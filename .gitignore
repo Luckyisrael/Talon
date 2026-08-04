@@ -1,0 +1,42 @@
+# Backend (Go)
+backend/bin/
+*.exe
+*.test
+*.out
+
+# Frontend (Node / Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.env
+frontend/.env.local
+
+# Android (RN native build output)
+android/
+*.apk
+*.aab
+local.properties
+*.keystore
+*.jks
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Go
+vendor/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
