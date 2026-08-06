@@ -46,6 +46,7 @@ docker run -d \
   --privileged \
   --network host \
   "$IMAGE" \
+  androidboot.use_memfd=1 \
   androidboot.redroid_width=1080 \
   androidboot.redroid_height=2400 \
   androidboot.redroid_dpi=420 \
