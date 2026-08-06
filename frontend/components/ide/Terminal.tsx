@@ -16,9 +16,9 @@ export default function Terminal({ output = "" }: TerminalProps) {
   ];
 
   return (
-    <div className="flex flex-col h-full bg-surface-container-lowest">
+    <div className="flex flex-col h-full min-h-0 bg-surface-container-lowest">
       {/* Tabs */}
-      <div className="flex items-center h-10 px-2 hairline-bottom">
+      <div className="flex items-center h-10 px-2 hairline-bottom flex-shrink-0">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -35,7 +35,7 @@ export default function Terminal({ output = "" }: TerminalProps) {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto p-4 font-mono text-xs">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 font-mono text-xs">
         {activeTab === "terminal" && (
           <div className="text-on-surface-variant">
             <div className="flex items-center gap-2 mb-2">

@@ -46,17 +46,17 @@ export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
   const [buildOutput, setBuildOutput] = useState("");
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full overflow-hidden">
       {/* Main IDE area */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Left: File Tree */}
-        <div className="w-56 flex-shrink-0 border-r border-outline-variant bg-surface-container-low hidden md:block">
+        <div className="w-56 flex-shrink-0 border-r border-outline-variant bg-surface-container-low hidden md:block overflow-hidden">
           <div className="h-10 flex items-center px-4 hairline-bottom">
             <span className="text-xs font-mono uppercase tracking-wider text-on-surface-variant">
               Files
             </span>
           </div>
-          <div className="overflow-auto" style={{ height: "calc(100% - 40px)" }}>
+          <div className="overflow-y-auto" style={{ height: "calc(100% - 40px)" }}>
             <FileTree
               files={files}
               selectedFile={selectedFile}
@@ -65,8 +65,8 @@ export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
           </div>
         </div>
 
-        {/* Center: AI Chat or Code Editor */}
-        <div className="flex-1 flex flex-col min-w-0">
+        {/* Center: AI Chat */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <AIChat
             projectId={projectId}
             onFilesGenerated={(newFiles) => {
@@ -76,13 +76,13 @@ export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
         </div>
 
         {/* Right: Phone Preview */}
-        <div className="w-80 flex-shrink-0 border-l border-outline-variant hidden lg:block">
+        <div className="w-80 flex-shrink-0 border-l border-outline-variant hidden lg:block overflow-hidden">
           <PhonePreview status={previewStatus} />
         </div>
       </div>
 
       {/* Bottom: Terminal */}
-      <div className="h-48 flex-shrink-0 border-t border-outline-variant">
+      <div className="h-48 flex-shrink-0 border-t border-outline-variant overflow-hidden">
         <Terminal output={buildOutput} />
       </div>
     </div>

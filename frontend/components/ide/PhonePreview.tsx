@@ -6,9 +6,9 @@ interface PhonePreviewProps {
 
 export default function PhonePreview({ status = "idle" }: PhonePreviewProps) {
   return (
-    <div className="flex flex-col h-full bg-surface-container-low">
+    <div className="flex flex-col h-full min-h-0 bg-surface-container-low">
       {/* Header */}
-      <div className="h-12 flex items-center justify-between px-4 hairline-bottom">
+      <div className="h-12 flex items-center justify-between px-4 hairline-bottom flex-shrink-0">
         <span className="text-xs font-mono uppercase tracking-wider text-on-surface-variant">
           Preview
         </span>
@@ -29,7 +29,7 @@ export default function PhonePreview({ status = "idle" }: PhonePreviewProps) {
       </div>
 
       {/* Phone frame */}
-      <div className="flex-1 flex items-center justify-center p-4">
+      <div className="flex-1 min-h-0 overflow-y-auto flex items-center justify-center p-4">
         <div className="relative w-full max-w-[280px]">
           {/* Phone frame */}
           <div className="relative bg-surface-container-highest rounded-[36px] p-2 shadow-md">

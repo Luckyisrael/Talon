@@ -71,9 +71,9 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
   }
 
   return (
-    <div className="flex flex-col h-full bg-surface-container-low">
+    <div className="flex flex-col h-full min-h-0 bg-surface-container-low">
       {/* Header */}
-      <div className="h-12 flex items-center justify-between px-4 hairline-bottom">
+      <div className="h-12 flex items-center justify-between px-4 hairline-bottom flex-shrink-0">
         <span className="text-xs font-mono uppercase tracking-wider text-on-surface-variant">
           AI Assistant
         </span>
@@ -102,7 +102,7 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-auto p-4 space-y-4">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="w-12 h-12 rounded-2xl bg-surface-container-high flex items-center justify-center mb-4">
@@ -149,7 +149,7 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
       </div>
 
       {/* Input */}
-      <form onSubmit={handleSubmit} className="p-4 hairline-top">
+      <form onSubmit={handleSubmit} className="p-4 hairline-top flex-shrink-0">
         <div className="flex gap-2">
           <input
             type="text"
