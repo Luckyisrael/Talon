@@ -14,7 +14,7 @@ const Spinner = forwardRef<HTMLDivElement, SpinnerProps>(
     };
 
     const colors = {
-      primary: "border-primary border-t-transparent",
+      primary: "border-accent border-t-transparent",
       currentColor: "border-current border-t-transparent",
     };
 

@@ -7,14 +7,14 @@ interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
 
 const StatusBadge = forwardRef<HTMLSpanElement, StatusBadgeProps>(
   ({ className = "", variant = "free", size = "sm", children, ...props }, ref) => {
-    const baseStyles = "pill font-mono uppercase tracking-wider inline-flex items-center";
+    const baseStyles = "rounded-full font-mono uppercase tracking-wider inline-flex items-center";
 
     const variants = {
-      free: "bg-surface-container-high text-on-surface-variant",
+      free: "bg-surface-4 text-text-secondary",
       pro: "bg-solana-purple text-white",
-      active: "bg-success-container text-success",
-      paused: "bg-surface-container-highest text-on-surface-variant",
-      error: "bg-error-container text-error",
+      active: "bg-success/20 text-success",
+      paused: "bg-surface-4 text-text-secondary",
+      error: "bg-error/20 text-error",
     };
 
     const sizes = {

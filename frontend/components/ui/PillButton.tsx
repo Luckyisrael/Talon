@@ -7,12 +7,12 @@ interface PillButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const PillButton = forwardRef<HTMLButtonElement, PillButtonProps>(
   ({ className = "", variant = "primary", size = "md", children, ...props }, ref) => {
-    const baseStyles = "pill font-medium transition-all duration-150 ease-out inline-flex items-center justify-center gap-2";
+    const baseStyles = "rounded-full font-medium transition-all duration-150 ease-out inline-flex items-center justify-center gap-2";
 
     const variants = {
-      primary: "bg-primary text-on-primary hover:bg-primary-dark active:scale-[0.98]",
-      secondary: "tonal-surface text-on-surface hover:tonal-surface-hover active:scale-[0.98]",
-      ghost: "bg-transparent text-on-surface hover:bg-surface-container-high active:scale-[0.98]",
+      primary: "bg-text-primary text-background hover:bg-text-secondary active:scale-[0.98]",
+      secondary: "bg-surface-3 text-text-primary hover:bg-surface-4 active:scale-[0.98]",
+      ghost: "bg-transparent text-text-primary hover:bg-surface-3 active:scale-[0.98]",
     };
 
     const sizes = {

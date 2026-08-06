@@ -24,35 +24,32 @@ export default function ProjectCard({ project }: ProjectCardProps) {
       <TonalCard
         variant="elevated"
         padding="lg"
-        className="group cursor-pointer hover:shadow-lg transition-all duration-200 h-full"
+        className="group cursor-pointer hover:bg-surface-4 transition-all duration-200 h-full"
       >
         <div className="flex flex-col h-full">
-          {/* Header */}
           <div className="flex items-start justify-between mb-4">
-            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-              <span className="text-primary font-semibold text-sm">
+            <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
+              <span className="text-accent font-semibold text-sm">
                 {project.name.charAt(0)}
               </span>
             </div>
             <StatusBadge variant={status} />
           </div>
 
-          {/* Content */}
-          <h3 className="text-base font-semibold text-on-surface mb-1 group-hover:text-primary transition-colors">
+          <h3 className="text-base font-semibold text-text-primary mb-1 group-hover:text-accent transition-colors">
             {project.name}
           </h3>
-          <p className="text-xs text-on-surface-variant font-mono">
+          <p className="text-xs text-text-secondary font-mono">
             Created {new Date(project.created_at).toLocaleDateString()}
           </p>
 
-          {/* Footer */}
-          <div className="mt-auto pt-4 hairline-top">
+          <div className="mt-auto pt-4">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-on-surface-variant">
+              <span className="text-xs text-text-secondary">
                 {project.prompts_used || 0} prompts used
               </span>
               <svg
-                className="w-4 h-4 text-on-surface-variant group-hover:text-primary transition-colors"
+                className="w-4 h-4 text-text-secondary group-hover:text-accent transition-colors"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"

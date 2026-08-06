@@ -47,12 +47,10 @@ export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Main IDE area */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Left: File Tree */}
-        <div className="w-56 flex-shrink-0 border-r border-outline-variant bg-surface-container-low hidden md:block overflow-hidden">
-          <div className="h-10 flex items-center px-4 hairline-bottom">
-            <span className="text-xs font-mono uppercase tracking-wider text-on-surface-variant">
+        <div className="w-56 flex-shrink-0 bg-surface-2 hidden md:block overflow-hidden">
+          <div className="h-10 flex items-center px-4 bg-surface-1">
+            <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">
               Files
             </span>
           </div>
@@ -65,7 +63,6 @@ export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
           </div>
         </div>
 
-        {/* Center: AI Chat */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <AIChat
             projectId={projectId}
@@ -75,14 +72,12 @@ export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
           />
         </div>
 
-        {/* Right: Phone Preview */}
-        <div className="w-80 flex-shrink-0 border-l border-outline-variant hidden lg:block overflow-hidden">
+        <div className="w-80 flex-shrink-0 hidden lg:block overflow-hidden">
           <PhonePreview status={previewStatus} />
         </div>
       </div>
 
-      {/* Bottom: Terminal */}
-      <div className="h-48 flex-shrink-0 border-t border-outline-variant overflow-hidden">
+      <div className="h-48 flex-shrink-0 overflow-hidden">
         <Terminal output={buildOutput} />
       </div>
     </div>

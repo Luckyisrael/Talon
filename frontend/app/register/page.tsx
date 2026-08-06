@@ -41,25 +41,22 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 bg-surface">
+    <div className="min-h-screen flex items-center justify-center px-4 bg-background">
       <div className="w-full max-w-sm">
-        {/* Logo */}
         <div className="flex justify-center mb-8">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-xl bg-solana-purple flex items-center justify-center">
-              <span className="text-white font-bold">S</span>
-            </div>
+          <Link href="/" className="flex items-center gap-3">
+            <div className="w-3 h-3 rounded-full bg-text-primary" />
+            <span className="text-xl font-bold text-text-primary">SeekerStudio</span>
           </Link>
         </div>
 
-        {/* Card */}
-        <div className="bg-surface-container rounded-2xl p-6">
-          <h1 className="text-xl font-bold text-on-surface text-center mb-1">Create account</h1>
-          <p className="text-sm text-on-surface-variant text-center mb-6">Start building Solana Mobile apps</p>
+        <div className="bg-surface-3 rounded-[20px] p-6">
+          <h1 className="text-xl font-bold text-text-primary text-center mb-1">Create account</h1>
+          <p className="text-sm text-text-secondary text-center mb-6">Start building Solana Mobile apps</p>
 
           <form onSubmit={handleSubmit}>
             <label className="block mb-4">
-              <span className="text-xs font-mono uppercase tracking-wider text-on-surface-variant">
+              <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">
                 Email
               </span>
               <input
@@ -67,13 +64,13 @@ export default function RegisterPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="mt-2 w-full h-11 px-4 rounded-xl bg-surface border border-outline-variant text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary transition-colors"
+                className="mt-2 w-full h-11 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all"
                 autoFocus
               />
             </label>
 
             <label className="block mb-4">
-              <span className="text-xs font-mono uppercase tracking-wider text-on-surface-variant">
+              <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">
                 Password
               </span>
               <input
@@ -81,7 +78,7 @@ export default function RegisterPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="mt-2 w-full h-11 px-4 rounded-xl bg-surface border border-outline-variant text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary transition-colors"
+                className="mt-2 w-full h-11 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all"
               />
             </label>
 
@@ -99,9 +96,9 @@ export default function RegisterPage() {
           </form>
         </div>
 
-        <p className="text-sm text-on-surface-variant text-center mt-6">
+        <p className="text-sm text-text-secondary text-center mt-6">
           Already have an account?{" "}
-          <Link href="/login" className="text-primary hover:text-primary-dark transition-colors">
+          <Link href="/login" className="text-accent hover:text-accent-hover transition-colors">
             Sign in
           </Link>
         </p>

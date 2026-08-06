@@ -61,18 +61,17 @@ export default function DashboardPage() {
   return (
     <AppShell>
       <div className="max-w-5xl mx-auto px-4 py-8">
-        {/* Header */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-on-surface mb-1">Projects</h1>
-            <p className="text-sm text-on-surface-variant">
+            <h1 className="text-2xl font-bold text-text-primary mb-1">Projects</h1>
+            <p className="text-sm text-text-secondary">
               Build and manage your Solana Mobile apps
             </p>
           </div>
 
           <div className="flex items-center gap-3">
             {user && (
-              <div className="hidden sm:flex items-center gap-2 text-xs text-on-surface-variant">
+              <div className="hidden sm:flex items-center gap-2 text-xs text-text-secondary">
                 <span className="font-mono">{user.email}</span>
                 <StatusBadge variant={user.tier as "free" | "pro"} />
               </div>
@@ -86,7 +85,6 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Content */}
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <Spinner size="lg" />
@@ -96,7 +94,6 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Create Project Modal */}
       <CreateProject open={createOpen} onClose={() => setCreateOpen(false)} />
     </AppShell>
   );

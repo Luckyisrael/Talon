@@ -49,7 +49,7 @@ export default function ProjectPage() {
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-surface">
+      <div className="h-screen flex items-center justify-center bg-background">
         <Spinner size="lg" />
       </div>
     );
@@ -60,28 +60,26 @@ export default function ProjectPage() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-surface">
-      {/* Top bar */}
-      <div className="h-12 flex items-center justify-between px-4 hairline-bottom bg-surface-container-low">
+    <div className="h-screen flex flex-col bg-background">
+      <div className="h-12 flex items-center justify-between px-4 bg-surface-1">
         <div className="flex items-center gap-3">
           <button
             onClick={() => router.push("/dashboard")}
-            className="p-2 rounded-lg hover:bg-surface-container-high transition-colors"
+            className="p-2 rounded-lg hover:bg-surface-3 transition-colors"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </button>
-          <span className="text-sm font-medium text-on-surface">{project.name}</span>
+          <span className="text-sm font-medium text-text-primary">{project.name}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-on-surface-variant capitalize">
+          <span className="text-xs font-mono text-text-secondary capitalize">
             {project.status}
           </span>
         </div>
       </div>
 
-      {/* IDE */}
       <div className="flex-1 overflow-hidden">
         <IDELayout projectId={project.id} projectName={project.name} />
       </div>

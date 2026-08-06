@@ -51,32 +51,28 @@ export default function CreateProject({ open, onClose }: CreateProjectProps) {
 
   return (
     <>
-      {/* Overlay */}
       <div
         className="fixed inset-0 bg-black/50 z-50"
         onClick={onClose}
       />
 
-      {/* Modal */}
       <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-        <div className="w-full max-w-md bg-surface-container rounded-2xl shadow-lg p-6">
-          {/* Header */}
+        <div className="w-full max-w-md bg-surface-3 rounded-[20px] shadow-lg p-6">
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-semibold text-on-surface">New Project</h2>
+            <h2 className="text-lg font-semibold text-text-primary">New Project</h2>
             <button
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-surface-container-high transition-colors"
+              className="p-2 rounded-lg hover:bg-surface-4 transition-colors"
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-5 h-5 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
 
-          {/* Form */}
           <form onSubmit={handleSubmit}>
             <label className="block mb-2">
-              <span className="text-xs font-mono uppercase tracking-wider text-on-surface-variant">
+              <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">
                 Project Name
               </span>
               <input
@@ -84,7 +80,7 @@ export default function CreateProject({ open, onClose }: CreateProjectProps) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="My Solana Wallet"
-                className="mt-2 w-full h-12 px-4 rounded-xl bg-surface border border-outline-variant text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary transition-colors"
+                className="mt-2 w-full h-12 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all"
                 autoFocus
               />
             </label>

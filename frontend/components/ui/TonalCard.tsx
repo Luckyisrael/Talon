@@ -10,9 +10,9 @@ const TonalCard = forwardRef<HTMLDivElement, TonalCardProps>(
     const baseStyles = "rounded-xl transition-all duration-150";
 
     const variants = {
-      default: "tonal-surface",
-      elevated: "bg-surface-container shadow-md",
-      outlined: "bg-surface border border-outline-variant",
+      default: "bg-surface-3",
+      elevated: "bg-surface-3 shadow-md",
+      outlined: "bg-surface-2",
     };
 
     const paddings = {

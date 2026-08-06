@@ -16,17 +16,16 @@ export default function Terminal({ output = "" }: TerminalProps) {
   ];
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-surface-container-lowest">
-      {/* Tabs */}
-      <div className="flex items-center h-10 px-2 hairline-bottom flex-shrink-0">
+    <div className="flex flex-col h-full min-h-0 bg-surface-1">
+      <div className="flex items-center h-10 px-2 flex-shrink-0 bg-surface-1">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={`px-3 h-8 text-xs font-mono transition-colors ${
               activeTab === tab.id
-                ? "text-primary border-b-2 border-primary"
-                : "text-on-surface-variant hover:text-on-surface"
+                ? "text-accent border-b-2 border-accent"
+                : "text-text-secondary hover:text-text-primary"
             }`}
           >
             {tab.label}
@@ -34,10 +33,9 @@ export default function Terminal({ output = "" }: TerminalProps) {
         ))}
       </div>
 
-      {/* Content */}
       <div className="flex-1 min-h-0 overflow-y-auto p-4 font-mono text-xs">
         {activeTab === "terminal" && (
-          <div className="text-on-surface-variant">
+          <div className="text-text-secondary">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-success">$</span>
               <span className="animate-pulse">_</span>
@@ -46,13 +44,13 @@ export default function Terminal({ output = "" }: TerminalProps) {
         )}
 
         {activeTab === "output" && (
-          <div className="text-on-surface-variant whitespace-pre-wrap">
+          <div className="text-text-secondary whitespace-pre-wrap">
             {output || "No build output yet."}
           </div>
         )}
 
         {activeTab === "logs" && (
-          <div className="text-on-surface-variant whitespace-pre-wrap">
+          <div className="text-text-secondary whitespace-pre-wrap">
             {output || "No logs yet."}
           </div>
         )}

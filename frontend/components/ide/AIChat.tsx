@@ -71,29 +71,28 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-surface-container-low">
-      {/* Header */}
-      <div className="h-12 flex items-center justify-between px-4 hairline-bottom flex-shrink-0">
-        <span className="text-xs font-mono uppercase tracking-wider text-on-surface-variant">
+    <div className="flex flex-col h-full min-h-0 bg-surface-1">
+      <div className="h-12 flex items-center justify-between px-4 flex-shrink-0 bg-surface-1">
+        <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">
           AI Assistant
         </span>
         <div className="flex gap-1">
           <button
             onClick={() => setMode("plan")}
-            className={`pill h-7 px-3 text-xs font-medium transition-colors ${
+            className={`rounded-full h-7 px-3 text-xs font-medium transition-colors ${
               mode === "plan"
-                ? "bg-primary text-on-primary"
-                : "bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest"
+                ? "bg-accent text-background"
+                : "bg-surface-3 text-text-secondary hover:bg-surface-4"
             }`}
           >
             Plan
           </button>
           <button
             onClick={() => setMode("build")}
-            className={`pill h-7 px-3 text-xs font-medium transition-colors ${
+            className={`rounded-full h-7 px-3 text-xs font-medium transition-colors ${
               mode === "build"
-                ? "bg-primary text-on-primary"
-                : "bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest"
+                ? "bg-accent text-background"
+                : "bg-surface-3 text-text-secondary hover:bg-surface-4"
             }`}
           >
             Build
@@ -101,16 +100,15 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
         </div>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <div className="w-12 h-12 rounded-2xl bg-surface-container-high flex items-center justify-center mb-4">
-              <svg className="w-6 h-6 text-on-surface-variant" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="w-12 h-12 rounded-2xl bg-surface-3 flex items-center justify-center mb-4">
+              <svg className="w-6 h-6 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
               </svg>
             </div>
-            <p className="text-sm text-on-surface-variant">
+            <p className="text-sm text-text-secondary">
               Describe what you want to build
             </p>
           </div>
@@ -124,8 +122,8 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
             <div
               className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm ${
                 msg.role === "user"
-                  ? "bg-primary text-on-primary"
-                  : "bg-surface-container-high text-on-surface"
+                  ? "bg-accent text-background"
+                  : "bg-surface-3 text-text-primary"
               }`}
             >
               {msg.content}
@@ -135,11 +133,11 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
 
         {loading && (
           <div className="flex justify-start">
-            <div className="bg-surface-container-high rounded-2xl px-4 py-3">
+            <div className="bg-surface-3 rounded-2xl px-4 py-3">
               <div className="flex gap-1">
-                <div className="w-2 h-2 bg-on-surface-variant/40 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                <div className="w-2 h-2 bg-on-surface-variant/40 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                <div className="w-2 h-2 bg-on-surface-variant/40 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                <div className="w-2 h-2 bg-text-secondary/40 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                <div className="w-2 h-2 bg-text-secondary/40 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                <div className="w-2 h-2 bg-text-secondary/40 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
               </div>
             </div>
           </div>
@@ -148,21 +146,20 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <form onSubmit={handleSubmit} className="p-4 hairline-top flex-shrink-0">
+      <form onSubmit={handleSubmit} className="p-4 flex-shrink-0">
         <div className="flex gap-2">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={mode === "plan" ? "Describe your app..." : "What should I build?"}
-            className="flex-1 h-10 px-4 rounded-xl bg-surface border border-outline-variant text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary transition-colors text-sm"
+            className="flex-1 h-10 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all text-sm"
             disabled={loading}
           />
           <button
             type="submit"
             disabled={loading || !input.trim()}
-            className="pill h-10 w-10 flex items-center justify-center bg-primary text-on-primary hover:bg-primary-dark transition-colors disabled:opacity-50"
+            className="rounded-full h-10 w-10 flex items-center justify-center bg-accent text-background hover:bg-accent-hover transition-colors disabled:opacity-50"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
