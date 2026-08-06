@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Menu } from "iconsax-reactjs";
 import { PillButton, StatusBadge } from "@/components/ui";
 
 interface TopBarProps {
@@ -27,9 +28,7 @@ export default function TopBar({
             className="md:hidden p-2 rounded-lg hover:bg-surface-3"
             aria-label="Toggle menu"
           >
-            <svg className="w-5 h-5 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
+            <Menu size="20" className="text-text-secondary" variant="Linear" />
           </button>
         )}
 

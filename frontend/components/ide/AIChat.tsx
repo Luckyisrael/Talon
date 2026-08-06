@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
+import { Message, Send } from "iconsax-reactjs";
 
 interface Message {
   role: "user" | "assistant";
@@ -17,11 +18,6 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"plan" | "build">("plan");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -104,9 +100,7 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="w-12 h-12 rounded-2xl bg-surface-3 flex items-center justify-center mb-4">
-              <svg className="w-6 h-6 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-              </svg>
+              <Message size="24" className="text-text-secondary" variant="Linear" />
             </div>
             <p className="text-sm text-text-secondary">
               Describe what you want to build
@@ -142,8 +136,6 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
             </div>
           </div>
         )}
-
-        <div ref={messagesEndRef} />
       </div>
 
       <form onSubmit={handleSubmit} className="p-4 flex-shrink-0">
@@ -161,9 +153,7 @@ export default function AIChat({ projectId, onFilesGenerated }: AIChatProps) {
             disabled={loading || !input.trim()}
             className="rounded-full h-10 w-10 flex items-center justify-center bg-accent text-background hover:bg-accent-hover transition-colors disabled:opacity-50"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
+            <Send size="16" variant="Linear" />
           </button>
         </div>
       </form>

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { ArrowLeft } from "iconsax-reactjs";
 import { useParams, useRouter } from "next/navigation";
 import { IDELayout } from "@/components/ide";
 import { Spinner } from "@/components/ui";
+import { useState, useEffect } from "react";
 
 interface Project {
   id: number;
@@ -67,9 +68,7 @@ export default function ProjectPage() {
             onClick={() => router.push("/dashboard")}
             className="p-2 rounded-lg hover:bg-surface-3 transition-colors"
           >
-            <svg className="w-4 h-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
+            <ArrowLeft size="16" className="text-text-secondary" variant="Linear" />
           </button>
           <span className="text-sm font-medium text-text-primary">{project.name}</span>
         </div>

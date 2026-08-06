@@ -1,5 +1,6 @@
 "use client";
 
+import { ArrowRight } from "iconsax-reactjs";
 import Link from "next/link";
 import TonalCard from "@/components/ui/TonalCard";
 import StatusBadge from "@/components/ui/StatusBadge";
@@ -48,14 +49,7 @@ export default function ProjectCard({ project }: ProjectCardProps) {
               <span className="text-xs text-text-secondary">
                 {project.prompts_used || 0} prompts used
               </span>
-              <svg
-                className="w-4 h-4 text-text-secondary group-hover:text-accent transition-colors"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
+              <ArrowRight size="16" className="text-text-secondary group-hover:text-accent transition-colors" variant="Linear" />
             </div>
           </div>
         </div>

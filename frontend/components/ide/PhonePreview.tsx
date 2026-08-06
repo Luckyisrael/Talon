@@ -1,5 +1,7 @@
 "use client";
 
+import { Mobile, Warning2 } from "iconsax-reactjs";
+
 interface PhonePreviewProps {
   status?: "idle" | "connecting" | "streaming" | "error";
 }
@@ -44,9 +46,7 @@ export default function PhonePreview({ status = "idle" }: PhonePreviewProps) {
                 {status === "idle" && (
                   <div className="text-center px-6">
                     <div className="w-12 h-12 rounded-xl bg-surface-3 flex items-center justify-center mx-auto mb-3">
-                      <svg className="w-6 h-6 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                      </svg>
+                      <Mobile size="24" className="text-text-secondary" variant="Linear" />
                     </div>
                     <p className="text-[10px] text-text-secondary">
                       Start a session to preview your app
@@ -68,9 +68,7 @@ export default function PhonePreview({ status = "idle" }: PhonePreviewProps) {
                 {status === "error" && (
                   <div className="text-center px-6">
                     <div className="w-12 h-12 rounded-xl bg-error/20 flex items-center justify-center mx-auto mb-3">
-                      <svg className="w-6 h-6 text-error" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                      </svg>
+                      <Warning2 size="24" className="text-error" variant="Linear" />
                     </div>
                     <p className="text-[10px] text-error">Connection failed</p>
                   </div>

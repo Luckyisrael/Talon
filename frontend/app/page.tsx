@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Add, ArrowDown, Microphone, Monitor, Message, Mobile, DocumentUpload, ShieldSecurity, Flash, Code, Box, Game, Send, Gameboy } from "iconsax-reactjs";
 
 export default function Home() {
   return (
@@ -54,14 +55,12 @@ export default function Home() {
 
       {/* Hero Section */}
       <main className="flex-1 flex flex-col items-center px-6 pt-20 pb-16">
-        {/* Headline */}
         <h1 className="text-5xl md:text-7xl font-bold text-text-primary text-center mb-4 tracking-tight">
           Build Solana Mobile Apps
         </h1>
 
-        {/* Subheadline */}
         <p className="text-lg md:text-xl text-text-secondary text-center mb-10 max-w-2xl">
-          Describe your app, watch AI generate real React Native code, preview it on a live Android emulator, and deploy to Solana Seeker — all from your browser.
+          Describe your app, preview and test it live, then deploy to Solana Seeker all without leaving your browser.
         </p>
 
         {/* Prompt Input Box */}
@@ -69,38 +68,28 @@ export default function Home() {
           <div className="flex items-center justify-between mb-6">
             <span className="text-lg text-text-muted">Describe the app you want to build...</span>
             <div className="w-8 h-8 rounded-full bg-surface-5 flex items-center justify-center">
-              <svg className="w-4 h-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
+              <Monitor size="18" className="text-text-secondary" variant="Linear" />
             </div>
           </div>
 
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <button className="w-9 h-9 rounded-full bg-surface-5 flex items-center justify-center hover:bg-surface-4 transition-colors">
-                <svg className="w-4 h-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
+                <Add size="16" className="text-text-secondary" variant="Linear" />
               </button>
               <button className="h-9 px-4 rounded-full bg-surface-5 flex items-center gap-2 text-sm text-text-secondary hover:bg-surface-4 transition-colors">
-                <span>📱</span>
+                <Mobile size="14" variant="Linear" />
                 <span>For Seeker</span>
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
+                <ArrowDown size="12" variant="Linear" />
               </button>
               <button className="h-9 px-4 rounded-full bg-surface-5 flex items-center gap-2 text-sm text-text-secondary hover:bg-surface-4 transition-colors">
-                <span>⚡</span>
+                <Flash size="14" variant="Linear" />
                 <span>Auto</span>
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
+                <ArrowDown size="12" variant="Linear" />
               </button>
             </div>
             <button className="w-9 h-9 rounded-full bg-surface-5 flex items-center justify-center hover:bg-surface-4 transition-colors">
-              <svg className="w-4 h-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
+              <Microphone size="16" className="text-text-secondary" variant="Linear" />
             </button>
           </div>
         </div>
@@ -139,9 +128,7 @@ export default function Home() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-surface-3 rounded-[20px] p-6">
               <div className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center mb-4">
-                <svg className="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                </svg>
+                <Message size="20" className="text-accent" variant="Linear" />
               </div>
               <h3 className="text-base font-semibold text-text-primary mb-2">AI-Powered Generation</h3>
               <p className="text-sm text-text-secondary leading-relaxed">
@@ -151,9 +138,7 @@ export default function Home() {
 
             <div className="bg-surface-3 rounded-[20px] p-6">
               <div className="w-10 h-10 rounded-full bg-solana-purple/10 flex items-center justify-center mb-4">
-                <svg className="w-5 h-5 text-solana-purple" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                </svg>
+                <Mobile size="20" className="text-solana-purple" variant="Linear" />
               </div>
               <h3 className="text-base font-semibold text-text-primary mb-2">Live Device Preview</h3>
               <p className="text-sm text-text-secondary leading-relaxed">
@@ -163,9 +148,7 @@ export default function Home() {
 
             <div className="bg-surface-3 rounded-[20px] p-6">
               <div className="w-10 h-10 rounded-full bg-success/10 flex items-center justify-center mb-4">
-                <svg className="w-5 h-5 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                </svg>
+                <DocumentUpload size="20" className="text-success" variant="Linear" />
               </div>
               <h3 className="text-base font-semibold text-text-primary mb-2">One-Click Deploy</h3>
               <p className="text-sm text-text-secondary leading-relaxed">
@@ -175,9 +158,7 @@ export default function Home() {
 
             <div className="bg-surface-3 rounded-[20px] p-6">
               <div className="w-10 h-10 rounded-full bg-warning/10 flex items-center justify-center mb-4">
-                <svg className="w-5 h-5 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                </svg>
+                <ShieldSecurity size="20" className="text-warning" variant="Linear" />
               </div>
               <h3 className="text-base font-semibold text-text-primary mb-2">Solana Native</h3>
               <p className="text-sm text-text-secondary leading-relaxed">
@@ -187,9 +168,7 @@ export default function Home() {
 
             <div className="bg-surface-3 rounded-[20px] p-6">
               <div className="w-10 h-10 rounded-full bg-error/10 flex items-center justify-center mb-4">
-                <svg className="w-5 h-5 text-error" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
+                <Flash size="20" className="text-error" variant="Linear" />
               </div>
               <h3 className="text-base font-semibold text-text-primary mb-2">Instant Iteration</h3>
               <p className="text-sm text-text-secondary leading-relaxed">
@@ -199,9 +178,7 @@ export default function Home() {
 
             <div className="bg-surface-3 rounded-[20px] p-6">
               <div className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center mb-4">
-                <svg className="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
+                <Code size="20" className="text-accent" variant="Linear" />
               </div>
               <h3 className="text-base font-semibold text-text-primary mb-2">Full IDE Experience</h3>
               <p className="text-sm text-text-secondary leading-relaxed">

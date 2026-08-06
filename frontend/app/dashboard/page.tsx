@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Add } from "iconsax-reactjs";
 import AppShell from "@/components/layout/AppShell";
 import { PillButton, StatusBadge, Spinner } from "@/components/ui";
 import { ProjectGrid, CreateProject } from "@/components/dashboard";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 interface Project {
   id: number;
@@ -77,9 +78,7 @@ export default function DashboardPage() {
               </div>
             )}
             <PillButton onClick={() => setCreateOpen(true)}>
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
+              <Add size="16" variant="Linear" />
               New Project
             </PillButton>
           </div>
