@@ -21,7 +21,7 @@ fi
 echo "✅ binder available"
 
 if ! docker info &>/dev/null; then
-  echo "❌ Docker not accessible. Is Docker Desktop running?"
+  echo "❌ Docker daemon not running. Start with: systemctl start docker"
   exit 1
 fi
 echo "✅ Docker accessible"
@@ -44,15 +44,15 @@ echo "Resolution: 1080x2400 @ 420 DPI (Seeker aspect ratio)"
 docker run -d \
   --name "$CONTAINER_NAME" \
   --privileged \
-  -p 5555:5555 \
+  --network host \
   "$IMAGE" \
   androidboot.redroid_width=1080 \
   androidboot.redroid_height=2400 \
   androidboot.redroid_dpi=420 \
   androidboot.redroid_fps=60
 
-echo "Container started. Waiting 5s for boot..."
-sleep 5
+echo "Container started. Waiting 10s for boot..."
+sleep 10
 
 # Verify container is running
 echo ""
@@ -70,14 +70,14 @@ adb devices
 # Verify resolution
 echo ""
 echo "--- Verify Seeker resolution ---"
-adb shell getprop ro.boot.redroid_width
-adb shell getprop ro.boot.redroid_height
-adb shell getprop ro.boot.redroid_dpi
+adb -s localhost:5555 shell getprop ro.boot.redroid_width
+adb -s localhost:5555 shell getprop ro.boot.redroid_height
+adb -s localhost:5555 shell getprop ro.boot.redroid_dpi
 
 # Take a screenshot
 echo ""
 echo "--- Taking screenshot ---"
-adb exec-out screencap -p > /tmp/seeker-screenshot.png
+adb -s localhost:5555 exec-out screencap -p > /tmp/seeker-screenshot.png
 if [ -f /tmp/seeker-screenshot.png ]; then
   cp /tmp/seeker-screenshot.png /mnt/c/Users/Lucky/Desktop/SeekerStudio/infra/phase1/screenshot.png
   echo "✅ Screenshot saved to infra/phase1/screenshot.png"
