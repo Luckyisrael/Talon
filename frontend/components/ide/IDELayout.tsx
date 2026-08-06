@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { ArrowDown, ArrowUp } from "iconsax-reactjs";
 import AIChat from "./AIChat";
 import FileTree from "./FileTree";
 import PhonePreview from "./PhonePreview";
 import Terminal from "./Terminal";
+import CodeEditor from "./CodeEditor";
 
 interface IDELayoutProps {
   projectId: number;
@@ -57,15 +59,24 @@ function buildFileTree(files: { path: string; content: string }[]): FileNode[] {
 export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
   const [selectedFile, setSelectedFile] = useState<string>();
   const [files, setFiles] = useState<FileNode[]>([]);
-  const [fileContents] = useState<Record<string, string>>({});
+  const [fileContents, setFileContents] = useState<Record<string, string>>({});
   const [previewStatus] = useState<"idle" | "connecting" | "streaming" | "error">("idle");
   const [buildOutput, setBuildOutput] = useState("");
+  const [terminalOpen, setTerminalOpen] = useState(true);
 
   const handleFilesGenerated = useCallback(
     (newFiles: { path: string; content: string }[]) => {
       setFiles((prev) => {
         const tree = buildFileTree(newFiles);
         return mergeFileTrees(prev, tree);
+      });
+
+      setFileContents((prev) => {
+        const next = { ...prev };
+        for (const f of newFiles) {
+          next[f.path] = f.content;
+        }
+        return next;
       });
 
       setBuildOutput((prev) => {
@@ -77,6 +88,8 @@ export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
     },
     []
   );
+
+  const selectedContent = selectedFile ? fileContents[selectedFile] : undefined;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -105,12 +118,16 @@ export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
           </div>
         </div>
 
-        {/* AI Chat */}
+        {/* Center: Editor or AI Chat */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          <AIChat
-            projectId={projectId}
-            onFilesGenerated={handleFilesGenerated}
-          />
+          {selectedFile && selectedContent !== undefined ? (
+            <CodeEditor filePath={selectedFile} content={selectedContent} />
+          ) : (
+            <AIChat
+              projectId={projectId}
+              onFilesGenerated={handleFilesGenerated}
+            />
+          )}
         </div>
 
         {/* Phone Preview */}
@@ -119,9 +136,26 @@ export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
         </div>
       </div>
 
-      {/* Terminal */}
-      <div className="h-48 flex-shrink-0 overflow-hidden">
-        <Terminal output={buildOutput} />
+      {/* Terminal - collapsible */}
+      <div className="flex-shrink-0 overflow-hidden" style={{ height: terminalOpen ? "192px" : "36px" }}>
+        {/* Terminal header - always visible */}
+        <div className="h-9 flex items-center justify-between px-3 bg-surface-1 cursor-pointer select-none" onClick={() => setTerminalOpen(!terminalOpen)}>
+          <span className="text-xs font-mono text-text-secondary">Terminal</span>
+          <button className="p-1 rounded hover:bg-surface-3 transition-colors">
+            {terminalOpen ? (
+              <ArrowDown size="14" className="text-text-secondary" variant="Linear" />
+            ) : (
+              <ArrowUp size="14" className="text-text-secondary" variant="Linear" />
+            )}
+          </button>
+        </div>
+
+        {/* Terminal content */}
+        {terminalOpen && (
+          <div style={{ height: "calc(100% - 36px)" }}>
+            <Terminal output={buildOutput} />
+          </div>
+        )}
       </div>
     </div>
   );

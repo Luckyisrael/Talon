@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 interface TerminalProps {
   output?: string;
@@ -8,6 +8,13 @@ interface TerminalProps {
 
 export default function Terminal({ output = "" }: TerminalProps) {
   const [activeTab, setActiveTab] = useState<"terminal" | "output" | "logs">("terminal");
+  const outputRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
+  }, [output]);
 
   const tabs = [
     { id: "terminal" as const, label: "Terminal" },
@@ -17,12 +24,13 @@ export default function Terminal({ output = "" }: TerminalProps) {
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface-1">
-      <div className="flex items-center h-10 px-2 flex-shrink-0 bg-surface-1">
+      {/* Tabs */}
+      <div className="flex items-center h-8 px-2 flex-shrink-0 bg-surface-1">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-3 h-8 text-xs font-mono transition-colors ${
+            className={`px-3 h-7 text-xs font-mono transition-colors ${
               activeTab === tab.id
                 ? "text-accent border-b-2 border-accent"
                 : "text-text-secondary hover:text-text-primary"
@@ -33,7 +41,8 @@ export default function Terminal({ output = "" }: TerminalProps) {
         ))}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-4 font-mono text-xs">
+      {/* Content */}
+      <div ref={outputRef} className="flex-1 min-h-0 overflow-y-auto p-3 font-mono text-xs">
         {activeTab === "terminal" && (
           <div className="text-text-secondary">
             <div className="flex items-center gap-2 mb-2">
