@@ -1,26 +1,215 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Material You - Tonal Palette */
+  --primary: #6750A4;
+  --primary-light: #D0BCFF;
+  --primary-dark: #381E72;
+  --primary-container: #EADDFF;
+  --on-primary: #FFFFFF;
+  --on-primary-container: #21005D;
+
+  /* Surfaces */
+  --surface: #FFFBFE;
+  --surface-dim: #DED8E1;
+  --surface-bright: #FFFBFE;
+  --surface-container-lowest: #FFFFFF;
+  --surface-container-low: #F7F2FA;
+  --surface-container: #F3EDF7;
+  --surface-container-high: #ECE6F0;
+  --surface-container-highest: #E6E0E9;
+  --on-surface: #1C1B1F;
+  --on-surface-variant: #49454F;
+
+  /* Outline */
+  --outline: #79747E;
+  --outline-variant: #CAC4D0;
+
+  /* Error */
+  --error: #B3261E;
+  --error-container: #F9DEDC;
+  --on-error: #FFFFFF;
+
+  /* Success */
+  --success: #386A20;
+  --success-container: #B8F396;
+
+  /* Solana Brand */
+  --solana-purple: #9945FF;
+  --solana-green: #14F195;
+  --solana-gradient: linear-gradient(135deg, #9945FF 0%, #14F195 100%);
+
+  /* Spacing Scale (Major Second 1.125x) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Border Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+  /* Typography */
+  --font-sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  /* Transitions */
+  --duration-fast: 80ms;
+  --duration-normal: 150ms;
+  --duration-slow: 200ms;
+  --easing: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-background: var(--surface);
+  --color-foreground: var(--on-surface);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Primary */
+  --color-primary: var(--primary);
+  --color-primary-light: var(--primary-light);
+  --color-primary-dark: var(--primary-dark);
+  --color-primary-container: var(--primary-container);
+  --color-on-primary: var(--on-primary);
+  --color-on-primary-container: var(--on-primary-container);
+
+  /* Surfaces */
+  --color-surface: var(--surface);
+  --color-surface-dim: var(--surface-dim);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-surface-container-highest: var(--surface-container-highest);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+
+  /* Outline */
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+
+  /* Error */
+  --color-error: var(--error);
+  --color-error-container: var(--error-container);
+  --color-on-error: var(--on-error);
+
+  /* Success */
+  --color-success: var(--success);
+  --color-success-container: var(--success-container);
+
+  /* Solana */
+  --color-solana-purple: var(--solana-purple);
+  --color-solana-green: var(--solana-green);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --primary: #D0BCFF;
+    --primary-light: #EADDFF;
+    --primary-dark: #381E72;
+    --primary-container: #4F378B;
+    --on-primary: #381E72;
+    --on-primary-container: #EADDFF;
+
+    --surface: #1C1B1F;
+    --surface-dim: #141218;
+    --surface-bright: #3B383E;
+    --surface-container-lowest: #0F0D13;
+    --surface-container-low: #1D1B20;
+    --surface-container: #211F26;
+    --surface-container-high: #2B2930;
+    --surface-container-highest: #36343B;
+    --on-surface: #E6E1E5;
+    --on-surface-variant: #CAC4D0;
+
+    --outline: #938F99;
+    --outline-variant: #49454F;
+
+    --error: #F2B8B5;
+    --error-container: #8C1D18;
+    --on-error: #601410;
+
+    --success: #A5D6A7;
+    --success-container: #1B5E20;
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--surface);
+  color: var(--on-surface);
+  font-family: var(--font-sans);
+}
+
+/* Swiss Minimalist Hairline Dividers */
+.hairline-bottom {
+  border-bottom: 1px solid var(--outline-variant);
+}
+
+.hairline-top {
+  border-top: 1px solid var(--outline-variant);
+}
+
+/* Material You Tonal Surface */
+.tonal-surface {
+  background-color: color-mix(in srgb, var(--primary) 8%, var(--surface));
+}
+
+.tonal-surface-hover {
+  background-color: color-mix(in srgb, var(--primary) 12%, var(--surface));
+}
+
+/* Solana Gradient */
+.solana-gradient {
+  background: var(--solana-gradient);
+}
+
+/* Pill Shape */
+.pill {
+  border-radius: var(--radius-full);
+}
+
+/* Bento Grid */
+.bento-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(2, 1fr);
+}
+
+@media (min-width: 768px) {
+  .bento-grid {
+    grid-template-columns: repeat(12, 1fr);
+  }
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--outline-variant);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--outline);
 }
