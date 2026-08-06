@@ -108,6 +108,9 @@ func main() {
 		r.Post("/v1/prompts", promptHandler.Create)
 		r.Get("/v1/prompts/{id}", promptHandler.Get)
 
+		// Project Memory
+		r.Get("/v1/projects/{projectID}/memory", promptHandler.GetMemory)
+
 		// Sessions
 		r.Post("/v1/sessions", sessionHandler.Create)
 		r.Get("/v1/sessions/{id}", sessionHandler.Get)

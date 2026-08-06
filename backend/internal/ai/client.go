@@ -265,7 +265,7 @@ func (c *Client) Plan(ctx context.Context, history []PromptMessage) (*PlanRespon
 
 func (c *Client) Build(ctx context.Context, history []PromptMessage, workspacePath string) (*BuildResponse, error) {
 	// Read existing files and inject into context
-	existingFiles := c.readProjectFiles(workspacePath)
+	existingFiles := c.ReadProjectFiles(workspacePath)
 	if len(existingFiles) > 0 {
 		contextMsg := PromptMessage{
 			Role:    "user",
@@ -339,7 +339,7 @@ func stripCodeBlocks(s string) string {
 }
 
 // readProjectFiles reads key files from the project workspace
-func (c *Client) readProjectFiles(workspacePath string) string {
+func (c *Client) ReadProjectFiles(workspacePath string) string {
 	if workspacePath == "" {
 		return ""
 	}

@@ -47,6 +47,15 @@ type Usage struct {
 	PeriodStart   time.Time `json:"period_start"`
 }
 
+type ProjectMemory struct {
+	ID        int64     `json:"id"`
+	ProjectID int64     `json:"project_id"`
+	EntryType string    `json:"entry_type"`
+	Content   string    `json:"content"`
+	Metadata  string    `json:"metadata,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Store struct {
 	db *sql.DB
 }
@@ -115,6 +124,15 @@ func (s *Store) migrate() error {
 			device_minutes REAL DEFAULT 0,
 			period_start DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS project_memory (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			entry_type TEXT NOT NULL,
+			content TEXT NOT NULL,
+			metadata TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
 	}
 
@@ -280,5 +298,63 @@ func (s *Store) IncrementPrompts(userID int64) error {
 
 func (s *Store) IncrementDeviceMinutes(userID int64, minutes float64) error {
 	_, err := s.db.Exec("UPDATE usage SET device_minutes = device_minutes + ? WHERE user_id = ? AND period_start = (SELECT MAX(period_start) FROM usage WHERE user_id = ?)", minutes, userID, userID)
+	return err
+}
+
+// Project Memory methods
+
+func (s *Store) AddMemory(projectID int64, entryType, content, metadata string) error {
+	_, err := s.db.Exec("INSERT INTO project_memory (project_id, entry_type, content, metadata) VALUES (?, ?, ?, ?)", projectID, entryType, content, metadata)
+	return err
+}
+
+func (s *Store) GetMemoryByType(projectID int64, entryType string) ([]ProjectMemory, error) {
+	rows, err := s.db.Query("SELECT id, project_id, entry_type, content, metadata, created_at FROM project_memory WHERE project_id = ? AND entry_type = ? ORDER BY created_at ASC", projectID, entryType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var memories []ProjectMemory
+	for rows.Next() {
+		var m ProjectMemory
+		if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &m.Metadata, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		memories = append(memories, m)
+	}
+	return memories, nil
+}
+
+func (s *Store) GetAllMemory(projectID int64) ([]ProjectMemory, error) {
+	rows, err := s.db.Query("SELECT id, project_id, entry_type, content, metadata, created_at FROM project_memory WHERE project_id = ? ORDER BY created_at ASC", projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var memories []ProjectMemory
+	for rows.Next() {
+		var m ProjectMemory
+		if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &m.Metadata, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		memories = append(memories, m)
+	}
+	return memories, nil
+}
+
+func (s *Store) UpdateMemory(id int64, content, metadata string) error {
+	_, err := s.db.Exec("UPDATE project_memory SET content = ?, metadata = ? WHERE id = ?", content, metadata, id)
+	return err
+}
+
+func (s *Store) DeleteMemory(id int64) error {
+	_, err := s.db.Exec("DELETE FROM project_memory WHERE id = ?", id)
+	return err
+}
+
+func (s *Store) ClearMemory(projectID int64) error {
+	_, err := s.db.Exec("DELETE FROM project_memory WHERE project_id = ?", projectID)
 	return err
 }
