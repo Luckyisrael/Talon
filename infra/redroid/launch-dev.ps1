@@ -59,8 +59,8 @@ if ($devices -match "localhost:$AdbPort\s+device") {
 
 # Step 6: Set device PIN (required for MWA)
 Write-Host "--- Setting device PIN ---" -ForegroundColor Yellow
-wsl -d SeekerLinux -e adb -s localhost:$AdbPort push /mnt/c/Users/Lucky/Desktop/SeekerStudio/infra/redroid/entrypoint.sh /tmp/device-setup.sh 2>&1
-wsl -d SeekerLinux -e adb -s localhost:$AdbPort shell "sh /tmp/device-setup.sh" 2>&1
+wsl -d SeekerLinux -e adb -s localhost:$AdbPort push /mnt/c/Users/Lucky/Desktop/SeekerStudio/infra/redroid/entrypoint.sh /data/local/tmp/device-setup.sh 2>&1
+wsl -d SeekerLinux -e adb -s localhost:$AdbPort shell "sh /data/local/tmp/device-setup.sh" 2>&1
 
 Write-Host "`n=== Container Ready ===" -ForegroundColor Green
 Write-Host "Container:   $ContainerName"
