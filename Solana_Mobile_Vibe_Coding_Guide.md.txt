@@ -40,6 +40,7 @@ To protect server GPU/RAM margins while ensuring rapid viral adoption within the
 3. **Warm Paused Pool**: Each host keeps 3–5 pre-booted, `docker pause`d containers. Re-connection on the Free tier calls "Resume Container" and **unpauses in ~2 seconds** (cold start ~20–30s with a loading state).
 4. **Metering**: Active device-minutes and prompt usage are recorded per user and enforced against tier limits with metered overage.
 
+
 ---
 
 ## 3. High-Level Architecture & Component Specification

@@ -77,11 +77,12 @@ wsl --import SeekerLinux C:\Users\Lucky\wsl\SeekerLinux noble-wsl-amd64.wsl
 1. Installs kernel build dependencies (`build-essential`, `flex`, `bison`, `bc`, `libssl-dev`, etc.)
 2. Clones `microsoft/WSL2-Linux-Kernel` at tag `linux-msft-wsl-6.6.87.2` (matching your running kernel exactly)
 3. Copies Microsoft's `config-wsl` as the base `.config`
-4. Enables three critical options:
+4. Enables four critical options:
    - `CONFIG_ANDROID=y` — enables the Android subsystem
    - `CONFIG_ANDROID_BINDER_IPC=y` — the Binder IPC driver (built-in, not module)
    - `CONFIG_ANDROID_BINDERFS=y` — modern Binder filesystem (replaces legacy /dev/binder)
    - `CONFIG_ASHMEM=y` — shared memory for legacy compatibility
+   - `CONFIG_ISO9660_FS=y` — ISO9660 filesystem (required for Docker Desktop to mount its CLI tools ISO)
 5. Runs `make olddefconfig` to resolve dependencies
 6. Builds `bzImage` with all available CPUs (`make -j$(nproc)`)
 7. Copies the finished kernel to `C:\Users\Lucky\seekersstudio-kernel\bzImage`
@@ -126,6 +127,7 @@ Runs a battery of checks inside SeekerLinux:
 ```
 ✅ binder found in /proc/filesystems
 binderfs /dev/binderfs
+✅ ISO9660 found in /proc/filesystems
 ✅ Docker accessible from SeekerLinux
 ```
 
@@ -144,6 +146,38 @@ Redroid needs access to the host's binderfs mount. Docker's privilege separation
 normally blocks this. The `--privileged` flag grants the container the necessary
 kernel capabilities.
 
+## Docker: Docker CE (not Docker Desktop)
+
+We use Docker CE installed directly inside SeekerLinux, **not Docker Desktop**.
+
+**Why not Docker Desktop?**
+Docker Desktop's WSL2 backend ships precompiled LinuxKit binaries (`initd`) that are
+compiled against specific kernel netlink headers. Our custom kernel (6.6.87.2+) has
+slightly different netlink attribute validation, causing `initd` to crash silently.
+This is a known issue ([WSL#40573](https://github.com/microsoft/WSL/issues/40573))
+that cannot be fixed by kernel config — it requires Docker to recompile their binaries.
+
+**How Docker CE works instead:**
+- `docker.io` package from Ubuntu repos installs Docker CE 29.x directly into SeekerLinux
+- Docker daemon runs as a systemd service inside SeekerLinux (systemd enabled via `/etc/wsl.conf`)
+- Containers use `--network host` mode (bridge/iptables not available due to missing kernel modules)
+- Access Docker from Windows via: `wsl -d SeekerLinux -e docker ...`
+- Also works for your other projects (postgres, etc.) via the same pattern
+
+**Docker daemon configuration** (`/etc/docker/daemon.json`):
+```json
+{
+  "iptables": false,
+  "bridge": "none",
+  "ip-forward": true,
+  "storage-driver": "overlay2"
+}
+```
+- `iptables: false` — `xt_addrtype` module missing from kernel (compiled as `=m`, not loadable)
+- `bridge: none` — bridge netfilter module missing, same reason
+- Containers use `--network host` instead for networking
+- For port-mapped containers, access via `localhost:<port>` from Windows
+
 ## Disk Space Awareness
 
 The kernel build consumes ~5-7 GB temporarily:
@@ -151,8 +185,13 @@ The kernel build consumes ~5-7 GB temporarily:
 - Build artifacts (.o files): ~3-4 GB
 - bzImage output: ~15 MB
 
-The `build-kernel.sh` script runs `make clean` after copying the bzImage, freeing
-~3 GB. The source code (~2 GB) remains for future rebuilds.
+The `build-kernel.sh` script runs `make clean` AND removes the source tree after
+copying the bzImage, freeing ~5 GB. Docker CE adds ~300 MB. Net disk impact is minimal.
+
+After setup, compact the SeekerLinux VHDX to reclaim deleted space on Windows:
+```powershell
+wsl --manage SeekerLinux --set-compact true
+```
 
 ## How to Run (Manual Steps)
 
@@ -162,27 +201,54 @@ If you prefer running commands manually instead of the master script:
 # 1. Import Ubuntu WSL distro
 wsl --import SeekerLinux C:\Users\Lucky\wsl\SeekerLinux C:\Users\Lucky\AppData\Local\Temp\opencode\noble-wsl-amd64.wsl
 
-# 2. Set default user to root
-wsl -d SeekerLinux -e bash -c 'echo -e "[user]\ndefault=root" > /etc/wsl.conf'
+# 2. Set default user to root + enable systemd
+wsl -d SeekerLinux -e bash -c 'printf "[boot]\nsystemd=true\n\n[user]\ndefault=root\n" > /etc/wsl.conf'
+wsl --terminate SeekerLinux
+Start-Sleep -Seconds 3
 
-# 3. Build kernel (10-20 min)
+# 3. Install Docker CE
+wsl -d SeekerLinux -e bash -c "apt-get update && apt-get install -y docker.io"
+
+# 4. Configure Docker daemon
+wsl -d SeekerLinux -e bash -c 'mkdir -p /etc/docker && printf "{\"iptables\":false,\"bridge\":\"none\",\"ip-forward\":true,\"storage-driver\":\"overlay2\"}\n" > /etc/docker/daemon.json'
+wsl -d SeekerLinux -e systemctl restart docker
+
+# 5. Verify Docker
+wsl -d SeekerLinux -e docker run --rm hello-world
+
+# 6. Build kernel (10-20 min)
 wsl -d SeekerLinux -e bash -c "bash < /mnt/c/Users/Lucky/Desktop/SeekerStudio/infra/phase1/build-kernel.sh"
 
-# 4. Write .wslconfig
+# 7. Write .wslconfig
 @'
 [wsl2]
 kernel=C:\\Users\\Lucky\\seekersstudio-kernel\\bzImage
 '@ | Out-File -FilePath "$env:USERPROFILE\.wslconfig" -Encoding ascii -Force
 
-# 5. Restart WSL
+# 8. Restart WSL
 wsl --shutdown
 Start-Sleep -Seconds 3
 
-# 6. Verify binder
+# 9. Verify binder + Docker
 wsl -d SeekerLinux -e bash -c "bash < /mnt/c/Users/Lucky/Desktop/SeekerStudio/infra/phase1/verify.sh"
 
-# 7. Boot Redroid
+# 10. Compact VHDX (reclaim disk space)
+wsl --manage SeekerLinux --set-compact true
+
+# 11. Boot Redroid
 wsl -d SeekerLinux -e bash -c "bash < /mnt/c/Users/Lucky/Desktop/SeekerStudio/infra/phase1/boot-redroid.sh"
+```
+
+**Using Docker from Windows:**
+```powershell
+# Run any docker command via WSL
+wsl -d SeekerLinux -e docker ps
+wsl -d SeekerLinux -e docker run -d --name mydb --network host -e POSTGRES_PASSWORD=secret postgres:16
+wsl -d SeekerLinux -e docker exec -it mydb psql -U postgres
+
+# Or enter SeekerLinux shell and use docker directly
+wsl -d SeekerLinux
+docker ps
 ```
 
 ## Troubleshooting
@@ -190,10 +256,13 @@ wsl -d SeekerLinux -e bash -c "bash < /mnt/c/Users/Lucky/Desktop/SeekerStudio/in
 | Symptom | Cause | Fix |
 |---|---|---|
 | `grep binder` returns nothing | Custom kernel not loaded | Verify `.wslconfig` path, run `wsl --shutdown`, restart |
-| Docker says "cannot connect" | Docker Desktop not running | Start Docker Desktop from Start Menu |
+| `grep iso9660` returns nothing | ISO9660 not built into kernel | Rebuild kernel with `scripts/config --enable CONFIG_ISO9660_FS` |
+| Docker fails to start | Kernel modules missing | Check `/etc/docker/daemon.json` has `iptables:false`, `bridge:none` |
+| `docker pull` times out | DNS not resolving inside WSL | Check `/etc/resolv.conf` in SeekerLinux, restart WSL |
 | `adb devices` shows `offline` | Container not fully booted | Wait 10s, retry `adb connect localhost:5555` |
 | Container exits immediately | Kernel lacks binder | Rebuild kernel with binder enabled |
 | `getprop` shows wrong resolution | Redroid boot params wrong | Recreate container with correct `androidboot.redroid_*` flags |
+| "address already in use" | Port conflict with host services | Use `--network host` and different ports |
 
 ## What This Enables
 

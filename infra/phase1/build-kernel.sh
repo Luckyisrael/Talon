@@ -45,6 +45,9 @@ scripts/config --enable CONFIG_ANDROID_BINDER_IPC
 scripts/config --enable CONFIG_ANDROID_BINDERFS
 scripts/config --enable CONFIG_ASHMEM
 
+# Step 4b: Enable ISO9660 (required for Docker Desktop CLI tools ISO mount)
+scripts/config --enable CONFIG_ISO9660_FS
+
 # Step 5: Rebuild config (resolve dependencies)
 echo ""
 echo "=== Running olddefconfig ==="
@@ -77,6 +80,12 @@ echo "=== Cleaning build artifacts ==="
 make clean
 echo "Clean complete. Freed disk space."
 
+# Step 10: Remove build source to reclaim disk space inside VHDX
+echo ""
+echo "=== Removing kernel source tree to reclaim disk space ==="
+rm -rf "$BUILD_DIR"
+echo "Source tree removed. Freed ~5 GB inside VHDX."
+
 echo ""
 echo "=== DONE ==="
 echo "bzImage is at: C:\\Users\\Lucky\\seekersstudio-kernel\\bzImage"
@@ -87,3 +96,4 @@ echo "     (use infra/phase1/wslconfig.txt as template)"
 echo "  2. Run: wsl --shutdown"
 echo "  3. Run: wsl -d SeekerLinux -e uname -r  (should show custom kernel)"
 echo "  4. Run: wsl -d SeekerLinux -e grep binder /proc/filesystems"
+echo "  5. Run: wsl -d SeekerLinux -e grep iso9660 /proc/filesystems"
