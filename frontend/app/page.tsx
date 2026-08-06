@@ -5,13 +5,11 @@ export default function Home() {
     <div className="min-h-screen flex flex-col bg-background">
       {/* Navbar */}
       <nav className="h-20 flex items-center justify-between px-6 md:px-12 max-w-[1500px] mx-auto w-full">
-        {/* Left: Logo */}
         <Link href="/" className="flex items-center gap-3">
           <div className="w-3 h-3 rounded-full bg-text-primary" />
           <span className="text-xl font-bold text-text-primary">SeekerStudio</span>
         </Link>
 
-        {/* Center: Nav links */}
         <div className="hidden md:flex items-center gap-8">
           <Link href="/docs" className="text-base text-text-secondary hover:text-text-primary transition-colors">
             Resources
@@ -24,9 +22,7 @@ export default function Home() {
           </Link>
         </div>
 
-        {/* Right: Social + Sign in */}
         <div className="flex items-center gap-5">
-          {/* Social icons */}
           <Link href="https://twitter.com/seekersstudio" className="text-text-secondary hover:text-text-primary transition-colors" target="_blank" rel="noopener noreferrer">
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
@@ -48,7 +44,6 @@ export default function Home() {
             </svg>
           </Link>
 
-          {/* Sign in */}
           <Link href="/login">
             <button className="h-10 px-5 rounded-full bg-text-primary text-background text-sm font-semibold hover:bg-text-secondary transition-colors">
               Sign in
@@ -58,20 +53,19 @@ export default function Home() {
       </nav>
 
       {/* Hero Section */}
-      <main className="flex-1 flex flex-col items-center justify-center px-6 py-12">
+      <main className="flex-1 flex flex-col items-center px-6 pt-20 pb-16">
         {/* Headline */}
-        <h1 className="text-5xl md:text-7xl font-bold text-text-primary text-center mb-6 tracking-tight">
+        <h1 className="text-5xl md:text-7xl font-bold text-text-primary text-center mb-4 tracking-tight">
           Build Solana Mobile Apps
         </h1>
 
         {/* Subheadline */}
-        <p className="text-xl text-text-secondary text-center mb-12 max-w-2xl">
-          with AI
+        <p className="text-lg md:text-xl text-text-secondary text-center mb-10 max-w-2xl">
+          Describe your app, watch AI generate real React Native code, preview it on a live Android emulator, and deploy to Solana Seeker — all from your browser.
         </p>
 
         {/* Prompt Input Box */}
-        <div className="w-full max-w-[950px] bg-surface-3 rounded-[20px] border border-surface-5 p-6 mb-8">
-          {/* Top row */}
+        <div className="w-full max-w-[950px] bg-surface-3 rounded-[24px] p-6 mb-8">
           <div className="flex items-center justify-between mb-6">
             <span className="text-lg text-text-muted">Describe the app you want to build...</span>
             <div className="w-8 h-8 rounded-full bg-surface-5 flex items-center justify-center">
@@ -81,7 +75,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Bottom row - toolbar */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <button className="w-9 h-9 rounded-full bg-surface-5 flex items-center justify-center hover:bg-surface-4 transition-colors">
@@ -113,25 +106,180 @@ export default function Home() {
         </div>
 
         {/* Suggestion Chips */}
-        <div className="flex flex-wrap justify-center gap-3">
-          <button className="h-11 px-5 rounded-full bg-surface-3 border border-surface-5 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
+        <div className="flex flex-wrap justify-center gap-3 mb-20">
+          <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
             <span className="w-6 h-6 rounded-full bg-accent flex items-center justify-center text-xs">🎮</span>
             Create a Multiplayer Game
           </button>
-          <button className="h-11 px-5 rounded-full bg-surface-3 border border-surface-5 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
+          <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
             <span className="w-6 h-6 rounded-full bg-accent flex items-center justify-center text-xs">📦</span>
             Create a 3D Game
           </button>
-          <button className="h-11 px-5 rounded-full bg-surface-3 border border-surface-5 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
+          <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
             <span className="w-6 h-6 rounded-full bg-solana-purple flex items-center justify-center text-xs text-white">S</span>
             Solana Wallet App
           </button>
-          <button className="h-11 px-5 rounded-full bg-surface-3 border border-surface-5 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
+          <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
             <span className="w-6 h-6 rounded-full bg-surface-5 flex items-center justify-center text-xs">⚡</span>
             GitHub to Mobile App
           </button>
         </div>
+
+        {/* Features Section */}
+        <div className="w-full max-w-[1200px] mx-auto">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl md:text-4xl font-bold text-text-primary mb-4">
+              Everything you need to ship
+            </h2>
+            <p className="text-lg text-text-secondary max-w-xl mx-auto">
+              From idea to installed app on a real Android device — no local setup required.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-surface-3 rounded-[20px] p-6">
+              <div className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-text-primary mb-2">AI-Powered Generation</h3>
+              <p className="text-sm text-text-secondary leading-relaxed">
+                Describe your app in plain English. Our AI generates production-ready React Native code with Solana Mobile SDK integration.
+              </p>
+            </div>
+
+            <div className="bg-surface-3 rounded-[20px] p-6">
+              <div className="w-10 h-10 rounded-full bg-solana-purple/10 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-solana-purple" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-text-primary mb-2">Live Device Preview</h3>
+              <p className="text-sm text-text-secondary leading-relaxed">
+                See your app running on a real Android emulator in real-time. Every change streams instantly to the virtual Seeker device.
+              </p>
+            </div>
+
+            <div className="bg-surface-3 rounded-[20px] p-6">
+              <div className="w-10 h-10 rounded-full bg-success/10 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-text-primary mb-2">One-Click Deploy</h3>
+              <p className="text-sm text-text-secondary leading-relaxed">
+                Build and install your APK directly to the emulator. Test wallet connections, MWA protocol, and native features instantly.
+              </p>
+            </div>
+
+            <div className="bg-surface-3 rounded-[20px] p-6">
+              <div className="w-10 h-10 rounded-full bg-warning/10 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-text-primary mb-2">Solana Native</h3>
+              <p className="text-sm text-text-secondary leading-relaxed">
+                Built-in MWA wallet integration, Keypair management, and Solana RPC. Everything your Seeker app needs, pre-configured.
+              </p>
+            </div>
+
+            <div className="bg-surface-3 rounded-[20px] p-6">
+              <div className="w-10 h-10 rounded-full bg-error/10 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-error" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-text-primary mb-2">Instant Iteration</h3>
+              <p className="text-sm text-text-secondary leading-relaxed">
+                Chat with AI to refine your app. Fix bugs, add features, change designs — all through natural conversation.
+              </p>
+            </div>
+
+            <div className="bg-surface-3 rounded-[20px] p-6">
+              <div className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-text-primary mb-2">Full IDE Experience</h3>
+              <p className="text-sm text-text-secondary leading-relaxed">
+                File tree, terminal, build output — all in your browser. No VS Code, no Android Studio, no local toolchain needed.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* CTA Section */}
+        <div className="w-full max-w-[800px] mx-auto mt-24 text-center">
+          <h2 className="text-3xl md:text-4xl font-bold text-text-primary mb-4">
+            Start building today
+          </h2>
+          <p className="text-lg text-text-secondary mb-8 max-w-lg mx-auto">
+            Free tier includes 20 AI prompts and 60 minutes of device time. No credit card required.
+          </p>
+          <Link href="/register">
+            <button className="h-12 px-8 rounded-full bg-text-primary text-background text-base font-semibold hover:bg-text-secondary transition-colors">
+              Get Started Free
+            </button>
+          </Link>
+        </div>
       </main>
+
+      {/* Footer */}
+      <footer className="py-12 px-6 md:px-12 bg-surface-1">
+        <div className="max-w-[1200px] mx-auto">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-12">
+            <div>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-3 h-3 rounded-full bg-text-primary" />
+                <span className="text-sm font-bold text-text-primary">SeekerStudio</span>
+              </div>
+              <p className="text-sm text-text-secondary leading-relaxed">
+                Build Solana Mobile apps with AI. From idea to device in minutes.
+              </p>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-text-primary mb-4">Product</h4>
+              <ul className="space-y-2">
+                <li><Link href="/pricing" className="text-sm text-text-secondary hover:text-text-primary transition-colors">Pricing</Link></li>
+                <li><Link href="/dashboard" className="text-sm text-text-secondary hover:text-text-primary transition-colors">App</Link></li>
+                <li><Link href="/docs" className="text-sm text-text-secondary hover:text-text-primary transition-colors">Documentation</Link></li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-text-primary mb-4">Resources</h4>
+              <ul className="space-y-2">
+                <li><Link href="/docs/getting-started" className="text-sm text-text-secondary hover:text-text-primary transition-colors">Getting Started</Link></li>
+                <li><Link href="/docs/solana-mobile" className="text-sm text-text-secondary hover:text-text-primary transition-colors">Solana Mobile Guide</Link></li>
+                <li><Link href="/docs/api" className="text-sm text-text-secondary hover:text-text-primary transition-colors">API Reference</Link></li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-text-primary mb-4">Community</h4>
+              <ul className="space-y-2">
+                <li><Link href="https://discord.gg/seekersstudio" className="text-sm text-text-secondary hover:text-text-primary transition-colors" target="_blank" rel="noopener noreferrer">Discord</Link></li>
+                <li><Link href="https://twitter.com/seekersstudio" className="text-sm text-text-secondary hover:text-text-primary transition-colors" target="_blank" rel="noopener noreferrer">Twitter</Link></li>
+                <li><Link href="https://github.com/seekersstudio" className="text-sm text-text-secondary hover:text-text-primary transition-colors" target="_blank" rel="noopener noreferrer">GitHub</Link></li>
+              </ul>
+            </div>
+          </div>
+
+          <div className="pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
+            <p className="text-xs text-text-muted">
+              © 2026 SeekerStudio. All rights reserved.
+            </p>
+            <div className="flex items-center gap-6">
+              <Link href="/privacy" className="text-xs text-text-muted hover:text-text-secondary transition-colors">Privacy</Link>
+              <Link href="/terms" className="text-xs text-text-muted hover:text-text-secondary transition-colors">Terms</Link>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
