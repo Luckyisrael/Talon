@@ -2,7 +2,7 @@
 # ============================================================
 # SeekerStudio Redroid Device Setup
 # Run via ADB after container boot:
-#   adb -s localhost:5555 shell "sh /tmp/device-setup.sh"
+#   adb -s localhost:5555 shell "sh /data/local/tmp/device-setup.sh"
 #
 # This script only configures the Android device itself.
 # No Solana CLI or validators — that runs on the host.
