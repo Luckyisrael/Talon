@@ -6,21 +6,22 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/seekersstudio/backend/internal adb"
+	"github.com/seekersstudio/backend/internal/adb"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/api"
 	"github.com/seekersstudio/backend/internal/auth"
 	"github.com/seekersstudio/backend/internal/store"
+
+	_ "modernc.org/sqlite"
 )
 
-type contextKey string
-
-const userIDKey contextKey = "user_id"
+// contextKey is used for request context values.
 
 func main() {
 	port := os.Getenv("PORT")
@@ -35,20 +36,24 @@ func main() {
 
 	templateDir := os.Getenv("TEMPLATE_DIR")
 	if templateDir == "" {
-		templateDir = "./template"
+		exe, _ := os.Executable()
+		templateDir = filepath.Join(filepath.Dir(exe), "template")
 	}
 
 	workspaceDir := os.Getenv("WORKSPACE_DIR")
 	if workspaceDir == "" {
-		workspaceDir = "./workspaces"
+		exe, _ := os.Executable()
+		workspaceDir = filepath.Join(filepath.Dir(exe), "workspaces")
 	}
 
 	// Initialize services
+	log.Println("initializing store...")
 	s, err := store.New(dbPath)
 	if err != nil {
 		log.Fatal("failed to initialize store:", err)
 	}
 	defer s.Close()
+	log.Println("store initialized")
 
 	authSvc := auth.New()
 	aiClient := ai.New()
@@ -116,6 +121,7 @@ func main() {
 
 	log.Printf("seekersstudio backend listening on :%s", port)
 	if err := http.ListenAndServe(":"+port, r); err != nil {
+		log.Printf("server error: %v", err)
 		log.Fatal(err)
 	}
 }
@@ -141,7 +147,7 @@ func authMiddleware(svc *auth.Service) func(http.Handler) http.Handler {
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), userIDKey, claims.UserID)
+			ctx := context.WithValue(r.Context(), api.UserIDKey, claims.UserID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

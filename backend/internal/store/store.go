@@ -261,12 +261,11 @@ func (s *Store) GetUsage(userID int64) (*Usage, error) {
 	err := s.db.QueryRow("SELECT id, user_id, prompts_used, device_minutes, period_start FROM usage WHERE user_id = ? ORDER BY period_start DESC LIMIT 1", userID).
 		Scan(&u.ID, &u.UserID, &u.PromptsUsed, &u.DeviceMinutes, &u.PeriodStart)
 	if err == sql.ErrNoRows {
-		res, err2 := s.db.Exec("INSERT INTO usage (user_id) VALUES (?)", userID)
+		_, err2 := s.db.Exec("INSERT INTO usage (user_id) VALUES (?)", userID)
 		if err2 != nil {
 			return nil, err2
 		}
-		id, _ := res.LastInsertId()
-		return s.GetUsage(id)
+		return s.GetUsage(userID)
 	}
 	if err != nil {
 		return nil, err

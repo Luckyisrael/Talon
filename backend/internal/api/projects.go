@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,7 +31,7 @@ type createProjectRequest struct {
 }
 
 func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("user_id").(int64)
+	userID := GetUserID(r.Context())
 
 	projects, err := h.store.ListProjects(userID)
 	if err != nil {
@@ -46,7 +47,7 @@ func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("user_id").(int64)
+	userID := GetUserID(r.Context())
 
 	var req createProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -61,15 +62,15 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	project, err := h.store.CreateProject(userID, req.Name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create project")
+		writeError(w, http.StatusInternalServerError, "failed to create project: "+err.Error())
 		return
 	}
 
 	// Copy template to workspace
 	projectDir := filepath.Join(h.workspaceDir, strconv.FormatInt(project.ID, 10))
 	if err := copyDir(h.templateDir, projectDir); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to initialize project")
-		return
+		// Template copy failed but project was created — log but don't fail
+		log.Printf("WARN: template copy failed for project %d: %v", project.ID, err)
 	}
 
 	writeJSON(w, http.StatusCreated, project)

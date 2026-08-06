@@ -8,6 +8,8 @@ import (
 	"github.com/seekersstudio/backend/internal/store"
 )
 
+// AuthHandler doesn't need GetUserID — it's called before auth middleware.
+
 type AuthHandler struct {
 	store *store.Store
 	auth  *auth.Service

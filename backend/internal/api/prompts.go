@@ -27,7 +27,7 @@ type promptRequest struct {
 }
 
 func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("user_id").(int64)
+	userID := GetUserID(r.Context())
 
 	var req promptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

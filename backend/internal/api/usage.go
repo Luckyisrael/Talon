@@ -24,7 +24,7 @@ type usageResponse struct {
 }
 
 func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("user_id").(int64)
+	userID := GetUserID(r.Context())
 
 	user, err := h.store.GetUserByID(userID)
 	if err != nil {
