@@ -1,0 +1,30 @@
+{
+  "name": "seeker-app",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "build:android": "eas build -p android"
+  },
+  "dependencies": {
+    "expo": "~54.0.0",
+    "expo-dev-client": "~5.0.0",
+    "react": "19.2.8",
+    "react-native": "0.76.9",
+    "react-native-safe-area-context": "~5.0.0",
+    "react-native-gesture-handler": "~2.20.0",
+    "react-native-reanimated": "~3.16.0",
+    "@solana/web3.js": "^1.95.0",
+    "@solana-mobile/mobile-wallet-adapter-protocol-web3js": "^0.0.2",
+    "@solana-mobile/mobile-wallet-adapter-protocol": "^0.0.2",
+    "react-native-get-random-values": "~1.11.0",
+    "@craftzdog/react-native-buffer": "^6.0.5",
+    "react-native-quick-base64": "^2.1.2",
+    "@react-native-async-storage/async-storage": "^2.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.0.0",
+    "typescript": "^5.3.0"
+  }
+}

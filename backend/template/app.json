@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "SeekerApp",
+    "slug": "seeker-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0a"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0a0a"
+      },
+      "package": "com.seekerstudio.app"
+    },
+    "plugins": []
+  }
+}
