@@ -26,13 +26,14 @@ else
 fi
 echo ""
 
-# Step 3: Check for ashmem (optional, for legacy compatibility)
-echo "--- Ashmem (optional) ---"
-if grep -q ashmem /proc/misc 2>/dev/null; then
-  echo "✅ ashmem found"
-  grep ashmem /proc/misc
+# Step 3: Check for memfd (used instead of ashmem)
+echo "--- Memfd support (required for Redroid) ---"
+if grep -q CONFIG_MEMFD_CREATE /proc/config.gz 2>/dev/null || zgrep -q CONFIG_MEMFD_CREATE /proc/config.gz 2>/dev/null; then
+  echo "✅ memfd_create available"
+elif [ -e /dev/shm ]; then
+  echo "✅ /dev/shm exists (memfd likely available)"
 else
-  echo "⚠️  ashmem not found (ok if using binderfs, which is preferred)"
+  echo "⚠️  memfd status unknown — Redroid uses androidboot.use_memfd=1"
 fi
 echo ""
 

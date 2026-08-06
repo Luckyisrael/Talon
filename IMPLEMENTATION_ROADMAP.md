@@ -12,16 +12,14 @@ Each phase has a **Definition of Done (DoD)** — do not start the next phase un
 
 | Tool | Version | Notes |
 |---|---|---|
-| Docker Desktop | 29.6.1 | WSL2 backend, distro `docker-desktop` (currently stopped) |
-| Docker Compose | v5.3.0 | |
-| WSL2 | 2.x | Only `docker-desktop` distro present; no general Ubuntu distro yet |
+| Docker CE | 29.1.3 | Running inside SeekerLinux WSL distro (Docker Desktop is unused — broken with custom kernel) |
+| WSL2 | 2.x | `SeekerLinux` distro (Ubuntu 24.04, systemd enabled) with custom kernel 6.6.87.2+ |
+| Custom Kernel | 6.6.87.2+ | `binderfs=y` (built-in), `memfd_create=y`. Ashmem not available — use `androidboot.use_memfd=1`. |
 | Go | 1.25.2 | windows/amd64 |
 | Node | 22.23.1 | |
 | Git | 2.55.0 | |
 
-**Dev platform constraint:** Redroid needs `binder_linux`/`ashmem_linux` in a **Linux host kernel**.
-Docker Desktop's stock WSL2 kernel does **not** ship these modules — Phase 1 includes building a
-custom WSL2 kernel (the documented community path). A dedicated Ubuntu WSL distro + custom kernel is the fallback.
+**Dev platform:** Redroid runs inside SeekerLinux (WSL2) via Docker CE with `--privileged --network host`. Android's `/init` boots with `androidboot.use_memfd=1` (no ashmem). ADB connects over TCP on `localhost:5555`.
 
 ---
 
@@ -58,60 +56,55 @@ custom WSL2 kernel (the documented community path). A dedicated Ubuntu WSL distr
 
 **Objective:** Boot a Redroid Android 14 container at Seeker resolution on the local machine.
 
-- Create a custom WSL2 kernel with `binder_linux` + `ashmem_linux` (community guide):
-  - Clone `microsoft/WSL2-Linux-Kernel`, `make menuconfig` → enable `CONFIG_ANDROID_BINDER_IPC` (+ hwbinder/vndbinder devices) and `CONFIG_ASHMEM`.
-  - Build `arch/x86/boot/bzImage`; point `.wslconfig` → `kernel=<path>`; `wsl --shutdown`.
-  - Fallback: install a general Ubuntu WSL distro, then build/load modules via `remote-android/redroid-modules` (DKMS).
-- Verify host kernel: `grep binder /proc/filesystems` (inside Linux) lists `binder`.
-- Start Redroid (docker-desktop context):
-  ```bash
-  docker run -d --name redroid-seeker-base --privileged -p 5555:5555 \
-    redroid/redroid:14.0.0_64only-latest \
-    androidboot.redroid_width=1080 androidboot.redroid_height=2400 \
-    androidboot.redroid_dpi=420 androidboot.redroid_fps=60
-  adb connect localhost:5555
-  adb shell getprop ro.boot.redroid_*   # confirm 1080x2400 @ 420
-  adb exec-out screencap -p > screen.png  # sanity image
-  ```
+**Status:** ✅ COMPLETE
+
+- Created `SeekerLinux` WSL2 distro (Ubuntu 24.04, systemd enabled via `/etc/wsl.conf`).
+- Built custom WSL2 kernel `6.6.87.2-microsoft-standard-WSL2+` with:
+  - `CONFIG_ANDROID_BINDER_IPC=y` (built-in)
+  - `CONFIG_ANDROID_BINDERFS=y` (built-in)
+  - `CONFIG_MEMFD_CREATE=y` (built-in)
+  - Ashmem (`CONFIG_ASHMEM`) is **not available** in this kernel version — Redroid uses `androidboot.use_memfd=1` instead.
+- Docker CE 29.1.3 installed inside SeekerLinux with daemon config: `iptables:false`, `bridge:none`, `ip-forward:true`, `storage-driver:overlay2`.
+- Redroid container boots at Seeker resolution: **1080×2400 @ 420 DPI**.
+- ADB connects over TCP: `localhost:5555`.
+- VHDX compacted: 13.79 GB → 3.51 GB. Free disk: ~22 GB.
+
+**Redroid is used purely as an Android device emulator** — it runs APKs and streams via ws-scrcpy. No Solana CLI, test validators, or smart contract tooling inside the container.
+
+**DoD:** ✅ Redroid boots and is ADB-controllable at Seeker resolution on the dev machine.
+
+---
+
+## Phase 2 — Container Image & Device Setup
+
+**Objective:** Prepare the Redroid container for running Seeker mobile apps.
+
+**Status:** ✅ COMPLETE
+
+Redroid is a pure Android device — it runs APKs and streams via ws-scrcpy. No Solana tooling inside.
+
+- Container launched with `androidboot.use_memfd=1` (replaces deprecated ashmem).
+- ADB TCP enabled on port 5555.
+- Device PIN set programmatically via `locksettings set-pin` (required for MWA wallet sessions).
+- Container persists app data via Docker volume mounts.
 
 **Testing / Verification:**
-- `adb devices` shows `localhost:5555  device` (not `offline`).
+- `adb devices` shows `localhost:5555  device`.
 - `getprop` resolution/DPI match Seeker (1080×2400 @ 420).
 - `screencap` produces a valid PNG.
 
-**DoD:** Redroid boots and is ADB-controllable at Seeker resolution on the dev machine.
+**DoD:** ✅ Container boots, ADB works, ready for APK deployment.
 
 ---
 
-## Phase 2 — Container Image: Solana Dev Stack (baked)
+## Phase 3 — Go Backend: Core API
 
-**Objective:** Turn the base Redroid image into a ready-to-use Seeker workspace image.
+**Objective:** Backend that serves the frontend, manages AI prompts, and orchestrates the dev environment.
 
-- `infra/redroid/Dockerfile` extends `redroid/redroid:14.0.0_64only-latest`:
-  - Install `solana` CLI (`agave-install` or apt release) → `solana-test-validator` on localhost:8899.
-  - Bake official **mock-mwa-wallet** APK (`solana-mobile/mock-mwa-wallet`); configure known devnet keypair via `local.properties` at build time.
-  - Entrypoint: set **device PIN programmatically** (MWA requires device authentication), start validator, airdrop.
-  - Ship `adb` (host or in-image) so the web terminal (`adb shell`) works out of the box.
-- Build + launch the image; install the APK via ADB.
-- Scratch Expo bare RN app that calls `transact()` → `authorize` → balance → airdrop → send.
-
-**Testing / Verification:**
-- Mock wallet visible in `pm list packages`; device PIN set (MWA session works).
-- `solana-test-validator` responds on 8899; `solana airdrop` from inside container succeeds.
-- RN app on Redroid completes: connect → balance → airdrop → transfer (verified via screencap + logcat).
-
-**DoD:** Full MWA flow works inside the container against the local validator.
-
----
-
-## Phase 3 — Go Backend: Core API + Container Manager
-
-**Objective:** Backend that owns project workspaces and the Redroid lifecycle (testable without a real emulator).
-
-- `backend/internal/container` — Docker SDK client; `Manager` interface with `Create`, `Pause`, `Resume`, `Destroy`, `WarmPool`. Implement `DockerManager` (real) + `FakeManager` (in-memory, for tests).
-- `backend/internal/workspace` — per-user project volume mount/snapshot at `/data/workspaces/<user>/<project>`.
+- `backend/internal/api` — HTTP routes: sessions CRUD, prompts, builds, usage.
 - `backend/internal/auth` — bearer/session tokens; `backend/internal/store` — SQLite (users, projects, sessions, usage).
 - `backend/internal/billing` — device-minute + prompt metering records (Stripe wiring deferred to Phase 6/8).
+- `backend/internal/adb` — ADB command proxy (connect, install APK, shell, screenshot, logcat).
 - HTTP routes: sessions create/pause/resume/destroy, projects CRUD, usage.
 
 **Testing / Verification:**
@@ -227,8 +220,9 @@ custom WSL2 kernel (the documented community path). A dedicated Ubuntu WSL distr
 
 | Risk | Mitigation |
 |---|---|
-| WSL2 kernel lacks binder modules | Custom kernel build (Phase 1) with docker-desktop kernel as fallback; verify with `/proc/filesystems` probe |
-| H.264 encoding at 60 FPS is CPU-heavy | Hardware encode on hosts (entry NVIDIA T400/NVENC or iGPU QuickSync); free tier capped at 30 FPS |
+| WSL2 kernel lacks binder | Custom kernel with `binderfs=y` built-in; verified via `/proc/filesystems` |
+| Ashmem not available | Use `androidboot.use_memfd=1` — memfd_create is built into the kernel |
+| H.264 encoding at 60 FPS is CPU-heavy | Hardware encode on hosts (NVIDIA T400/NVENC or iGPU QuickSync); free tier capped at 30 FPS |
 | AI token cost erodes margin | Model routing (flash for routine), per-prompt output caps, burn-rate dashboard |
 | Concurrent session saturation | Warm paused pool + concurrency capacity model (≈8 active/host on 16vCPU/64GB) |
 | ws-scrcpy unauthenticated by default | Go WSS termination + per-session tokens; never expose ws-scrcpy directly |
@@ -238,6 +232,9 @@ custom WSL2 kernel (the documented community path). A dedicated Ubuntu WSL distr
 
 ## Suggested Next Steps
 
-1. **Phase 0** — scaffold repo (fastest, unblocks everything).
-2. **Phase 1** — the highest-risk step: custom WSL2 kernel + first Redroid boot. Do this early; everything after depends on it.
-3. Parallelize: Phase 3 (Go backend, tests don't need an emulator) can proceed while Phase 1/2 are sorted.
+1. ✅ **Phase 0** — repo scaffolded.
+2. ✅ **Phase 1** — custom kernel + Redroid boot at Seeker resolution.
+3. ✅ **Phase 2** — container ready for APK deployment.
+4. **Phase 3** — Go backend API (serves frontend, manages prompts, proxies ADB).
+5. **Phase 4** — ws-scrcpy streaming + web terminal (live preview in browser).
+6. **Phase 5** — AI orchestrator (prompt → code → build → deploy → preview loop).

@@ -2,10 +2,13 @@
 # SeekerStudio — Launch Redroid Dev Container
 # Run from PowerShell:
 #   powershell C:\Users\Lucky\Desktop\SeekerStudio\infra\redroid\launch-dev.ps1
+#
+# Redroid is a pure Android device — runs APKs, streams via ws-scrcpy.
+# No Solana tooling inside. Host handles all build/compile work.
 # ============================================================
 
 $ContainerName = "redroid-seeker-dev"
-$ImageName = "redroid-seeker-dev"
+$ImageName = "redroid/redroid:14.0.0_64only-latest"
 $DevicePin = "1234"
 $AdbPort = 5555
 
@@ -54,13 +57,13 @@ if ($devices -match "localhost:$AdbPort\s+device") {
     exit 1
 }
 
-# Step 6: Run setup (PIN + Solana + Validator)
-Write-Host "--- Running setup (PIN + Solana + Validator) ---" -ForegroundColor Yellow
-wsl -d SeekerLinux -e adb -s localhost:$AdbPort push /mnt/c/Users/Lucky/Desktop/SeekerStudio/infra/redroid/entrypoint.sh /tmp/entrypoint.sh 2>&1
-wsl -d SeekerLinux -e adb -s localhost:$AdbPort shell "sh /tmp/entrypoint.sh" 2>&1
+# Step 6: Set device PIN (required for MWA)
+Write-Host "--- Setting device PIN ---" -ForegroundColor Yellow
+wsl -d SeekerLinux -e adb -s localhost:$AdbPort push /mnt/c/Users/Lucky/Desktop/SeekerStudio/infra/redroid/entrypoint.sh /tmp/device-setup.sh 2>&1
+wsl -d SeekerLinux -e adb -s localhost:$AdbPort shell "sh /tmp/device-setup.sh" 2>&1
 
 Write-Host "`n=== Container Ready ===" -ForegroundColor Green
+Write-Host "Container:   $ContainerName"
 Write-Host "ADB:         adb -s localhost:$AdbPort shell"
-Write-Host "Solana:      adb -s localhost:$AdbPort shell /opt/solana/bin/solana --version"
-Write-Host "Validator:   adb -s localhost:$AdbPort shell /opt/solana/bin/solana cluster-version"
-Write-Host "Wallet:      /tmp/solana-keypair.json"
+Write-Host "Resolution:  1080x2400 @ 420 DPI"
+Write-Host "Device PIN:  $DevicePin"
