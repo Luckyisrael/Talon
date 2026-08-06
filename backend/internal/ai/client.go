@@ -10,7 +10,9 @@ import (
 	"os"
 )
 
-const systemPromptPlan = `You are a Solana Mobile app architect helping users design apps for the Seeker device.
+const systemPromptPlan = `IMPORTANT: Do NOT use any tools. Do NOT call any functions. Respond ONLY with plain text JSON. No tool calls.
+
+You are a Solana Mobile app architect helping users design apps for the Seeker device.
 
 The Seeker device specs:
 - Screen: 6.36" AMOLED, 2670x1200, 460 PPI, 120Hz
@@ -41,7 +43,9 @@ Respond in this JSON format:
 
 If you're still discussing (not ready to finalize), set plan to null.`
 
-const systemPromptBuild = `You are a React Native engineer specializing in Solana Mobile apps for the Seeker device.
+const systemPromptBuild = `IMPORTANT: Do NOT use any tools. Do NOT call any functions. Respond ONLY with plain text JSON. No tool calls.
+
+You are a React Native engineer specializing in Solana Mobile apps for the Seeker device.
 
 The project already has these packages installed:
 - expo, react-native
@@ -73,7 +77,15 @@ Rules:
 - Always wrap app root in ErrorBoundary
 - Keep files focused and clean`
 
+type Provider string
+
+const (
+	ProviderAgentRouter Provider = "agentrouter"
+	ProviderOpenRouter  Provider = "openrouter"
+)
+
 type Client struct {
+	provider   Provider
 	baseURL    string
 	apiKey     string
 	model      string
@@ -81,22 +93,41 @@ type Client struct {
 }
 
 func New() *Client {
-	apiKey := os.Getenv("ANTHROPIC_AUTH_TOKEN")
-	if apiKey == "" {
-		apiKey = os.Getenv("AGENTROUTER_API_KEY")
+	provider := Provider(os.Getenv("AI_PROVIDER"))
+	if provider == "" {
+		provider = ProviderAgentRouter
 	}
 
-	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://agentrouter.org"
-	}
+	var baseURL, apiKey, model string
 
-	model := os.Getenv("ANTHROPIC_MODEL")
-	if model == "" {
-		model = "claude-opus-4-6"
+	switch provider {
+	case ProviderOpenRouter:
+		baseURL = os.Getenv("OPENROUTER_BASE_URL")
+		if baseURL == "" {
+			baseURL = "https://openrouter.ai/api/v1"
+		}
+		apiKey = os.Getenv("OPENROUTER_API_KEY")
+		model = os.Getenv("AI_MODEL")
+		if model == "" {
+			model = "anthropic/claude-sonnet-4"
+		}
+	default: // agentrouter
+		baseURL = os.Getenv("ANTHROPIC_BASE_URL")
+		if baseURL == "" {
+			baseURL = "https://agentrouter.org"
+		}
+		apiKey = os.Getenv("ANTHROPIC_AUTH_TOKEN")
+		if apiKey == "" {
+			apiKey = os.Getenv("AGENTROUTER_API_KEY")
+		}
+		model = os.Getenv("ANTHROPIC_MODEL")
+		if model == "" {
+			model = "claude-opus-5"
+		}
 	}
 
 	return &Client{
+		provider:   provider,
 		baseURL:    baseURL,
 		apiKey:     apiKey,
 		model:      model,
@@ -139,10 +170,10 @@ type PromptMessage struct {
 
 // Anthropic Messages API request
 type anthropicRequest struct {
-	Model     string              `json:"model"`
-	MaxTokens int                 `json:"max_tokens"`
-	System    string              `json:"system,omitempty"`
-	Messages  []anthropicMessage  `json:"messages"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    string             `json:"system,omitempty"`
+	Messages  []anthropicMessage `json:"messages"`
 }
 
 type anthropicMessage struct {
@@ -153,8 +184,32 @@ type anthropicMessage struct {
 // Anthropic Messages API response
 type anthropicResponse struct {
 	Content []struct {
+		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
+	Error *struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// OpenAI-compatible request (for OpenRouter)
+type openaiRequest struct {
+	Model    string          `json:"model"`
+	Messages []openaiMessage `json:"messages"`
+}
+
+type openaiMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type openaiResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
@@ -189,7 +244,14 @@ func (c *Client) Build(ctx context.Context, history []PromptMessage) (*BuildResp
 }
 
 func (c *Client) chat(ctx context.Context, system string, history []PromptMessage) (string, error) {
-	messages := []anthropicMessage{}
+	if c.provider == ProviderOpenRouter {
+		return c.chatOpenAI(ctx, system, history)
+	}
+	return c.chatAnthropic(ctx, system, history)
+}
+
+func (c *Client) chatAnthropic(ctx context.Context, system string, history []PromptMessage) (string, error) {
+	messages := make([]anthropicMessage, 0, len(history))
 	for _, h := range history {
 		messages = append(messages, anthropicMessage{
 			Role:    h.Role,
@@ -217,7 +279,6 @@ func (c *Client) chat(ctx context.Context, system string, history []PromptMessag
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
 
@@ -236,18 +297,88 @@ func (c *Client) chat(ctx context.Context, system string, history []PromptMessag
 		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	var anthropicResp anthropicResponse
-	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
+	var anthResp anthropicResponse
+	if err := json.Unmarshal(respBody, &anthResp); err != nil {
 		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	if anthropicResp.Error != nil {
-		return "", fmt.Errorf("API error: %s", anthropicResp.Error.Message)
+	if anthResp.Error != nil {
+		return "", fmt.Errorf("API error: %s", anthResp.Error.Message)
 	}
 
-	if len(anthropicResp.Content) == 0 {
+	if len(anthResp.Content) == 0 {
 		return "", fmt.Errorf("empty response from AI")
 	}
 
-	return anthropicResp.Content[0].Text, nil
+	// Find the text block (skip thinking and tool_use blocks)
+	for _, block := range anthResp.Content {
+		if block.Type == "text" && block.Text != "" {
+			return block.Text, nil
+		}
+	}
+
+	return "", fmt.Errorf("no text content in AI response")
+}
+
+func (c *Client) chatOpenAI(ctx context.Context, system string, history []PromptMessage) (string, error) {
+	messages := []openaiMessage{
+		{Role: "system", Content: system},
+	}
+	for _, h := range history {
+		messages = append(messages, openaiMessage{
+			Role:    h.Role,
+			Content: h.Content,
+		})
+	}
+
+	reqBody := openaiRequest{
+		Model:    c.model,
+		Messages: messages,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := c.baseURL + "/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("HTTP-Referer", "https://seekerstudio.app")
+	req.Header.Set("X-Title", "SeekerStudio")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var oaiResp openaiResponse
+	if err := json.Unmarshal(respBody, &oaiResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if oaiResp.Error != nil {
+		return "", fmt.Errorf("API error: %s", oaiResp.Error.Message)
+	}
+
+	if len(oaiResp.Choices) == 0 {
+		return "", fmt.Errorf("empty response from AI")
+	}
+
+	return oaiResp.Choices[0].Message.Content, nil
 }
