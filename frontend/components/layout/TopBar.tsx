@@ -35,7 +35,7 @@ export default function TopBar({
         )}
 
         <Link href="/" className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg solana-gradient flex items-center justify-center">
+          <div className="w-7 h-7 rounded-lg bg-solana-purple flex items-center justify-center">
             <span className="text-white font-bold text-xs">S</span>
           </div>
           <span className="font-semibold text-sm hidden sm:inline">SeekerStudio</span>

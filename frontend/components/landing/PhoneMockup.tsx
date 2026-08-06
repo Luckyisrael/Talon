@@ -19,7 +19,7 @@ export default function PhoneMockup() {
 
               {/* Content placeholder */}
               <div className="flex flex-col items-center justify-center h-full px-6 pb-20">
-                <div className="w-16 h-16 rounded-2xl solana-gradient flex items-center justify-center mb-6">
+                <div className="w-16 h-16 rounded-2xl bg-solana-purple flex items-center justify-center mb-6">
                   <span className="text-white text-2xl font-bold">S</span>
                 </div>
                 <div className="w-32 h-3 bg-on-surface/20 rounded-full mb-3" />
@@ -29,15 +29,12 @@ export default function PhoneMockup() {
 
               {/* Bottom nav */}
               <div className="absolute bottom-0 left-0 right-0 h-16 flex items-center justify-around px-6 bg-surface-container-low">
-                <div className="w-6 h-6 rounded-full bg-primary/20" />
+                <div className="w-6 h-6 rounded-full bg-solana-purple/20" />
                 <div className="w-6 h-6 rounded-full bg-on-surface/10" />
                 <div className="w-6 h-6 rounded-full bg-on-surface/10" />
               </div>
             </div>
           </div>
-
-          {/* Glow effect */}
-          <div className="absolute -inset-10 bg-gradient-to-r from-solana-purple/20 to-solana-green/20 blur-3xl -z-10" />
         </div>
       </div>
     </section>

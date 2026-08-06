@@ -37,7 +37,6 @@
   /* Solana Brand */
   --solana-purple: #9945FF;
   --solana-green: #14F195;
-  --solana-gradient: linear-gradient(135deg, #9945FF 0%, #14F195 100%);
 
   /* Spacing Scale (Major Second 1.125x) */
   --space-1: 4px;
@@ -170,11 +169,6 @@ body {
 
 .tonal-surface-hover {
   background-color: color-mix(in srgb, var(--primary) 12%, var(--surface));
-}
-
-/* Solana Gradient */
-.solana-gradient {
-  background: var(--solana-gradient);
 }
 
 /* Pill Shape */

@@ -46,7 +46,7 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="flex justify-center mb-8">
           <Link href="/" className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-xl solana-gradient flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-solana-purple flex items-center justify-center">
               <span className="text-white font-bold">S</span>
             </div>
           </Link>

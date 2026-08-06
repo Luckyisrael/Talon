@@ -32,7 +32,7 @@ export default function Footer() {
           {/* Brand */}
           <div className="col-span-2 md:col-span-1">
             <Link href="/" className="flex items-center gap-2 mb-4">
-              <div className="w-7 h-7 rounded-lg solana-gradient flex items-center justify-center">
+              <div className="w-7 h-7 rounded-lg bg-solana-purple flex items-center justify-center">
                 <span className="text-white font-bold text-xs">S</span>
               </div>
               <span className="font-semibold text-sm">SeekerStudio</span>

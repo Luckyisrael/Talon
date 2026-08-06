@@ -11,7 +11,7 @@ const StatusBadge = forwardRef<HTMLSpanElement, StatusBadgeProps>(
 
     const variants = {
       free: "bg-surface-container-high text-on-surface-variant",
-      pro: "solana-gradient text-white",
+      pro: "bg-solana-purple text-white",
       active: "bg-success-container text-success",
       paused: "bg-surface-container-highest text-on-surface-variant",
       error: "bg-error-container text-error",
