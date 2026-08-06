@@ -6,8 +6,14 @@ When building or editing ANY UI (frontend/), you MUST follow the rules in
 starting UI work and obey its constraints (44px targets, pill controls, tonal
 surfaces, spacing scales, corner nesting rule).
 
+## Architecture
+- **Redroid** = pure Android device emulator (APK runner + ws-scrcpy streaming). No Solana inside.
+- **Mock MWA Wallet** = pre-installed on Redroid for testing wallet connection, tx signing, etc.
+- **Host (WSL/SeekerLinux)** = Solana CLI, build tools, Go backend, all compile/deploy work.
+- **Generated apps** = React Native apps that connect to wallet via MWA protocol.
+
 ## Project docs
-- `Solana_Mobile_Vibe_Coding_Guide.md.txt` — product blueprint & system spec (Go backend, ws-scrcpy streaming, Redroid, freemium).
+- `Solana_Mobile_Vibe_Coding_Guide.md.txt` — product blueprint & system spec.
 - `IMPLEMENTATION_ROADMAP.md` — phase-by-phase build plan with Definition-of-Done gates. Follow it in order.
 - `contracts/` — shared API endpoint definitions.
 
@@ -17,3 +23,8 @@ surfaces, spacing scales, corner nesting rule).
 
 ## Frontend (Next.js)
 - Lives in `frontend/`. App Router + TypeScript + Tailwind. Run `npm run build` (and lint) after changes.
+
+## Android / Redroid
+- Redroid boots with `androidboot.use_memfd=1` (no ashmem in kernel).
+- ADB connects on `localhost:5555` via `wsl -d SeekerLinux -e adb ...`.
+- Mock wallet install: `infra/redroid/install-mock-wallet.ps1` (requires JDK 17 + Android SDK).

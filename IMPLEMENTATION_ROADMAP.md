@@ -79,21 +79,24 @@ Each phase has a **Definition of Done (DoD)** — do not start the next phase un
 
 **Objective:** Prepare the Redroid container for running Seeker mobile apps.
 
-**Status:** ✅ COMPLETE
+**Status:** 🔄 IN PROGRESS
 
-Redroid is a pure Android device — it runs APKs and streams via ws-scrcpy. No Solana tooling inside.
+Redroid is a pure Android device — it runs APKs and streams via ws-scrcpy. Solana tooling runs on the host.
 
 - Container launched with `androidboot.use_memfd=1` (replaces deprecated ashmem).
 - ADB TCP enabled on port 5555.
 - Device PIN set programmatically via `locksettings set-pin` (required for MWA wallet sessions).
+- **Mock MWA Wallet** installed — `solana-mobile/mock-mwa-wallet` APK baked into the image or pushed via ADB. This lets generated apps test wallet connection, transaction signing, and all MWA flows without a real Seeker device.
 - Container persists app data via Docker volume mounts.
 
 **Testing / Verification:**
 - `adb devices` shows `localhost:5555  device`.
 - `getprop` resolution/DPI match Seeker (1080×2400 @ 420).
 - `screencap` produces a valid PNG.
+- `pm list packages | grep mockmwa` shows wallet installed.
+- Generated app can connect to wallet via MWA and prompt for transaction signing.
 
-**DoD:** ✅ Container boots, ADB works, ready for APK deployment.
+**DoD:** Container boots, ADB works, mock wallet installed, ready for APK deployment and MWA testing.
 
 ---
 
