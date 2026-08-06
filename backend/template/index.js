@@ -1,5 +1,2 @@
-import "./polyfill";
-import { registerRootComponent } from "expo";
-import App from "./App";
-
-registerRootComponent(App);
+import './polyfill'
+import 'expo-router/entry'

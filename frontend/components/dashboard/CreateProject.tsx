@@ -9,9 +9,10 @@ import Spinner from "@/components/ui/Spinner";
 interface CreateProjectProps {
   open: boolean;
   onClose: () => void;
+  onCreated?: () => void;
 }
 
-export default function CreateProject({ open, onClose }: CreateProjectProps) {
+export default function CreateProject({ open, onClose, onCreated }: CreateProjectProps) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
@@ -28,6 +29,12 @@ export default function CreateProject({ open, onClose }: CreateProjectProps) {
 
     try {
       const token = localStorage.getItem("token");
+      if (!token) {
+        setError("Please sign in first");
+        setLoading(false);
+        return;
+      }
+
       const res = await fetch("http://localhost:8080/v1/projects", {
         method: "POST",
         headers: {
@@ -38,10 +45,12 @@ export default function CreateProject({ open, onClose }: CreateProjectProps) {
       });
 
       if (!res.ok) {
-        throw new Error("Failed to create project");
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to create project");
       }
 
       const project = await res.json();
+      onCreated?.();
       router.push(`/project/${project.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
