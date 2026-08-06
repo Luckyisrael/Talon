@@ -1,12 +1,13 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
-
-	openai "github.com/sashabaranov/go-openai"
 )
 
 const systemPromptPlan = `You are a Solana Mobile app architect helping users design apps for the Seeker device.
@@ -73,27 +74,34 @@ Rules:
 - Keep files focused and clean`
 
 type Client struct {
-	client *openai.Client
-	model  string
+	baseURL    string
+	apiKey     string
+	model      string
+	httpClient *http.Client
 }
 
 func New() *Client {
-	apiKey := os.Getenv("AGENTROUTER_API_KEY")
+	apiKey := os.Getenv("ANTHROPIC_AUTH_TOKEN")
 	if apiKey == "" {
-		apiKey = os.Getenv("OPENAI_API_KEY")
+		apiKey = os.Getenv("AGENTROUTER_API_KEY")
 	}
 
-	model := os.Getenv("AI_MODEL")
+	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://agentrouter.org"
+	}
+
+	model := os.Getenv("ANTHROPIC_MODEL")
 	if model == "" {
-		model = "claude-sonnet-4-20250514"
+		model = "claude-opus-4-6"
 	}
 
-	config := openai.DefaultConfig(apiKey)
-	config.BaseURL = "https://agentrouter.org/v1"
-
-	client := openai.NewClientWithConfig(config)
-
-	return &Client{client: client, model: model}
+	return &Client{
+		baseURL:    baseURL,
+		apiKey:     apiKey,
+		model:      model,
+		httpClient: &http.Client{},
+	}
 }
 
 type PlanResponse struct {
@@ -129,6 +137,29 @@ type PromptMessage struct {
 	Content string `json:"content"`
 }
 
+// Anthropic Messages API request
+type anthropicRequest struct {
+	Model     string              `json:"model"`
+	MaxTokens int                 `json:"max_tokens"`
+	System    string              `json:"system,omitempty"`
+	Messages  []anthropicMessage  `json:"messages"`
+}
+
+type anthropicMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// Anthropic Messages API response
+type anthropicResponse struct {
+	Content []struct {
+		Text string `json:"text"`
+	} `json:"content"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
 func (c *Client) Plan(ctx context.Context, history []PromptMessage) (*PlanResponse, error) {
 	resp, err := c.chat(ctx, systemPromptPlan, history)
 	if err != nil {
@@ -158,32 +189,65 @@ func (c *Client) Build(ctx context.Context, history []PromptMessage) (*BuildResp
 }
 
 func (c *Client) chat(ctx context.Context, system string, history []PromptMessage) (string, error) {
-	msgs := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: system},
-	}
-
+	messages := []anthropicMessage{}
 	for _, h := range history {
-		role := openai.ChatMessageRoleUser
-		if h.Role == "assistant" {
-			role = openai.ChatMessageRoleAssistant
-		}
-		msgs = append(msgs, openai.ChatCompletionMessage{
-			Role:    role,
+		messages = append(messages, anthropicMessage{
+			Role:    h.Role,
 			Content: h.Content,
 		})
 	}
 
-	resp, err := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model:    c.model,
-		Messages: msgs,
-	})
+	reqBody := anthropicRequest{
+		Model:     c.model,
+		MaxTokens: 4096,
+		System:    system,
+		Messages:  messages,
+	}
+
+	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", fmt.Errorf("AI request failed: %w", err)
+		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("no response from AI")
+	url := c.baseURL + "/v1/messages"
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
-	return resp.Choices[0].Message.Content, nil
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var anthropicResp anthropicResponse
+	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if anthropicResp.Error != nil {
+		return "", fmt.Errorf("API error: %s", anthropicResp.Error.Message)
+	}
+
+	if len(anthropicResp.Content) == 0 {
+		return "", fmt.Errorf("empty response from AI")
+	}
+
+	return anthropicResp.Content[0].Text, nil
 }
