@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Add, ArrowDown, Microphone, Monitor, Message, Mobile, DocumentUpload, ShieldSecurity, Flash, Code, Box, Game, Send, Gameboy } from "iconsax-reactjs";
+import { Add, ArrowDown, Microphone, Monitor, Message, Mobile, DocumentUpload, ShieldSecurity, Flash, Code, Box, Game } from "iconsax-reactjs";
 
 export default function Home() {
   return (
@@ -97,19 +97,25 @@ export default function Home() {
         {/* Suggestion Chips */}
         <div className="flex flex-wrap justify-center gap-3 mb-20">
           <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
-            <span className="w-6 h-6 rounded-full bg-accent flex items-center justify-center text-xs">🎮</span>
+            <span className="w-6 h-6 rounded-full bg-accent flex items-center justify-center">
+              <Game size="14" className="text-background" variant="Linear" />
+            </span>
             Create a Multiplayer Game
           </button>
           <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
-            <span className="w-6 h-6 rounded-full bg-accent flex items-center justify-center text-xs">📦</span>
+            <span className="w-6 h-6 rounded-full bg-accent flex items-center justify-center">
+              <Box size="14" className="text-background" variant="Linear" />
+            </span>
             Create a 3D Game
           </button>
           <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
-            <span className="w-6 h-6 rounded-full bg-solana-purple flex items-center justify-center text-xs text-white">S</span>
+            <span className="w-6 h-6 rounded-full bg-solana-purple flex items-center justify-center text-xs text-white font-bold">S</span>
             Solana Wallet App
           </button>
           <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
-            <span className="w-6 h-6 rounded-full bg-surface-5 flex items-center justify-center text-xs">⚡</span>
+            <span className="w-6 h-6 rounded-full bg-surface-5 flex items-center justify-center">
+              <Flash size="14" className="text-text-primary" variant="Linear" />
+            </span>
             GitHub to Mobile App
           </button>
         </div>
@@ -121,7 +127,7 @@ export default function Home() {
               Everything you need to ship
             </h2>
             <p className="text-lg text-text-secondary max-w-xl mx-auto">
-              From idea to installed app on a real Android device — no local setup required.
+              From idea to installed app on a real Android device no local setup required.
             </p>
           </div>
 
