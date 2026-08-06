@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 const systemPromptPlan = `IMPORTANT: Do NOT use any tools. Do NOT call any functions. Respond ONLY with plain text JSON. No tool calls.
@@ -47,6 +49,31 @@ const systemPromptBuild = `IMPORTANT: Do NOT use any tools. Do NOT call any func
 
 You are a React Native engineer specializing in Solana Mobile apps for the Seeker device.
 
+=== CRITICAL GUARDRAILS — READ EVERY ONE ===
+
+1. READ BEFORE EDIT: The existing project files are provided in the context below. You MUST read and understand them before generating any code. Never generate code for a file you haven't seen. If a file already exists, your output must preserve its existing structure and only add/modify what the user requested.
+
+2. NEVER DELETE: Do not remove existing functionality, screens, components, or features unless the user explicitly says "delete" or "remove". If a file exists and the user didn't ask to change it, do NOT include it in your response.
+
+3. PRESERVE PATTERNS: Match the existing code style exactly. If the project uses named exports, use named exports. If it uses a specific folder structure, follow it. If it uses a particular state management approach, continue using it.
+
+4. VALIDATE PATHS: File paths must be relative to the project root (e.g., "src/screens/HomeScreen.tsx", not "MyApp/src/screens/HomeScreen.tsx"). Never use absolute paths.
+
+5. NO CONFIG CHANGES: Do not modify package.json, app.json, tsconfig.json, or babel.config.js unless the user explicitly asks. Never add new dependencies without the user requesting them.
+
+6. TYPE SAFETY: All components must have proper TypeScript types. Use interfaces for props. Never use 'any' type.
+
+7. ERROR BOUNDARIES: Every screen component must be wrapped in an ErrorBoundary. If an ErrorBoundary doesn't exist yet, create it.
+
+8. WALLET PATTERNS: All Solana wallet interactions MUST use MWA (Mobile Wallet Adapter) protocol. Never store private keys in app state. Use transact() for signing.
+
+9. SINGLE RESPONSIBILITY: Each file should do one thing. Don't create mega-components. Split complex UIs into smaller, focused components.
+
+10. EXPLAIN CHANGES: Your "message" field must clearly explain:
+    - What files you created vs modified
+    - Why you made each change
+    - Any decisions or assumptions you made
+
 The project already has these packages installed:
 - expo, react-native
 - @solana/web3.js
@@ -57,10 +84,10 @@ The project already has these packages installed:
 - react-native-gesture-handler, react-native-reanimated
 - react-native-safe-area-context
 
-You generate COMPLETE, working code. Your response MUST be valid JSON:
+Your response MUST be valid JSON:
 
 {
-  "message": "explanation of what you generated",
+  "message": "explanation of what you generated and why",
   "files": [
     {"path": "src/screens/HomeScreen.tsx", "content": "full file content"}
   ],
@@ -85,11 +112,12 @@ const (
 )
 
 type Client struct {
-	provider   Provider
-	baseURL    string
-	apiKey     string
-	model      string
-	httpClient *http.Client
+	provider     Provider
+	baseURL      string
+	apiKey       string
+	model        string
+	httpClient   *http.Client
+	workspaceDir string
 }
 
 func New() *Client {
@@ -126,12 +154,18 @@ func New() *Client {
 		}
 	}
 
+	workspaceDir := os.Getenv("WORKSPACE_DIR")
+	if workspaceDir == "" {
+		workspaceDir = os.TempDir()
+	}
+
 	return &Client{
-		provider:   provider,
-		baseURL:    baseURL,
-		apiKey:     apiKey,
-		model:      model,
-		httpClient: &http.Client{},
+		provider:     provider,
+		baseURL:      baseURL,
+		apiKey:       apiKey,
+		model:        model,
+		httpClient:   &http.Client{},
+		workspaceDir: workspaceDir,
 	}
 }
 
@@ -216,7 +250,7 @@ type openaiResponse struct {
 }
 
 func (c *Client) Plan(ctx context.Context, history []PromptMessage) (*PlanResponse, error) {
-	resp, err := c.chat(ctx, systemPromptPlan, history)
+	resp, err := c.chatWithRetry(ctx, systemPromptPlan, history, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -229,8 +263,18 @@ func (c *Client) Plan(ctx context.Context, history []PromptMessage) (*PlanRespon
 	return &planResp, nil
 }
 
-func (c *Client) Build(ctx context.Context, history []PromptMessage) (*BuildResponse, error) {
-	resp, err := c.chat(ctx, systemPromptBuild, history)
+func (c *Client) Build(ctx context.Context, history []PromptMessage, workspacePath string) (*BuildResponse, error) {
+	// Read existing files and inject into context
+	existingFiles := c.readProjectFiles(workspacePath)
+	if len(existingFiles) > 0 {
+		contextMsg := PromptMessage{
+			Role:    "user",
+			Content: "Here are the existing project files. Read them carefully before making any changes:\n\n" + existingFiles,
+		}
+		history = append([]PromptMessage{contextMsg}, history...)
+	}
+
+	resp, err := c.chatWithRetry(ctx, systemPromptBuild, history, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +285,106 @@ func (c *Client) Build(ctx context.Context, history []PromptMessage) (*BuildResp
 	}
 
 	return &buildResp, nil
+}
+
+// chatWithRetry sends the request and retries once if the response is invalid JSON
+func (c *Client) chatWithRetry(ctx context.Context, system string, history []PromptMessage, maxRetries int) (string, error) {
+	resp, err := c.chat(ctx, system, history)
+	if err != nil {
+		return "", err
+	}
+
+	// Strip markdown code blocks if present
+	resp = stripCodeBlocks(resp)
+
+	// Check if response is valid JSON (for build mode, it must be)
+	if strings.Contains(system, "You generate COMPLETE") {
+		var testResp map[string]interface{}
+		if err := json.Unmarshal([]byte(resp), &testResp); err != nil {
+			// Invalid JSON — retry with error context
+			if maxRetries > 0 {
+				retryHistory := make([]PromptMessage, len(history))
+				copy(retryHistory, history)
+				retryHistory = append(retryHistory, PromptMessage{Role: "assistant", Content: resp})
+				retryHistory = append(retryHistory, PromptMessage{
+					Role:    "user",
+					Content: "Your response was not valid JSON. You MUST respond with valid JSON only. No markdown, no code blocks, just raw JSON. The JSON must have 'message', 'files', and 'commands' fields. Try again.",
+				})
+				return c.chatWithRetry(ctx, system, retryHistory, maxRetries-1)
+			}
+		}
+	}
+
+	return resp, nil
+}
+
+// stripCodeBlocks removes markdown code block wrappers from AI responses
+func stripCodeBlocks(s string) string {
+	s = strings.TrimSpace(s)
+
+	// Remove opening code block (```json, ```tsx, ```typescript, etc.)
+	if strings.HasPrefix(s, "```") {
+		// Find end of first line
+		if idx := strings.Index(s, "\n"); idx != -1 {
+			s = s[idx+1:]
+		}
+	}
+
+	// Remove closing code block
+	if strings.HasSuffix(s, "```") {
+		s = s[:len(s)-3]
+	}
+
+	return strings.TrimSpace(s)
+}
+
+// readProjectFiles reads key files from the project workspace
+func (c *Client) readProjectFiles(workspacePath string) string {
+	if workspacePath == "" {
+		return ""
+	}
+
+	var files []string
+	keyFiles := []string{
+		"App.tsx",
+		"index.js",
+		"package.json",
+		"tsconfig.json",
+		"babel.config.js",
+		"polyfill.js",
+		"app.json",
+	}
+
+	// Read root-level key files
+	for _, f := range keyFiles {
+		path := filepath.Join(workspacePath, f)
+		content, err := os.ReadFile(path)
+		if err == nil {
+			files = append(files, fmt.Sprintf("=== %s ===\n%s", f, string(content)))
+		}
+	}
+
+	// Read src/ directory recursively
+	srcDir := filepath.Join(workspacePath, "src")
+	if _, err := os.Stat(srcDir); err == nil {
+		filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			// Skip node_modules and other non-essential files
+			if strings.Contains(path, "node_modules") || strings.Contains(path, ".expo") {
+				return nil
+			}
+			relPath, _ := filepath.Rel(workspacePath, path)
+			content, err := os.ReadFile(path)
+			if err == nil {
+				files = append(files, fmt.Sprintf("=== %s ===\n%s", relPath, string(content)))
+			}
+			return nil
+		})
+	}
+
+	return strings.Join(files, "\n\n")
 }
 
 func (c *Client) chat(ctx context.Context, system string, history []PromptMessage) (string, error) {
@@ -261,7 +405,7 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 
 	reqBody := anthropicRequest{
 		Model:     c.model,
-		MaxTokens: 4096,
+		MaxTokens: 8192,
 		System:    system,
 		Messages:  messages,
 	}
