@@ -44,7 +44,7 @@ try {
 
 # Check ADB
 $devices = wsl -d SeekerLinux -e adb devices 2>&1 | Out-String
-if ($devices -notmatch "device$") {
+if ($devices -notmatch "5555") {
     Write-Host "Redroid not connected on localhost:5555. Run launch-dev.ps1 first." -ForegroundColor Red
     Write-Host "ADB output: $devices" -ForegroundColor Gray
     exit 1
