@@ -60,18 +60,13 @@ git clone --depth 1 $RepoUrl $CloneDir 2>&1 | Select-Object -Last 3
 
 # Step 3: Build APK
 Write-Host "`n--- Building APK ---" -ForegroundColor Yellow
-Push-Location $CloneDir
-
-# Find gradlew
-$gradlew = if (Test-Path "gradlew.bat") { "gradlew.bat" } else { ".\gradlew" }
+$gradlew = Join-Path $CloneDir "gradlew.bat"
 
 & $gradlew assembleDebug 2>&1 | Select-Object -Last 10
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed. Check output above." -ForegroundColor Red
-    Pop-Location
     exit 1
 }
-Pop-Location
 
 # Step 4: Find the built APK
 $apkPath = Get-ChildItem -Path $CloneDir -Recurse -Filter "*.apk" | Where-Object { $_.FullName -match "debug" } | Select-Object -First 1
@@ -83,7 +78,10 @@ Write-Host "APK found: $($apkPath.FullName)" -ForegroundColor Green
 
 # Step 5: Install on Redroid
 Write-Host "`n--- Installing on Redroid ---" -ForegroundColor Yellow
-wsl -d SeekerLinux -e adb -s $AdbTarget install "$($apkPath.FullName -replace '\\','/')" 2>&1
+$apkWsl = $apkPath.FullName -replace '\\','/'
+# Convert Windows path to WSL mount path
+$apkWsl = $apkWsl -replace 'C:','/mnt/c'
+wsl -d SeekerLinux -e adb -s $AdbTarget install "$apkWsl" 2>&1
 
 # Step 6: Verify installation
 Write-Host "`n--- Verifying installation ---" -ForegroundColor Yellow
