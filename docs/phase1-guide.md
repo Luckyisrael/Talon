@@ -269,7 +269,7 @@ docker ps
 Once Phase 1 is complete:
 - **Phase 2** can build the Solana dev stack image (mock wallet + validator)
 - **Phase 3** can start the Go backend (container management)
-- **Phase 4** can wire streaming (ws-scrcpy to browser)
+- **Phase 4** can wire streaming (screenshot-based to browser)
 - **Phase 5** can build the AI orchestrator (typecheck gate + heal loop)
 
 The Redroid container is the foundation everything else depends on.

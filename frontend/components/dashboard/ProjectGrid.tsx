@@ -1,19 +1,13 @@
 import { Add } from "iconsax-reactjs";
 import ProjectCard from "./ProjectCard";
-
-interface Project {
-  id: number;
-  name: string;
-  status: string;
-  created_at: string;
-  prompts_used?: number;
-}
+import type { Project } from "@/lib/types";
 
 interface ProjectGridProps {
   projects: Project[];
+  onDelete?: (project: Project) => void;
 }
 
-export default function ProjectGrid({ projects }: ProjectGridProps) {
+export default function ProjectGrid({ projects, onDelete }: ProjectGridProps) {
   if (projects.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
@@ -29,7 +23,7 @@ export default function ProjectGrid({ projects }: ProjectGridProps) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {projects.map((project) => (
-        <ProjectCard key={project.id} project={project} />
+        <ProjectCard key={project.id} project={project} onDelete={onDelete} />
       ))}
     </div>
   );

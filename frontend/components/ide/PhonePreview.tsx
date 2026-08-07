@@ -1,28 +1,92 @@
 "use client";
 
 import { Mobile, Warning2 } from "iconsax-reactjs";
+import { useRef, useEffect, useCallback } from "react";
+import { createAuthWebSocket } from "@/lib/api";
+
+const DEVICE_WIDTH = 1080;
+const DEVICE_HEIGHT = 2400;
 
 interface PhonePreviewProps {
   status?: "idle" | "connecting" | "streaming" | "error";
+  sessionId?: number | null;
+  onStartSession?: () => void;
 }
 
-export default function PhonePreview({ status = "idle" }: PhonePreviewProps) {
+export default function PhonePreview({ status = "idle", sessionId, onStartSession }: PhonePreviewProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const sendInput = useCallback((msg: Record<string, unknown>) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify(msg));
+  }, []);
+
+  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = DEVICE_WIDTH / rect.width;
+    const scaleY = DEVICE_HEIGHT / rect.height;
+
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+
+    sendInput({ type: "tap", x, y });
+  }, [sendInput]);
+
+  const connectStream = useCallback(() => {
+    if (!sessionId || wsRef.current) return;
+
+    const ws = createAuthWebSocket(`/v1/sessions/${sessionId}/stream`);
+    if (!ws) return;
+    wsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      if (event.data instanceof Blob) {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        createImageBitmap(event.data).then((bmp) => {
+          canvas.width = bmp.width;
+          canvas.height = bmp.height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(bmp, 0, 0);
+          }
+          bmp.close();
+        }).catch(() => {});
+      }
+    };
+
+    ws.onclose = () => { wsRef.current = null; };
+    ws.onerror = () => { wsRef.current = null; };
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (status === "streaming" && sessionId) connectStream();
+    return () => {
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, [status, sessionId, connectStream]);
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface-1">
       <div className="h-12 flex items-center justify-between px-4 flex-shrink-0 bg-surface-1">
-        <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">
-          Preview
-        </span>
+        <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">Preview</span>
         <div className="flex items-center gap-2">
           <div
             className={`w-2 h-2 rounded-full ${
               status === "streaming"
                 ? "bg-success animate-pulse"
                 : status === "connecting"
-                ? "bg-warning animate-pulse"
-                : status === "error"
-                ? "bg-error"
-                : "bg-text-secondary/40"
+                  ? "bg-warning animate-pulse"
+                  : status === "error"
+                    ? "bg-error"
+                    : "bg-text-secondary/40"
             }`}
           />
           <span className="text-xs text-text-secondary capitalize">{status}</span>
@@ -33,7 +97,8 @@ export default function PhonePreview({ status = "idle" }: PhonePreviewProps) {
         <div className="relative w-full max-w-[280px]">
           <div className="relative bg-surface-4 rounded-[36px] p-2">
             <div className="relative bg-surface-2 rounded-[28px] overflow-hidden aspect-[9/19.5]">
-              <div className="h-10 flex items-center justify-between px-5 pt-1">
+              {/* Status bar */}
+              <div className="h-10 flex items-center justify-between px-5 pt-1 z-10 relative">
                 <span className="text-[9px] font-mono text-text-secondary">9:41</span>
                 <div className="flex gap-0.5">
                   <div className="w-2.5 h-1.5 bg-text-secondary rounded-sm" />
@@ -42,15 +107,22 @@ export default function PhonePreview({ status = "idle" }: PhonePreviewProps) {
                 </div>
               </div>
 
+              {/* Screen content */}
               <div className="absolute inset-0 top-10 bottom-12 flex items-center justify-center">
                 {status === "idle" && (
                   <div className="text-center px-6">
                     <div className="w-12 h-12 rounded-xl bg-surface-3 flex items-center justify-center mx-auto mb-3">
                       <Mobile size="24" className="text-text-secondary" variant="Linear" />
                     </div>
-                    <p className="text-[10px] text-text-secondary">
-                      Start a session to preview your app
-                    </p>
+                    <p className="text-[10px] text-text-secondary mb-3">Start a session to preview your app</p>
+                    {onStartSession && (
+                      <button
+                        onClick={onStartSession}
+                        className="px-4 py-1.5 rounded-full bg-accent text-background text-[10px] font-medium hover:bg-accent-hover transition-colors"
+                      >
+                        Start Session
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -62,7 +134,11 @@ export default function PhonePreview({ status = "idle" }: PhonePreviewProps) {
                 )}
 
                 {status === "streaming" && (
-                  <div className="w-full h-full bg-black/10" />
+                  <canvas
+                    ref={canvasRef}
+                    onClick={handleCanvasClick}
+                    className="w-full h-full object-cover cursor-pointer"
+                  />
                 )}
 
                 {status === "error" && (
@@ -71,11 +147,20 @@ export default function PhonePreview({ status = "idle" }: PhonePreviewProps) {
                       <Warning2 size="24" className="text-error" variant="Linear" />
                     </div>
                     <p className="text-[10px] text-error">Connection failed</p>
+                    {onStartSession && (
+                      <button
+                        onClick={onStartSession}
+                        className="mt-2 px-4 py-1.5 rounded-full bg-accent text-background text-[10px] font-medium hover:bg-accent-hover transition-colors"
+                      >
+                        Retry
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
 
-              <div className="absolute bottom-0 left-0 right-0 h-12 flex items-center justify-around px-5 bg-surface-2">
+              {/* Navigation bar */}
+              <div className="absolute bottom-0 left-0 right-0 h-12 flex items-center justify-around px-5 bg-surface-2 z-10">
                 <div className="w-5 h-5 rounded-full bg-accent/20" />
                 <div className="w-5 h-5 rounded-full bg-text-primary/10" />
                 <div className="w-5 h-5 rounded-full bg-text-primary/10" />

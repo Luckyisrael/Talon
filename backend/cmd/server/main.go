@@ -16,7 +16,9 @@ import (
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/api"
 	"github.com/seekersstudio/backend/internal/auth"
+	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/store"
+	"github.com/seekersstudio/backend/internal/ws"
 
 	_ "modernc.org/sqlite"
 )
@@ -34,17 +36,21 @@ func main() {
 		dbPath = "./seekersstudio.db"
 	}
 
+	// Resolve paths relative to the project root (where go.mod lives)
+	projectRoot := findProjectRoot()
+
 	templateDir := os.Getenv("TEMPLATE_DIR")
 	if templateDir == "" {
-		exe, _ := os.Executable()
-		templateDir = filepath.Join(filepath.Dir(exe), "template")
+		templateDir = filepath.Join(projectRoot, "backend", "template")
 	}
 
 	workspaceDir := os.Getenv("WORKSPACE_DIR")
 	if workspaceDir == "" {
-		exe, _ := os.Executable()
-		workspaceDir = filepath.Join(filepath.Dir(exe), "workspaces")
+		workspaceDir = filepath.Join(projectRoot, "workspaces")
 	}
+
+	log.Printf("template dir: %s", templateDir)
+	log.Printf("workspace dir: %s", workspaceDir)
 
 	// Initialize services
 	log.Println("initializing store...")
@@ -58,6 +64,7 @@ func main() {
 	authSvc := auth.New()
 	aiClient := ai.New()
 	adbClient := adb.New()
+	orchestratorSvc := orchestrator.New(aiClient)
 
 	// Ensure workspace dir exists
 	os.MkdirAll(workspaceDir, 0755)
@@ -65,9 +72,11 @@ func main() {
 	// Initialize handlers
 	authHandler := api.NewAuthHandler(s, authSvc)
 	projectHandler := api.NewProjectHandler(s, templateDir, workspaceDir)
-	promptHandler := api.NewPromptHandler(s, aiClient)
-	sessionHandler := api.NewSessionHandler(s, adbClient)
+	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc)
+	sessionHandler := api.NewSessionHandler(s, adbClient, workspaceDir)
 	usageHandler := api.NewUsageHandler(s)
+	terminalHandler := ws.NewTerminalHandler()
+	streamHandler := ws.NewStreamHandler()
 
 	// Router
 	r := chi.NewRouter()
@@ -101,11 +110,15 @@ func main() {
 		r.Get("/v1/projects", projectHandler.List)
 		r.Post("/v1/projects", projectHandler.Create)
 		r.Get("/v1/projects/{id}", projectHandler.Get)
+		r.Get("/v1/projects/{id}/files", projectHandler.GetFiles)
+		r.Put("/v1/projects/{id}/files", projectHandler.WriteFiles)
+		r.Delete("/v1/projects/{id}/files", projectHandler.DeleteFile)
 		r.Put("/v1/projects/{id}", projectHandler.UpdatePlan)
 		r.Delete("/v1/projects/{id}", projectHandler.Delete)
 
 		// Prompts
 		r.Post("/v1/prompts", promptHandler.Create)
+		r.Post("/v1/prompts/stream", promptHandler.Stream)
 		r.Get("/v1/prompts/{id}", promptHandler.Get)
 
 		// Project Memory
@@ -121,6 +134,10 @@ func main() {
 		// Usage
 		r.Get("/v1/usage", usageHandler.Get)
 	})
+
+	// WebSocket endpoints (auth via query param — browsers can't set WS headers)
+	r.Get("/v1/sessions/{id}/terminal", terminalHandler.Handle)
+	r.Get("/v1/sessions/{id}/stream", streamHandler.Handle)
 
 	log.Printf("seekersstudio backend listening on :%s", port)
 	if err := http.ListenAndServe(":"+port, r); err != nil {
@@ -169,4 +186,25 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// findProjectRoot walks up from the executable's directory looking for go.mod
+func findProjectRoot() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	dir := filepath.Dir(exe)
+	for i := 0; i < 10; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	// Fallback: assume we're running from backend/cmd/server
+	return filepath.Join(".", "..", "..")
 }

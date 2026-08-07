@@ -104,3 +104,27 @@ func (c *Client) Push(localPath, remotePath string) (string, error) {
 func (c *Client) GetProp(prop string) (string, error) {
 	return c.Run("getprop " + prop)
 }
+
+func (c *Client) Tap(x, y int) error {
+	_, err := c.Run(fmt.Sprintf("input tap %d %d", x, y))
+	return err
+}
+
+func (c *Client) Swipe(x1, y1, x2, y2, durationMs int) error {
+	_, err := c.Run(fmt.Sprintf("input swipe %d %d %d %d %d", x1, y1, x2, y2, durationMs))
+	return err
+}
+
+func (c *Client) Key(keycode string) error {
+	_, err := c.Run("input keyevent " + keycode)
+	return err
+}
+
+func (c *Client) ScreenshotStream() ([]byte, error) {
+	args := c.adbArgs("exec-out", "screencap", "-p")
+	out, err := exec.Command("wsl", args...).Output()
+	if err != nil {
+		return nil, fmt.Errorf("screencap stream failed: %w", err)
+	}
+	return out, nil
+}

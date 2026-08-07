@@ -1,0 +1,10 @@
+FROM redroid/redroid:14.0.0_64only-latest
+
+# Software codec libraries exist but media_codecs.xml is missing.
+# We can't write to /system in a Dockerfile (read-only overlay),
+# so we'll use an entrypoint script that copies it at runtime.
+# But first, put it somewhere writable.
+COPY media_codecs.xml /data/local/tmp/media_codecs.xml
+
+# Enable Codec2
+RUN echo "debug.stagefright.ccodec=1" >> /vendor/build.prop

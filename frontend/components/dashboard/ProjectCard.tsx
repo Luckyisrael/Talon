@@ -1,23 +1,17 @@
 "use client";
 
-import { ArrowRight } from "iconsax-reactjs";
+import { ArrowRight, Trash } from "iconsax-reactjs";
 import Link from "next/link";
 import TonalCard from "@/components/ui/TonalCard";
 import StatusBadge from "@/components/ui/StatusBadge";
-
-interface Project {
-  id: number;
-  name: string;
-  status: string;
-  created_at: string;
-  prompts_used?: number;
-}
+import type { Project } from "@/lib/types";
 
 interface ProjectCardProps {
   project: Project;
+  onDelete?: (project: Project) => void;
 }
 
-export default function ProjectCard({ project }: ProjectCardProps) {
+export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
   const status = project.status === "active" ? "active" : "paused";
 
   return (
@@ -34,7 +28,22 @@ export default function ProjectCard({ project }: ProjectCardProps) {
                 {project.name.charAt(0)}
               </span>
             </div>
-            <StatusBadge variant={status} />
+            <div className="flex items-center gap-2">
+              <StatusBadge variant={status} />
+              {onDelete && (
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onDelete(project);
+                  }}
+                  className="p-1.5 rounded-lg text-text-muted hover:text-red-400 hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100"
+                  title="Delete project"
+                >
+                  <Trash size="14" variant="Linear" />
+                </button>
+              )}
+            </div>
           </div>
 
           <h3 className="text-base font-semibold text-text-primary mb-1 group-hover:text-accent transition-colors">
@@ -45,10 +54,7 @@ export default function ProjectCard({ project }: ProjectCardProps) {
           </p>
 
           <div className="mt-auto pt-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-text-secondary">
-                {project.prompts_used || 0} prompts used
-              </span>
+            <div className="flex items-center justify-end">
               <ArrowRight size="16" className="text-text-secondary group-hover:text-accent transition-colors" variant="Linear" />
             </div>
           </div>

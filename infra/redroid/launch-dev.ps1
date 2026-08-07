@@ -3,7 +3,7 @@
 # Run from PowerShell:
 #   powershell C:\Users\Lucky\Desktop\SeekerStudio\infra\redroid\launch-dev.ps1
 #
-# Redroid is a pure Android device — runs APKs, streams via ws-scrcpy.
+# Redroid is a pure Android device — runs APKs, streams via screenshot-based streaming (v1).
 # No Solana tooling inside. Host handles all build/compile work.
 # ============================================================
 
@@ -61,6 +61,15 @@ if ($devices -match "localhost:$AdbPort\s+device") {
 Write-Host "--- Setting device PIN ---" -ForegroundColor Yellow
 wsl -d SeekerLinux -e adb -s localhost:$AdbPort push /mnt/c/Users/Lucky/Desktop/SeekerStudio/infra/redroid/entrypoint.sh /data/local/tmp/device-setup.sh 2>&1
 wsl -d SeekerLinux -e adb -s localhost:$AdbPort shell "sh /data/local/tmp/device-setup.sh" 2>&1
+
+# Step 7: Keep display awake (infinite timeout + wake screen)
+Write-Host "--- Keeping display awake ---" -ForegroundColor Yellow
+wsl -d SeekerLinux -e adb -s localhost:$AdbPort shell "settings put system screen_off_timeout 2147483647" 2>&1
+Start-Sleep -Seconds 1
+wsl -d SeekerLinux -e adb -s localhost:$AdbPort shell "input keyevent KEYCODE_WAKEUP" 2>&1
+Start-Sleep -Seconds 1
+wsl -d SeekerLinux -e adb -s localhost:$AdbPort shell "input keyevent 82" 2>&1
+Start-Sleep -Seconds 2
 
 Write-Host "`n=== Container Ready ===" -ForegroundColor Green
 Write-Host "Container:   $ContainerName"

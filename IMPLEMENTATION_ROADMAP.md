@@ -4,7 +4,7 @@ Phase-by-phase guide to build and test SeekerStudio until it is production-ready
 Each phase has a **Definition of Done (DoD)** — do not start the next phase until the DoD is met.
 
 **Reference spec:** `Solana_Mobile_Vibe_Coding_Guide.md.txt`
-**Locked decisions:** Go backend · ws-scrcpy H.264 streaming · Redroid on own hosts · Freemium with $59 Pro + metered overage.
+**Locked decisions:** Go backend · screenshot-based streaming (v1) · Redroid on own hosts · Freemium with $59 Pro + metered overage.
 
 ---
 
@@ -69,7 +69,7 @@ Each phase has a **Definition of Done (DoD)** — do not start the next phase un
 - ADB connects over TCP: `localhost:5555`.
 - VHDX compacted: 13.79 GB → 3.51 GB. Free disk: ~22 GB.
 
-**Redroid is used purely as an Android device emulator** — it runs APKs and streams via ws-scrcpy. No Solana CLI, test validators, or smart contract tooling inside the container.
+**Redroid is used purely as an Android device emulator** — it runs APKs and streams via screenshot-based streaming (v1). No Solana CLI, test validators, or smart contract tooling inside the container.
 
 **DoD:** ✅ Redroid boots and is ADB-controllable at Seeker resolution on the dev machine.
 
@@ -81,7 +81,7 @@ Each phase has a **Definition of Done (DoD)** — do not start the next phase un
 
 **Status:** 🔄 IN PROGRESS
 
-Redroid is a pure Android device — it runs APKs and streams via ws-scrcpy. Solana tooling runs on the host.
+Redroid is a pure Android device — it runs APKs and streams via screenshot-based streaming (v1). Solana tooling runs on the host.
 
 - Container launched with `androidboot.use_memfd=1` (replaces deprecated ashmem).
 - ADB TCP enabled on port 5555.
@@ -118,18 +118,17 @@ Redroid is a pure Android device — it runs APKs and streams via ws-scrcpy. Sol
 
 ---
 
-## Phase 4 — Streaming Gateway (Go → ws-scrcpy) + Web Terminal
+## Phase 4 — Streaming Gateway (Go → ADB Screenshot) + Web Terminal
 
 **Objective:** Live preview in the browser with authentication, plus an in-browser terminal.
 
-- Run `ws-scrcpy` per user session (proxy over ADB to the container) with `INCLUDE_ADB_SHELL` enabled (bundles an xterm.js ADB shell).
-- `backend/internal/streaming` — Go terminates the user-facing WSS (TLS + per-session bearer token), proxies frames/input to the per-user ws-scrcpy instance. One container/port per session; kill on session end.
-- `backend/internal/terminal` — authenticated terminal socket: xterm.js ↔ Go proxy ↔ `adb shell` (or `docker exec` into the container shell). Supports copy/paste and multi-session.
-- `frontend` — phone-frame `<canvas>`/`<video>` component wired to the streaming WS; use ws-scrcpy's input pipeline (touch, keyboard, clipboard) via `postMessage`.
+- `backend/internal/ws/stream.go` — ADB screenshot-based streaming: captures PNG via `exec-out screencap -p`, encodes to JPEG, sends via WebSocket. Supports touch/keyboard input via ADB `input` commands.
+- `backend/internal/ws/terminal.go` — authenticated terminal socket: xterm.js ↔ Go proxy ↔ `adb shell`.
+- `frontend` — phone-frame `<canvas>` component wired to the streaming WS; touch/click events sent as JSON to backend for ADB `input tap`/`swipe`/`keyevent`.
 - `frontend` — terminal panel (xterm.js) in the IDE layout for running `adb shell`, `solana` CLI, Metro, and Gradle commands.
 
 **Testing / Verification:**
-- Browser shows the live Redroid screen at 30 FPS (free) / 60 FPS (pro) in the phone frame.
+- Browser shows the live Redroid screen at 10 FPS (screenshot-based streaming with JPEG encoding + frame-diffing).
 - Tap/drag/keyboard from the browser reaches the container (assert via UI state + screencap).
 - Terminal renders in the IDE; `adb shell getprop` and `solana --version` run inside the container from the browser.
 - Unauthenticated WS/token connections are rejected.
@@ -205,7 +204,7 @@ Redroid is a pure Android device — it runs APKs and streams via ws-scrcpy. Sol
 
 - **Containerize**: `infra/` Dockerfiles for backend + frontend; compose for local prod-like run; staging on the target host.
 - **Hosts**: dedicated x86_64 Ubuntu 24.04 (Hetzner/OVH). Provision script: pin kernel, load binder modules at boot (`/etc/modules-load.d/redroid.conf`), **module probe gate** (`grep binder /proc/filesystems`) before serving.
-- **Security**: TLS/WSS everywhere, secrets via env/secret manager, rate limits, per-session isolation, no unencrypted ws-scrcpy exposure.
+- **Security**: TLS/WSS everywhere, secrets via env/secret manager, rate limits, per-session isolation, no unencrypted streaming exposure.
 - **Observability**: structured logs, Prometheus metrics (containers, device-minutes, AI spend), cost/burn-rate dashboard per user.
 - **Reliability**: backups of workspace volumes, container restart policies, load test (concurrent sessions per host), failover/restore runbook.
 - **CI**: GitHub Actions — Go tests, `tsc` typecheck, frontend build, image build.
@@ -225,10 +224,10 @@ Redroid is a pure Android device — it runs APKs and streams via ws-scrcpy. Sol
 |---|---|
 | WSL2 kernel lacks binder | Custom kernel with `binderfs=y` built-in; verified via `/proc/filesystems` |
 | Ashmem not available | Use `androidboot.use_memfd=1` — memfd_create is built into the kernel |
-| H.264 encoding at 60 FPS is CPU-heavy | Hardware encode on hosts (NVIDIA T400/NVENC or iGPU QuickSync); free tier capped at 30 FPS |
+| Screenshot streaming is CPU-heavy on hosts | JPEG encoding + frame-diffing to reduce bandwidth; future: hardware encode |
 | AI token cost erodes margin | Model routing (flash for routine), per-prompt output caps, burn-rate dashboard |
 | Concurrent session saturation | Warm paused pool + concurrency capacity model (≈8 active/host on 16vCPU/64GB) |
-| ws-scrcpy unauthenticated by default | Go WSS termination + per-session tokens; never expose ws-scrcpy directly |
+| Streaming endpoint unauthenticated by default | Go WSS termination + per-session tokens; never expose streaming directly |
 | Metro Fast Refresh state loss | Generated code enforces named default exports; ErrorBoundary in root |
 
 ---
@@ -239,5 +238,5 @@ Redroid is a pure Android device — it runs APKs and streams via ws-scrcpy. Sol
 2. ✅ **Phase 1** — custom kernel + Redroid boot at Seeker resolution.
 3. ✅ **Phase 2** — container ready for APK deployment.
 4. **Phase 3** — Go backend API (serves frontend, manages prompts, proxies ADB).
-5. **Phase 4** — ws-scrcpy streaming + web terminal (live preview in browser).
+5. **Phase 4** — screenshot-based streaming + web terminal (live preview in browser).
 6. **Phase 5** — AI orchestrator (prompt → code → build → deploy → preview loop).

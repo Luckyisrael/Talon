@@ -1,32 +1,36 @@
-# Backend (Go)
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
 backend/bin/
 *.exe
 *.test
 *.out
+*.apk
+*.aab
 
-# Frontend (Node / Next.js)
-frontend/node_modules/
+# Next.js
 frontend/.next/
 frontend/out/
 frontend/build/
-frontend/.env
-frontend/.env.local
-
-# Android (RN native build output)
-android/
-*.apk
-*.aab
-local.properties
-*.keystore
-*.jks
 
 # Environment & secrets
 .env
 .env.*
 !.env.example
 
-# Go
-vendor/
+# Android
+android/
+local.properties
+*.keystore
+*.jks
+
+# Databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Logs
 *.log
@@ -40,3 +44,35 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+*~
+
+# Workspaces (runtime)
+workspaces/
+
+# Staging
+.staging/
+
+# Expo
+.expo/
+dist/
+
+# Go
+*.exe~
+
+# Misc
+server.exe~
+seekersstudio.db
+seeker.db
+seeker2.db
+seeker3.db
+
+# Docker
+.docker/
+
+# Coverage
+coverage/
+*.cover
+
+# Debug
+.DS_Store
+*.pid

@@ -30,7 +30,7 @@ Base URL (dev): `http://localhost:8080`. All endpoints under `/v1` require
 | POST | `/v1/sessions/{id}/pause` | Pause container (idle/over-limit enforcement) |
 | POST | `/v1/sessions/{id}/resume` | Resume from warm pool or cold start |
 | DELETE | `/v1/sessions/{id}` | Destroy session |
-| GET | `/v1/sessions/{id}/stream` | **WS** — H.264 video + touch/keyboard input (ws-scrcpy proxy) |
+| GET | `/v1/sessions/{id}/stream` | **WS** — JPEG screenshot stream + touch/keyboard input via ADB |
 | GET | `/v1/sessions/{id}/terminal` | **WS** — xterm.js PTY (adb shell / docker exec) |
 
 ## AI Orchestrator (Phase 5)

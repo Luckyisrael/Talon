@@ -6,7 +6,7 @@ This document serves as the complete technical blueprint for building a **browse
 
 ### Core Value Proposition
 - **Zero-Friction Setup**: Eliminates hours of setting up Android Studio, NDK, Java, Solana Mobile Wallet Adapter (MWA) bridges, and local test validators. Developers or non-technical founders can build, test, and preview native Solana Android apps in seconds.
-- **Instant Live Native Preview**: Utilizes **Redroid (Remote Android in Docker)** streamed via **ws-scrcpy (H.264 over WebSocket)** directly to an in-browser HTML5 `<canvas>`.
+- **Instant Live Native Preview**: Utilizes **Redroid (Remote Android in Docker)** streamed via **screenshot-based streaming (v1)** directly to an in-browser HTML5 `<canvas>`.
 - **AI-Powered Code Generation**: Incorporates tight system prompts and self-healing agent loops tuned specifically for React Native (`@solana/web3.js` and `@solana-mobile/mobile-wallet-adapter-protocol-web3js`).
 - **Cost-Protected Freemium**: Session-level compute gating (idle pause, warm container pool, metered overage) protects server margins while enabling viral adoption.
 
@@ -50,18 +50,18 @@ To protect server GPU/RAM margins while ensuring rapid viral adoption within the
 │                     1. WEB FRONTEND (Next.js)                   │
 │   • Monaco Code Editor                                          │
 │   • AI Prompt Panel & Streaming Logs                            │
-│   • HTML5 Canvas (ws-scrcpy H.264 WebSocket Video Player)      │
+│   • HTML5 Canvas (screenshot-based streaming + touch input)       │
 │   • Web Terminal (xterm.js ↔ adb/docker shell)                  │
 │   • Tier Control & Usage Metering UI                            │
 └──────────────┬──────────────────────────────┬───────────────────┘
                │ REST / WebSockets            │ Touch / Video Stream
 ┌──────────────▼──────────────┐  ┌────────────▼────────────────────┐
 │    2. AI ORCHESTRATOR       │  │   3. STREAMING GATEWAY          │
-│     (Go API Server)         │  │ (Go proxy → ws-scrcpy + ADB)    │
+│     (Go API Server)         │  │ (Go proxy → ADB Screenshot)     │
 │ • Anthropic SDK + routing   │  │ • Authenticated WS termination  │
-│ • Self-Healing Agent Loop   │  │ • H.264 Encoder                 │
-│ • Typecheck gate + vision   │  │ • Touch/Key/Clipboard Input     │
-│ • Web Terminal Proxy        │  │ • adb shell / docker exec PTY   │
+│ • Self-Healing Agent Loop   │  │ • JPEG Encoding + Frame Diff    │
+│ • Typecheck gate + vision   │  │ • Touch/Key Input via ADB       │
+│ • Web Terminal Proxy        │  │ • adb shell PTY                 │
 └──────────────┬──────────────┘  └────────────┬────────────────────┘
                │ Writes Code                  │ Controls Android
 ┌──────────────▼──────────────────────────────▼────────────────────┐
@@ -77,7 +77,7 @@ To protect server GPU/RAM margins while ensuring rapid viral adoption within the
 
 ## 4. Technology Stack Specification
 
-- **Frontend**: Next.js (App Router), TypeScript, Tailwind CSS, `@monaco-editor/react`, `@xterm/xterm` (web terminal), `ws-scrcpy` JS client (`WebCodecs` / `MsePlayer` / `TinyH264Player`).
+- **Frontend**: Next.js (App Router), TypeScript, Tailwind CSS, `@monaco-editor/react`, `@xterm/xterm` (web terminal), HTML5 Canvas (screenshot-based streaming).
 - **AI Backend / Orchestrator**: **Go 1.23+**
   - HTTP: stdlib `net/http` (1.22+ method routing) + `github.com/go-chi/chi/v5`.
   - WebSockets: `github.com/gorilla/websocket` (frontend session sockets).
@@ -86,11 +86,11 @@ To protect server GPU/RAM margins while ensuring rapid viral adoption within the
   - Docker: `github.com/docker/docker` client SDK (container lifecycle, warm pool, exec).
   - Billing: `github.com/stripe/stripe-go/v8` (subscriptions + metered overage).
   - SQLite / Postgres driver for user/tier/metering records.
-- **Streaming Gateway**: Go API server terminates the user-facing WebSocket, authenticates the session, and proxies to a per-user **ws-scrcpy** daemon instance (which bridges ADB/scrcpy). H.264 frames are decoded client-side via WebCodecs (hardware) with MSE/TinyH264 fallbacks.
+- **Streaming Gateway**: Go API server terminates the user-facing WebSocket, authenticates the session, captures screenshots via ADB `exec-out screencap -p`, encodes to JPEG, and sends via WebSocket. Touch input forwarded via ADB `input` commands.
 - **Runtime & Emulator Environment**:
   - Host OS: Ubuntu 24.04 LTS (dedicated hosts) or WSL2 locally, with `binder_linux` loaded.
   - Container: `redroid/redroid:14.0.0_64only-latest`.
-  - Android Bridge: ADB over TCP (Port 5555), `ws-scrcpy`.
+  - Android Bridge: ADB over TCP (Port 5555).
   - App Stack: React Native 0.74+, Expo (Bare workflow), `@solana/web3.js`, `@solana-mobile/mobile-wallet-adapter-protocol-web3js`.
   - Wallet: official `solana-mobile/mock-mwa-wallet` APK baked into the image.
   - Local chain: `solana-test-validator` inside the container for pre-funded devnet simulation.
@@ -103,8 +103,7 @@ internal/billing/         # device-minute + prompt metering, Stripe
 internal/container/       # Docker lifecycle, warm paused pool
 internal/orchestrator/    # AI pipeline, self-healing loop, vision check
 internal/prompts/         # system prompts as Go constants
-internal/streaming/       # authenticated ws-scrcpy proxy
-internal/terminal/        # authenticated web terminal (PTY ↔ adb shell / docker exec)
+internal/ws/               # WebSocket: screenshot streaming + terminal proxy
 internal/store/           # users, projects, usage records
 internal/workspace/       # project volume mount / snapshot
 ```
@@ -175,17 +174,18 @@ Implement the file write & self-healing pipeline in `internal/orchestrator/orche
 5. **Verify**: Tail `adb logcat` (`ReactNativeJS:E`, `AndroidRuntime:E`) and capture `adb exec-out screencap -p`; on error, send message + stack + failing file + tree back to the heal LLM (max 3 attempts, watchdog-timed).
 6. **Vision check**: Feed the post-bundle screenshot to a vision model to confirm the UI matches intent.
 
-### Phase 3: H.264 Screen Streaming (ws-scrcpy)
-- The Go backend terminates the user-facing WebSocket with **per-session bearer-token auth** (WSS required; ws-scrcpy ships unencrypted/unauthenticated by default) and proxies to the per-user `ws-scrcpy` daemon.
-- Render the stream in the Web UI inside a custom `<canvas>`/`<video>` container:
+### Phase 3: Screenshot-Based Screen Streaming (v1)
+- The Go backend terminates the user-facing WebSocket with **per-session bearer-token auth** (WSS required) and captures screenshots via ADB `exec-out screencap -p`.
+- Frames are encoded to JPEG (quality 80) with frame-diffing (SHA256 hash) and a backpressure queue to prevent memory blowup.
+- Touch input is forwarded via ADB `input tap`/`swipe`/`keyevent` commands.
+- Render the stream in the Web UI inside a custom `<canvas>` container:
   ```tsx
   // Canvas Component Preview
   <div className="relative w-[360px] h-[800px] border-8 border-slate-900 rounded-[36px] overflow-hidden shadow-2xl">
     <canvas id="seeker-emulator-stream" className="w-full h-full object-cover" />
   </div>
   ```
-- Use ws-scrcpy's built-in input pipeline (touch, keyboard, clipboard, multi-touch) wired via its `postMessage` protocol to the canvas — no hand-rolled ADB touch serialization. Player priority: WebCodecs → MSE → TinyH264.
-- **Web terminal**: `xterm.js` panel in the IDE connects over an authenticated WebSocket to the Go terminal proxy (`internal/terminal`), which attaches a PTY to `adb shell` (or `docker exec` into the container) for running `adb`/`solana`/Metro/Gradle commands. Enable ws-scrcpy's `INCLUDE_ADB_SHELL` as a fallback.
+- **Web terminal**: `xterm.js` panel in the IDE connects over an authenticated WebSocket to the Go terminal proxy, which attaches a PTY to `adb shell` for running `adb`/`solana`/Metro/Gradle commands.
 
 ### Phase 4: Freemium Enforcement & Session Manager (Go)
 Implement container state management in `internal/container/manager.go`:

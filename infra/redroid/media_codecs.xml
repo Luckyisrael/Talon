@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<MediaCodecs>
+    <Decoders>
+        <MediaCodec name="c2.android.avc.decoder" type="video/avc" />
+        <MediaCodec name="c2.android.hevc.decoder" type="video/hevc" />
+        <MediaCodec name="c2.android.vp8.decoder" type="video/x-vnd.on2.vp8" />
+        <MediaCodec name="c2.android.vp9.decoder" type="video/x-vnd.on2.vp9" />
+        <MediaCodec name="c2.android.mpeg4.decoder" type="video/mp4v-es" />
+        <MediaCodec name="c2.android.h263.decoder" type="video/3gpp" />
+        <MediaCodec name="c2.android.mpeg2.decoder" type="video/mpeg2" />
+        <MediaCodec name="c2.android.aac.decoder" type="audio/mp4a-latm" />
+        <MediaCodec name="c2.android.mp3.decoder" type="audio/mpeg" />
+        <MediaCodec name="c2.android.amrnb.decoder" type="audio/3gpp" />
+        <MediaCodec name="c2.android.amrwb.decoder" type="audio/amr-wb" />
+        <MediaCodec name="c2.android.vorbis.decoder" type="audio/vorbis" />
+        <MediaCodec name="c2.android.opus.decoder" type="audio/opus" />
+        <MediaCodec name="c2.android.flac.decoder" type="audio/flac" />
+        <MediaCodec name="c2.android.raw.decoder" type="audio/raw" />
+        <MediaCodec name="c2.android.g711alaw.decoder" type="audio/g711-alaw" />
+        <MediaCodec name="c2.android.g711mlaw.decoder" type="audio/g711-mlaw" />
+    </Decoders>
+    <Encoders>
+        <MediaCodec name="c2.android.avc.encoder" type="video/avc" />
+        <MediaCodec name="c2.android.hevc.encoder" type="video/hevc" />
+        <MediaCodec name="c2.android.vp8.encoder" type="video/x-vnd.on2.vp8" />
+        <MediaCodec name="c2.android.vp9.encoder" type="video/x-vnd.on2.vp9" />
+        <MediaCodec name="c2.android.mpeg4.encoder" type="video/mp4v-es" />
+        <MediaCodec name="c2.android.h263.encoder" type="video/3gpp" />
+        <MediaCodec name="c2.android.aac.encoder" type="audio/mp4a-latm" />
+        <MediaCodec name="c2.android.amrnb.encoder" type="audio/3gpp" />
+        <MediaCodec name="c2.android.amrwb.encoder" type="audio/amr-wb" />
+        <MediaCodec name="c2.android.opus.encoder" type="audio/opus" />
+        <MediaCodec name="c2.android.flac.encoder" type="audio/flac" />
+        <MediaCodec name="c2.android.raw.encoder" type="audio/raw" />
+    </Encoders>
+</MediaCodecs>

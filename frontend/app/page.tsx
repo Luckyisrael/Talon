@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Add, ArrowDown, Microphone, Monitor, Message, Mobile, DocumentUpload, ShieldSecurity, Flash, Code, Box, Game } from "iconsax-reactjs";
+import { Add, ArrowDown, Microphone, Monitor, Message, Mobile, DocumentUpload, ShieldSecurity, Flash, Code, Box, Game, Solana } from "iconsax-reactjs";
 
 export default function Home() {
   return (
@@ -64,7 +64,7 @@ export default function Home() {
         </p>
 
         {/* Prompt Input Box */}
-        <div className="w-full max-w-[950px] bg-surface-3 rounded-[24px] p-6 mb-8">
+        <div className="w-full max-w-[950px] bg-surface-3 rounded-[45px] p-6 mb-8">
           <div className="flex items-center justify-between mb-6">
             <span className="text-lg text-text-muted">Describe the app you want to build...</span>
             <div className="w-8 h-8 rounded-full bg-surface-5 flex items-center justify-center">
@@ -74,21 +74,21 @@ export default function Home() {
 
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <button className="w-9 h-9 rounded-full bg-surface-5 flex items-center justify-center hover:bg-surface-4 transition-colors">
+              <button className="w-12 h-12 rounded-full bg-surface-5 flex items-center justify-center hover:bg-surface-4 transition-colors">
                 <Add size="16" className="text-text-secondary" variant="Linear" />
               </button>
-              <button className="h-9 px-4 rounded-full bg-surface-5 flex items-center gap-2 text-sm text-text-secondary hover:bg-surface-4 transition-colors">
+              <button className="h-12 px-4 rounded-full bg-surface-5 flex items-center gap-2 text-sm text-text-secondary hover:bg-surface-4 transition-colors">
                 <Mobile size="14" variant="Linear" />
                 <span>For Seeker</span>
                 <ArrowDown size="12" variant="Linear" />
               </button>
-              <button className="h-9 px-4 rounded-full bg-surface-5 flex items-center gap-2 text-sm text-text-secondary hover:bg-surface-4 transition-colors">
+              <button className="h-12 px-4 rounded-full bg-surface-5 flex items-center gap-2 text-sm text-text-secondary hover:bg-surface-4 transition-colors">
                 <Flash size="14" variant="Linear" />
                 <span>Auto</span>
                 <ArrowDown size="12" variant="Linear" />
               </button>
             </div>
-            <button className="w-9 h-9 rounded-full bg-surface-5 flex items-center justify-center hover:bg-surface-4 transition-colors">
+            <button className="w-10 h-10 rounded-full bg-surface-5 flex items-center justify-center hover:bg-surface-4 transition-colors">
               <Microphone size="16" className="text-text-secondary" variant="Linear" />
             </button>
           </div>
@@ -96,23 +96,23 @@ export default function Home() {
 
         {/* Suggestion Chips */}
         <div className="flex flex-wrap justify-center gap-3 mb-20">
-          <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
+          <button className="h-14 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
             <span className="w-6 h-6 rounded-full bg-accent flex items-center justify-center">
               <Game size="14" className="text-background" variant="Linear" />
             </span>
             Create a Multiplayer Game
           </button>
-          <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
+          <button className="h-14 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
             <span className="w-6 h-6 rounded-full bg-accent flex items-center justify-center">
               <Box size="14" className="text-background" variant="Linear" />
             </span>
             Create a 3D Game
           </button>
-          <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
-            <span className="w-6 h-6 rounded-full bg-solana-purple flex items-center justify-center text-xs text-white font-bold">S</span>
+          <button className="h-14 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
+            <Solana size="14" className="text-background" variant="Linear" color="#00FFA3"/>
             Solana Wallet App
           </button>
-          <button className="h-11 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
+          <button className="h-14 px-5 rounded-full bg-surface-3 flex items-center gap-3 text-sm font-medium text-text-primary hover:bg-surface-4 transition-colors">
             <span className="w-6 h-6 rounded-full bg-surface-5 flex items-center justify-center">
               <Flash size="14" className="text-text-primary" variant="Linear" />
             </span>

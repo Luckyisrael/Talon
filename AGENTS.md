@@ -7,7 +7,7 @@ starting UI work and obey its constraints (44px targets, pill controls, tonal
 surfaces, spacing scales, corner nesting rule).
 
 ## Architecture
-- **Redroid** = pure Android device emulator (APK runner + ws-scrcpy streaming). No Solana inside.
+- **Redroid** = pure Android device emulator (APK runner + screenshot-based streaming). No Solana inside.
 - **Mock MWA Wallet** = pre-installed on Redroid for testing wallet connection, tx signing, etc.
 - **Host (WSL/SeekerLinux)** = Solana CLI, build tools, Go backend, all compile/deploy work.
 - **Generated apps** = React Native apps that connect to wallet via MWA protocol.

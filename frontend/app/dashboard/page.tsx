@@ -3,50 +3,32 @@
 import { Add } from "iconsax-reactjs";
 import AppShell from "@/components/layout/AppShell";
 import { PillButton, StatusBadge, Spinner } from "@/components/ui";
-import { ProjectGrid, CreateProject } from "@/components/dashboard";
+import { ProjectGrid, CreateProject, DeleteProjectModal } from "@/components/dashboard";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-
-interface Project {
-  id: number;
-  name: string;
-  status: string;
-  created_at: string;
-  prompts_used?: number;
-}
+import { projects as projectsApi, usage as usageApi } from "@/lib/api";
+import { isAuthenticated } from "@/lib/auth";
+import type { Project } from "@/lib/types";
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectList, setProjectList] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [user, setUser] = useState<{ email: string; tier: string } | null>(null);
 
-  const loadProjects = useCallback(async () => {
-    const token = localStorage.getItem("token");
-    if (!token) {
+  // Delete modal state
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+
+  const loadData = useCallback(async () => {
+    if (!isAuthenticated()) {
       router.push("/login");
       return;
     }
 
     try {
-      const [projectsRes, usageRes] = await Promise.all([
-        fetch("http://localhost:8080/v1/projects", {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-        fetch("http://localhost:8080/v1/usage", {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-      ]);
-
-      if (!projectsRes.ok || !usageRes.ok) {
-        throw new Error("Failed to load data");
-      }
-
-      const projectsData = await projectsRes.json();
-      const usageData = await usageRes.json();
-
-      setProjects(projectsData || []);
+      const [projectsData, usageData] = await Promise.all([projectsApi.list(), usageApi.get()]);
+      setProjectList(projectsData || []);
       setUser({ email: "user@example.com", tier: usageData.tier });
     } catch (err) {
       console.error("Failed to load dashboard:", err);
@@ -55,9 +37,7 @@ export default function DashboardPage() {
     }
   }, [router]);
 
-  useEffect(() => {
-    loadProjects();
-  }, [loadProjects]);
+  useEffect(() => { loadData(); }, [loadData]);
 
   return (
     <AppShell>
@@ -65,9 +45,7 @@ export default function DashboardPage() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
           <div>
             <h1 className="text-2xl font-bold text-text-primary mb-1">Projects</h1>
-            <p className="text-sm text-text-secondary">
-              Build and manage your Solana Mobile apps
-            </p>
+            <p className="text-sm text-text-secondary">Build and manage your Solana Mobile apps</p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -89,15 +67,27 @@ export default function DashboardPage() {
             <Spinner size="lg" />
           </div>
         ) : (
-          <ProjectGrid projects={projects} />
+          <ProjectGrid
+            projects={projectList}
+            onDelete={(project) => setDeleteTarget(project)}
+          />
         )}
       </div>
 
-      <CreateProject
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreated={loadProjects}
-      />
+      <CreateProject open={createOpen} onClose={() => setCreateOpen(false)} onCreated={loadData} />
+
+      {deleteTarget && (
+        <DeleteProjectModal
+          open={!!deleteTarget}
+          projectId={deleteTarget.id}
+          projectName={deleteTarget.name}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={() => {
+            setDeleteTarget(null);
+            loadData();
+          }}
+        />
+      )}
     </AppShell>
   );
 }

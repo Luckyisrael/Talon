@@ -12,9 +12,13 @@ import (
 	"strings"
 )
 
-const systemPromptPlan = `IMPORTANT: Do NOT use any tools. Do NOT call any functions. Respond ONLY with plain text JSON. No tool calls.
+const systemPromptPlan = `CRITICAL RULES — VIOLATION IS FAILURE:
+1. You are in PLAN mode. You must NEVER write code, generate file contents, create files, or provide implementation details.
+2. You must NEVER generate HTML, CSS, JavaScript, index.html, or any web code.
+3. You must NEVER generate React Native code, TypeScript code, or any code at all.
+4. If the user asks you to write code, build something, create an app, or implement anything, you MUST refuse and tell them to switch to Build mode.
 
-You are a Solana Mobile app architect helping users design apps for the Seeker device.
+You are a Solana Mobile app architect helping users DESIGN apps for the Seeker device (Android, React Native/Expo).
 
 The Seeker device specs:
 - Screen: 6.36" AMOLED, 2670x1200, 460 PPI, 120Hz
@@ -22,7 +26,24 @@ The Seeker device specs:
 - Has Mobile Wallet Adapter (MWA) for Solana wallet integration
 - Seed Vault for secure key storage
 
-Your job: help the user plan their app's screens, features, and navigation.
+Your job: help the user plan their app's screens, features, and navigation. NOTHING ELSE.
+
+If the user says anything like "create me...", "build me...", "make me...", "I want a...", "I need a...", "can you create...", "add two numbers", "simple app", "calculator", "todo app" — you MUST respond:
+"I'm in Plan mode, which is for designing your app — not writing code. To start building, switch to Build mode using the toggle at the top of the chat.
+
+In Plan mode I can help you:
+- Define screens and features
+- Plan navigation flow
+- Choose packages and architecture
+- Discuss UI/UX patterns
+
+Switch to Build mode when you're ready to generate code."
+
+Plan mode is ONLY for:
+- Discussing and refining the app idea
+- Defining screens and features
+- Planning navigation and architecture
+- Choosing packages
 
 When the user describes their app idea:
 1. Ask clarifying questions if needed
@@ -45,21 +66,29 @@ Respond in this JSON format:
 
 If you're still discussing (not ready to finalize), set plan to null.`
 
-const systemPromptBuild = `IMPORTANT: Do NOT use any tools. Do NOT call any functions. Respond ONLY with plain text JSON. No tool calls.
+const systemPromptBuild = `CRITICAL RULES — VIOLATION IS FAILURE:
+1. You are building a REACT NATIVE / EXPO mobile app for ANDROID (Seeker device).
+2. You must NEVER generate HTML, CSS, vanilla JavaScript, index.html, or any web code.
+3. You must NEVER create website files. This is NOT a web app.
+4. ONLY use React Native components: View, Text, StyleSheet, TouchableOpacity, ScrollView, FlatList, TextInput, Switch, etc.
+5. ONLY use Expo libraries and expo-router for navigation.
+6. Your output MUST be valid JSON with a "files" array containing TypeScript/TSX files.
 
 You are a React Native engineer specializing in Solana Mobile apps for the Seeker device.
 
 === CRITICAL GUARDRAILS — READ EVERY ONE ===
 
-1. READ BEFORE EDIT: The existing project files are provided in the context below. You MUST read and understand them before generating any code. Never generate code for a file you haven't seen. If a file already exists, your output must preserve its existing structure and only add/modify what the user requested.
+1. REACT NATIVE ONLY: Use View, Text, StyleSheet, TouchableOpacity, ScrollView, FlatList, TextInput, Switch, SafeAreaView, etc. NEVER use div, span, p, button, input, or any HTML elements. NEVER use CSS files. NEVER use document.getElementById or any DOM API.
 
-2. NEVER DELETE: Do not remove existing functionality, screens, components, or features unless the user explicitly says "delete" or "remove". If a file exists and the user didn't ask to change it, do NOT include it in your response.
+2. READ BEFORE EDIT: The existing project files are provided in the context below. You MUST read and understand them before generating any code. Never generate code for a file you haven't seen. If a file already exists, your output must preserve its existing structure and only add/modify what the user requested.
 
-3. PRESERVE PATTERNS: Match the existing code style exactly. If the project uses named exports, use named exports. If it uses a specific folder structure, follow it. If it uses a particular state management approach, continue using it.
+3. NEVER DELETE: Do not remove existing functionality, screens, components, or features unless the user explicitly says "delete" or "remove". If a file exists and the user didn't ask to change it, do NOT include it in your response.
 
-4. VALIDATE PATHS: File paths must be relative to the project root (e.g., "src/screens/HomeScreen.tsx", not "MyApp/src/screens/HomeScreen.tsx"). Never use absolute paths.
+4. PRESERVE PATTERNS: Match the existing code style exactly. If the project uses named exports, use named exports. If it uses a specific folder structure, follow it. If it uses a particular state management approach, continue using it.
 
-5. NO CONFIG CHANGES: Do not modify package.json, app.json, tsconfig.json, or babel.config.js unless the user explicitly asks. Never add new dependencies without the user requesting them.
+5. VALIDATE PATHS: File paths must be relative to the project root (e.g., "src/screens/HomeScreen.tsx", not "MyApp/src/screens/HomeScreen.tsx"). Never use absolute paths.
+
+6. NO CONFIG CHANGES: Do not modify package.json, app.json, tsconfig.json, or babel.config.js unless the user explicitly asks. Never add new dependencies without the user requesting them.
 
 6. TYPE SAFETY: All components must have proper TypeScript types. Use interfaces for props. Never use 'any' type.
 
@@ -76,13 +105,15 @@ You are a React Native engineer specializing in Solana Mobile apps for the Seeke
 
 The project already has these packages installed:
 - expo, react-native
-- @solana/web3.js
+- @solana/web3.js, @solana/spl-token
 - @solana-mobile/mobile-wallet-adapter-protocol-web3js
 - @solana-mobile/mobile-wallet-adapter-protocol
-- react-native-get-random-values, @craftzdog/react-native-buffer, react-native-quick-base64
-- @react-native-async-storage/async-storage
 - react-native-gesture-handler, react-native-reanimated
-- react-native-safe-area-context
+- react-native-safe-area-context, react-native-screens
+- react-native-quick-crypto, js-base64
+- @react-native-async-storage/async-storage
+- expo-router, expo-constants, expo-linking, expo-status-bar
+- react-native-svg, react-native-webview
 
 Your response MUST be valid JSON:
 
@@ -218,8 +249,9 @@ type anthropicMessage struct {
 // Anthropic Messages API response
 type anthropicResponse struct {
 	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type  string `json:"type"`
+		Text  string `json:"text"`
+		Thinking string `json:"thinking,omitempty"`
 	} `json:"content"`
 	Error *struct {
 		Type    string `json:"type"`
@@ -295,7 +327,7 @@ func (c *Client) chatWithRetry(ctx context.Context, system string, history []Pro
 	}
 
 	// Strip markdown code blocks if present
-	resp = stripCodeBlocks(resp)
+	resp = StripCodeBlocks(resp)
 
 	// Check if response is valid JSON (for build mode, it must be)
 	if strings.Contains(system, "You generate COMPLETE") {
@@ -318,8 +350,8 @@ func (c *Client) chatWithRetry(ctx context.Context, system string, history []Pro
 	return resp, nil
 }
 
-// stripCodeBlocks removes markdown code block wrappers from AI responses
-func stripCodeBlocks(s string) string {
+// StripCodeBlocks removes markdown code block wrappers from AI responses.
+func StripCodeBlocks(s string) string {
 	s = strings.TrimSpace(s)
 
 	// Remove opening code block (```json, ```tsx, ```typescript, etc.)
@@ -461,6 +493,18 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 		}
 	}
 
+	// Fallback: some providers return only thinking blocks with no text.
+	// Concatenate thinking content as a last resort.
+	var thinkingParts []string
+	for _, block := range anthResp.Content {
+		if block.Type == "thinking" && block.Thinking != "" {
+			thinkingParts = append(thinkingParts, block.Thinking)
+		}
+	}
+	if len(thinkingParts) > 0 {
+		return strings.Join(thinkingParts, "\n"), nil
+	}
+
 	return "", fmt.Errorf("no text content in AI response")
 }
 
@@ -525,4 +569,277 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 	}
 
 	return oaiResp.Choices[0].Message.Content, nil
+}
+
+// ── Streaming ─────────────────────────────────────────
+
+// StreamEvent represents a single event in a streaming AI response.
+type StreamEvent struct {
+	Type  string      `json:"type"`            // thinking.start, text.delta, tool.start, etc.
+	Data  interface{} `json:"data,omitempty"`  // event-specific payload
+	Error string      `json:"error,omitempty"` // error message if type is "error"
+}
+
+// StreamTextDelta is the payload for text.delta and thinking.delta events.
+type StreamTextDelta struct {
+	Text string `json:"text"`
+}
+
+// StreamToolStart is the payload for tool.start events.
+type StreamToolStart struct {
+	Name  string      `json:"name"`            // e.g., "write_file"
+	Input interface{} `json:"input,omitempty"` // e.g., {"path": "src/App.tsx"}
+}
+
+// StreamToolEnd is the payload for tool.end events.
+type StreamToolEnd struct {
+	Name   string `json:"name"`
+	Result string `json:"result,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// ChatStream sends a streaming request to the AI and returns a channel of events.
+// The channel is closed when the stream ends or an error occurs.
+func (c *Client) ChatStream(ctx context.Context, system string, history []PromptMessage) <-chan StreamEvent {
+	events := make(chan StreamEvent, 64)
+
+	go func() {
+		defer close(events)
+
+		if c.provider == ProviderOpenRouter {
+			// OpenRouter doesn't support streaming in our setup — fall back to non-streaming
+			c.fallbackStream(ctx, system, history, events)
+			return
+		}
+
+		c.streamAnthropic(ctx, system, history, events)
+	}()
+
+	return events
+}
+
+func (c *Client) streamAnthropic(ctx context.Context, system string, history []PromptMessage, events chan<- StreamEvent) {
+	messages := make([]anthropicMessage, 0, len(history))
+	for _, h := range history {
+		messages = append(messages, anthropicMessage{
+			Role:    h.Role,
+			Content: h.Content,
+		})
+	}
+
+	reqBody := map[string]interface{}{
+		"model":      c.model,
+		"max_tokens": 8192,
+		"system":     system,
+		"messages":   messages,
+		"stream":     true,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		events <- StreamEvent{Type: "error", Error: "failed to marshal request: " + err.Error()}
+		return
+	}
+
+	url := c.baseURL + "/v1/messages"
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		events <- StreamEvent{Type: "error", Error: "failed to create request: " + err.Error()}
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", c.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		events <- StreamEvent{Type: "error", Error: "request failed: " + err.Error()}
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		events <- StreamEvent{Type: "error", Error: fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(respBody))}
+		return
+	}
+
+	// Parse SSE stream
+	scanner := newSSEScanner(resp.Body)
+	for scanner.Next() {
+		event := scanner.Event()
+
+		switch event.Type {
+		case "content_block_start":
+			var data struct {
+				ContentBlock struct {
+					Type string `json:"type"`
+				} `json:"content_block"`
+			}
+			if json.Unmarshal(event.Data, &data) == nil {
+				switch data.ContentBlock.Type {
+				case "thinking":
+					events <- StreamEvent{Type: "thinking.start"}
+				case "text":
+					events <- StreamEvent{Type: "text.start"}
+				}
+			}
+
+		case "content_block_delta":
+			var data struct {
+				Delta struct {
+					Type      string `json:"type"`
+					Text      string `json:"text"`
+					Thinking  string `json:"thinking"`
+				} `json:"delta"`
+			}
+			if json.Unmarshal(event.Data, &data) == nil {
+				switch data.Delta.Type {
+				case "thinking_delta":
+					events <- StreamEvent{Type: "thinking.delta", Data: StreamTextDelta{Text: data.Delta.Thinking}}
+				case "text_delta":
+					events <- StreamEvent{Type: "text.delta", Data: StreamTextDelta{Text: data.Delta.Text}}
+				}
+			}
+
+		case "content_block_stop":
+			// We don't know which block type stopped without tracking index.
+			// The text.end / thinking.end will be inferred by the caller
+			// when it sees text.start followed by the next content_block_start or message_stop.
+
+		case "message_delta":
+			events <- StreamEvent{Type: "text.end"}
+
+		case "message_stop":
+			events <- StreamEvent{Type: "done"}
+
+		case "error":
+			var data struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(event.Data, &data) == nil {
+				events <- StreamEvent{Type: "error", Error: data.Error.Message}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		events <- StreamEvent{Type: "error", Error: "stream read error: " + err.Error()}
+	}
+}
+
+// fallbackStream handles non-streaming providers by making a regular request
+// and emitting events to simulate streaming.
+func (c *Client) fallbackStream(ctx context.Context, system string, history []PromptMessage, events chan<- StreamEvent) {
+	events <- StreamEvent{Type: "thinking.start"}
+
+	resp, err := c.chat(ctx, system, history)
+	if err != nil {
+		events <- StreamEvent{Type: "error", Error: err.Error()}
+		return
+	}
+
+	events <- StreamEvent{Type: "thinking.end"}
+	events <- StreamEvent{Type: "text.start"}
+
+	// Emit text in chunks to simulate streaming
+	chunkSize := 20
+	for i := 0; i < len(resp); i += chunkSize {
+		end := i + chunkSize
+		if end > len(resp) {
+			end = len(resp)
+		}
+		events <- StreamEvent{Type: "text.delta", Data: StreamTextDelta{Text: resp[i:end]}}
+	}
+
+	events <- StreamEvent{Type: "text.end"}
+	events <- StreamEvent{Type: "done"}
+}
+
+// ── SSE Scanner ───────────────────────────────────────
+
+type sseEvent struct {
+	Type string
+	Data json.RawMessage
+}
+
+type sseScanner struct {
+	reader  io.Reader
+	err     error
+	event   sseEvent
+	buf     []byte
+}
+
+func newSSEScanner(r io.Reader) *sseScanner {
+	return &sseScanner{reader: r, buf: make([]byte, 0, 4096)}
+}
+
+func (s *sseScanner) Err() error { return s.err }
+
+func (s *sseScanner) Event() sseEvent { return s.event }
+
+func (s *sseScanner) Next() bool {
+	tmp := make([]byte, 1024)
+	for {
+		n, err := s.reader.Read(tmp)
+		if n > 0 {
+			s.buf = append(s.buf, tmp[:n]...)
+		}
+		if err != nil {
+			if err != io.EOF {
+				s.err = err
+			}
+			// Process any remaining data
+			if len(s.buf) == 0 {
+				return false
+			}
+		}
+
+		// Try to parse an SSE event from the buffer
+		for {
+			// Look for double newline (event separator)
+			idx := bytes.Index(s.buf, []byte("\n\n"))
+			if idx < 0 {
+				break
+			}
+
+			rawEvent := s.buf[:idx]
+			s.buf = s.buf[idx+2:]
+
+			event := s.parseSSEBlock(rawEvent)
+			if event.Type != "" {
+				s.event = event
+				return true
+			}
+		}
+
+		if err != nil {
+			return false
+		}
+	}
+}
+
+func (s *sseScanner) parseSSEBlock(block []byte) sseEvent {
+	var event sseEvent
+	lines := bytes.Split(block, []byte("\n"))
+
+	for _, line := range lines {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+
+		if bytes.HasPrefix(line, []byte("event:")) {
+			event.Type = string(bytes.TrimSpace(line[6:]))
+		} else if bytes.HasPrefix(line, []byte("data:")) {
+			data := bytes.TrimSpace(line[5:])
+			event.Data = json.RawMessage(data)
+		}
+	}
+
+	return event
 }

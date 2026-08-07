@@ -5,12 +5,9 @@ import { useParams, useRouter } from "next/navigation";
 import { IDELayout } from "@/components/ide";
 import { Spinner } from "@/components/ui";
 import { useState, useEffect } from "react";
-
-interface Project {
-  id: number;
-  name: string;
-  status: string;
-}
+import { projects } from "@/lib/api";
+import { isAuthenticated } from "@/lib/auth";
+import type { Project } from "@/lib/types";
 
 export default function ProjectPage() {
   const params = useParams();
@@ -19,23 +16,14 @@ export default function ProjectPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token) {
+    if (!isAuthenticated()) {
       router.push("/login");
       return;
     }
 
     async function loadProject() {
       try {
-        const res = await fetch(`http://localhost:8080/v1/projects/${params.id}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-
-        if (!res.ok) {
-          throw new Error("Project not found");
-        }
-
-        const data = await res.json();
+        const data = await projects.get(Number(params.id));
         setProject(data);
       } catch (err) {
         console.error("Failed to load project:", err);
@@ -56,26 +44,19 @@ export default function ProjectPage() {
     );
   }
 
-  if (!project) {
-    return null;
-  }
+  if (!project) return null;
 
   return (
     <div className="h-screen flex flex-col bg-background">
       <div className="h-12 flex items-center justify-between px-4 bg-surface-1">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => router.push("/dashboard")}
-            className="p-2 rounded-lg hover:bg-surface-3 transition-colors"
-          >
+          <button onClick={() => router.push("/dashboard")} className="p-2 rounded-lg hover:bg-surface-3 transition-colors">
             <ArrowLeft size="16" className="text-text-secondary" variant="Linear" />
           </button>
           <span className="text-sm font-medium text-text-primary">{project.name}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-text-secondary capitalize">
-            {project.status}
-          </span>
+          <span className="text-xs font-mono text-text-secondary capitalize">{project.status}</span>
         </div>
       </div>
 

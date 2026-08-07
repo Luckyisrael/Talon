@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import PillButton from "@/components/ui/PillButton";
 import Spinner from "@/components/ui/Spinner";
+import { auth } from "@/lib/api";
+import { setToken } from "@/lib/auth";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -19,19 +21,8 @@ export default function RegisterPage() {
     setError("");
 
     try {
-      const res = await fetch("http://localhost:8080/v1/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Registration failed");
-      }
-
-      const data = await res.json();
-      localStorage.setItem("token", data.token);
+      const data = await auth.register(email, password, email.split("@")[0]);
+      setToken(data.token);
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -56,9 +47,7 @@ export default function RegisterPage() {
 
           <form onSubmit={handleSubmit}>
             <label className="block mb-4">
-              <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">
-                Email
-              </span>
+              <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">Email</span>
               <input
                 type="email"
                 value={email}
@@ -70,9 +59,7 @@ export default function RegisterPage() {
             </label>
 
             <label className="block mb-4">
-              <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">
-                Password
-              </span>
+              <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">Password</span>
               <input
                 type="password"
                 value={password}
@@ -82,15 +69,9 @@ export default function RegisterPage() {
               />
             </label>
 
-            {error && (
-              <p className="text-sm text-error mb-4">{error}</p>
-            )}
+            {error && <p className="text-sm text-error mb-4">{error}</p>}
 
-            <PillButton
-              type="submit"
-              disabled={loading}
-              className="w-full"
-            >
+            <PillButton type="submit" disabled={loading} className="w-full">
               {loading ? <Spinner size="sm" color="currentColor" /> : "Create Account"}
             </PillButton>
           </form>

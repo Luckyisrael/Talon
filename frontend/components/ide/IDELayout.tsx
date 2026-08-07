@@ -1,185 +1,205 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { ArrowDown, ArrowUp } from "iconsax-reactjs";
-import AIChat from "./AIChat";
+import { useCallback, useEffect, useRef } from "react";
+import { ArrowDown, ArrowUp, Message } from "iconsax-reactjs";
+import AIChat, { type AIChatHandle } from "./AIChat";
 import FileTree from "./FileTree";
 import PhonePreview from "./PhonePreview";
 import Terminal from "./Terminal";
 import CodeEditor from "./CodeEditor";
+import PlanViewer from "./PlanViewer";
+import ResizablePanel from "../ui/ResizablePanel";
+import { useIDEStore } from "@/lib/store";
+import { projects } from "@/lib/api";
 
 interface IDELayoutProps {
   projectId: number;
   projectName: string;
 }
 
-interface FileNode {
-  name: string;
-  type: "file" | "folder";
-  children?: FileNode[];
-}
+export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
+  const store = useIDEStore();
+  const aiChatRef = useRef<AIChatHandle>(null);
 
-function buildFileTree(files: { path: string; content: string }[]): FileNode[] {
-  const root: FileNode[] = [];
-
-  for (const file of files) {
-    const parts = file.path.split("/").filter(Boolean);
-    let current = root;
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const isFile = i === parts.length - 1;
-
-      const existing = current.find((n) => n.name === part);
-      if (existing) {
-        if (!isFile && existing.type === "file") {
-          existing.type = "folder";
-          existing.children = [];
+  // Load existing project files on mount (exclude scaffold)
+  useEffect(() => {
+    async function loadFiles() {
+      try {
+        const files = await projects.getFiles(projectId, false);
+        if (files.length > 0) {
+          store.setFilesFromEntries(files);
         }
-        if (existing.children) {
-          current = existing.children;
-        }
-      } else {
-        const node: FileNode = {
-          name: part,
-          type: isFile ? "file" : "folder",
-          children: isFile ? undefined : [],
-        };
-        current.push(node);
-        if (node.children) {
-          current = node.children;
-        }
+      } catch {
+        // Silently ignore — files will be populated by AI responses
       }
     }
-  }
+    loadFiles();
+  }, [projectId]);
 
-  return root;
-}
+  const handleStartSession = useCallback(async () => {
+    store.setPreviewStatus("connecting");
+    try {
+      const { sessions } = await import("@/lib/api");
+      const data = await sessions.create(projectId);
+      store.setSessionId(data.id);
+      store.setPreviewStatus("streaming");
+    } catch {
+      store.setPreviewStatus("error");
+    }
+  }, [projectId]);
 
-export default function IDELayout({ projectId, projectName }: IDELayoutProps) {
-  const [selectedFile, setSelectedFile] = useState<string>();
-  const [files, setFiles] = useState<FileNode[]>([]);
-  const [fileContents, setFileContents] = useState<Record<string, string>>({});
-  const [previewStatus] = useState<"idle" | "connecting" | "streaming" | "error">("idle");
-  const [buildOutput, setBuildOutput] = useState("");
-  const [terminalOpen, setTerminalOpen] = useState(true);
+  const handlePlanApproved = useCallback(() => {
+    const plan = store.currentPlan;
+    if (!plan || !aiChatRef.current) return;
+    store.setCurrentPlan(null);
+    aiChatRef.current.switchToBuild();
+    const screenNames = plan.plan.screens.map((s) => s.name).join(", ");
+    aiChatRef.current.sendMessage(
+      `Build the following screens: ${screenNames}. Generate all necessary components with full implementation.`,
+    );
+  }, [store]);
 
-  const handleFilesGenerated = useCallback(
-    (newFiles: { path: string; content: string }[]) => {
-      setFiles((prev) => {
-        const tree = buildFileTree(newFiles);
-        return mergeFileTrees(prev, tree);
-      });
-
-      setFileContents((prev) => {
-        const next = { ...prev };
-        for (const f of newFiles) {
-          next[f.path] = f.content;
-        }
-        return next;
-      });
-
-      setBuildOutput((prev) => {
-        const fileNames = newFiles.map((f) => f.path).join("\n");
-        return prev
-          ? `${prev}\n\nGenerated ${newFiles.length} files:\n${fileNames}`
-          : `Generated ${newFiles.length} files:\n${fileNames}`;
-      });
+  const handleNewFile = useCallback(
+    async (parentPath: string, name: string) => {
+      const filePath = parentPath ? `${parentPath}/${name}` : name;
+      await projects.writeFiles(projectId, [{ path: filePath, content: "" }]);
+      store.addFiles([{ path: filePath, content: "" }]);
     },
-    []
+    [projectId, store],
   );
 
-  const selectedContent = selectedFile ? fileContents[selectedFile] : undefined;
+  const handleNewFolder = useCallback(
+    async (parentPath: string, name: string) => {
+      // Create a .gitkeep inside the folder so it exists on disk
+      const folderPath = parentPath ? `${parentPath}/${name}` : name;
+      const gitkeep = `${folderPath}/.gitkeep`;
+      await projects.writeFiles(projectId, [{ path: gitkeep, content: "" }]);
+      store.addFiles([{ path: gitkeep, content: "" }]);
+    },
+    [projectId, store],
+  );
+
+  const handleRename = useCallback(
+    async (oldPath: string, newName: string) => {
+      const parts = oldPath.split("/");
+      parts[parts.length - 1] = newName;
+      const newPath = parts.join("/");
+
+      const oldContent = store.fileContents[oldPath] || "";
+      await projects.writeFiles(projectId, [{ path: newPath, content: oldContent }]);
+      await projects.deleteFile(projectId, oldPath);
+      store.removeFileByPath(oldPath);
+      store.addFiles([{ path: newPath, content: oldContent }]);
+    },
+    [projectId, store],
+  );
+
+  const handleDelete = useCallback(
+    async (path: string) => {
+      await projects.deleteFile(projectId, path);
+      store.removeFileByPath(path);
+    },
+    [projectId, store],
+  );
+
+  const selectedContent = store.selectedFile ? store.fileContents[store.selectedFile] : undefined;
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden bg-background">
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* File Tree */}
-        <div className="w-56 flex-shrink-0 bg-surface-2 hidden md:block overflow-hidden">
-          <div className="h-10 flex items-center px-4 bg-surface-1">
-            <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">
-              Files
-            </span>
+        {/* LEFT PANEL */}
+        <ResizablePanel direction="horizontal" defaultSize={240} minSize={180} maxSize={400} className="hidden md:block">
+          <div className="flex flex-col h-full bg-surface-1 overflow-hidden">
+            {/* File Tree */}
+            <div className="flex flex-col flex-1 min-h-0">
+              <div className="h-10 flex items-center px-4 bg-surface-2 flex-shrink-0">
+                <span className="text-[11px] font-mono uppercase tracking-wider text-text-muted">Files</span>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto px-1 py-1">
+                <FileTree
+                  files={store.files}
+                  selectedFile={store.selectedFile}
+                  onSelectFile={store.selectFile}
+                  onNewFile={handleNewFile}
+                  onNewFolder={handleNewFolder}
+                  onRename={handleRename}
+                  onDelete={handleDelete}
+                />
+              </div>
+            </div>
+
+            <div className="h-px bg-surface-3 flex-shrink-0" />
+
+            {/* AI Chat */}
+            <div className="flex flex-col flex-1 min-h-0">
+              <div className="h-10 flex items-center gap-2 px-4 bg-surface-2 flex-shrink-0">
+                <Message size="13" className="text-accent" variant="Linear" />
+                <span className="text-[11px] font-mono uppercase tracking-wider text-text-muted">AI Assistant</span>
+              </div>
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <AIChat ref={aiChatRef} projectId={projectId} />
+              </div>
+            </div>
           </div>
-          <div className="overflow-y-auto" style={{ height: "calc(100% - 40px)" }}>
-            {files.length > 0 ? (
-              <FileTree
-                files={files}
-                selectedFile={selectedFile}
-                onSelectFile={setSelectedFile}
+        </ResizablePanel>
+
+        {/* CENTER COLUMN */}
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+          {/* Editor / Plan */}
+          <div className="flex-1 min-h-0 overflow-hidden bg-surface-2">
+            {store.currentPlan ? (
+              <PlanViewer
+                message={store.currentPlan.message}
+                plan={store.currentPlan.plan}
+                onApprove={handlePlanApproved}
               />
+            ) : store.selectedFile && selectedContent !== undefined ? (
+              <CodeEditor filePath={store.selectedFile} content={selectedContent} />
             ) : (
-              <div className="p-4">
-                <p className="text-xs text-text-muted">
-                  No files yet. Use the AI assistant to generate code.
-                </p>
+              <div className="flex flex-col items-center justify-center h-full text-center px-8">
+                <div className="w-14 h-14 rounded-2xl bg-surface-3 flex items-center justify-center mb-4">
+                  <Message size="28" className="text-text-muted" variant="Linear" />
+                </div>
+                <p className="text-sm text-text-secondary mb-1">Select a file to view code</p>
+                <p className="text-xs text-text-muted">Or use the AI assistant to generate new files</p>
               </div>
             )}
           </div>
+
+          {/* Terminal */}
+          <ResizablePanel direction="vertical" defaultSize={200} minSize={40} maxSize={400} handleSide="start">
+            <div className="flex flex-col h-full bg-surface-1 overflow-hidden">
+              <div
+                className="h-10 flex items-center justify-between px-4 cursor-pointer select-none hover:bg-surface-2 transition-colors flex-shrink-0"
+                onClick={() => store.setTerminalOpen(!store.terminalOpen)}
+              >
+                <span className="text-[11px] font-mono uppercase tracking-wider text-text-muted">Terminal</span>
+                {store.terminalOpen ? (
+                  <ArrowDown size="14" className="text-text-muted" variant="Linear" />
+                ) : (
+                  <ArrowUp size="14" className="text-text-muted" variant="Linear" />
+                )}
+              </div>
+              {store.terminalOpen && (
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  <Terminal sessionId={store.sessionId} />
+                </div>
+              )}
+            </div>
+          </ResizablePanel>
         </div>
 
-        {/* Center: Editor or AI Chat */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {selectedFile && selectedContent !== undefined ? (
-            <CodeEditor filePath={selectedFile} content={selectedContent} />
-          ) : (
-            <AIChat
-              projectId={projectId}
-              onFilesGenerated={handleFilesGenerated}
+        {/* RIGHT PANEL */}
+        <ResizablePanel direction="horizontal" defaultSize={288} minSize={200} maxSize={500} className="hidden lg:block" handleSide="start">
+          <div className="flex flex-col h-full bg-surface-1 overflow-hidden">
+            <PhonePreview
+              status={store.previewStatus}
+              sessionId={store.sessionId}
+              onStartSession={handleStartSession}
             />
-          )}
-        </div>
-
-        {/* Phone Preview */}
-        <div className="w-80 flex-shrink-0 hidden lg:block overflow-hidden">
-          <PhonePreview status={previewStatus} />
-        </div>
-      </div>
-
-      {/* Terminal - collapsible */}
-      <div className="flex-shrink-0 overflow-hidden" style={{ height: terminalOpen ? "192px" : "36px" }}>
-        {/* Terminal header - always visible */}
-        <div className="h-9 flex items-center justify-between px-3 bg-surface-1 cursor-pointer select-none" onClick={() => setTerminalOpen(!terminalOpen)}>
-          <span className="text-xs font-mono text-text-secondary">Terminal</span>
-          <button className="p-1 rounded hover:bg-surface-3 transition-colors">
-            {terminalOpen ? (
-              <ArrowDown size="14" className="text-text-secondary" variant="Linear" />
-            ) : (
-              <ArrowUp size="14" className="text-text-secondary" variant="Linear" />
-            )}
-          </button>
-        </div>
-
-        {/* Terminal content */}
-        {terminalOpen && (
-          <div style={{ height: "calc(100% - 36px)" }}>
-            <Terminal output={buildOutput} />
           </div>
-        )}
+        </ResizablePanel>
       </div>
     </div>
   );
-}
-
-function mergeFileTrees(existing: FileNode[], newNodes: FileNode[]): FileNode[] {
-  const result = [...existing];
-
-  for (const newNode of newNodes) {
-    const existingIdx = result.findIndex((n) => n.name === newNode.name);
-    if (existingIdx >= 0) {
-      const existingNode = result[existingIdx];
-      if (newNode.type === "folder" && existingNode.type === "folder" && newNode.children && existingNode.children) {
-        result[existingIdx] = {
-          ...existingNode,
-          children: mergeFileTrees(existingNode.children, newNode.children),
-        };
-      } else if (newNode.type === "file") {
-        result[existingIdx] = newNode;
-      }
-    } else {
-      result.push(newNode);
-    }
-  }
-
-  return result;
 }
