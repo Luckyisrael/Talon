@@ -110,6 +110,18 @@ func main() {
 		log.Printf("dev-client manager initialized (template v%s)", devClientMgr.Allowlist().TemplateVersion)
 	}
 
+	// Initialize wallet manager
+	walletMgr, err := devclient.NewWalletManager(templateDir)
+	if err != nil {
+		log.Printf("WARNING: wallet manager init failed: %v (mock wallet install will be skipped)", err)
+	} else {
+		if walletMgr.IsInstalled() {
+			log.Printf("wallet manager initialized (mock wallet found)")
+		} else {
+			log.Printf("WARNING: mock wallet APK not found — run build-mock-wallet.sh")
+		}
+	}
+
 	// Ensure workspace dir exists
 	os.MkdirAll(workspaceDir, 0755)
 
@@ -117,7 +129,7 @@ func main() {
 	authHandler := api.NewAuthHandler(s, authSvc)
 	projectHandler := api.NewProjectHandler(s, wsMgr, workspaceDir)
 	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr)
-	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, workspaceDir, devClientMgr)
+	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, workspaceDir, devClientMgr, walletMgr)
 	usageHandler := api.NewUsageHandler(s)
 	terminalHandler := ws.NewTerminalHandler(authSvc, s)
 	streamHandler := ws.NewStreamHandler(authSvc, s)

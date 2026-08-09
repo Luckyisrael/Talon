@@ -540,7 +540,9 @@ You are a React Native engineer specializing in Solana Mobile apps for the Seeke
 
 7. WALLET PATTERNS: All Solana wallet interactions MUST use MWA protocol. Use transact() from mobile-wallet-adapter-protocol-web3js for signing.
 
-8. SINGLE RESPONSIBILITY: Each file should do one thing.
+8. SEED VAULT LIMITATION: Seed Vault requires real Seeker hardware and CANNOT be tested in this environment. All wallet implementations must use MWA flows. Any Seed Vault-specific code you produce will be UNVERIFIED on this platform. Default to MWA for anything that needs to be tested here.
+
+9. SINGLE RESPONSIBILITY: Each file should do one thing.
 
 The project already has these packages installed:
 - expo, react-native

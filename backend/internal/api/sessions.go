@@ -20,15 +20,17 @@ type SessionHandler struct {
 	portAlloc   *redroid.PortAllocator
 	workspaceDir string
 	devClient   *devclient.Manager
+	wallet      *devclient.WalletManager
 }
 
-func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.PortAllocator, workspaceDir string, dc *devclient.Manager) *SessionHandler {
+func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.PortAllocator, workspaceDir string, dc *devclient.Manager, wm *devclient.WalletManager) *SessionHandler {
 	return &SessionHandler{
 		store:       s,
 		manager:     mgr,
 		portAlloc:   portAlloc,
 		workspaceDir: workspaceDir,
 		devClient:   dc,
+		wallet:      wm,
 	}
 }
 
@@ -87,6 +89,18 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		} else {
 			log.Printf("dev-client installed for session %d on %s", session.ID, adbTarget)
 		}
+	}
+
+	// Setup mock wallet (hard failure if not available — §2.9)
+	if h.wallet != nil && h.wallet.IsInstalled() {
+		adbTarget := "localhost:" + strconv.Itoa(containerInfo.ADBPort)
+		if err := h.wallet.SetupSession(context.Background(), adbTarget); err != nil {
+			log.Printf("ERROR: mock wallet setup failed for session %d: %v", session.ID, err)
+			h.store.UpdateSessionState(session.ID, "destroyed")
+			writeError(w, http.StatusServiceUnavailable, "wallet setup failed: "+err.Error())
+			return
+		}
+		log.Printf("mock wallet configured for session %d on %s", session.ID, adbTarget)
 	}
 
 	// Start Metro bundler for this session
