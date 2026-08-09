@@ -41,6 +41,17 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *o
 	reg.Register(&tools.InstallPackage{})
 	reg.Register(&tools.BuildAPK{})
 
+	// Phase 7: Register ADR and memory tools
+	storeAdapter := &tools.StoreAdapter{
+		CreateADRFn: func(projectID int64, decision, context, options, outcome string) error {
+			_, err := s.CreateADR(projectID, decision, context, options, outcome)
+			return err
+		},
+		AddMemoryFn: s.AddMemory,
+	}
+	reg.Register(tools.NewWriteADR(storeAdapter))
+	reg.Register(tools.NewWriteMemory(storeAdapter))
+
 	return &PromptHandler{
 		store:       s,
 		ai:          a,

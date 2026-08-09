@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"log"
 	"sync"
 )
 
@@ -25,9 +26,14 @@ type DefaultEncoder struct {
 }
 
 // NewEncoder creates a new JPEG encoder.
-// Uses optimized pure-Go encoding. Swap with NewTurboEncoder when
-// libjpeg-turbo-dev is installed for 1.7x faster encoding.
+// Auto-detects libjpeg-turbo (CGo) and uses it when available,
+// falling back to pure-Go stdlib encoder otherwise.
 func NewEncoder() Encoder {
+	if e := tryTurboEncoder(); e != nil {
+		log.Printf("using libjpeg-turbo encoder")
+		return e
+	}
+	log.Printf("using pure-Go JPEG encoder (libjpeg-turbo not available)")
 	return &DefaultEncoder{
 		bufPool: sync.Pool{
 			New: func() interface{} {

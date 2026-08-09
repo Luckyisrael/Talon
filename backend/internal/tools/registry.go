@@ -65,3 +65,17 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	}
 	return t.Execute(ctx, args)
 }
+
+// StoreAdapter wraps the actual store to provide the interface needed by tools.
+type StoreAdapter struct {
+	CreateADRFn  func(projectID int64, decision, context, options, outcome string) error
+	AddMemoryFn  func(projectID int64, entryType, content, metadata string) error
+}
+
+func (a *StoreAdapter) CreateADR(projectID int64, decision, context, options, outcome string) error {
+	return a.CreateADRFn(projectID, decision, context, options, outcome)
+}
+
+func (a *StoreAdapter) AddMemory(projectID int64, entryType, content, metadata string) error {
+	return a.AddMemoryFn(projectID, entryType, content, metadata)
+}

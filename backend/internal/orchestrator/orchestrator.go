@@ -129,6 +129,11 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 			verb := o.getToolVerb(toolUse.Name, toolUse.Input)
 			sess.Emitter.EmitToolCall(toolUse.Name, verb, "", "running")
 
+			// Phase 7: Emit task update for key operations
+			if taskID := o.getTaskIDForTool(toolUse.Name); taskID != "" {
+				sess.EmitTaskUpdate(taskID, verb, "in_progress", "")
+			}
+
 			output, execErr := toolExecutor(ctx, toolUse.Name, toolUse.Input)
 			isError := execErr != nil
 			if output == "" && execErr != nil {
@@ -140,6 +145,15 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 				status = "error"
 			}
 			sess.Emitter.EmitToolCall(toolUse.Name, verb, "", status)
+
+			// Phase 7: Complete task for key operations
+			if taskID := o.getTaskIDForTool(toolUse.Name); taskID != "" {
+				result := "success"
+				if isError {
+					result = execErr.Error()
+				}
+				sess.EmitTaskUpdate(taskID, verb, "completed", result)
+			}
 
 			// Phase 7: Track file reads for read-before-write enforcement
 			if toolUse.Name == "read_file" {
@@ -273,6 +287,24 @@ func (o *Orchestrator) getToolVerb(toolName string, input json.RawMessage) strin
 		return "Tailing logcat"
 	default:
 		return toolName
+	}
+}
+
+// getTaskIDForTool returns a task ID for tools that should emit task tracking events.
+func (o *Orchestrator) getTaskIDForTool(toolName string) string {
+	switch toolName {
+	case "build_apk":
+		return "build-apk"
+	case "run_tests":
+		return "run-tests"
+	case "run_typecheck", "run_lint":
+		return "verify"
+	case "install_package":
+		return "install-deps"
+	case "capture_screenshot":
+		return "runtime-check"
+	default:
+		return ""
 	}
 }
 

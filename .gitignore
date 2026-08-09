@@ -28,7 +28,8 @@ local.properties
 # Backend template build artifacts
 backend/template/android/
 backend/template/.expo/
-backend/template/dev-client/*.apk
+backend/template/dev-client/**/*.apk
+backend/template/mock-wallet/*.apk
 
 # Databases
 *.db
