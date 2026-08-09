@@ -27,8 +27,8 @@ If a change would touch real hardware provisioning, Seed Vault APIs, or the rele
 
 ## 2. Non-Negotiable Rules
 
-### 2.1 The mock wallet is built offline, never per-container
-The mock MWA wallet APK is built once via an offline/CI pipeline — cloning the source and producing a build artifact — exactly as the dev client is in Phase 5. It must never be built live at the moment a new session or container starts.
+### 2.1 The mock wallet is built offline, never per-container, from the exact known source
+The mock wallet is the `fakewallet` module inside Solana Mobile's official `mobile-wallet-adapter` monorepo (`github.com/solana-mobile/mobile-wallet-adapter`, under `android/fakewallet`) — not a separate standalone repository, and not something the AI or a build script should search for under a different name. It is built once via an offline/CI pipeline using the module's own Gradle task (`./gradlew :fakewallet:installV1Debug` or the equivalent assemble task to produce a distributable APK rather than installing directly), exactly as the dev client is in Phase 5. It must never be built live at the moment a new session or container starts.
 
 ### 2.2 The mock wallet is baked into the container image, not installed post-boot
 Every new session's container must start with the mock wallet already present, as part of the container image or the template mount established in Phase 2 and Phase 4 — not a separate `adb install` step performed manually or ad hoc after the container is already running.
@@ -44,6 +44,8 @@ Because Phase 4 already guarantees one container per session, this phase must sp
 
 ### 2.6 A full connect-to-sign round trip must genuinely work
 The pipeline is only considered functional when a generated app can: initiate a wallet connection, have the mock wallet present an approval prompt, and receive a valid signed transaction or signed message back in the generated app. Partial success — a connection that succeeds while signing silently fails, for example — does not count as working.
+
+The same monorepo also contains `fakedapp` (`android/fakedapp`), Solana Mobile's own reference dapp built specifically to exercise `fakewallet`'s full protocol surface. Use it as a known-good baseline when verifying this round trip — if `fakedapp` completes the connect-to-sign flow against a baked `fakewallet` instance but a SeekerStudio-generated app doesn't, that isolates the problem to the generated app or its MWA integration rather than the wallet pipeline itself.
 
 ### 2.7 The AI must know Seed Vault cannot be tested here
 Because Seed Vault is real-hardware-only, this must be encoded as a fact the AI's generation context is aware of, not left to be discovered by trial and error. Generated apps should default to MWA-based flows for anything this platform can actually verify before real hardware is involved, and any Seed Vault-specific code the AI produces must be understood — by the AI and by the user — as unverified, not something this pipeline confirms works.
@@ -64,6 +66,7 @@ If a session's container ever starts without a correctly installed and configure
 - [ ] The mock wallet's version is confirmed tied to a specific template version and does not change unexpectedly underneath an already-created project
 - [ ] Two concurrent sessions are confirmed to have fully independent wallet state — no shared keypair or session data observed between them, tested directly
 - [ ] A generated app is confirmed able to complete a genuine connect → approve → sign → receive-signed-result round trip against the mock wallet, tested end to end on a real running session
+- [ ] `fakedapp` is confirmed to successfully complete the same round trip against the baked `fakewallet` instance, establishing that the wallet pipeline itself is sound independent of any generated app
 - [ ] The AI's generation context is directly inspected and confirmed to reflect that Seed Vault cannot be tested in this environment, and that MWA is the default verifiable flow
 - [ ] The full mock-wallet build-and-bake process is confirmed to run successfully from a clean native Ubuntu environment using only scripted, automatable steps
 - [ ] A deliberately induced build or install failure for the mock wallet is confirmed to surface as a clear, visible failure — not a session that silently proceeds without working wallet support
