@@ -7,21 +7,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/events"
+	"github.com/seekersstudio/backend/internal/store"
 )
 
 type Orchestrator struct {
 	ai         *ai.Client
 	sessions   map[int64]*SessionState
+	store      *store.Store
 	maxRounds  int
 }
 
-func New(aiClient *ai.Client) *Orchestrator {
+func New(aiClient *ai.Client, s *store.Store) *Orchestrator {
 	return &Orchestrator{
 		ai:        aiClient,
 		sessions:  make(map[int64]*SessionState),
+		store:     s,
 		maxRounds: 15,
 	}
 }
@@ -31,7 +35,25 @@ func (o *Orchestrator) CreateSession(id, projectID int64, workspacePath string) 
 	emitter := events.NewSessionEmitter(id, 128)
 	sess := NewSession(id, projectID, workspacePath, stagingPath, emitter)
 	o.sessions[id] = sess
+
+	// Load ADRs and memory for this project
+	o.loadProjectContext(sess, projectID)
+
 	return sess
+}
+
+func (o *Orchestrator) loadProjectContext(sess *SessionState, projectID int64) {
+	// Load Architecture Decision Records
+	adrs, err := o.store.GetActiveADRs(projectID)
+	if err == nil {
+		sess.LoadADRs(adrs)
+	}
+
+	// Load project memory
+	memory, err := o.store.GetAllMemory(projectID)
+	if err == nil {
+		sess.LoadMemory(memory)
+	}
 }
 
 func (o *Orchestrator) GetSession(id int64) *SessionState {
@@ -66,8 +88,14 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 
 	sess.TransitionTo(PhaseGenerate)
 
+	// Phase 7: Inject ADR and memory into context
+	systemPrompt = o.enrichPromptWithContext(sess, systemPrompt)
+
 	history := make([]ai.PromptMessage, len(initialHistory))
 	copy(history, initialHistory)
+
+	// Clear read tracking for new turn
+	sess.ClearReadFiles()
 
 	round := 0
 	for round < o.maxRounds {
@@ -97,7 +125,9 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 
 		var toolResults []ai.ToolResultBlock
 		for _, toolUse := range result.ToolUses {
-			sess.Emitter.EmitToolCall(toolUse.Name, "", "", "running")
+			// Phase 7: Emit specific verb based on tool type
+			verb := o.getToolVerb(toolUse.Name, toolUse.Input)
+			sess.Emitter.EmitToolCall(toolUse.Name, verb, "", "running")
 
 			output, execErr := toolExecutor(ctx, toolUse.Name, toolUse.Input)
 			isError := execErr != nil
@@ -109,7 +139,30 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 			if isError {
 				status = "error"
 			}
-			sess.Emitter.EmitToolCall(toolUse.Name, "", "", status)
+			sess.Emitter.EmitToolCall(toolUse.Name, verb, "", status)
+
+			// Phase 7: Track file reads for read-before-write enforcement
+			if toolUse.Name == "read_file" {
+				var readArgs struct {
+					Path string `json:"path"`
+				}
+				if json.Unmarshal(toolUse.Input, &readArgs) == nil {
+					sess.MarkFileRead(readArgs.Path)
+				}
+			}
+
+			// Phase 7: Check read-before-write for write_file
+			if toolUse.Name == "write_file" {
+				var writeArgs struct {
+					Path string `json:"path"`
+				}
+				if json.Unmarshal(toolUse.Input, &writeArgs) == nil {
+					if !sess.HasReadFile(writeArgs.Path) {
+						// Emit warning but don't block (agent may be creating new file)
+						sess.Emitter.EmitToolCall("guardrail", writeArgs.Path, "", "read-before-write warning")
+					}
+				}
+			}
 
 			toolResults = append(toolResults, ai.ToolResultBlock{
 				Type:      "tool_result",
@@ -135,6 +188,92 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 	sess.TransitionTo(PhaseFailed)
 	sess.Emitter.EmitError(fmt.Sprintf("exceeded max rounds (%d)", o.maxRounds))
 	return fmt.Errorf("exceeded max rounds (%d)", o.maxRounds)
+}
+
+// enrichPromptWithContext adds ADR and memory context to the system prompt.
+func (o *Orchestrator) enrichPromptWithContext(sess *SessionState, systemPrompt string) string {
+	var enriched strings.Builder
+	enriched.WriteString(systemPrompt)
+
+	// Add ADR context
+	if adrs := sess.GetADRs(); len(adrs) > 0 {
+		enriched.WriteString("\n\n## Architecture Decisions (MUST follow)\n\n")
+		for _, adr := range adrs {
+			enriched.WriteString(fmt.Sprintf("### %s\n", adr.Decision))
+			enriched.WriteString(fmt.Sprintf("Context: %s\n", adr.Context))
+			if adr.Options != "" {
+				enriched.WriteString(fmt.Sprintf("Options considered: %s\n", adr.Options))
+			}
+			enriched.WriteString(fmt.Sprintf("Decision: %s\n\n", adr.Outcome))
+		}
+		enriched.WriteString("IMPORTANT: These decisions are established. Do not introduce conflicting patterns. If a request would conflict with an existing decision, either reconcile it within the existing architecture or flag the conflict to the user.\n")
+	}
+
+	// Add project memory context
+	if memory := sess.GetMemory(); len(memory) > 0 {
+		enriched.WriteString("\n\n## Project Memory\n\n")
+		for _, m := range memory {
+			enriched.WriteString(fmt.Sprintf("[%s] %s\n", m.EntryType, m.Content))
+		}
+	}
+
+	return enriched.String()
+}
+
+// getToolVerb returns a human-readable verb for the tool call.
+func (o *Orchestrator) getToolVerb(toolName string, input json.RawMessage) string {
+	switch toolName {
+	case "read_file":
+		var args struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(input, &args) == nil {
+			return fmt.Sprintf("Reading %s", args.Path)
+		}
+		return "Reading file"
+	case "write_file":
+		var args struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(input, &args) == nil {
+			return fmt.Sprintf("Creating %s", args.Path)
+		}
+		return "Writing file"
+	case "delete_file":
+		var args struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(input, &args) == nil {
+			return fmt.Sprintf("Deleting %s", args.Path)
+		}
+		return "Deleting file"
+	case "install_package":
+		var args struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(input, &args) == nil {
+			return fmt.Sprintf("Installing %s", args.Name)
+		}
+		return "Installing package"
+	case "run_typecheck":
+		return "Checking types"
+	case "run_lint":
+		return "Linting"
+	case "run_build":
+		return "Building"
+	case "run_command":
+		return "Shell"
+	case "web_search":
+		return "Searching web"
+	case "github_search":
+		return "Searching GitHub"
+	case "capture_screenshot":
+		return "Capturing screenshot"
+	case "tail_logcat":
+		return "Tailing logcat"
+	default:
+		return toolName
+	}
 }
 
 func (o *Orchestrator) buildContext(sess *SessionState, userPrompt string) {
@@ -327,6 +466,17 @@ func (o *Orchestrator) runLint(ctx context.Context, workspacePath string) string
 		return string(output)
 	}
 	return ""
+}
+
+// WriteADR records an Architecture Decision Record for the project.
+func (o *Orchestrator) WriteADR(projectID int64, decision, context, options, outcome string) error {
+	_, err := o.store.CreateADR(projectID, decision, context, options, outcome)
+	return err
+}
+
+// WriteMemory writes an entry to project memory.
+func (o *Orchestrator) WriteMemory(projectID int64, entryType, content, metadata string) error {
+	return o.store.AddMemory(projectID, entryType, content, metadata)
 }
 
 func readFileContent(path string) (string, error) {

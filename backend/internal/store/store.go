@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -65,6 +66,18 @@ type ProjectMemory struct {
 	Content   string    `json:"content"`
 	Metadata  string    `json:"metadata,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type ArchitectureDecision struct {
+	ID        int64     `json:"id"`
+	ProjectID int64     `json:"project_id"`
+	Decision  string    `json:"decision"`
+	Context   string    `json:"context"`
+	Options   string    `json:"options,omitempty"`
+	Outcome   string    `json:"outcome"`
+	Status    string    `json:"status"` // "proposed", "accepted", "deprecated", "superseded"
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Store struct {
@@ -159,6 +172,18 @@ func (s *Store) migrate() error {
 			content TEXT NOT NULL,
 			metadata TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS architecture_decisions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			decision TEXT NOT NULL,
+			context TEXT NOT NULL,
+			options TEXT DEFAULT '',
+			outcome TEXT NOT NULL,
+			status TEXT DEFAULT 'accepted',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
 	}
@@ -472,4 +497,110 @@ func (s *Store) AndroidPackageExists(pkg string) bool {
 	var count int
 	s.db.QueryRow("SELECT COUNT(*) FROM projects WHERE android_package = ?", pkg).Scan(&count)
 	return count > 0
+}
+
+// Architecture Decision Record methods
+
+func (s *Store) CreateADR(projectID int64, decision, context, options, outcome string) (*ArchitectureDecision, error) {
+	res, err := s.db.Exec(
+		"INSERT INTO architecture_decisions (project_id, decision, context, options, outcome) VALUES (?, ?, ?, ?, ?)",
+		projectID, decision, context, options, outcome,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetADR(id)
+}
+
+func (s *Store) GetADR(id int64) (*ArchitectureDecision, error) {
+	adr := &ArchitectureDecision{}
+	err := s.db.QueryRow(
+		"SELECT id, project_id, decision, context, options, outcome, status, created_at, updated_at FROM architecture_decisions WHERE id = ?", id,
+	).Scan(&adr.ID, &adr.ProjectID, &adr.Decision, &adr.Context, &adr.Options, &adr.Outcome, &adr.Status, &adr.CreatedAt, &adr.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return adr, nil
+}
+
+func (s *Store) GetADRsByProject(projectID int64) ([]ArchitectureDecision, error) {
+	rows, err := s.db.Query(
+		"SELECT id, project_id, decision, context, options, outcome, status, created_at, updated_at FROM architecture_decisions WHERE project_id = ? ORDER BY created_at ASC", projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var adrs []ArchitectureDecision
+	for rows.Next() {
+		var adr ArchitectureDecision
+		if err := rows.Scan(&adr.ID, &adr.ProjectID, &adr.Decision, &adr.Context, &adr.Options, &adr.Outcome, &adr.Status, &adr.CreatedAt, &adr.UpdatedAt); err != nil {
+			return nil, err
+		}
+		adrs = append(adrs, adr)
+	}
+	return adrs, nil
+}
+
+func (s *Store) GetActiveADRs(projectID int64) ([]ArchitectureDecision, error) {
+	rows, err := s.db.Query(
+		"SELECT id, project_id, decision, context, options, outcome, status, created_at, updated_at FROM architecture_decisions WHERE project_id = ? AND status = 'accepted' ORDER BY created_at ASC", projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var adrs []ArchitectureDecision
+	for rows.Next() {
+		var adr ArchitectureDecision
+		if err := rows.Scan(&adr.ID, &adr.ProjectID, &adr.Decision, &adr.Context, &adr.Options, &adr.Outcome, &adr.Status, &adr.CreatedAt, &adr.UpdatedAt); err != nil {
+			return nil, err
+		}
+		adrs = append(adrs, adr)
+	}
+	return adrs, nil
+}
+
+func (s *Store) UpdateADR(id int64, outcome, status string) error {
+	_, err := s.db.Exec(
+		"UPDATE architecture_decisions SET outcome = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		outcome, status, id,
+	)
+	return err
+}
+
+func (s *Store) SupersedeADR(id int64) error {
+	_, err := s.db.Exec(
+		"UPDATE architecture_decisions SET status = 'superseded', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		id,
+	)
+	return err
+}
+
+func (s *Store) DeleteADR(id int64) error {
+	_, err := s.db.Exec("DELETE FROM architecture_decisions WHERE id = ?", id)
+	return err
+}
+
+// FormatADRsForPrompt returns all active ADRs formatted for injection into the AI context.
+func (s *Store) FormatADRsForPrompt(projectID int64) string {
+	adrs, err := s.GetActiveADRs(projectID)
+	if err != nil || len(adrs) == 0 {
+		return ""
+	}
+
+	result := "Architecture Decision Record (established decisions):\n\n"
+	for _, adr := range adrs {
+		result += fmt.Sprintf("## %s\n", adr.Decision)
+		result += fmt.Sprintf("Context: %s\n", adr.Context)
+		if adr.Options != "" {
+			result += fmt.Sprintf("Options considered: %s\n", adr.Options)
+		}
+		result += fmt.Sprintf("Decision: %s\n", adr.Outcome)
+		result += fmt.Sprintf("Status: %s\n\n", adr.Status)
+	}
+	return result
 }

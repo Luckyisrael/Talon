@@ -300,6 +300,15 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			fullText.WriteString("\n\nBuild failed. Check server logs for details.")
 			mu.Unlock()
+			// Send error event to client
+			select {
+			case evtChan <- events.Event{
+				Type:   events.ErrorEvent,
+				Status: "error",
+				Error:  err.Error(),
+			}:
+			default:
+			}
 		}
 	}()
 

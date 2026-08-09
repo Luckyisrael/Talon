@@ -17,6 +17,7 @@ const (
 	TextEvent        EventType = "text"
 	ThinkingEvent    EventType = "thinking"
 	RebuildEvent     EventType = "rebuild"
+	TaskUpdateEvent  EventType = "task_update"
 )
 
 type Phase string
@@ -152,6 +153,17 @@ func (e *SessionEmitter) EmitRebuild(status, detail string) {
 		Type:   RebuildEvent,
 		Status: status,
 		Error:  detail,
+	})
+}
+
+// EmitTaskUpdate is a convenience method for emitting task tracking events.
+func (e *SessionEmitter) EmitTaskUpdate(taskID, description, status, result string) {
+	e.Emit(Event{
+		Type:   TaskUpdateEvent,
+		Tool:   taskID,
+		Name:   description,
+		Status: status,
+		Error:  result,
 	})
 }
 

@@ -89,16 +89,34 @@ Every tool call emits **two events minimum** — not one event after the fact:
 
 Narration text streams the same way your existing chat tokens do (SSE, incremental). The trace should never feel like it "dumps" — every line the user sees in the screenshot example appeared progressively while the agent was actually working, not all at once at the end.
 
-### 11.4 Frontend rendering contract
+### 11.4 Action verbs must be explicit and file-operation-specific
+Generic labels like `write_file` or `tool_call` are not acceptable in the rendered trace — every action shown to the user must use a plain-language verb that describes what's actually happening to that specific file, matching the interactive, narrated feel of the screenshot example:
+
+- `read_file` → **"Reading `{path}`"**
+- `write_file` on a path that does not yet exist in the workspace → **"Creating `{path}`"**
+- `write_file` on a path that already exists → **"Updating `{path}`"** — and this label is what makes §2.13 of `PHASE_7_ENGINEERING_INTELLIGENCE.md` (mandatory read-before-write) directly visible: a "Reading `{path}`" row must appear before every "Updating `{path}`" row for the same file, in the same turn. If an "Updating" row ever appears without a preceding "Reading" row for that exact path in that turn, the read-before-write rule has been violated — this is not just a rendering detail, it doubles as a live, human-visible audit of that rule actually being followed.
+- `delete_file` → **"Deleting `{path}`"**
+- `install_package` → **"Installing `{package}`"**
+- `run_typecheck` → **"Checking types…"**
+- `run_lint` → **"Linting…"**
+- `run_build` → **"Building…"**
+- `run_command` → **"Shell"** with the literal command shown in monospace (as in the screenshot)
+- Grouped read-only exploration (§11.2) → **"Explored N searches"**
+
+This mapping must live in one place the frontend renders from directly — not be re-derived ad hoc per tool — so adding a new tool later means adding one new verb mapping, not touching rendering logic throughout the UI.
+
+### 11.5 Frontend rendering contract
 - Tool type as a bold label (`Shell`, `Explored`, `Read`) followed by the command/args in monospace.
 - Grouped rows show an icon + short summary line, expandable via chevron to reveal the individual calls inside.
 - Narration renders as plain prose between tool rows, exactly interleaved in the order events arrived — this is what makes it read like a running commentary, not a log dump.
 - Full trace is retained per turn (scrollable history), not ephemeral — the user should be able to scroll back and re-expand a past group.
 
-### 11.5 DoD
+### 11.6 DoD
 - Sending a prompt shows the first narration or tool-call row within ~300ms, not after the full turn completes.
 - 3+ consecutive read-only calls auto-collapse into one group; write/build/verify calls never do.
 - Every tool row transitions visibly from running → done/fail; nothing appears pre-resolved.
+- Every file-touching action renders with its specific verb (Reading/Creating/Updating/Deleting), not a generic tool name — confirmed by inspecting a real trace, not the event schema alone.
+- Editing an existing file is confirmed to always show a "Reading" row before its "Updating" row for that exact path, within the same turn — checked here as a UI requirement, and in Phase 7 §2.13 as the underlying engineering rule it makes visible.
 
 ---
 
@@ -113,3 +131,43 @@ Direct mapping from what you're seeing to what in this addendum fixes it, so thi
 | Two backends running (8080 + 9191) | Stale process from a previous run not killed before restart | Operational — confirm process cleanup in your dev restart script; not an architecture fix |
 
 Once §10 lands, "empty file tree until first AI write" stops being a behavior you have to remember to implement correctly per-endpoint — it becomes true by construction.
+
+---
+
+## 13. Per-Project Identity Configuration
+
+**Problem this solves:** `app.json`/`package.json` mix two categories of values — per-project identity (`name`, `slug`, `android.package`, `ios.bundleIdentifier`, `scheme`) and shared template config (`dependencies`, `scripts`, `plugins`, `expo.doctor`). These must be handled by completely different mechanisms, or you either get bundle-id collisions across projects or lose the shared build cache from Guide 2.
+
+### 13.1 Fields that must be unique per project
+- `expo.name` — display name
+- `expo.slug` — internal identifier, derived from the user's chosen app name
+- `android.package` — Android bundle id (reverse-DNS, must be a legal Java package name)
+- `ios.bundleIdentifier` — iOS equivalent
+- `expo.scheme` — deep-link scheme, must not collide across installed apps
+- `package.json`'s `name` field
+
+### 13.2 Fields that must stay identical to `template:vN`
+`dependencies`, `devDependencies`, `scripts`, `plugins`, `expo.doctor`. These are what makes the shared Gradle/npm cache and the pre-built dev client (Guide 2) work at all — never let project creation or the AI touch these independently of a template version bump.
+
+### 13.3 The dev-client identity tension — and its resolution
+`android.package`/`scheme` are only read by `expo prebuild` when generating the **native** Android project. The shared dev client (built once per `template:vN`, per the native-modules guide) is itself a native artifact with some package name baked in — if every project gets a truly personalized bundle id from creation, that forces a per-project native rebuild of the dev client, which defeats Guide 2's core optimization.
+
+**Resolution:**
+- The shared dev client runs under one **fixed, generic development identity** (e.g. `com.seekerstudio.devshell`) across every session — it's internal infra, never published, so this is safe.
+- `name`/`slug` personalize immediately and take effect at the JS/Expo Router level — no rebuild required.
+- The **real, personalized** bundle id is stored as project metadata from day one, but only gets baked into an actual native build at **export time** (Phase 7 — `gradlew assembleRelease` for the signed APK / dApp Store bundle), when a full native rebuild is already happening anyway.
+- Net effect: identity personalization is free during the fast inner loop, and only "paid for" once, deliberately, on export.
+
+### 13.4 Where personalization happens
+- **Source of truth is the database** (projects table: `name`, `slug`, `bundle_id`, `scheme`), not the filesystem.
+- `app.json` in the workspace is a **rendered copy**, written deterministically by Go — a template-substitution step, not an LLM call — immediately after the overlay mounts (§10.6), before the first prompt is ever sent.
+- Slug generation: kebab-case from the user's app name, collision-checked against existing projects, suffixed if needed.
+- Bundle id generation: `com.seekerstudio.apps.{slug}` (or similar), validated as a legal reverse-DNS Java package name (lowercase, underscores not hyphens per segment, no leading digits).
+
+### 13.5 Guardrail — identity fields are not agent-writable
+Extend §5's guardrail layer: the `write_file` tool must reject any write targeting `app.json`/`package.json`'s identity keys, full stop — this isn't a prompt instruction, it's a Go-level check before `STAGE_WRITE`. Stronger version: don't expose these files to the agent's file tools at all. If generated UI code needs to reference the app's display name, provide a read-only `get_project_info` tool instead of raw file access to the config.
+
+### 13.6 DoD
+- Two projects created back to back have distinct `slug`, `android.package`, and `scheme` — assert no collision possible by construction (DB uniqueness constraint, not just app-layer checking).
+- Sending a prompt that asks the AI to "change the app's bundle id" is rejected or ignored at the tool layer, not just discouraged in the system prompt.
+- Export (Phase 7) produces an APK with the *real* personalized bundle id; the dev-loop dev client throughout the session ran under the fixed generic identity the whole time.

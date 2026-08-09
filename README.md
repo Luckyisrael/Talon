@@ -270,3 +270,7 @@ Private — All rights reserved.
 - [AgentRouter](https://agentrouter.org/) for AI infrastructure
 - [Redroid](https://github.com/remote-android/redroid-doc) for Android emulation
 - [Expo](https://expo.dev/) for React Native tooling
+
+
+
+echo 'OPENROUTER_API_KEY=your-key-here' >> /home/lucky-israel/Desktop/Projects/SeekerStudio/backend/.env

@@ -75,7 +75,7 @@ func main() {
 
 	authSvc := auth.New()
 	aiClient := ai.New()
-	orchestratorSvc := orchestrator.New(aiClient)
+	orchestratorSvc := orchestrator.New(aiClient, s)
 
 	// Initialize port allocator and container manager
 	portAlloc := redroid.NewPortAllocator(15555, 16555)

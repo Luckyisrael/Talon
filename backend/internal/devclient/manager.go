@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,7 +38,7 @@ func NewManager(templateDir string) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read template version: %w", err)
 	}
-	version := string(data)
+	version := strings.TrimRight(string(data), "\r\n\t ")
 
 	alPath := AllowlistPath(templateDir, version)
 	al, err := LoadAllowlist(alPath)
