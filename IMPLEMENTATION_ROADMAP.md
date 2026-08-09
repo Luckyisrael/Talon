@@ -12,14 +12,14 @@ Each phase has a **Definition of Done (DoD)** — do not start the next phase un
 
 | Tool | Version | Notes |
 |---|---|---|
-| Docker CE | 29.1.3 | Running inside SeekerLinux WSL distro (Docker Desktop is unused — broken with custom kernel) |
-| WSL2 | 2.x | `SeekerLinux` distro (Ubuntu 24.04, systemd enabled) with custom kernel 6.6.87.2+ |
+| Docker CE | 29.1.3 | Running natively on Ubuntu 24.04 |
+| Ubuntu | 24.04 | Native Linux with systemd |
 | Custom Kernel | 6.6.87.2+ | `binderfs=y` (built-in), `memfd_create=y`. Ashmem not available — use `androidboot.use_memfd=1`. |
-| Go | 1.25.2 | windows/amd64 |
+| Go | 1.25.2 | linux/amd64 |
 | Node | 22.23.1 | |
 | Git | 2.55.0 | |
 
-**Dev platform:** Redroid runs inside SeekerLinux (WSL2) via Docker CE with `--privileged --network host`. Android's `/init` boots with `androidboot.use_memfd=1` (no ashmem). ADB connects over TCP on `localhost:5555`.
+**Dev platform:** Redroid runs on native Ubuntu via Docker CE with `--privileged --network host`. Android's `/init` boots with `androidboot.use_memfd=1` (no ashmem). ADB connects over TCP on `localhost:5555`.
 
 ---
 
@@ -32,7 +32,7 @@ Each phase has a **Definition of Done (DoD)** — do not start the next phase un
   SeekerStudio/
   ├─ backend/         # Go API server (orchestrator, container mgr, streaming+terminal proxy, billing)
   ├─ frontend/        # Next.js IDE (Monaco + canvas + xterm.js terminal + prompt panel)
-  ├─ infra/           # Dockerfiles, compose, WSL kernel build scripts, host provisioning
+   ├─ infra/           # Dockerfiles, compose, host provisioning
   ├─ contracts/       # shared API types / OpenAPI spec
   ├─ IMPLEMENTATION_ROADMAP.md
   └─ Solana_Mobile_Vibe_Coding_Guide.md.txt
@@ -52,22 +52,15 @@ Each phase has a **Definition of Done (DoD)** — do not start the next phase un
 
 ---
 
-## Phase 1 — Local Runtime: WSL2 Kernel + Redroid
+## Phase 1 — Local Runtime: Redroid on Native Linux
 
 **Objective:** Boot a Redroid Android 14 container at Seeker resolution on the local machine.
 
 **Status:** ✅ COMPLETE
 
-- Created `SeekerLinux` WSL2 distro (Ubuntu 24.04, systemd enabled via `/etc/wsl.conf`).
-- Built custom WSL2 kernel `6.6.87.2-microsoft-standard-WSL2+` with:
-  - `CONFIG_ANDROID_BINDER_IPC=y` (built-in)
-  - `CONFIG_ANDROID_BINDERFS=y` (built-in)
-  - `CONFIG_MEMFD_CREATE=y` (built-in)
-  - Ashmem (`CONFIG_ASHMEM`) is **not available** in this kernel version — Redroid uses `androidboot.use_memfd=1` instead.
-- Docker CE 29.1.3 installed inside SeekerLinux with daemon config: `iptables:false`, `bridge:none`, `ip-forward:true`, `storage-driver:overlay2`.
+- Installed Docker CE natively on Ubuntu 24.04.
 - Redroid container boots at Seeker resolution: **1080×2400 @ 420 DPI**.
 - ADB connects over TCP: `localhost:5555`.
-- VHDX compacted: 13.79 GB → 3.51 GB. Free disk: ~22 GB.
 
 **Redroid is used purely as an Android device emulator** — it runs APKs and streams via screenshot-based streaming (v1). No Solana CLI, test validators, or smart contract tooling inside the container.
 
@@ -222,7 +215,7 @@ Redroid is a pure Android device — it runs APKs and streams via screenshot-bas
 
 | Risk | Mitigation |
 |---|---|
-| WSL2 kernel lacks binder | Custom kernel with `binderfs=y` built-in; verified via `/proc/filesystems` |
+| Kernel lacks binder | Verify binder support in stock kernel; use `androidboot.use_memfd=1` if ashmem unavailable |
 | Ashmem not available | Use `androidboot.use_memfd=1` — memfd_create is built into the kernel |
 | Screenshot streaming is CPU-heavy on hosts | JPEG encoding + frame-diffing to reduce bandwidth; future: hardware encode |
 | AI token cost erodes margin | Model routing (flash for routine), per-prompt output caps, burn-rate dashboard |

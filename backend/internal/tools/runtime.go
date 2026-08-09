@@ -9,7 +9,8 @@ import (
 )
 
 type CaptureScreenshot struct {
-	ADBPath string
+	ADBPath   string
+	ADBTarget string
 }
 
 func (t *CaptureScreenshot) Name() string { return "capture_screenshot" }
@@ -37,7 +38,12 @@ func (t *CaptureScreenshot) Execute(ctx context.Context, args json.RawMessage) (
 		adbPath = "adb"
 	}
 
-	cmd := exec.CommandContext(ctx, adbPath, "-s", "localhost:5555", "exec-out", "screencap", "-p")
+	target := t.ADBTarget
+	if target == "" {
+		target = "localhost:5555"
+	}
+
+	cmd := exec.CommandContext(ctx, adbPath, "-s", target, "exec-out", "screencap", "-p")
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {
@@ -55,7 +61,8 @@ func (t *CaptureScreenshot) Execute(ctx context.Context, args json.RawMessage) (
 }
 
 type TailLogcat struct {
-	ADBPath string
+	ADBPath   string
+	ADBTarget string
 }
 
 func (t *TailLogcat) Name() string { return "tail_logcat" }
@@ -102,7 +109,12 @@ func (t *TailLogcat) Execute(ctx context.Context, args json.RawMessage) (ToolRes
 		adbPath = "adb"
 	}
 
-	cmd := exec.CommandContext(ctx, adbPath, "-s", "localhost:5555", "logcat", "-d", "-t", fmt.Sprintf("%d", a.Lines), "ReactNativeJS:E", "AndroidRuntime:E")
+	target := t.ADBTarget
+	if target == "" {
+		target = "localhost:5555"
+	}
+
+	cmd := exec.CommandContext(ctx, adbPath, "-s", target, "logcat", "-d", "-t", fmt.Sprintf("%d", a.Lines), "ReactNativeJS:E", "AndroidRuntime:E")
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {

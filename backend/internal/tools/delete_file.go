@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 type DeleteFileStaged struct {
@@ -42,18 +41,18 @@ func (t *DeleteFileStaged) Execute(ctx context.Context, args json.RawMessage) (T
 		return ToolResult{Content: "invalid arguments", IsError: true}, err
 	}
 
-	cleanPath := filepath.Clean(a.Path)
-	if strings.Contains(cleanPath, "..") {
-		return ToolResult{Content: "path traversal not allowed", IsError: true}, nil
+	fullPath, err := ValidateSandboxPath(t.StagingPath, a.Path)
+	if err != nil {
+		return ToolResult{Content: fmt.Sprintf("path rejected: %v", err), IsError: true}, nil
 	}
 
-	fullPath := filepath.Join(t.StagingPath, cleanPath)
 	if err := os.Remove(fullPath); err != nil {
 		if os.IsNotExist(err) {
-			return ToolResult{Content: fmt.Sprintf("file not found: %s", cleanPath)}, nil
+			return ToolResult{Content: "file not found"}, nil
 		}
-		return ToolResult{Content: fmt.Sprintf("failed to delete file: %v", err), IsError: true}, err
+		return ToolResult{Content: "failed to delete file", IsError: true}, err
 	}
 
+	cleanPath := filepath.Clean(a.Path)
 	return ToolResult{Content: fmt.Sprintf("File deleted from staging: %s", cleanPath)}, nil
 }

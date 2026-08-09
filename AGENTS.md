@@ -9,7 +9,7 @@ surfaces, spacing scales, corner nesting rule).
 ## Architecture
 - **Redroid** = pure Android device emulator (APK runner + screenshot-based streaming). No Solana inside.
 - **Mock MWA Wallet** = pre-installed on Redroid for testing wallet connection, tx signing, etc.
-- **Host (WSL/SeekerLinux)** = Solana CLI, build tools, Go backend, all compile/deploy work.
+- **Host (Ubuntu)** = Solana CLI, build tools, Go backend, all compile/deploy work.
 - **Generated apps** = React Native apps that connect to wallet via MWA protocol.
 
 ## Project docs
@@ -26,5 +26,21 @@ surfaces, spacing scales, corner nesting rule).
 
 ## Android / Redroid
 - Redroid boots with `androidboot.use_memfd=1` (no ashmem in kernel).
-- ADB connects on `localhost:5555` via `wsl -d SeekerLinux -e adb ...`.
-- Mock wallet install: `infra/redroid/install-mock-wallet.ps1` (requires JDK 17 + Android SDK).
+- ADB connects on `localhost:5555` directly (native Linux, no WSL bridge).
+- Mock wallet install: `infra/redroid/install-mock-wallet.sh` (requires JDK 17 + Android SDK).
+
+## Docker / Redroid networking rule
+NEVER run redroid (or any Docker container) with `--network host`. This breaks the host
+machine's routing table because Android's netd inside the container fights NetworkManager
+for control of the default route, causing intermittent internet loss on the host.
+
+Instead, use Docker's default bridge network and expose only the required ports explicitly, e.g.:
+```
+docker run -d --name redroid-seeker-dev --privileged -p 5555:5555 redroid/redroid:14.0.0_64only-latest androidboot.use_memfd=1 androidboot.redroid_width=1080 androidboot.redroid_height=2400 androidboot.redroid_dpi=420
+```
+
+Also always clean up old/orphaned redroid containers before starting a new one:
+```
+docker ps -a | grep redroid
+docker rm -f <old_container_name_or_id>
+```

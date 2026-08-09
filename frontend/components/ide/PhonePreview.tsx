@@ -15,15 +15,17 @@ interface PhonePreviewProps {
 
 export default function PhonePreview({ status = "idle", sessionId, onStartSession }: PhonePreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const videoWsRef = useRef<WebSocket | null>(null);
+  const inputWsRef = useRef<WebSocket | null>(null);
+  const touchStateRef = useRef<{ startX: number; startY: number; startTime: number } | null>(null);
 
   const sendInput = useCallback((msg: Record<string, unknown>) => {
-    const ws = wsRef.current;
+    const ws = inputWsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify(msg));
   }, []);
 
-  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -34,42 +36,92 @@ export default function PhonePreview({ status = "idle", sessionId, onStartSessio
     const x = Math.round((e.clientX - rect.left) * scaleX);
     const y = Math.round((e.clientY - rect.top) * scaleY);
 
+    touchStateRef.current = { startX: x, startY: y, startTime: Date.now() };
+
+    // Send immediate tap for responsive feel
     sendInput({ type: "tap", x, y });
   }, [sendInput]);
 
+  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !touchStateRef.current) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = DEVICE_WIDTH / rect.width;
+    const scaleY = DEVICE_HEIGHT / rect.height;
+
+    const endX = Math.round((e.clientX - rect.left) * scaleX);
+    const endY = Math.round((e.clientY - rect.top) * scaleY);
+    const { startX, startY, startTime } = touchStateRef.current;
+    const duration = Date.now() - startTime;
+
+    // If dragged significantly and held for a bit, send swipe
+    const dx = endX - startX;
+    const dy = endY - startY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist > 20 && duration > 100) {
+      sendInput({
+        type: "swipe",
+        x1: startX,
+        y1: startY,
+        x2: endX,
+        y2: endY,
+        duration: Math.min(duration, 500),
+      });
+    }
+
+    touchStateRef.current = null;
+  }, [sendInput]);
+
   const connectStream = useCallback(() => {
-    if (!sessionId || wsRef.current) return;
+    if (!sessionId) return;
 
-    const ws = createAuthWebSocket(`/v1/sessions/${sessionId}/stream`);
-    if (!ws) return;
-    wsRef.current = ws;
+    // Connect to video stream (separate from input)
+    if (!videoWsRef.current) {
+      const videoWs = createAuthWebSocket(`/v1/sessions/${sessionId}/stream`);
+      if (!videoWs) return;
+      videoWsRef.current = videoWs;
 
-    ws.onmessage = (event) => {
-      if (event.data instanceof Blob) {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
+      videoWs.onmessage = (event) => {
+        if (event.data instanceof Blob) {
+          const canvas = canvasRef.current;
+          if (!canvas) return;
 
-        createImageBitmap(event.data).then((bmp) => {
-          canvas.width = bmp.width;
-          canvas.height = bmp.height;
-          const ctx = canvas.getContext("2d");
-          if (ctx) {
-            ctx.drawImage(bmp, 0, 0);
-          }
-          bmp.close();
-        }).catch(() => {});
-      }
-    };
+          createImageBitmap(event.data).then((bmp) => {
+            canvas.width = bmp.width;
+            canvas.height = bmp.height;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.drawImage(bmp, 0, 0);
+            }
+            bmp.close();
+          }).catch(() => {});
+        }
+      };
 
-    ws.onclose = () => { wsRef.current = null; };
-    ws.onerror = () => { wsRef.current = null; };
+      videoWs.onclose = () => { videoWsRef.current = null; };
+      videoWs.onerror = () => { videoWsRef.current = null; };
+    }
+
+    // Connect to input stream (separate from video)
+    if (!inputWsRef.current) {
+      const inputWs = createAuthWebSocket(`/v1/sessions/${sessionId}/input`);
+      if (!inputWs) return;
+      inputWsRef.current = inputWs;
+
+      inputWs.onclose = () => { inputWsRef.current = null; };
+      inputWs.onerror = () => { inputWsRef.current = null; };
+    }
   }, [sessionId]);
 
   useEffect(() => {
     if (status === "streaming" && sessionId) connectStream();
     return () => {
-      wsRef.current?.close();
-      wsRef.current = null;
+      videoWsRef.current?.close();
+      videoWsRef.current = null;
+      inputWsRef.current?.close();
+      inputWsRef.current = null;
     };
   }, [status, sessionId, connectStream]);
 
@@ -136,8 +188,9 @@ export default function PhonePreview({ status = "idle", sessionId, onStartSessio
                 {status === "streaming" && (
                   <canvas
                     ref={canvasRef}
-                    onClick={handleCanvasClick}
-                    className="w-full h-full object-cover cursor-pointer"
+                    onPointerDown={handlePointerDown}
+                    onPointerUp={handlePointerUp}
+                    className="w-full h-full object-cover cursor-pointer touch-none"
                   />
                 )}
 

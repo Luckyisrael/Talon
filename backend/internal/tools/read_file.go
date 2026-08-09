@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 )
 
 type ReadFile struct {
@@ -42,15 +40,14 @@ func (t *ReadFile) Execute(ctx context.Context, args json.RawMessage) (ToolResul
 		return ToolResult{Content: "invalid arguments", IsError: true}, err
 	}
 
-	cleanPath := filepath.Clean(a.Path)
-	if strings.Contains(cleanPath, "..") {
-		return ToolResult{Content: "path traversal not allowed", IsError: true}, nil
+	fullPath, err := ValidateSandboxPath(t.WorkspacePath, a.Path)
+	if err != nil {
+		return ToolResult{Content: fmt.Sprintf("path rejected: %v", err), IsError: true}, nil
 	}
 
-	fullPath := filepath.Join(t.WorkspacePath, cleanPath)
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
-		return ToolResult{Content: fmt.Sprintf("error reading file: %v", err), IsError: true}, err
+		return ToolResult{Content: "error reading file", IsError: true}, err
 	}
 
 	return ToolResult{Content: string(data)}, nil

@@ -1,6 +1,0 @@
-{
-  "iptables": false,
-  "bridge": "none",
-  "ip-forward": true,
-  "storage-driver": "overlay2"
-}

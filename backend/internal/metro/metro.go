@@ -12,11 +12,10 @@ import (
 )
 
 type Server struct {
-	port    int
-	cmd     *exec.Cmd
-	ready   chan struct{}
+	port         int
+	cmd          *exec.Cmd
+	ready        chan struct{}
 	workspaceDir string
-	wslDistro    string
 	target       string
 }
 
@@ -34,7 +33,7 @@ func FindFreePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-func Start(sessionID int64, workspaceDir string) (*Server, error) {
+func Start(sessionID int64, workspaceDir string, adbTarget string) (*Server, error) {
 	sessionsMu.Lock()
 	defer sessionsMu.Unlock()
 
@@ -47,17 +46,20 @@ func Start(sessionID int64, workspaceDir string) (*Server, error) {
 		return nil, fmt.Errorf("failed to find free port: %w", err)
 	}
 
+	if adbTarget == "" {
+		adbTarget = "localhost:5555"
+	}
+
 	s := &Server{
 		port:         port,
 		ready:        make(chan struct{}),
 		workspaceDir: workspaceDir,
-		wslDistro:    "SeekerLinux",
-		target:       "localhost:5555",
+		target:       adbTarget,
 	}
 
-	// Start Metro via WSL
-	args := []string{"-d", s.wslDistro, "-e", "npx", "expo", "start", "--port", fmt.Sprintf("%d", port), "--non-interactive"}
-	s.cmd = exec.Command("wsl", args...)
+	// Start Metro directly on native Linux (no WSL wrapper)
+	args := []string{"expo", "start", "--port", fmt.Sprintf("%d", port), "--non-interactive"}
+	s.cmd = exec.Command("npx", args...)
 	s.cmd.Dir = workspaceDir
 
 	stdout, err := s.cmd.StdoutPipe()
@@ -74,7 +76,7 @@ func Start(sessionID int64, workspaceDir string) (*Server, error) {
 		return nil, fmt.Errorf("failed to start metro: %w", err)
 	}
 
-	// Monitor stdout for "Metro waiting on" or similar ready signal
+	// Monitor stdout for ready signal
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
@@ -117,8 +119,8 @@ func Start(sessionID int64, workspaceDir string) (*Server, error) {
 }
 
 func (s *Server) setupADBReverse() {
-	args := []string{"-d", s.wslDistro, "-e", "adb", "-s", s.target, "reverse", fmt.Sprintf("tcp:%d", s.port), fmt.Sprintf("tcp:%d", s.port)}
-	if err := exec.Command("wsl", args...).Run(); err != nil {
+	args := []string{"-s", s.target, "reverse", fmt.Sprintf("tcp:%d", s.port), fmt.Sprintf("tcp:%d", s.port)}
+	if err := exec.Command("adb", args...).Run(); err != nil {
 		log.Printf("adb reverse failed: %v", err)
 	} else {
 		log.Printf("adb reverse set: tcp:%d -> tcp:%d", s.port, s.port)
@@ -142,8 +144,8 @@ func Stop(sessionID int64) {
 	}
 
 	// Remove ADB reverse
-	args := []string{"-d", s.wslDistro, "-e", "adb", "-s", s.target, "reverse", "--remove", fmt.Sprintf("tcp:%d", s.port)}
-	exec.Command("wsl", args...).Run()
+	args := []string{"-s", s.target, "reverse", "--remove", fmt.Sprintf("tcp:%d", s.port)}
+	exec.Command("adb", args...).Run()
 
 	log.Printf("metro stopped for session %d", sessionID)
 }

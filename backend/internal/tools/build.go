@@ -7,13 +7,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
 type BuildAPK struct {
 	WorkspacePath string
 	ADBClient     *ADBRunner
+	ADBTarget     string
+	Allowlist     AllowlistInterface
+}
+
+// AllowlistInterface provides access to the native-module allowlist without importing devclient.
+type AllowlistInterface interface {
+	IsJSOnlyChange(workspacePath string, changedFiles []string) bool
+	IsAllowlisted(pkgName string) bool
 }
 
 func (t *BuildAPK) Name() string { return "build_apk" }
@@ -39,19 +46,18 @@ type BuildAPKArgs struct {
 }
 
 type ADBRunner struct {
-	WslDistro string
-	Target    string
+	Target string
 }
 
 func (a *ADBRunner) Run(command string) (string, error) {
-	args := []string{"-d", a.WslDistro, "-e", "adb", "-s", a.Target, "shell", command}
-	out, err := exec.Command("wsl", args...).CombinedOutput()
+	args := []string{"-s", a.Target, "shell", command}
+	out, err := exec.Command("adb", args...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
 func (a *ADBRunner) InstallAPK(apkPath string) (string, error) {
-	args := []string{"-d", a.WslDistro, "-e", "adb", "-s", a.Target, "install", "-r", apkPath}
-	out, err := exec.Command("wsl", args...).CombinedOutput()
+	args := []string{"-s", a.Target, "install", "-r", apkPath}
+	out, err := exec.Command("adb", args...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -61,8 +67,14 @@ func (t *BuildAPK) Execute(ctx context.Context, args json.RawMessage) (ToolResul
 		a.Install = true
 	}
 
-	if a.Install {
-		a.Install = true
+	// Check if this is a JS-only change (no native deps changed)
+	if t.Allowlist != nil && t.Allowlist.IsJSOnlyChange(t.WorkspacePath, nil) {
+		return ToolResult{
+			Content: "⚠️ Guardrail: This build appears to be JS-only (no native dependency changes). " +
+				"Consider using hot reload instead of a full native build to save time. " +
+				"Force a full build by re-running with force=true if native changes were made.",
+			IsError: false,
+		}, nil
 	}
 
 	// Find Java
@@ -132,18 +144,13 @@ func (t *BuildAPK) runExpoPrebuild(ctx context.Context, javaHome, androidHome st
 func (t *BuildAPK) runGradleBuild(ctx context.Context, javaHome, androidHome string) (string, string, error) {
 	androidDir := filepath.Join(t.WorkspacePath, "android")
 
-	// Check if gradlew exists
 	gradlew := filepath.Join(androidDir, "gradlew")
 	if _, err := os.Stat(gradlew); os.IsNotExist(err) {
 		return "", "", fmt.Errorf("gradlew not found at %s — run expo prebuild first", gradlew)
 	}
 
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "cmd", "/c", "gradlew.bat", "assembleDebug")
-	} else {
-		cmd = exec.CommandContext(ctx, "./gradlew", "assembleDebug")
-	}
+	// Native Linux: always use ./gradlew (no Windows cmd /c gradlew.bat path)
+	cmd := exec.CommandContext(ctx, "./gradlew", "assembleDebug")
 	cmd.Dir = androidDir
 	cmd.Env = append(os.Environ(),
 		"JAVA_HOME="+javaHome,
@@ -153,44 +160,47 @@ func (t *BuildAPK) runGradleBuild(ctx context.Context, javaHome, androidHome str
 
 	output, err := cmd.CombinedOutput()
 
-	// Find the APK
 	apkPath := findAPK(androidDir)
 	return apkPath, string(output), err
 }
 
 func (t *BuildAPK) installAPK(apkPath string) (string, error) {
-	// Use Windows adb directly
-	androidHome := findAndroidHome()
-	adbPath := filepath.Join(androidHome, "platform-tools", "adb.exe")
-
-	cmd := exec.Command(adbPath, "-s", "localhost:5555", "install", "-r", apkPath)
+	target := t.ADBTarget
+	if target == "" {
+		target = "localhost:5555"
+	}
+	cmd := exec.Command("adb", "-s", target, "install", "-r", apkPath)
 	output, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(output)), err
 }
 
 func findJavaHome() string {
-	// Check JAVA_HOME env
 	if jh := os.Getenv("JAVA_HOME"); jh != "" {
 		return jh
 	}
 
-	// Common Windows locations
+	// Linux: use standard paths and discover via alternatives
 	candidates := []string{
-		`C:\Program Files\Microsoft\jdk-17.0.16.8-hotspot`,
-		`C:\Program Files\Java\jdk-17`,
-		`C:\Program Files\Eclipse Adoptium\jdk-17`,
+		"/usr/lib/jvm/java-17-openjdk-amd64",
+		"/usr/lib/jvm/java-17-openjdk",
+		"/usr/lib/jvm/java-17",
 	}
 	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "bin", "java.exe")); err == nil {
+		if _, err := os.Stat(filepath.Join(c, "bin", "java")); err == nil {
 			return c
 		}
 	}
 
-	// Try where java
-	if out, err := exec.Command("where", "java.exe").Output(); err == nil {
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		if len(lines) > 0 {
-			return filepath.Dir(filepath.Dir(strings.TrimSpace(lines[0])))
+	// Try to find via which (Linux equivalent of where)
+	if out, err := exec.Command("which", "java").Output(); err == nil {
+		javaPath := strings.TrimSpace(string(out))
+		if javaPath != "" {
+			// Resolve symlink and get the JDK home (java is in bin/)
+			if resolved, err := filepath.EvalSymlinks(javaPath); err == nil {
+				javaPath = resolved
+			}
+			binDir := filepath.Dir(javaPath)
+			return filepath.Dir(binDir)
 		}
 	}
 
@@ -205,14 +215,16 @@ func findAndroidHome() string {
 		return ah
 	}
 
-	// Common Windows location
+	// Linux: standard Android SDK locations
+	homeDir, _ := os.UserHomeDir()
 	candidates := []string{
-		filepath.Join(os.Getenv("LOCALAPPDATA"), "Android", "Sdk"),
-		`C:\Users\` + os.Getenv("USERNAME") + `\AppData\Local\Android\Sdk`,
-		`C:\Android\sdk`,
+		filepath.Join(homeDir, "Android", "Sdk"),
+		"/opt/android-sdk",
+		"/usr/local/android-sdk",
+		filepath.Join(homeDir, "android-sdk"),
 	}
 	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "platform-tools", "adb.exe")); err == nil {
+		if _, err := os.Stat(filepath.Join(c, "platform-tools", "adb")); err == nil {
 			return c
 		}
 	}
@@ -227,7 +239,6 @@ func findAPK(androidDir string) string {
 		return apkPath
 	}
 
-	// Walk to find any .apk
 	var found string
 	filepath.Walk(androidDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {

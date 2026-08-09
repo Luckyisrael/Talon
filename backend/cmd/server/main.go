@@ -12,12 +12,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/seekersstudio/backend/internal/adb"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/api"
 	"github.com/seekersstudio/backend/internal/auth"
+	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/orchestrator"
+	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/store"
+	"github.com/seekersstudio/backend/internal/workspace"
 	"github.com/seekersstudio/backend/internal/ws"
 
 	_ "modernc.org/sqlite"
@@ -41,18 +43,28 @@ func main() {
 
 	templateDir := os.Getenv("TEMPLATE_DIR")
 	if templateDir == "" {
-		templateDir = filepath.Join(projectRoot, "backend", "template")
+		candidate := filepath.Join(projectRoot, "template")
+		if _, err := os.Stat(candidate); err == nil {
+			templateDir = candidate
+		} else {
+			templateDir = filepath.Join(projectRoot, "backend", "template")
+		}
 	}
 
 	workspaceDir := os.Getenv("WORKSPACE_DIR")
 	if workspaceDir == "" {
-		workspaceDir = filepath.Join(projectRoot, "workspaces")
+		candidate := filepath.Join(projectRoot, "workspaces")
+		if _, err := os.Stat(candidate); err == nil {
+			workspaceDir = candidate
+		} else {
+			workspaceDir = filepath.Join(projectRoot, "workspaces")
+		}
 	}
 
 	log.Printf("template dir: %s", templateDir)
 	log.Printf("workspace dir: %s", workspaceDir)
 
-	// Initialize services
+	// Initialize store
 	log.Println("initializing store...")
 	s, err := store.New(dbPath)
 	if err != nil {
@@ -63,20 +75,53 @@ func main() {
 
 	authSvc := auth.New()
 	aiClient := ai.New()
-	adbClient := adb.New()
 	orchestratorSvc := orchestrator.New(aiClient)
+
+	// Initialize port allocator and container manager
+	portAlloc := redroid.NewPortAllocator(15555, 16555)
+	maxContainers := 5
+
+	containerMgr, err := redroid.NewManager(portAlloc, maxContainers)
+	if err != nil {
+		log.Printf("WARNING: container manager init failed: %v (sessions will not have devices)", err)
+	} else {
+		log.Println("container manager initialized")
+
+		// Reconcile on startup — recover tracking of running containers, remove orphans
+		if err := containerMgr.Reconcile(s); err != nil {
+			log.Printf("WARNING: reconciliation failed: %v", err)
+		}
+
+		// Start periodic orphan cleanup (every 5 minutes)
+		containerMgr.StartCleanupLoop(s, 5*time.Minute)
+	}
+
+	// Initialize workspace manager
+	wsMgr, err := workspace.New(templateDir, workspaceDir)
+	if err != nil {
+		log.Printf("WARNING: workspace manager init failed: %v (projects will use fallback)", err)
+	}
+
+	// Initialize dev-client manager
+	devClientMgr, err := devclient.NewManager(templateDir)
+	if err != nil {
+		log.Printf("WARNING: dev-client manager init failed: %v (dev-client install will be skipped)", err)
+	} else {
+		log.Printf("dev-client manager initialized (template v%s)", devClientMgr.Allowlist().TemplateVersion)
+	}
 
 	// Ensure workspace dir exists
 	os.MkdirAll(workspaceDir, 0755)
 
 	// Initialize handlers
 	authHandler := api.NewAuthHandler(s, authSvc)
-	projectHandler := api.NewProjectHandler(s, templateDir, workspaceDir)
-	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc)
-	sessionHandler := api.NewSessionHandler(s, adbClient, workspaceDir)
+	projectHandler := api.NewProjectHandler(s, wsMgr, workspaceDir)
+	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr)
+	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, workspaceDir, devClientMgr)
 	usageHandler := api.NewUsageHandler(s)
-	terminalHandler := ws.NewTerminalHandler()
-	streamHandler := ws.NewStreamHandler()
+	terminalHandler := ws.NewTerminalHandler(authSvc, s)
+	streamHandler := ws.NewStreamHandler(authSvc, s)
+	inputHandler := ws.NewInputHandler(authSvc, s)
 
 	// Router
 	r := chi.NewRouter()
@@ -98,9 +143,16 @@ func main() {
 		})
 	})
 
-	// Auth routes (no auth required)
-	r.Post("/v1/auth/register", authHandler.Register)
-	r.Post("/v1/auth/login", authHandler.Login)
+	// Rate limiters
+	authLimiter := api.AuthRateLimiter()
+	promptLimiter := api.PromptRateLimiter()
+
+	// Auth routes (rate limited)
+	r.Group(func(r chi.Router) {
+		r.Use(authLimiter.Middleware)
+		r.Post("/v1/auth/register", authHandler.Register)
+		r.Post("/v1/auth/login", authHandler.Login)
+	})
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -116,9 +168,12 @@ func main() {
 		r.Put("/v1/projects/{id}", projectHandler.UpdatePlan)
 		r.Delete("/v1/projects/{id}", projectHandler.Delete)
 
-		// Prompts
-		r.Post("/v1/prompts", promptHandler.Create)
-		r.Post("/v1/prompts/stream", promptHandler.Stream)
+		// Prompts (rate limited — expensive AI calls)
+		r.Group(func(r chi.Router) {
+			r.Use(promptLimiter.Middleware)
+			r.Post("/v1/prompts", promptHandler.Create)
+			r.Post("/v1/prompts/stream", promptHandler.Stream)
+		})
 		r.Get("/v1/prompts/{id}", promptHandler.Get)
 
 		// Project Memory
@@ -138,6 +193,7 @@ func main() {
 	// WebSocket endpoints (auth via query param — browsers can't set WS headers)
 	r.Get("/v1/sessions/{id}/terminal", terminalHandler.Handle)
 	r.Get("/v1/sessions/{id}/stream", streamHandler.Handle)
+	r.Get("/v1/sessions/{id}/input", inputHandler.Handle)
 
 	log.Printf("seekersstudio backend listening on :%s", port)
 	if err := http.ListenAndServe(":"+port, r); err != nil {
@@ -174,10 +230,23 @@ func authMiddleware(svc *auth.Service) func(http.Handler) http.Handler {
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
+	allowedOrigins := map[string]bool{
+		"http://localhost:3000":  true,
+		"http://localhost:3001":  true,
+		"http://127.0.0.1:3000": true,
+	}
+	if origin := os.Getenv("CORS_ALLOWED_ORIGIN"); origin != "" {
+		allowedOrigins[origin] = true
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "86400")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -191,20 +260,31 @@ func corsMiddleware(next http.Handler) http.Handler {
 // findProjectRoot walks up from the executable's directory looking for go.mod
 func findProjectRoot() string {
 	exe, err := os.Executable()
+	if err == nil {
+		dir := filepath.Dir(exe)
+		for i := 0; i < 10; i++ {
+			if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+				return dir
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+
+	cwd, err := os.Getwd()
 	if err != nil {
 		return "."
 	}
-	dir := filepath.Dir(exe)
-	for i := 0; i < 10; i++ {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
+
+	for _, rel := range []string{".", "..", filepath.Join("..", "..")} {
+		candidate := filepath.Join(cwd, rel)
+		if _, err := os.Stat(filepath.Join(candidate, "go.mod")); err == nil {
+			return candidate
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
 	}
-	// Fallback: assume we're running from backend/cmd/server
-	return filepath.Join(".", "..", "..")
+
+	return cwd
 }

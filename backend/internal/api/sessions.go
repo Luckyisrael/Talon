@@ -1,25 +1,35 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/adb"
+	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/metro"
+	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/store"
 )
 
 type SessionHandler struct {
 	store       *store.Store
-	adb         *adb.Client
+	manager     *redroid.Manager
+	portAlloc   *redroid.PortAllocator
 	workspaceDir string
+	devClient   *devclient.Manager
 }
 
-func NewSessionHandler(s *store.Store, a *adb.Client, workspaceDir string) *SessionHandler {
-	return &SessionHandler{store: s, adb: a, workspaceDir: workspaceDir}
+func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.PortAllocator, workspaceDir string, dc *devclient.Manager) *SessionHandler {
+	return &SessionHandler{
+		store:       s,
+		manager:     mgr,
+		portAlloc:   portAlloc,
+		workspaceDir: workspaceDir,
+		devClient:   dc,
+	}
 }
 
 type createSessionRequest struct {
@@ -38,23 +48,52 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if ADB is connected
-	if !h.adb.IsConnected() {
-		writeError(w, http.StatusServiceUnavailable, "Redroid container not available")
+	// Check host capacity
+	if h.portAlloc.IsFull() {
+		writeError(w, http.StatusServiceUnavailable, "host at capacity — no available device slots")
 		return
 	}
 
+	// Create DB session record first (we need the ID for container naming)
 	session, err := h.store.CreateSession(req.ProjectID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
 
+	// Create Redroid container for this session
+	if h.manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "container manager not available")
+		return
+	}
+
+	containerInfo, err := h.manager.CreateContainer(session.ID)
+	if err != nil {
+		log.Printf("ERROR: container creation failed for session %d: %v", session.ID, err)
+		h.store.UpdateSessionState(session.ID, "destroyed")
+		writeError(w, http.StatusServiceUnavailable, "failed to create device container: "+err.Error())
+		return
+	}
+
+	// Persist container metadata
+	h.store.UpdateSessionContainer(session.ID, containerInfo.ContainerID, containerInfo.ContainerName, containerInfo.ADBPort)
+	h.store.UpdateSessionContainerState(session.ID, "running")
+
+	// Install dev-client APK into the container
+	if h.devClient != nil {
+		adbTarget := "localhost:" + strconv.Itoa(containerInfo.ADBPort)
+		if err := h.devClient.InstallDevClient(context.Background(), adbTarget); err != nil {
+			log.Printf("WARN: dev-client install failed for session %d: %v (container will run without pre-built dev-client)", session.ID, err)
+		} else {
+			log.Printf("dev-client installed for session %d on %s", session.ID, adbTarget)
+		}
+	}
+
 	// Start Metro bundler for this session
 	workspaceDir := h.workspaceDir + "/" + strconv.FormatInt(req.ProjectID, 10)
-	metroServer, err := metro.Start(session.ID, workspaceDir)
+	adbTarget := "localhost:" + strconv.Itoa(containerInfo.ADBPort)
+	metroServer, err := metro.Start(session.ID, workspaceDir, adbTarget)
 	if err != nil {
-		// Log but don't fail — session can still work without Metro
 		log.Printf("WARN: metro start failed for session %d: %v", session.ID, err)
 	}
 
@@ -62,12 +101,14 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	h.store.UpdateSessionState(session.ID, "running")
 	session.State = "running"
 
-	// Include Metro port in response
+	// Build response
 	response := map[string]interface{}{
-		"id":         session.ID,
-		"project_id": session.ProjectID,
-		"state":      session.State,
-		"started_at": session.StartedAt,
+		"id":          session.ID,
+		"project_id":  session.ProjectID,
+		"state":       session.State,
+		"started_at":  session.StartedAt,
+		"adb_port":    containerInfo.ADBPort,
+		"container_id": containerInfo.ContainerID,
 	}
 	if metroServer != nil {
 		response["metro_port"] = metroServer.Port()
@@ -91,10 +132,13 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	// Include Metro port if running
 	response := map[string]interface{}{
-		"id":         session.ID,
-		"project_id": session.ProjectID,
-		"state":      session.State,
-		"started_at": session.StartedAt,
+		"id":              session.ID,
+		"project_id":      session.ProjectID,
+		"state":           session.State,
+		"started_at":      session.StartedAt,
+		"adb_port":        session.ADBPort,
+		"container_id":    session.ContainerID,
+		"container_state": session.ContainerState,
 	}
 	if port, ok := metro.GetPort(id); ok {
 		response["metro_port"] = port
@@ -108,6 +152,21 @@ func (h *SessionHandler) Pause(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid session id")
 		return
+	}
+
+	session, err := h.store.GetSession(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	// Pause the Docker container
+	if session.ContainerID != "" && h.manager != nil {
+		if err := h.manager.PauseContainer(session.ContainerID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to pause container: "+err.Error())
+			return
+		}
+		h.store.UpdateSessionContainerState(id, "paused")
 	}
 
 	if err := h.store.UpdateSessionState(id, "paused"); err != nil {
@@ -125,6 +184,21 @@ func (h *SessionHandler) Resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	session, err := h.store.GetSession(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	// Unpause the Docker container
+	if session.ContainerID != "" && h.manager != nil {
+		if err := h.manager.UnpauseContainer(session.ContainerID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to resume container: "+err.Error())
+			return
+		}
+		h.store.UpdateSessionContainerState(id, "running")
+	}
+
 	if err := h.store.UpdateSessionState(id, "running"); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to resume session")
 		return
@@ -140,8 +214,26 @@ func (h *SessionHandler) Destroy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	session, err := h.store.GetSession(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
 	// Stop Metro bundler
 	metro.Stop(id)
+
+	// Destroy the Docker container
+	if session.ContainerID != "" && h.manager != nil {
+		if err := h.manager.StopContainer(session.ContainerID); err != nil {
+			log.Printf("WARN: container destroy failed for session %d: %v", id, err)
+		}
+		// Release the port
+		h.portAlloc.Release(id)
+		// Clear container metadata
+		h.store.UpdateSessionContainer(id, "", "", 0)
+		h.store.UpdateSessionContainerState(id, "")
+	}
 
 	if err := h.store.UpdateSessionState(id, "destroyed"); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to destroy session")

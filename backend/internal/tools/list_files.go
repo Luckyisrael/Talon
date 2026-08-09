@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 type ListFiles struct {
@@ -50,16 +49,20 @@ func (t *ListFiles) Execute(ctx context.Context, args json.RawMessage) (ToolResu
 
 	dir := t.WorkspacePath
 	if a.Path != "" {
-		cleanPath := filepath.Clean(a.Path)
-		if strings.Contains(cleanPath, "..") {
-			return ToolResult{Content: "path traversal not allowed", IsError: true}, nil
+		var err error
+		dir, err = ValidateSandboxPath(t.WorkspacePath, a.Path)
+		if err != nil {
+			return ToolResult{Content: fmt.Sprintf("path rejected: %v", err), IsError: true}, nil
 		}
-		dir = filepath.Join(t.WorkspacePath, cleanPath)
 	}
 
 	var entries []FileEntry
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			return nil
+		}
+		// Skip symlinks to prevent escape
+		if info.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
 		if info.IsDir() {
@@ -78,7 +81,11 @@ func (t *ListFiles) Execute(ctx context.Context, args json.RawMessage) (ToolResu
 		return nil
 	})
 	if err != nil {
-		return ToolResult{Content: fmt.Sprintf("error listing files: %v", err), IsError: true}, err
+		return ToolResult{Content: "error listing files", IsError: true}, err
+	}
+
+	if entries == nil {
+		entries = []FileEntry{}
 	}
 
 	data, _ := json.MarshalIndent(entries, "", "  ")

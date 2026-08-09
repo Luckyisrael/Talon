@@ -1,38 +1,39 @@
 package adb
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os/exec"
 	"strings"
 )
 
 type Client struct {
-	wslDistro string
-	target    string
+	target string
 }
 
-func New() *Client {
+func New(target string) *Client {
+	if target == "" {
+		target = "localhost:5555"
+	}
 	return &Client{
-		wslDistro: "SeekerLinux",
-		target:    "localhost:5555",
+		target: target,
 	}
 }
 
-func (c *Client) wslArgs(args ...string) []string {
-	allArgs := []string{"-d", c.wslDistro, "-e"}
-	allArgs = append(allArgs, args...)
-	return allArgs
+func (c *Client) adbArgs(args ...string) []string {
+	adbArgs := []string{"-s", c.target}
+	adbArgs = append(adbArgs, args...)
+	return adbArgs
 }
 
-func (c *Client) adbArgs(args ...string) []string {
-	adbArgs := []string{"adb", "-s", c.target}
-	adbArgs = append(adbArgs, args...)
-	return c.wslArgs(adbArgs...)
+// Target returns the ADB target address (e.g., "localhost:15555").
+func (c *Client) Target() string {
+	return c.target
 }
 
 func (c *Client) Run(command string) (string, error) {
 	args := c.adbArgs("shell", command)
-	out, err := exec.Command("wsl", args...).CombinedOutput()
+	out, err := exec.Command("adb", args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("adb shell failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -41,7 +42,7 @@ func (c *Client) Run(command string) (string, error) {
 
 func (c *Client) InstallAPK(apkPath string) (string, error) {
 	args := c.adbArgs("install", "-r", apkPath)
-	out, err := exec.Command("wsl", args...).CombinedOutput()
+	out, err := exec.Command("adb", args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("adb install failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -49,21 +50,17 @@ func (c *Client) InstallAPK(apkPath string) (string, error) {
 }
 
 func (c *Client) Screenshot() ([]byte, error) {
-	// Take screenshot on device
 	args := c.adbArgs("shell", "screencap", "-p", "/sdcard/screenshot.png")
-	if err := exec.Command("wsl", args...).Run(); err != nil {
+	if err := exec.Command("adb", args...).Run(); err != nil {
 		return nil, fmt.Errorf("screencap failed: %w", err)
 	}
 
-	// Pull screenshot
 	args = c.adbArgs("pull", "/sdcard/screenshot.png", "/tmp/screenshot.png")
-	if err := exec.Command("wsl", args...).Run(); err != nil {
+	if err := exec.Command("adb", args...).Run(); err != nil {
 		return nil, fmt.Errorf("screenshot pull failed: %w", err)
 	}
 
-	// Read from WSL
-	args = c.wslArgs("cat", "/tmp/screenshot.png")
-	out, err := exec.Command("wsl", args...).Output()
+	out, err := exec.Command("cat", "/tmp/screenshot.png").Output()
 	if err != nil {
 		return nil, fmt.Errorf("screenshot read failed: %w", err)
 	}
@@ -76,7 +73,7 @@ func (c *Client) Logcat(filter string, lines int) (string, error) {
 	if filter != "" {
 		args = append(args, filter)
 	}
-	out, err := exec.Command("wsl", args...).CombinedOutput()
+	out, err := exec.Command("adb", args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("logcat failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -84,8 +81,7 @@ func (c *Client) Logcat(filter string, lines int) (string, error) {
 }
 
 func (c *Client) IsConnected() bool {
-	args := c.wslArgs("adb", "devices")
-	out, err := exec.Command("wsl", args...).Output()
+	out, err := exec.Command("adb", "devices").Output()
 	if err != nil {
 		return false
 	}
@@ -94,7 +90,7 @@ func (c *Client) IsConnected() bool {
 
 func (c *Client) Push(localPath, remotePath string) (string, error) {
 	args := c.adbArgs("push", localPath, remotePath)
-	out, err := exec.Command("wsl", args...).CombinedOutput()
+	out, err := exec.Command("adb", args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("adb push failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -122,9 +118,44 @@ func (c *Client) Key(keycode string) error {
 
 func (c *Client) ScreenshotStream() ([]byte, error) {
 	args := c.adbArgs("exec-out", "screencap", "-p")
-	out, err := exec.Command("wsl", args...).Output()
+	out, err := exec.Command("adb", args...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("screencap stream failed: %w", err)
 	}
 	return out, nil
+}
+
+// ScreenshotRaw captures a raw RGBA framebuffer from the device.
+// Returns raw pixel data (width * height * 4 bytes) and dimensions.
+// This is significantly faster than ScreenshotStream because:
+// 1. No on-device PNG compression
+// 2. No PNG decode on host
+// 3. Direct RGBA data for JPEG encoding
+func (c *Client) ScreenshotRaw() ([]byte, int, int, error) {
+	args := c.adbArgs("exec-out", "screencap")
+	out, err := exec.Command("adb", args...).Output()
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("raw screencap failed: %w", err)
+	}
+
+	// screencap without -p outputs a header followed by raw RGBA pixels.
+	// Header format (little-endian):
+	//   bytes 0-3:   width (uint32)
+	//   bytes 4-7:   height (uint32)
+	//   bytes 8-11:  format (uint32, 1 = RGBA_8888)
+	//   bytes 12+:   pixel data (width * height * 4 bytes)
+	if len(out) < 12 {
+		return nil, 0, 0, fmt.Errorf("raw screencap output too short (%d bytes)", len(out))
+	}
+
+	width := int(binary.LittleEndian.Uint32(out[0:4]))
+	height := int(binary.LittleEndian.Uint32(out[4:8]))
+	// format := binary.LittleEndian.Uint32(out[8:12]) // 1 = RGBA_8888
+
+	expectedSize := 12 + width*height*4
+	if len(out) < expectedSize {
+		return nil, 0, 0, fmt.Errorf("raw screencap: expected %d bytes, got %d", expectedSize, len(out))
+	}
+
+	return out[12:expectedSize], width, height, nil
 }

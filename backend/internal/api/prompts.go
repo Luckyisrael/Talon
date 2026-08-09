@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/seekersstudio/backend/internal/ai"
+	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/store"
@@ -25,9 +28,10 @@ type PromptHandler struct {
 	workspaceDir string
 	orch        *orchestrator.Orchestrator
 	toolReg     *tools.Registry
+	devClient   *devclient.Manager
 }
 
-func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator) *PromptHandler {
+func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager) *PromptHandler {
 	reg := tools.NewRegistry()
 	reg.Register(&tools.ListFiles{})
 	reg.Register(&tools.ReadFile{})
@@ -43,6 +47,7 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *o
 		workspaceDir: workspaceDir,
 		orch:        orch,
 		toolReg:     reg,
+		devClient:   dc,
 	}
 }
 
@@ -69,6 +74,21 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.Mode != "plan" && req.Mode != "build" {
 		writeError(w, http.StatusBadRequest, "mode must be 'plan' or 'build'")
 		return
+	}
+
+	// Validate prompt length
+	if len(req.Prompt) > 50000 {
+		writeError(w, http.StatusBadRequest, "prompt too long (max 50000 characters)")
+		return
+	}
+
+	// Validate project ownership (IDOR prevention)
+	if req.ProjectID > 0 {
+		project, err := h.store.GetProject(req.ProjectID)
+		if err != nil || project.UserID != userID {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
 	}
 
 	if req.Mode == "plan" && isExecutionRequest(req.Prompt) {
@@ -107,7 +127,8 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.Mode == "plan" {
 		planResp, err := h.ai.Plan(context.Background(), history)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "AI request failed: "+err.Error())
+			log.Printf("AI plan error for user %d: %v", userID, err)
+			writeError(w, http.StatusInternalServerError, "AI request failed")
 			return
 		}
 		respBytes, _ := json.Marshal(planResp)
@@ -136,7 +157,8 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		systemPrompt := h.buildSystemPrompt(workspacePath)
 		err := h.orch.RunBuildWithTools(context.Background(), sess, req.Prompt, systemPrompt, history, buildTools, toolExecutor)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "build failed: "+err.Error())
+			log.Printf("build error for user %d project %d: %v", userID, req.ProjectID, err)
+			writeError(w, http.StatusInternalServerError, "build failed")
 			return
 		}
 
@@ -149,6 +171,9 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		buildResp.Message = "Build completed successfully"
+
+		// Check if build introduced new native dependencies requiring rebuild
+		h.checkAndTriggerRebuild(context.Background(), req.ProjectID, workspacePath, stagedFiles, sess)
 
 		respBytes, _ := json.Marshal(buildResp)
 		response = string(respBytes)
@@ -271,8 +296,9 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		err := h.orch.RunBuildWithTools(ctx, sess, req.Prompt, systemPrompt, history, buildTools, toolExecutor)
 		if err != nil {
+			log.Printf("stream build error for user %d: %v", userID, err)
 			mu.Lock()
-			fullText.WriteString("\n\nError: " + err.Error())
+			fullText.WriteString("\n\nBuild failed. Check server logs for details.")
 			mu.Unlock()
 		}
 	}()
@@ -428,10 +454,15 @@ func (h *PromptHandler) buildToolList(workspacePath, stagingPath string) []ai.To
 	lintTool := &tools.RunLint{WorkspacePath: workspacePath}
 	h.toolReg.Register(lintTool)
 
-	installTool := &tools.InstallPackage{WorkspacePath: workspacePath}
+	// InstallPackage uses the dev-client allowlist for native detection
+	var allowlist *devclient.Allowlist
+	if h.devClient != nil {
+		allowlist = h.devClient.Allowlist()
+	}
+	installTool := &tools.InstallPackage{WorkspacePath: workspacePath, Allowlist: allowlist}
 	h.toolReg.Register(installTool)
 
-	buildTool := &tools.BuildAPK{WorkspacePath: workspacePath}
+	buildTool := &tools.BuildAPK{WorkspacePath: workspacePath, Allowlist: allowlist}
 	h.toolReg.Register(buildTool)
 
 	defs := h.toolReg.List()
@@ -463,7 +494,16 @@ func (h *PromptHandler) buildSystemPrompt(workspacePath string) string {
 		contextPart = "\n\nExisting project files:\n\n" + existingFiles
 	}
 
-	return systemPromptBuild + contextPart
+	// Inject native-module allowlist into AI context
+	allowlistPart := ""
+	if h.devClient != nil {
+		al := h.devClient.Allowlist()
+		if al != nil {
+			allowlistPart = "\n\n" + al.FormatForPrompt()
+		}
+	}
+
+	return systemPromptBuild + allowlistPart + contextPart
 }
 
 const systemPromptBuild = `CRITICAL RULES — VIOLATION IS FAILURE:
@@ -699,4 +739,104 @@ func isExecutionRequest(prompt string) bool {
 		}
 	}
 	return false
+}
+
+// checkAndTriggerRebuild detects if the build introduced new native dependencies
+// and triggers an async rebuild if needed. The current dev client remains installed
+// and usable while the rebuild runs in the background.
+func (h *PromptHandler) checkAndTriggerRebuild(ctx context.Context, projectID int64, workspacePath string, stagedFiles []string, sess *orchestrator.SessionState) {
+	if h.devClient == nil {
+		return
+	}
+
+	// Detect package.json changes in staged files
+	pkgChange, err := devclient.DetectPackageChanges(workspacePath, stagedFiles)
+	if err != nil || pkgChange == nil {
+		return
+	}
+
+	if len(pkgChange.Added) == 0 {
+		return
+	}
+
+	// Check if any added packages need a native rebuild
+	needsRebuild, reason := h.devClient.CheckRebuildNeeded(workspacePath, pkgChange.Added)
+	if !needsRebuild {
+		return
+	}
+
+	log.Printf("project %d: native rebuild needed: %s", projectID, reason)
+	sess.Emitter.EmitRebuild("needed", reason)
+
+	// Get session's ADB target for rebuild install
+	project, err := h.store.GetProject(projectID)
+	if err != nil {
+		log.Printf("project %d: cannot get project for rebuild: %v", projectID, err)
+		return
+	}
+
+	// Find active session for this project to get ADB target
+	sessions, err := h.store.GetActiveSessions()
+	if err != nil {
+		return
+	}
+
+	var adbTarget string
+	for _, s := range sessions {
+		if s.ProjectID == project.ID && s.ADBPort > 0 {
+			adbTarget = fmt.Sprintf("localhost:%d", s.ADBPort)
+			break
+		}
+	}
+
+	if adbTarget == "" {
+		log.Printf("project %d: no active session with device for rebuild", projectID)
+		return
+	}
+
+	// Start async rebuild — current dev client stays installed
+	h.devClient.StartRebuild(ctx, projectID, workspacePath, adbTarget)
+	sess.Emitter.EmitRebuild("started", fmt.Sprintf("background rebuild started for: %s", reason))
+
+	// Monitor rebuild in background and surface completion/failure
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				state := h.devClient.GetRebuildState(projectID)
+				if state == nil {
+					return
+				}
+
+				switch state.Status {
+				case "success":
+					sess.Emitter.EmitRebuild("success", fmt.Sprintf("new dev-client installed: %s", state.NewAPK))
+					log.Printf("project %d: background rebuild succeeded", projectID)
+					h.devClient.ClearRebuild(projectID)
+					return
+				case "failed":
+					// Fallback: reinstall last-known-good APK
+					sess.Emitter.EmitRebuild("failed", fmt.Sprintf("rebuild failed: %s — falling back to last-known-good dev client", state.Error))
+					log.Printf("project %d: rebuild failed: %s — attempting fallback reinstall", projectID, state.Error)
+
+					if state.LastGoodAPK != "" {
+						if err := h.devClient.InstallDevClient(ctx, adbTarget); err != nil {
+							sess.Emitter.EmitRebuild("fallback_failed", fmt.Sprintf("fallback install also failed: %v", err))
+							log.Printf("project %d: fallback reinstall failed: %v", projectID, err)
+						} else {
+							sess.Emitter.EmitRebuild("fallback_success", "restored last-known-good dev client")
+							log.Printf("project %d: fallback reinstall succeeded", projectID)
+						}
+					}
+
+					h.devClient.ClearRebuild(projectID)
+					return
+				}
+
+				time.Sleep(1 * time.Second)
+			}
+		}
+	}()
 }

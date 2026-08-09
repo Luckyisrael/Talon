@@ -1,14 +1,13 @@
 # Dependencies
 node_modules/
 vendor/
+backend/template/node_modules/
 
 # Build outputs
 backend/bin/
 *.exe
 *.test
 *.out
-*.apk
-*.aab
 
 # Next.js
 frontend/.next/
@@ -25,6 +24,11 @@ android/
 local.properties
 *.keystore
 *.jks
+
+# Backend template build artifacts
+backend/template/android/
+backend/template/.expo/
+backend/template/dev-client/*.apk
 
 # Databases
 *.db
@@ -74,5 +78,10 @@ coverage/
 *.cover
 
 # Debug
-.DS_Store
 *.pid
+
+# Yarn
+frontend/yarn.lock
+
+# Package lock (using npm)
+backend/template/package-lock.json

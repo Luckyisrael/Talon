@@ -47,7 +47,7 @@
 │ • Research + install tools  │               │ Controls Android
 └──────────────┬──────────────┘  ┌────────────▼────────────┐
                │ Writes Code     │   4. REDROID CONTAINER   │
-┌──────────────▼─────────────────│ (Docker on WSL)         │
+┌──────────────▼─────────────────│ (Docker on Linux)        │
 │              5. METRO SERVER   │ • Android 14, 1080×2400  │
 │   (per-session, auto port)    │ • Mock MWA Wallet (planned)│
 │ • adb reverse port forwarding │ • expo-dev-client         │
@@ -61,7 +61,7 @@
 - **AI backbone**: AgentRouter ($200 credit, Anthropic-compatible API)
 - **Redroid** = pure Android device emulator (APK runner + screenshot-based streaming)
 - **No smart contracts inside Redroid** — all build tooling runs on host
-- **WSL = production mirror** — everything must work on Linux
+- **Linux = production mirror** — everything must work on Linux
 
 ### Locked Specifications
 
@@ -82,66 +82,36 @@
 
 ## 2. Environment & Infrastructure
 
-### 2.1 Windows Host
+### 2.1 Ubuntu Host
 
-- **OS**: Windows 10/11
-- **Java**: OpenJDK 17.0.16 at `C:\Program Files\Microsoft\jdk-17.0.16.8-hotspot`
-- **Node.js**: v22.23.1 at `C:\Program Files\nodejs\`
-- **Android SDK**: `C:\Users\Lucky\AppData\Local\Android\Sdk` (build-tools 35.0.0/36.0.0/36.1.0, platforms android-36)
+- **OS**: Ubuntu 24.04 LTS
+- **Java**: OpenJDK 17 (installed via apt)
+- **Node.js**: v22.x (installed via nodesource)
+- **Android SDK**: Standard Linux location (build-tools 34.0.0, platforms android-34)
+- **Docker**: CE 29.x (native Linux installation)
 
-### 2.2 WSL (SeekerLinux)
-
-- **Distro**: SeekerLinux (Ubuntu 24.04, systemd enabled)
-- **Custom Kernel**: 6.6.87.2+ with `binderfs=y`, `memfd_create=y` (no ashmem)
-- **Docker**: CE 29.1.3, daemon config: `iptables:false`, `bridge:none`, `ip-forward:true`, `storage-driver:overlay2`
-- **Java**: OpenJDK 17.0.19 (installed via apt)
-- **Node.js**: v22.23.2 (installed via nodesource)
-- **Android SDK**: `/root/android-sdk` (platform-tools, platforms;android-34, build-tools;34.0.0)
-- **scrcpy**: 4.1 at `/opt/scrcpy/scrcpy` (headless, for future use)
-
-### 2.3 WSL Networking Fix
-
-**Problem**: WSL had no outbound internet (no default gateway).
-
-**Fix** in `C:\Users\Lucky\.wslconfig`:
-```ini
-[wsl2]
-kernel=C:\\Users\\Lucky\\seekersstudio-kernel\\bzImage
-networkingMode=NAT
-```
-
-**APT Sources Fix**: Changed from `old-releases.ubuntu.com` (404) to `archive.ubuntu.com`:
-```bash
-# /etc/apt/sources.list.d/noble.list
-deb [check-valid-until=no] http://archive.ubuntu.com/ubuntu/ noble main universe restricted multiverse
-deb [check-valid-until=no] http://archive.ubuntu.com/ubuntu/ noble-updates main universe restricted multiverse
-deb [check-valid-until=no] http://archive.ubuntu.com/ubuntu/ noble-backports main universe restricted multiverse
-deb [check-valid-until=no] http://archive.ubuntu.com/ubuntu/ noble-security main universe restricted multiverse
-```
-
-### 2.4 Docker
+### 2.2 Docker
 
 **Redroid Container**:
 ```bash
 docker run -d --name redroid-seeker-dev \
   --privileged \
-  -p 5555:5555 \
-  -v redroid-data:/data \
+  --network host \
   redroid/redroid:14.0.0_64only-latest \
   androidboot.use_memfd=1
 ```
 
 **ADB Connection**:
 ```bash
-wsl -d SeekerLinux -e adb connect localhost:5555
+adb connect localhost:5555
 ```
 
-### 2.5 Infrastructure Scripts
+### 2.3 Infrastructure Scripts
 
 | Script | Purpose |
 |---|---|
-| `infra/redroid/launch-dev.ps1` | Launch Redroid container |
-| `infra/redroid/install-mock-wallet.ps1` | Install Mock MWA Wallet APK |
+| `infra/redroid/launch-dev.sh` | Launch Redroid container |
+| `infra/redroid/install-mock-wallet.sh` | Install Mock MWA Wallet APK |
 | `backend/scripts/install-sdk.sh` | Install Android SDK in WSL |
 | `backend/scripts/verify-sdk.sh` | Verify SDK installation |
 
@@ -391,7 +361,7 @@ persist.sys.device_name = Seeker
 
 ```bash
 AI_PROVIDER=agentrouter
-ANTHROPIC_AUTH_TOKEN=sk-w8339so6GvBgjmhqpp8hrTeltunk1mUH2F8mz1PK2RbxLZMY
+ANTHROPIC_AUTH_TOKEN=your-api-key-here
 ANTHROPIC_BASE_URL=https://agentrouter.org
 ANTHROPIC_MODEL=claude-opus-5
 ```
@@ -730,7 +700,7 @@ DB_PATH=./seekersstudio.db
 WORKSPACE_DIR=./workspaces
 TEMPLATE_DIR=./backend/template
 AI_PROVIDER=agentrouter
-ANTHROPIC_AUTH_TOKEN=sk-w8339so6GvBgjmhqpp8hrTeltunk1mUH2F8mz1PK2RbxLZMY
+ANTHROPIC_AUTH_TOKEN=your-api-key-here
 ANTHROPIC_BASE_URL=https://agentrouter.org
 ANTHROPIC_MODEL=claude-opus-5
 ```

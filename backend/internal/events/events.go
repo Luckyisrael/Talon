@@ -8,14 +8,15 @@ import (
 type EventType string
 
 const (
-	PhaseEvent      EventType = "phase"
-	ToolCallEvent   EventType = "tool_call"
-	VerifyEvent     EventType = "verify"
-	GuardrailEvent  EventType = "guardrail_reject"
-	ErrorEvent      EventType = "error"
-	DoneEvent       EventType = "done"
-	TextEvent       EventType = "text"
-	ThinkingEvent   EventType = "thinking"
+	PhaseEvent       EventType = "phase"
+	ToolCallEvent    EventType = "tool_call"
+	VerifyEvent      EventType = "verify"
+	GuardrailEvent   EventType = "guardrail_reject"
+	ErrorEvent       EventType = "error"
+	DoneEvent        EventType = "done"
+	TextEvent        EventType = "text"
+	ThinkingEvent    EventType = "thinking"
+	RebuildEvent     EventType = "rebuild"
 )
 
 type Phase string
@@ -142,6 +143,15 @@ func (e *SessionEmitter) EmitDone(status string) {
 	e.Emit(Event{
 		Type:   DoneEvent,
 		Status: status,
+	})
+}
+
+// EmitRebuild is a convenience method for emitting rebuild status events.
+func (e *SessionEmitter) EmitRebuild(status, detail string) {
+	e.Emit(Event{
+		Type:   RebuildEvent,
+		Status: status,
+		Error:  detail,
 	})
 }
 

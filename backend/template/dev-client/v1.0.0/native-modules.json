@@ -1,0 +1,145 @@
+{
+  "templateVersion": "1.0.0",
+  "sdkVersion": "55.0.0",
+  "builtAt": "2026-08-09T00:00:00Z",
+  "modules": [
+    {
+      "name": "react-native-quick-crypto",
+      "version": "1.0.6",
+      "nativeLinking": true,
+      "androidPackage": "com.nicktdev.quickcrypto"
+    },
+    {
+      "name": "react-native-gesture-handler",
+      "version": "2.30.0",
+      "nativeLinking": true,
+      "androidPackage": "com.swmansion.gesturehandler"
+    },
+    {
+      "name": "react-native-reanimated",
+      "version": "4.2.1",
+      "nativeLinking": true,
+      "androidPackage": "com.swmansion.reanimated"
+    },
+    {
+      "name": "react-native-screens",
+      "version": "4.23.0",
+      "nativeLinking": true,
+      "androidPackage": "com.swmansion.screens"
+    },
+    {
+      "name": "react-native-safe-area-context",
+      "version": "5.6.2",
+      "nativeLinking": true,
+      "androidPackage": "com.th3rdwave.safeareacontext"
+    },
+    {
+      "name": "react-native-svg",
+      "version": "15.15.3",
+      "nativeLinking": true,
+      "androidPackage": "com.horcrux.svg"
+    },
+    {
+      "name": "react-native-webview",
+      "version": "13.16.0",
+      "nativeLinking": true,
+      "androidPackage": "com.reactnative.webview"
+    },
+    {
+      "name": "react-native-worklets",
+      "version": "0.7.4",
+      "nativeLinking": true,
+      "androidPackage": "com.swmansion.worklets"
+    },
+    {
+      "name": "@react-native-async-storage/async-storage",
+      "version": "2.2.0",
+      "nativeLinking": true,
+      "androidPackage": "com.reactnativecommunity.asyncstorage"
+    },
+    {
+      "name": "expo-dev-client",
+      "version": "55.0.18",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.devclient"
+    },
+    {
+      "name": "expo-constants",
+      "version": "55.0.9",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.constants"
+    },
+    {
+      "name": "expo-font",
+      "version": "55.0.4",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.font"
+    },
+    {
+      "name": "expo-haptics",
+      "version": "55.0.9",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.haptics"
+    },
+    {
+      "name": "expo-image",
+      "version": "55.0.6",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.image"
+    },
+    {
+      "name": "expo-linear-gradient",
+      "version": "55.0.9",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.lineargradient"
+    },
+    {
+      "name": "expo-linking",
+      "version": "55.0.8",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.linking"
+    },
+    {
+      "name": "expo-router",
+      "version": "55.0.7",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.router"
+    },
+    {
+      "name": "expo-splash-screen",
+      "version": "55.0.12",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.splashscreen"
+    },
+    {
+      "name": "expo-status-bar",
+      "version": "55.0.4",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.statusbar"
+    },
+    {
+      "name": "expo-symbols",
+      "version": "55.0.5",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.symbols"
+    },
+    {
+      "name": "expo-system-ui",
+      "version": "55.0.10",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.systemui"
+    },
+    {
+      "name": "expo-web-browser",
+      "version": "55.0.10",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.webbrowser"
+    },
+    {
+      "name": "expo-blur",
+      "version": "55.0.10",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.blur"
+    }
+  ]
+}

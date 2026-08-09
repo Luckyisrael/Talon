@@ -2,6 +2,8 @@ package store
 
 import (
 	"database/sql"
+	"log"
+	"os"
 	"time"
 )
 
@@ -14,12 +16,17 @@ type User struct {
 }
 
 type Project struct {
-	ID        int64     `json:"id"`
-	UserID    int64     `json:"user_id"`
-	Name      string    `json:"name"`
-	PlanJSON  string    `json:"plan_json,omitempty"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
+	ID              int64     `json:"id"`
+	UserID          int64     `json:"user_id"`
+	Name            string    `json:"name"`
+	Slug            string    `json:"slug"`
+	AndroidPackage  string    `json:"android_package"`
+	IOSBundleID     string    `json:"ios_bundle_id"`
+	Scheme          string    `json:"scheme"`
+	PlanJSON        string    `json:"plan_json,omitempty"`
+	Status          string    `json:"status"`
+	TemplateVersion string    `json:"template_version,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type Prompt struct {
@@ -32,11 +39,15 @@ type Prompt struct {
 }
 
 type Session struct {
-	ID        int64      `json:"id"`
-	ProjectID int64      `json:"project_id"`
-	State     string     `json:"state"`
-	StartedAt time.Time  `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	ID             int64      `json:"id"`
+	ProjectID      int64      `json:"project_id"`
+	State          string     `json:"state"`
+	ContainerID    string     `json:"container_id,omitempty"`
+	ContainerName  string     `json:"container_name,omitempty"`
+	ADBPort        int        `json:"adb_port,omitempty"`
+	ContainerState string     `json:"container_state,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	EndedAt        *time.Time `json:"ended_at,omitempty"`
 }
 
 type Usage struct {
@@ -66,8 +77,24 @@ func New(dbPath string) (*Store, error) {
 		return nil, err
 	}
 
+	// Configure for concurrent access
+	db.SetMaxOpenConns(1) // SQLite only supports one writer
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+
 	if err := db.Ping(); err != nil {
 		return nil, err
+	}
+
+	// Enable WAL mode for better concurrent read performance
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		log.Printf("WARNING: could not enable WAL mode: %v", err)
+	}
+
+	// Restrict database file permissions to owner-only (0600)
+	if err := os.Chmod(dbPath, 0600); err != nil {
+		// Non-fatal: log but don't fail
+		log.Printf("WARNING: could not restrict database permissions: %v", err)
 	}
 
 	s := &Store{db: db}
@@ -142,6 +169,26 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	// Migration: add template_version column if missing
+	s.db.Exec("ALTER TABLE projects ADD COLUMN template_version TEXT DEFAULT ''")
+
+	// Migration: add identity columns if missing
+	s.db.Exec("ALTER TABLE projects ADD COLUMN slug TEXT DEFAULT ''")
+	s.db.Exec("ALTER TABLE projects ADD COLUMN android_package TEXT DEFAULT ''")
+	s.db.Exec("ALTER TABLE projects ADD COLUMN ios_bundle_id TEXT DEFAULT ''")
+	s.db.Exec("ALTER TABLE projects ADD COLUMN scheme TEXT DEFAULT ''")
+
+	// Add uniqueness constraints (ignore errors if already exist)
+	s.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_slug ON projects(slug) WHERE slug != ''")
+	s.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_android_package ON projects(android_package) WHERE android_package != ''")
+	s.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_ios_bundle_id ON projects(ios_bundle_id) WHERE ios_bundle_id != ''")
+
+	// Migration: add container tracking columns to sessions
+	s.db.Exec("ALTER TABLE sessions ADD COLUMN container_id TEXT DEFAULT ''")
+	s.db.Exec("ALTER TABLE sessions ADD COLUMN container_name TEXT DEFAULT ''")
+	s.db.Exec("ALTER TABLE sessions ADD COLUMN adb_port INTEGER DEFAULT 0")
+	s.db.Exec("ALTER TABLE sessions ADD COLUMN container_state TEXT DEFAULT ''")
+
 	return nil
 }
 
@@ -174,8 +221,11 @@ func (s *Store) GetUserByID(id int64) (*User, error) {
 	return u, nil
 }
 
-func (s *Store) CreateProject(userID int64, name string) (*Project, error) {
-	res, err := s.db.Exec("INSERT INTO projects (user_id, name) VALUES (?, ?)", userID, name)
+func (s *Store) CreateProject(userID int64, name, templateVersion, slug, androidPackage, iosBundleID, scheme string) (*Project, error) {
+	res, err := s.db.Exec(
+		"INSERT INTO projects (user_id, name, template_version, slug, android_package, ios_bundle_id, scheme) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		userID, name, templateVersion, slug, androidPackage, iosBundleID, scheme,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -185,8 +235,9 @@ func (s *Store) CreateProject(userID int64, name string) (*Project, error) {
 
 func (s *Store) GetProject(id int64) (*Project, error) {
 	p := &Project{}
-	err := s.db.QueryRow("SELECT id, user_id, name, plan_json, status, created_at FROM projects WHERE id = ?", id).
-		Scan(&p.ID, &p.UserID, &p.Name, &p.PlanJSON, &p.Status, &p.CreatedAt)
+	err := s.db.QueryRow(
+		"SELECT id, user_id, name, slug, android_package, ios_bundle_id, scheme, plan_json, status, template_version, created_at FROM projects WHERE id = ?", id,
+	).Scan(&p.ID, &p.UserID, &p.Name, &p.Slug, &p.AndroidPackage, &p.IOSBundleID, &p.Scheme, &p.PlanJSON, &p.Status, &p.TemplateVersion, &p.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +245,9 @@ func (s *Store) GetProject(id int64) (*Project, error) {
 }
 
 func (s *Store) ListProjects(userID int64) ([]Project, error) {
-	rows, err := s.db.Query("SELECT id, user_id, name, plan_json, status, created_at FROM projects WHERE user_id = ? ORDER BY created_at DESC", userID)
+	rows, err := s.db.Query(
+		"SELECT id, user_id, name, slug, android_package, ios_bundle_id, scheme, plan_json, status, template_version, created_at FROM projects WHERE user_id = ? ORDER BY created_at DESC", userID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +256,7 @@ func (s *Store) ListProjects(userID int64) ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Name, &p.PlanJSON, &p.Status, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Name, &p.Slug, &p.AndroidPackage, &p.IOSBundleID, &p.Scheme, &p.PlanJSON, &p.Status, &p.TemplateVersion, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -256,8 +309,8 @@ func (s *Store) CreateSession(projectID int64) (*Session, error) {
 
 func (s *Store) GetSession(id int64) (*Session, error) {
 	sess := &Session{}
-	err := s.db.QueryRow("SELECT id, project_id, state, started_at, ended_at FROM sessions WHERE id = ?", id).
-		Scan(&sess.ID, &sess.ProjectID, &sess.State, &sess.StartedAt, &sess.EndedAt)
+	err := s.db.QueryRow("SELECT id, project_id, state, container_id, container_name, adb_port, container_state, started_at, ended_at FROM sessions WHERE id = ?", id).
+		Scan(&sess.ID, &sess.ProjectID, &sess.State, &sess.ContainerID, &sess.ContainerName, &sess.ADBPort, &sess.ContainerState, &sess.StartedAt, &sess.EndedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -272,6 +325,54 @@ func (s *Store) UpdateSessionState(id int64, state string) error {
 		_, err = s.db.Exec("UPDATE sessions SET state = ? WHERE id = ?", state, id)
 	}
 	return err
+}
+
+// UpdateSessionContainer stores container metadata for a session.
+func (s *Store) UpdateSessionContainer(sessionID int64, containerID, containerName string, adbPort int) error {
+	_, err := s.db.Exec(
+		"UPDATE sessions SET container_id = ?, container_name = ?, adb_port = ? WHERE id = ?",
+		containerID, containerName, adbPort, sessionID,
+	)
+	return err
+}
+
+// UpdateSessionContainerState stores the Docker container state.
+func (s *Store) UpdateSessionContainerState(sessionID int64, containerState string) error {
+	_, err := s.db.Exec("UPDATE sessions SET container_state = ? WHERE id = ?", containerState, sessionID)
+	return err
+}
+
+// GetActiveSessions returns all sessions with state != "destroyed".
+func (s *Store) GetActiveSessions() ([]Session, error) {
+	rows, err := s.db.Query(
+		"SELECT id, project_id, state, container_id, container_name, adb_port, container_state, started_at, ended_at FROM sessions WHERE state != 'destroyed' ORDER BY started_at DESC",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []Session
+	for rows.Next() {
+		var sess Session
+		if err := rows.Scan(&sess.ID, &sess.ProjectID, &sess.State, &sess.ContainerID, &sess.ContainerName, &sess.ADBPort, &sess.ContainerState, &sess.StartedAt, &sess.EndedAt); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions, nil
+}
+
+// GetSessionByContainerID finds a session by its Docker container ID.
+func (s *Store) GetSessionByContainerID(containerID string) (*Session, error) {
+	sess := &Session{}
+	err := s.db.QueryRow(
+		"SELECT id, project_id, state, container_id, container_name, adb_port, container_state, started_at, ended_at FROM sessions WHERE container_id = ?", containerID,
+	).Scan(&sess.ID, &sess.ProjectID, &sess.State, &sess.ContainerID, &sess.ContainerName, &sess.ADBPort, &sess.ContainerState, &sess.StartedAt, &sess.EndedAt)
+	if err != nil {
+		return nil, err
+	}
+	return sess, nil
 }
 
 func (s *Store) GetUsage(userID int64) (*Usage, error) {
@@ -357,4 +458,18 @@ func (s *Store) DeleteMemory(id int64) error {
 func (s *Store) ClearMemory(projectID int64) error {
 	_, err := s.db.Exec("DELETE FROM project_memory WHERE project_id = ?", projectID)
 	return err
+}
+
+// SlugExists checks if a slug is already in use.
+func (s *Store) SlugExists(slug string) bool {
+	var count int
+	s.db.QueryRow("SELECT COUNT(*) FROM projects WHERE slug = ?", slug).Scan(&count)
+	return count > 0
+}
+
+// AndroidPackageExists checks if an Android package name is already in use.
+func (s *Store) AndroidPackageExists(pkg string) bool {
+	var count int
+	s.db.QueryRow("SELECT COUNT(*) FROM projects WHERE android_package = ?", pkg).Scan(&count)
+	return count > 0
 }

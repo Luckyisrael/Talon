@@ -5,27 +5,26 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/seekersstudio/backend/internal/identity"
 	"github.com/seekersstudio/backend/internal/store"
+	"github.com/seekersstudio/backend/internal/workspace"
 )
-
-const scaffoldManifest = ".scaffold-manifest.json"
 
 type ProjectHandler struct {
 	store       *store.Store
-	templateDir string
+	workspace   *workspace.Manager
 	workspaceDir string
 }
 
-func NewProjectHandler(s *store.Store, templateDir, workspaceDir string) *ProjectHandler {
+func NewProjectHandler(s *store.Store, ws *workspace.Manager, workspaceDir string) *ProjectHandler {
 	return &ProjectHandler{
 		store:       s,
-		templateDir: templateDir,
+		workspace:   ws,
 		workspaceDir: workspaceDir,
 	}
 }
@@ -64,28 +63,29 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project, err := h.store.CreateProject(userID, req.Name)
+	// Generate unique identity from name
+	id := identity.Generate(req.Name)
+	id = identity.EnsureUnique(id, h.store.SlugExists, h.store.AndroidPackageExists)
+
+	// Get template version for pinning
+	templateVersion := h.workspace.TemplateVersion()
+
+	project, err := h.store.CreateProject(userID, req.Name, templateVersion, id.Slug, id.AndroidPackage, id.IOSBundleID, id.Scheme)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create project: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to create project")
 		return
 	}
 
-	// Copy template to workspace and write scaffold manifest
-	projectDir := filepath.Join(h.workspaceDir, strconv.FormatInt(project.ID, 10))
-	if err := copyDirWithManifest(h.templateDir, projectDir); err != nil {
-		log.Printf("WARN: template copy failed for project %d: %v", project.ID, err)
-	}
-
-	// Run npm install in background (non-blocking)
-	go func() {
-		cmd := exec.Command("npm", "install")
-		cmd.Dir = projectDir
-		if output, err := cmd.CombinedOutput(); err != nil {
-			log.Printf("npm install failed for project %d: %v\n%s", project.ID, err, string(output))
-		} else {
-			log.Printf("npm install completed for project %d", project.ID)
+	// Create workspace via OverlayFS mount (instant, no npm install)
+	mount, err := h.workspace.CreateWorkspace(project.ID)
+	if err != nil {
+		log.Printf("WARN: workspace creation failed for project %d: %v", project.ID, err)
+	} else if mount != nil {
+		// Render identity into config files after mount
+		if err := identity.RenderConfigs(mount.UpperDir, id); err != nil {
+			log.Printf("WARN: identity render failed for project %d: %v", project.ID, err)
 		}
-	}()
+	}
 
 	writeJSON(w, http.StatusCreated, project)
 }
@@ -118,34 +118,11 @@ func (h *ProjectHandler) GetFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	includeScaffold := r.URL.Query().Get("includeScaffold") != "false"
-
-	projectDir := filepath.Join(h.workspaceDir, strconv.FormatInt(id, 10))
+	// Read ONLY from the writable upper layer — no scaffold flag needed
+	projectDir := h.workspace.GetUpperPath(id)
 	if _, err := os.Stat(projectDir); os.IsNotExist(err) {
 		writeJSON(w, http.StatusOK, []fileEntry{})
 		return
-	}
-
-	// Load scaffold manifest
-	scaffoldPaths := make(map[string]bool)
-	hasManifest := false
-	if !includeScaffold {
-		manifestPath := filepath.Join(projectDir, scaffoldManifest)
-		if data, err := os.ReadFile(manifestPath); err == nil {
-			var paths []string
-			if json.Unmarshal(data, &paths) == nil {
-				hasManifest = true
-				for _, p := range paths {
-					scaffoldPaths[p] = true
-				}
-			}
-		}
-		// If no manifest exists and includeScaffold=false, return empty
-		// (all files are treated as scaffold since we can't distinguish)
-		if !hasManifest {
-			writeJSON(w, http.StatusOK, []fileEntry{})
-			return
-		}
 	}
 
 	var files []fileEntry
@@ -156,13 +133,11 @@ func (h *ProjectHandler) GetFiles(w http.ResponseWriter, r *http.Request) {
 
 		relPath, _ := filepath.Rel(projectDir, path)
 
-		// Skip node_modules, .expo, and the scaffold manifest itself
-		if strings.Contains(relPath, "node_modules") || strings.Contains(relPath, ".expo") || relPath == scaffoldManifest {
+		// Skip node_modules symlink and hidden files
+		if info.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
-
-		// Skip scaffold files if requested
-		if !includeScaffold && scaffoldPaths[relPath] {
+		if strings.HasPrefix(info.Name(), ".") {
 			return nil
 		}
 
@@ -215,13 +190,19 @@ func (h *ProjectHandler) WriteFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projectDir := filepath.Join(h.workspaceDir, strconv.FormatInt(id, 10))
+	// Write to the writable upper layer
+	projectDir := h.workspace.GetUpperPath(id)
 
 	for _, f := range req.Files {
-		// Validate: no path traversal
 		clean := filepath.Clean(f.Path)
 		if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
 			writeError(w, http.StatusBadRequest, "invalid file path: "+f.Path)
+			return
+		}
+
+		// Block writes to identity fields
+		if err := identity.BlockIdentityFields(clean, f.Content); err != nil {
+			writeError(w, http.StatusForbidden, err.Error())
 			return
 		}
 
@@ -234,7 +215,7 @@ func (h *ProjectHandler) WriteFiles(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := os.WriteFile(fullPath, []byte(f.Content), 0644); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to write file: "+f.Path)
+			writeError(w, http.StatusInternalServerError, "failed to write file")
 			return
 		}
 	}
@@ -255,23 +236,16 @@ func (h *ProjectHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate: no path traversal
 	clean := filepath.Clean(filePath)
 	if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
 		writeError(w, http.StatusBadRequest, "invalid file path")
 		return
 	}
 
-	// Don't allow deleting the scaffold manifest
-	if clean == scaffoldManifest {
-		writeError(w, http.StatusForbidden, "cannot delete scaffold manifest")
-		return
-	}
-
-	projectDir := filepath.Join(h.workspaceDir, strconv.FormatInt(id, 10))
+	// Delete from the writable upper layer
+	projectDir := h.workspace.GetUpperPath(id)
 	fullPath := filepath.Join(projectDir, clean)
 
-	// Ensure the path is within the project directory
 	absProject, _ := filepath.Abs(projectDir)
 	absFull, _ := filepath.Abs(fullPath)
 	if !strings.HasPrefix(absFull, absProject) {
@@ -327,46 +301,8 @@ func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projectDir := filepath.Join(h.workspaceDir, strconv.FormatInt(id, 10))
-	os.RemoveAll(projectDir)
+	// Destroy workspace (unmount OverlayFS if mounted)
+	h.workspace.DestroyWorkspace(id)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
-}
-
-// copyDirWithManifest copies src to dst and writes a scaffold manifest listing all copied files.
-func copyDirWithManifest(src, dst string) error {
-	var manifest []string
-
-	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relPath, _ := filepath.Rel(src, path)
-		dstPath := filepath.Join(dst, relPath)
-
-		if info.IsDir() {
-			return os.MkdirAll(dstPath, 0755)
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		if err := os.WriteFile(dstPath, data, 0644); err != nil {
-			return err
-		}
-
-		manifest = append(manifest, relPath)
-		return nil
-	})
-
-	if err != nil {
-		return err
-	}
-
-	// Write the scaffold manifest
-	manifestData, _ := json.Marshal(manifest)
-	return os.WriteFile(filepath.Join(dst, scaffoldManifest), manifestData, 0644)
 }

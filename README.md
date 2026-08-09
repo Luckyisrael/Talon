@@ -27,7 +27,7 @@ A browser-based "Vibe Coding" IDE for the Solana Mobile ecosystem. Users describ
 └──────────────┬──────────────┘  ┌────────────▼────────────┐
                │ writes code     │   REDROID CONTAINER      │
 ┌──────────────▼─────────────────│   Android 14 · 1080×2400│
-│         METRO SERVER          │   Docker on WSL/Linux    │
+│         METRO SERVER          │   Docker on Linux       │
 │  per-session · auto port      └─────────────────────────┘
 │  adb reverse · hot reload     │
 └───────────────────────────────┘
@@ -92,22 +92,12 @@ SeekerStudio/
 
 ## Prerequisites
 
-### Windows
-
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with WSL 2 backend
+- Docker CE (native Linux installation)
 - [Android SDK](https://developer.android.com/studio) (for ADB)
 - [JDK 17](https://adoptium.net/)
 - [Node.js 22](https://nodejs.org/)
 - [Go 1.25+](https://go.dev/dl/)
 - [ADB](https://developer.android.com/tools/adb) (platform-tools)
-
-### Linux (Recommended for production)
-
-```bash
-# Ubuntu/Debian
-sudo apt update
-sudo apt install -y openjdk-17-jdk nodejs npm golang-go docker.io adb
-```
 
 ## Quick Start
 
@@ -118,19 +108,7 @@ git clone git@github.com:Luckyisrael/SeekerStudio.git
 cd SeekerStudio
 ```
 
-### 2. Set up WSL (Windows only)
-
-```ini
-# %USERPROFILE%\.wslconfig
-[wsl2]
-networkingMode=NAT
-```
-
-```bash
-wsl -d <distro-name> -- sudo apt update && sudo apt install -y openjdk-17-jdk nodejs npm
-```
-
-### 3. Start Redroid (Android emulator)
+### 2. Start Redroid (Android emulator)
 
 ```bash
 docker run -d --name redroid-seeker-dev \
@@ -143,7 +121,7 @@ docker run -d --name redroid-seeker-dev \
 adb connect localhost:5555
 ```
 
-### 4. Install backend dependencies & run
+### 3. Install backend dependencies & run
 
 ```bash
 cd backend
@@ -153,7 +131,7 @@ go run ./cmd/server
 
 Backend starts on `http://localhost:9191`.
 
-### 5. Install frontend dependencies & run
+### 4. Install frontend dependencies & run
 
 ```bash
 cd frontend
@@ -163,7 +141,7 @@ npm run dev
 
 Frontend starts on `http://localhost:3000`.
 
-### 6. Open the IDE
+### 5. Open the IDE
 
 Navigate to `http://localhost:3000`, create an account, create a project, and start building.
 
@@ -273,7 +251,6 @@ npm run build
 
 - **Redroid video encoding** — Hardware codec (`media.swcodec`) unavailable; uses screenshot-based streaming
 - **No Mock MWA Wallet** — Wallet testing requires manual APK installation
-- **WSL networking** — Requires `networkingMode=NAT` in `.wslconfig`
 
 ## Contributing
 

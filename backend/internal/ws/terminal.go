@@ -4,10 +4,13 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
+	"github.com/seekersstudio/backend/internal/auth"
+	"github.com/seekersstudio/backend/internal/store"
 )
 
 var upgrader = websocket.Upgrader{
@@ -15,24 +18,50 @@ var upgrader = websocket.Upgrader{
 }
 
 type TerminalHandler struct {
-	wslDistro string
-	target    string
+	store   *store.Store
+	authSvc *auth.Service
 }
 
-func NewTerminalHandler() *TerminalHandler {
+func NewTerminalHandler(authSvc *auth.Service, s *store.Store) *TerminalHandler {
 	return &TerminalHandler{
-		wslDistro: "SeekerLinux",
-		target:    "localhost:5555",
+		store:   s,
+		authSvc: authSvc,
 	}
 }
 
 func (h *TerminalHandler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.Get("/", h.Handle)
+	r.Get("/{id}", h.Handle)
 	return r
 }
 
 func (h *TerminalHandler) Handle(w http.ResponseWriter, r *http.Request) {
+	// Authenticate via query param (browsers can't set WS headers)
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, `{"error":"missing token"}`, http.StatusUnauthorized)
+		return
+	}
+	if _, err := h.authSvc.ValidateToken(token); err != nil {
+		http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
+		return
+	}
+
+	// Resolve session → ADB target
+	sessionID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid session id"}`, http.StatusBadRequest)
+		return
+	}
+
+	session, err := h.store.GetSession(sessionID)
+	if err != nil || session.ADBPort == 0 {
+		http.Error(w, `{"error":"session not found or no device attached"}`, http.StatusNotFound)
+		return
+	}
+
+	adbTarget := "localhost:" + strconv.Itoa(session.ADBPort)
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("websocket upgrade failed: %v", err)
@@ -40,9 +69,9 @@ func (h *TerminalHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Spawn adb shell process via WSL
-	args := []string{"-d", h.wslDistro, "-e", "adb", "-s", h.target, "shell"}
-	cmd := exec.Command("wsl", args...)
+	// Spawn adb shell process directly (native Linux)
+	args := []string{"-s", adbTarget, "shell"}
+	cmd := exec.Command("adb", args...)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -71,13 +100,13 @@ func (h *TerminalHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("adb shell session started (pid %d)", cmd.Process.Pid)
+	log.Printf("adb shell session started (session %d, target %s, pid %d)", sessionID, adbTarget, cmd.Process.Pid)
 
 	var mu sync.Mutex
 	stdoutDone := make(chan struct{})
 	stderrDone := make(chan struct{})
 
-	// Read from process stdout → WebSocket
+	// Read from process stdout -> WebSocket
 	go func() {
 		defer close(stdoutDone)
 		buf := make([]byte, 4096)
@@ -94,7 +123,7 @@ func (h *TerminalHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Read from process stderr → WebSocket
+	// Read from process stderr -> WebSocket
 	go func() {
 		defer close(stderrDone)
 		buf := make([]byte, 4096)
@@ -111,8 +140,7 @@ func (h *TerminalHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Read from WebSocket → process stdin
-	// When this exits (client disconnects), close stdin to signal process to exit
+	// Read from WebSocket -> process stdin
 	go func() {
 		for {
 			_, message, err := conn.ReadMessage()
@@ -123,16 +151,14 @@ func (h *TerminalHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			stdin.Write(message)
 			mu.Unlock()
 		}
-		// Client disconnected — close stdin so shell exits
 		stdin.Close()
 	}()
 
-	// Wait for both readers to finish (process exited)
 	<-stdoutDone
 	<-stderrDone
 	cmd.Wait()
 
-	log.Printf("adb shell session ended (pid %d)", cmd.Process.Pid)
+	log.Printf("adb shell session ended (session %d, pid %d)", sessionID, cmd.Process.Pid)
 
 	conn.WriteMessage(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shell exited"))
