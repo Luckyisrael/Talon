@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // WalletManager handles mock wallet lifecycle: installation, configuration, verification.
@@ -32,7 +33,7 @@ func NewWalletManager(templateDir string) (*WalletManager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read template version: %w", err)
 	}
-	version := string(data)
+	version := strings.TrimRight(string(data), "\r\n\t ")
 
 	return &WalletManager{
 		templateDir: templateDir,
