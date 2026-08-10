@@ -234,12 +234,30 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 				if tcErr != nil {
 					errorMsg = tcErr.Error()
 				}
-			healNudge := "STOP EXPLORING. Your code has type errors that MUST be fixed before the build can succeed.\n\n" + errorMsg + "\n\nRULES FOR HEALING:\n1. Do NOT read other files. Do NOT explore the codebase.\n2. Do NOT call list_files, read_file, or grep_codebase.\n3. You already know the error. Fix it NOW by calling write_file on the affected file.\n4. After fixing, call run_typecheck to verify. If it passes, you are done.\n5. If you do anything other than fix the specific error above, you are wasting tokens."
-			history = append(history, ai.PromptMessage{
-				Role:    "user",
-				Content: healNudge,
-			})
-			sess.Emitter.EmitToolCall("guardrail", "", "", "typecheck failed, healing")
+
+				// Extract the specific file from the first error
+				targetFile := extractErrorFile(typecheckResult)
+				healNudge := "STOP EXPLORING. Your code has type errors that MUST be fixed.\n\n"
+				healNudge += errorMsg + "\n\n"
+
+				if targetFile != "" {
+					healNudge += "THE ERROR IS IN: " + targetFile + "\n"
+					healNudge += "Fix ONLY this file by calling write_file. Do not touch any other files.\n"
+				} else {
+					healNudge += "Fix the errors by calling write_file on the affected files.\n"
+				}
+
+				healNudge += "\nCRITICAL RULES:\n"
+				healNudge += "1. Do NOT overwrite package.json, tsconfig.json, or app.json — these are PROTECTED.\n"
+				healNudge += "2. Do NOT call list_files, read_file, or grep_codebase.\n"
+				healNudge += "3. Fix the specific error above, then call run_typecheck to verify.\n"
+				healNudge += "4. If typecheck passes, you are done. Do not explore further."
+
+				history = append(history, ai.PromptMessage{
+					Role:    "user",
+					Content: healNudge,
+				})
+				sess.Emitter.EmitToolCall("guardrail", "", "", "typecheck failed, healing")
 				continue
 			}
 			sess.Emitter.EmitToolCall("run_typecheck", "Checking types…", "", "completed")
@@ -621,4 +639,31 @@ func readFileContent(path string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// extractErrorFile extracts the filename from a tsc error line.
+// Input: "app/index.tsx(5,12): error TS2307: Cannot find module 'react'"
+// Output: "app/index.tsx"
+func extractErrorFile(tscOutput string) string {
+	lines := strings.Split(tscOutput, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Look for pattern: <path>(<line>,<col>): error TS<number>:
+		if idx := strings.Index(line, "("); idx > 0 {
+			prefix := line[:idx]
+			// Only accept if no path separators (relative path like "app/index.tsx")
+			// or if it's a simple filename
+			if !strings.Contains(prefix, "/") && !strings.Contains(prefix, "\\") {
+				return prefix
+			}
+			// For paths with separators, extract just the relative part
+			if lastSlash := strings.LastIndexAny(prefix, "/\\"); lastSlash >= 0 {
+				return prefix[lastSlash+1:]
+			}
+		}
+	}
+	return ""
 }

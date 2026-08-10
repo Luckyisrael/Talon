@@ -14,6 +14,21 @@ type WriteFileStaged struct {
 	StagingPath string
 }
 
+// protectedFiles are configuration files that the AI must never overwrite.
+// These are managed by the workspace template and copied to the project root.
+// Overwriting them breaks typecheck, lint, and build (e.g., losing 40+ dependencies).
+var protectedFiles = map[string]bool{
+	"package.json":      true,
+	"tsconfig.json":     true,
+	"app.json":          true,
+	"babel.config.js":   true,
+	"metro.config.js":   true,
+	"index.js":          true,
+	"eslint.config.js":  true,
+	".gitignore":        true,
+	"expo-env.d.ts":     true,
+}
+
 func (t *WriteFileStaged) Name() string { return "write_file" }
 
 func (t *WriteFileStaged) Description() string {
@@ -46,6 +61,20 @@ func (t *WriteFileStaged) Execute(ctx context.Context, args json.RawMessage) (To
 	var a WriteFileStagedArgs
 	if err := json.Unmarshal(args, &a); err != nil {
 		return ToolResult{Content: "invalid arguments", IsError: true}, err
+	}
+
+	// Block writes to protected configuration files
+	base := filepath.Base(a.Path)
+	if protectedFiles[base] {
+		return ToolResult{
+			Content: fmt.Sprintf(
+				"BLOCKED: '%s' is a protected platform file. Do NOT overwrite it.\n"+
+					"These files are auto-managed and contain critical configuration (40+ dependencies, TypeScript config, etc.).\n"+
+					"Overwriting them breaks typecheck, lint, and build.\n"+
+					"For source code, write to paths like: src/**/*.tsx, app/**/*.tsx, lib/**/*.ts",
+				base),
+			IsError: true,
+		}, nil
 	}
 
 	fullPath, err := ValidateSandboxPath(t.StagingPath, a.Path)

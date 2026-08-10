@@ -3,9 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/seekersstudio/backend/internal/devclient"
@@ -81,9 +85,15 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	h.store.UpdateSessionContainer(session.ID, containerInfo.ContainerID, containerInfo.ContainerName, containerInfo.ADBPort)
 	h.store.UpdateSessionContainerState(session.ID, "running")
 
+	adbTarget := "localhost:" + strconv.Itoa(containerInfo.ADBPort)
+
+	// Wait for device boot before any ADB operations
+	if err := h.waitForDeviceBoot(adbTarget, 90*time.Second); err != nil {
+		log.Printf("WARN: device boot wait failed for session %d: %v", session.ID, err)
+	}
+
 	// Install dev-client APK into the container
 	if h.devClient != nil {
-		adbTarget := "localhost:" + strconv.Itoa(containerInfo.ADBPort)
 		if err := h.devClient.InstallDevClient(context.Background(), adbTarget); err != nil {
 			log.Printf("WARN: dev-client install failed for session %d: %v (container will run without pre-built dev-client)", session.ID, err)
 		} else {
@@ -93,19 +103,27 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Setup mock wallet (hard failure if not available — §2.9)
 	if h.wallet != nil && h.wallet.IsInstalled() {
-		adbTarget := "localhost:" + strconv.Itoa(containerInfo.ADBPort)
-		if err := h.wallet.SetupSession(context.Background(), adbTarget); err != nil {
-			log.Printf("ERROR: mock wallet setup failed for session %d: %v", session.ID, err)
-			h.store.UpdateSessionState(session.ID, "destroyed")
-			writeError(w, http.StatusServiceUnavailable, "wallet setup failed: "+err.Error())
-			return
+		// Check if wallet is already installed on device (pre-baked image)
+		if h.wallet.IsInstalledOnDevice(adbTarget) {
+			log.Printf("wallet already installed on %s (pre-baked image), skipping install", adbTarget)
+			// Just verify it's working
+			if err := h.wallet.VerifyWallet(context.Background(), adbTarget); err != nil {
+				log.Printf("WARN: wallet verification failed for session %d: %v", session.ID, err)
+			}
+		} else {
+			// Legacy path: install at session creation
+			if err := h.wallet.SetupSession(context.Background(), adbTarget); err != nil {
+				log.Printf("ERROR: mock wallet setup failed for session %d: %v", session.ID, err)
+				h.store.UpdateSessionState(session.ID, "destroyed")
+				writeError(w, http.StatusServiceUnavailable, "wallet setup failed: "+err.Error())
+				return
+			}
+			log.Printf("mock wallet configured for session %d on %s", session.ID, adbTarget)
 		}
-		log.Printf("mock wallet configured for session %d on %s", session.ID, adbTarget)
 	}
 
 	// Start Metro bundler for this session
 	workspaceDir := h.workspaceDir + "/" + strconv.FormatInt(req.ProjectID, 10)
-	adbTarget := "localhost:" + strconv.Itoa(containerInfo.ADBPort)
 	metroServer, err := metro.Start(session.ID, workspaceDir, adbTarget)
 	if err != nil {
 		log.Printf("WARN: metro start failed for session %d: %v", session.ID, err)
@@ -255,4 +273,22 @@ func (h *SessionHandler) Destroy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"state": "destroyed"})
+}
+
+// waitForDeviceBoot polls until the device reports boot_completed=1.
+func (h *SessionHandler) waitForDeviceBoot(adbTarget string, timeout time.Duration) error {
+	log.Printf("waiting for device boot completion (target: %s)", adbTarget)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command("adb", "-s", adbTarget, "shell", "getprop", "sys.boot_completed")
+		output, err := cmd.CombinedOutput()
+		if err == nil && strings.TrimSpace(string(output)) == "1" {
+			// Extra 3s for services to initialize after boot_completed
+			time.Sleep(3 * time.Second)
+			log.Printf("device boot completed (target: %s)", adbTarget)
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("device did not boot within %v (target: %s)", timeout, adbTarget)
 }

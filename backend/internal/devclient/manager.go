@@ -69,6 +69,7 @@ func (m *Manager) DevClientAPKPath() string {
 }
 
 // InstallDevClient installs the pre-built dev-client APK into a container via ADB.
+// Retries up to 5 times if the package manager service is not ready.
 func (m *Manager) InstallDevClient(ctx context.Context, adbTarget string) error {
 	apkPath := m.DevClientAPKPath()
 
@@ -77,15 +78,56 @@ func (m *Manager) InstallDevClient(ctx context.Context, adbTarget string) error 
 		return fmt.Errorf("dev-client APK not found at %s — run build-dev-client.sh first", apkPath)
 	}
 
-	// Install via ADB
-	cmd := exec.CommandContext(ctx, "adb", "-s", adbTarget, "install", "-r", apkPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("adb install failed: %s — %w", string(output), err)
+	// Check if already installed on device
+	if m.IsInstalledOnDevice(adbTarget) {
+		log.Printf("dev-client already installed on %s", adbTarget)
+		return nil
 	}
 
-	log.Printf("dev-client installed on %s from %s", adbTarget, apkPath)
-	return nil
+	// Retry install (same pattern as wallet — wait for package service)
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			log.Printf("dev-client install: waiting for package service (attempt %d/5)", attempt+1)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
+		}
+
+		// Check if package service is available
+		checkCmd := exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell", "service", "check", "package")
+		checkOutput, _ := checkCmd.CombinedOutput()
+		if strings.Contains(string(checkOutput), "not found") {
+			continue
+		}
+
+		// Install via ADB
+		cmd := exec.CommandContext(ctx, "adb", "-s", adbTarget, "install", "-r", apkPath)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			if strings.Contains(string(output), "Can't find service: package") {
+				continue // retry
+			}
+			if strings.Contains(string(output), "INSTALL_FAILED_INSUFFICIENT_STORAGE") {
+				return fmt.Errorf("insufficient storage for dev-client APK (271MB)")
+			}
+			return fmt.Errorf("adb install failed: %s — %w", string(output), err)
+		}
+
+		log.Printf("dev-client installed on %s from %s", adbTarget, apkPath)
+		return nil
+	}
+
+	return fmt.Errorf("dev-client install failed after 5 attempts: package service not ready")
+}
+
+// IsInstalledOnDevice checks if the dev-client is already installed on the device.
+func (m *Manager) IsInstalledOnDevice(adbTarget string) bool {
+	cmd := exec.Command("adb", "-s", adbTarget, "shell",
+		"pm", "list", "packages", "com.seekerstudio.devclient")
+	output, err := cmd.CombinedOutput()
+	return err == nil && len(output) > 0
 }
 
 // CheckRebuildNeeded evaluates whether new dependencies require a native rebuild.

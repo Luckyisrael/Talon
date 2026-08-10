@@ -71,6 +71,14 @@ func (wm *WalletManager) HasFakeDapp() bool {
 	return err == nil
 }
 
+// IsInstalledOnDevice checks if the mock wallet is already installed on the device.
+func (wm *WalletManager) IsInstalledOnDevice(adbTarget string) bool {
+	cmd := exec.Command("adb", "-s", adbTarget, "shell",
+		"pm", "list", "packages", "com.solana.mobilewalletadapter.fakewallet")
+	output, err := cmd.CombinedOutput()
+	return err == nil && len(output) > 0
+}
+
 // LoadManifest loads the wallet manifest.
 func (wm *WalletManager) LoadManifest() (*WalletManifest, error) {
 	manifestPath := wm.MockWalletManifestPath()

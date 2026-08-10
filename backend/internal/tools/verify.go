@@ -99,7 +99,16 @@ func (t *RunLint) Execute(ctx context.Context, args json.RawMessage) (ToolResult
 		return ToolResult{Content: `{"passed": true, "errors": ""}`}, nil
 	}
 
-	cmd := exec.CommandContext(ctx, "npx", "eslint", "--ext", ".ts,.tsx,.js,.jsx", ".")
+	// ESLint 9+ uses flat config (eslint.config.js) — no --ext flag needed
+	// If eslint.config.js exists, use flat config mode
+	var cmd *exec.Cmd
+	eslintConfig := filepath.Join(t.WorkspacePath, "eslint.config.js")
+	if _, err := os.Stat(eslintConfig); err == nil {
+		cmd = exec.CommandContext(ctx, "npx", "eslint", ".")
+	} else {
+		// Fallback for older ESLint configs
+		cmd = exec.CommandContext(ctx, "npx", "eslint", "--ext", ".ts,.tsx,.js,.jsx", ".")
+	}
 	cmd.Dir = t.WorkspacePath
 
 	output, err := cmd.CombinedOutput()
