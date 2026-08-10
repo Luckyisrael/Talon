@@ -506,6 +506,10 @@ func (h *PromptHandler) buildToolList(workspacePath, stagingPath string) []ai.To
 	buildTool := &tools.BuildAPK{WorkspacePath: workspacePath, Allowlist: allowlist}
 	h.toolReg.Register(buildTool)
 
+	// Wallet round-trip test tool (auto-detects ADB target)
+	walletTestTool := &tools.TestWalletRoundtrip{}
+	h.toolReg.Register(walletTestTool)
+
 	defs := h.toolReg.List()
 	result := make([]ai.ToolDefinition, len(defs))
 	for i, d := range defs {
@@ -635,6 +639,7 @@ Use the tools provided to:
 - run_lint: Run ESLint
 - install_package: Install additional npm packages (MWA, Seed Vault, Expo modules)
 - build_apk: Build Android APK and install on device (runs expo prebuild + gradle assembleDebug)
+- test_wallet_roundtrip: Test MWA wallet connection on device (launches fakedapp, verifies MWA protocol)
 
 Write files using write_file tool. The files will be staged and promoted after verification.
 

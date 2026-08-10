@@ -7,9 +7,8 @@ COPY backend/template/mock-wallet/v1.0.0/fakewallet-debug.apk /opt/seeker/fakewa
 COPY backend/template/mock-wallet/v1.0.0/fakedapp-debug.apk /opt/seeker/fakedapp.apk
 COPY backend/template/dev-client/v1.0.0/app-debug.apk /opt/seeker/devclient.apk
 
-# Copy the boot-time install script
+# Copy the boot-time install script (chmod done on host before COPY)
 COPY infra/redroid/install-seeker-apps.sh /opt/seeker/install-apps.sh
-RUN chmod +x /opt/seeker/install-apps.sh
 
 # The install script runs at container start (not build time)
 # because ADB needs the device to be booted first
