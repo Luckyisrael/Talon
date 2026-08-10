@@ -8,7 +8,7 @@ import type {
   Usage,
 } from "./types";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:9191";
+const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
 class APIError extends Error {
   constructor(

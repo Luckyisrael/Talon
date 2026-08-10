@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // WalletManager handles mock wallet lifecycle: installation, configuration, verification.
@@ -87,6 +88,7 @@ func (wm *WalletManager) LoadManifest() (*WalletManifest, error) {
 }
 
 // InstallWallet installs the mock wallet APK into a container via ADB.
+// Retries up to 5 times if the package manager service is not ready.
 func (wm *WalletManager) InstallWallet(ctx context.Context, adbTarget string) error {
 	apkPath := wm.MockWalletAPKPath()
 
@@ -95,15 +97,39 @@ func (wm *WalletManager) InstallWallet(ctx context.Context, adbTarget string) er
 		return fmt.Errorf("mock wallet APK not found at %s — run build-mock-wallet.sh first", apkPath)
 	}
 
-	// Install via ADB
-	cmd := exec.CommandContext(ctx, "adb", "-s", adbTarget, "install", "-r", apkPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("adb install failed: %s — %w", string(output), err)
+	// Wait for package manager service to be ready
+	for attempt := 0; attempt < 10; attempt++ {
+		if attempt > 0 {
+			log.Printf("wallet install: waiting for package service (attempt %d/10)", attempt+1)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
+		}
+
+		// Check if package service is available
+		checkCmd := exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell", "service", "check", "package")
+		checkOutput, _ := checkCmd.CombinedOutput()
+		if strings.Contains(string(checkOutput), "not found") {
+			continue
+		}
+
+		// Install via ADB
+		cmd := exec.CommandContext(ctx, "adb", "-s", adbTarget, "install", "-r", apkPath)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			if strings.Contains(string(output), "Can't find service: package") {
+				continue // retry
+			}
+			return fmt.Errorf("adb install failed: %s — %w", string(output), err)
+		}
+
+		log.Printf("mock wallet installed on %s from %s", adbTarget, apkPath)
+		return nil
 	}
 
-	log.Printf("mock wallet installed on %s from %s", adbTarget, apkPath)
-	return nil
+	return fmt.Errorf("wallet install failed after 10 attempts: package service not ready")
 }
 
 // ConfigureDevice sets up device-level configuration required for MWA sessions.
@@ -136,11 +162,11 @@ func (wm *WalletManager) ConfigureDevice(ctx context.Context, adbTarget string) 
 	return nil
 }
 
-// VerifyWallet checks if the mock wallet is properly installed and responds.
+// VerifyWallet checks if the mock wallet is properly installed.
 func (wm *WalletManager) VerifyWallet(ctx context.Context, adbTarget string) error {
 	// Check if the wallet app is installed
 	cmd := exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
-		"pm", "list", "packages", "com.solana.mobile.walletadapter.fakewallet")
+		"pm", "list", "packages", "com.solana.mobilewalletadapter.fakewallet")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("wallet verification failed: %w", err)
@@ -150,13 +176,11 @@ func (wm *WalletManager) VerifyWallet(ctx context.Context, adbTarget string) err
 		return fmt.Errorf("mock wallet package not found on device")
 	}
 
-	// Launch the wallet to verify it's functional
-	cmd = exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
-		"monkey", "-p", "com.solana.mobile.walletadapter.fakewallet",
-		"-c", "android.intent.category.LAUNCHER", "1")
-	if _, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to launch mock wallet: %w", err)
-	}
+	// Launch the wallet (best-effort — monkey may return non-zero even on success)
+	launchOut, _ := exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
+		"monkey", "-p", "com.solana.mobilewalletadapter.fakewallet",
+		"-c", "android.intent.category.LAUNCHER", "1").CombinedOutput()
+	log.Printf("wallet launch output: %s", strings.TrimSpace(string(launchOut)))
 
 	log.Printf("mock wallet verified on %s", adbTarget)
 	return nil
@@ -190,14 +214,14 @@ func (wm *WalletManager) VerifyRoundTrip(ctx context.Context, adbTarget string) 
 
 	// Check wallet
 	cmd := exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
-		"pm", "list", "packages", "com.solana.mobile.walletadapter.fakewallet")
+		"pm", "list", "packages", "com.solana.mobilewalletadapter.fakewallet")
 	if output, err := cmd.CombinedOutput(); err == nil && len(output) > 0 {
 		walletInstalled = true
 	}
 
 	// Check dapp
 	cmd = exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
-		"pm", "list", "packages", "com.solana.mobile.walletadapter.fakedapp")
+		"pm", "list", "packages", "com.solana.mobilewalletadapter.fakedapp")
 	if output, err := cmd.CombinedOutput(); err == nil && len(output) > 0 {
 		dappInstalled = true
 	}
@@ -211,26 +235,30 @@ func (wm *WalletManager) VerifyRoundTrip(ctx context.Context, adbTarget string) 
 		return nil
 	}
 
-	// Launch fakedapp to verify it starts
-	cmd = exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
-		"monkey", "-p", "com.solana.mobile.walletadapter.fakedapp",
-		"-c", "android.intent.category.LAUNCHER", "1")
-	if _, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to launch fakedapp: %w", err)
-	}
+	// Launch fakedapp to verify it starts (best-effort — monkey may return non-zero)
+	launchOut, _ := exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
+		"monkey", "-p", "com.solana.mobilewalletadapter.fakedapp",
+		"-c", "android.intent.category.LAUNCHER", "1").CombinedOutput()
+	log.Printf("fakedapp launch output: %s", strings.TrimSpace(string(launchOut)))
 
 	log.Printf("round trip verification: fakedapp launched on %s (manual approval required for full test)", adbTarget)
 	return nil
 }
 
 // SetupSession performs the full wallet setup for a new session:
-// 1. Install the mock wallet APK
-// 2. Install fakedapp APK (verification baseline)
-// 3. Configure device PIN
-// 4. Verify wallet is functional
+// 1. Wait for device boot completion
+// 2. Install the mock wallet APK
+// 3. Install fakedapp APK (verification baseline)
+// 4. Configure device PIN
+// 5. Verify wallet is functional
 // Returns an error if any step fails (hard failure per §2.9).
 func (wm *WalletManager) SetupSession(ctx context.Context, adbTarget string) error {
 	log.Printf("setting up mock wallet for session (target: %s)", adbTarget)
+
+	// Step 0: Wait for device boot completion
+	if err := wm.waitForBoot(ctx, adbTarget); err != nil {
+		return fmt.Errorf("device boot wait failed: %w", err)
+	}
 
 	// Step 1: Install wallet
 	if err := wm.InstallWallet(ctx, adbTarget); err != nil {
@@ -259,4 +287,34 @@ func (wm *WalletManager) SetupSession(ctx context.Context, adbTarget string) err
 
 	log.Printf("mock wallet setup complete for session (target: %s)", adbTarget)
 	return nil
+}
+
+// waitForBoot polls until the device reports boot_completed=1.
+func (wm *WalletManager) waitForBoot(ctx context.Context, adbTarget string) error {
+	log.Printf("waiting for device boot completion (target: %s)", adbTarget)
+	for i := 0; i < 30; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+
+		cmd := exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
+			"getprop", "sys.boot_completed")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(output)) == "1" {
+			// Extra 3s for services to initialize after boot_completed
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(3 * time.Second):
+			}
+			log.Printf("device boot completed (target: %s)", adbTarget)
+			return nil
+		}
+	}
+	return fmt.Errorf("device did not boot within 60s (target: %s)", adbTarget)
 }

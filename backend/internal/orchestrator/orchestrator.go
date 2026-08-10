@@ -234,11 +234,12 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 				if tcErr != nil {
 					errorMsg = tcErr.Error()
 				}
-				history = append(history, ai.PromptMessage{
-					Role:    "user",
-					Content: "Your code has type errors that must be fixed before the build can succeed:\n\n" + errorMsg + "\n\nFix the type errors by calling write_file to update the affected files. Do NOT declare done until typecheck passes.",
-				})
-				sess.Emitter.EmitToolCall("guardrail", "", "", "typecheck failed, healing")
+			healNudge := "STOP EXPLORING. Your code has type errors that MUST be fixed before the build can succeed.\n\n" + errorMsg + "\n\nRULES FOR HEALING:\n1. Do NOT read other files. Do NOT explore the codebase.\n2. Do NOT call list_files, read_file, or grep_codebase.\n3. You already know the error. Fix it NOW by calling write_file on the affected file.\n4. After fixing, call run_typecheck to verify. If it passes, you are done.\n5. If you do anything other than fix the specific error above, you are wasting tokens."
+			history = append(history, ai.PromptMessage{
+				Role:    "user",
+				Content: healNudge,
+			})
+			sess.Emitter.EmitToolCall("guardrail", "", "", "typecheck failed, healing")
 				continue
 			}
 			sess.Emitter.EmitToolCall("run_typecheck", "Checking types…", "", "completed")

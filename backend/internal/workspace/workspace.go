@@ -91,9 +91,10 @@ func (m *Manager) CreateWorkspace(projectID int64) (*Mount, error) {
 	return mount, nil
 }
 
-// fallbackCopy creates an empty upper layer with symlinked node_modules.
+// fallbackCopy creates an upper layer with symlinked node_modules and essential config files.
 // Template files are NOT copied — the file-tree reads only from the upper layer,
 // so a fresh project returns empty. AI-generated files go here.
+// We DO copy package.json + tsconfig.json + app.json so tsc resolves types correctly.
 func (m *Manager) fallbackCopy(projectDir, upperDir string) error {
 	// Symlink node_modules from template (shared, not duplicated)
 	srcNM := filepath.Join(m.templateDir, "node_modules")
@@ -103,6 +104,27 @@ func (m *Manager) fallbackCopy(projectDir, upperDir string) error {
 		if err := os.Symlink(srcNM, dstNM); err != nil {
 			return fmt.Errorf("failed to symlink node_modules: %w", err)
 		}
+		// Also symlink to project root so typecheck can find types
+		dstNMRoot := filepath.Join(projectDir, "node_modules")
+		os.Remove(dstNMRoot)
+		os.Symlink(srcNM, dstNMRoot)
+	}
+
+	// Copy essential config files so tsc can resolve types
+	// Copy to BOTH upperDir (for overlay) AND projectDir (for typecheck which runs here)
+	for _, fname := range []string{"package.json", "tsconfig.json", "app.json"} {
+		src := filepath.Join(m.templateDir, fname)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			continue
+		}
+		// Copy to upper dir
+		os.WriteFile(filepath.Join(upperDir, fname), data, 0644)
+		// Copy to project root (where typecheck runs)
+		os.WriteFile(filepath.Join(projectDir, fname), data, 0644)
 	}
 
 	return nil
