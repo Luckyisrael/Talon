@@ -354,6 +354,16 @@ done:
 		} else {
 			log.Printf("promoted %d files for project %d", len(stagedFiles), req.ProjectID)
 		}
+
+		// Phase 7: Write project memory after successful build
+		var buildFiles []ai.File
+		for _, path := range stagedFiles {
+			content, readErr := sess.Staging.ReadFile(path)
+			if readErr == nil {
+				buildFiles = append(buildFiles, ai.File{Path: path, Content: content})
+			}
+		}
+		h.updateMemoryAfterBuild(req.ProjectID, buildFiles, req.Prompt)
 	}
 
 	responseText := fullText.String()
@@ -589,7 +599,10 @@ Use the tools provided to:
 - install_package: Install additional npm packages (MWA, Seed Vault, Expo modules)
 - build_apk: Build Android APK and install on device (runs expo prebuild + gradle assembleDebug)
 
-Write files using write_file tool. The files will be staged and promoted after verification.`
+Write files using write_file tool. The files will be staged and promoted after verification.
+
+=== CRITICAL EXECUTION RULE ===
+You have a LIMITED number of rounds. DO NOT spend rounds exploring the codebase with list_files, read_file, or grep_codebase. The existing files are already provided in context above. START WRITING CODE IMMEDIATELY using write_file. Create ALL the files you need in the FIRST round. Exploration before writing is wasteful and will cause you to run out of rounds.`
 
 func writeSSE(w http.ResponseWriter, eventType string, data interface{}) {
 	var dataBytes []byte
@@ -753,18 +766,10 @@ func (h *PromptHandler) getWorkspacePath(projectID int64) string {
 func isExecutionRequest(prompt string) bool {
 	lower := strings.ToLower(prompt)
 	triggers := []string{
-		"implement", "execute", "build this", "write the code",
-		"write code", "generate the code", "generate code",
-		"create the", "start coding", "let's code", "code this",
-		"write this", "make this", "build it", "start building",
-		"create component", "create screen", "add the feature",
-		"code it", "develop this", "make it work",
-		"create me", "make me", "build me", "i want a", "i need a",
-		"i want to", "i need to", "can you create", "can you build",
-		"can you make", "can you write", "can you code",
-		"simple app", "simple application", "basic app",
-		"add two numbers", "calculator", "todo app", "weather app",
-		"build a", "make a", "create a",
+		"start coding", "let's code", "code this now",
+		"write the code now", "generate the code now",
+		"make it work now", "just build it",
+		"skip the plan", "no plan needed", "don't plan",
 	}
 	for _, t := range triggers {
 		if strings.Contains(lower, t) {

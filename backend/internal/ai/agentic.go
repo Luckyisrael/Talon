@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 )
 
 type ToolDefinition struct {
@@ -84,30 +85,53 @@ func (c *Client) ChatWithTools(ctx context.Context, system string, history []Pro
 	// Debug: log tool count in request
 	log.Printf("ChatWithTools: sending %d tools to %s", len(tools), c.baseURL)
 
-	url := c.baseURL + "/v1/messages"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+	var respBody []byte
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("ChatWithTools: retry attempt %d/%d", attempt+1, maxRetries)
+			time.Sleep(time.Duration(attempt*5) * time.Second)
+		}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
+		url := c.baseURL + "/v1/messages"
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if attempt < maxRetries-1 {
+				log.Printf("ChatWithTools: request error (attempt %d): %v", attempt+1, err)
+				continue
+			}
+			return nil, fmt.Errorf("request failed after %d attempts: %w", maxRetries, err)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		respBody, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response: %w", err)
+		}
+
+		// Retry on transient errors (502, 503, 504, 429)
+		if resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 || resp.StatusCode == 429 {
+			if attempt < maxRetries-1 {
+				log.Printf("ChatWithTools: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				continue
+			}
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		}
+
+		break
 	}
 
 	var agenticResp AgenticResponse

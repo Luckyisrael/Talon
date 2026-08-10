@@ -126,9 +126,19 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 					Content: result.Text,
 				})
 			}
+
+			fileList, _ := sess.Staging.ListFiles()
+			workspaceFiles := o.listWorkspaceFiles(sess.WorkspacePath)
+			allFiles := append(fileList, workspaceFiles...)
+			nudgeContent := "STOP. You returned text but did NOT call any tools. You MUST use the write_file tool to create code files. Do not describe what to write — actually write the files now."
+			if len(allFiles) > 0 {
+				nudgeContent += "\n\nExisting files:\n" + strings.Join(allFiles, "\n")
+			}
+			nudgeContent += "\n\nCall write_file for each file you need to create."
+
 			history = append(history, ai.PromptMessage{
 				Role:    "user",
-				Content: "You returned text but did not use any tools to write files. You MUST use the write_file tool to create the actual code files. Do not just describe what to write — actually write the files using write_file tool. Try again.",
+				Content: nudgeContent,
 			})
 			sess.Emitter.EmitToolCall("guardrail", "", "", "no files generated, retrying with nudge")
 			continue
@@ -144,7 +154,7 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 		var wroteFiles bool
 		for _, toolUse := range result.ToolUses {
 			// Phase 7: Emit specific verb based on tool type
-			verb := o.getToolVerb(toolUse.Name, toolUse.Input)
+			verb := o.getToolVerb(toolUse.Name, toolUse.Input, sess.WorkspacePath)
 			sess.Emitter.EmitToolCall(toolUse.Name, verb, "", "running")
 
 			// Phase 7: Emit task update for key operations
@@ -214,21 +224,51 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 		// Check if we're done — either files were written, or model returned text with tool results
 		staged, _ := sess.Staging.ListFiles()
 		if wroteFiles || len(staged) > 0 {
+			// Phase: Run typecheck to verify the code compiles
+			sess.Emitter.EmitToolCall("run_typecheck", "Checking types…", "", "running")
+			typecheckResult, tcErr := toolExecutor(ctx, "run_typecheck", json.RawMessage(`{}`))
+			if tcErr != nil || typecheckResult != "" {
+				// Typecheck failed — feed error back to agent for healing
+				sess.Emitter.EmitToolCall("run_typecheck", "Checking types…", "", "error")
+				errorMsg := "TypeScript typecheck failed:\n" + typecheckResult
+				if tcErr != nil {
+					errorMsg = tcErr.Error()
+				}
+				history = append(history, ai.PromptMessage{
+					Role:    "user",
+					Content: "Your code has type errors that must be fixed before the build can succeed:\n\n" + errorMsg + "\n\nFix the type errors by calling write_file to update the affected files. Do NOT declare done until typecheck passes.",
+				})
+				sess.Emitter.EmitToolCall("guardrail", "", "", "typecheck failed, healing")
+				continue
+			}
+			sess.Emitter.EmitToolCall("run_typecheck", "Checking types…", "", "completed")
 			sess.TransitionTo(PhaseDone)
 			sess.Emitter.EmitDone("success")
 			return nil
 		}
 
-		// Had tool calls but no write_file — nudge the model
+		// Had tool calls but no write_file — nudge the model aggressively
 		if result.Text != "" {
 			history = append(history, ai.PromptMessage{
 				Role:    "assistant",
 				Content: result.Text,
 			})
 		}
+
+		// Build a file listing so the agent doesn't need to re-explore
+		fileList, _ := sess.Staging.ListFiles()
+		workspaceFiles := o.listWorkspaceFiles(sess.WorkspacePath)
+		allFiles := append(fileList, workspaceFiles...)
+
+		nudgeContent := "STOP EXPLORING. You have already read the codebase. You MUST now call write_file to create code files. Do NOT call list_files, read_file, or grep_codebase again. Start writing files immediately."
+		if len(allFiles) > 0 {
+			nudgeContent += "\n\nExisting files in project:\n" + strings.Join(allFiles, "\n")
+		}
+		nudgeContent += "\n\nWrite the React Native code files now using write_file."
+
 		history = append(history, ai.PromptMessage{
 			Role:    "user",
-			Content: "You used tools but did not call write_file. You MUST use the write_file tool to create the actual code files. Do not just read files or list directories — write the code. Try again.",
+			Content: nudgeContent,
 		})
 		sess.Emitter.EmitToolCall("guardrail", "", "", "no files written, retrying with nudge")
 	}
@@ -236,6 +276,30 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 	sess.TransitionTo(PhaseFailed)
 	sess.Emitter.EmitError(fmt.Sprintf("exceeded max rounds (%d)", o.maxRounds))
 	return fmt.Errorf("exceeded max rounds (%d)", o.maxRounds)
+}
+
+// listWorkspaceFiles returns relative paths of files in the workspace (excluding node_modules).
+func (o *Orchestrator) listWorkspaceFiles(workspacePath string) []string {
+	var files []string
+	upperPath := filepath.Join(workspacePath, "upper")
+	err := filepath.Walk(upperPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(upperPath, path)
+		if err != nil {
+			return nil
+		}
+		if strings.Contains(rel, "node_modules") {
+			return nil
+		}
+		files = append(files, rel)
+		return nil
+	})
+	if err != nil {
+		return nil
+	}
+	return files
 }
 
 // enrichPromptWithContext adds ADR and memory context to the system prompt.
@@ -269,7 +333,7 @@ func (o *Orchestrator) enrichPromptWithContext(sess *SessionState, systemPrompt 
 }
 
 // getToolVerb returns a human-readable verb for the tool call.
-func (o *Orchestrator) getToolVerb(toolName string, input json.RawMessage) string {
+func (o *Orchestrator) getToolVerb(toolName string, input json.RawMessage, workspacePath string) string {
 	switch toolName {
 	case "read_file":
 		var args struct {
@@ -284,6 +348,11 @@ func (o *Orchestrator) getToolVerb(toolName string, input json.RawMessage) strin
 			Path string `json:"path"`
 		}
 		if json.Unmarshal(input, &args) == nil {
+			// Check if file already exists in workspace or staging
+			upperPath := filepath.Join(workspacePath, "upper", args.Path)
+			if _, err := os.Stat(upperPath); err == nil {
+				return fmt.Sprintf("Updating %s", args.Path)
+			}
 			return fmt.Sprintf("Creating %s", args.Path)
 		}
 		return "Writing file"
