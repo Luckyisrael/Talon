@@ -2,9 +2,8 @@
 # ============================================================
 # SeekerStudio — Launch Redroid Dev Container
 #
-# Redroid is a pure Android device — runs APKs, streams via
-# screenshot-based streaming (v1). No Solana tooling inside.
-# Host handles all build/compile work.
+# Uses the pre-baked seeker-redroid image with APKs included.
+# Installs APKs + sets PIN via ADB after boot.
 #
 # Usage: bash infra/redroid/launch-dev.sh
 # ============================================================
@@ -12,20 +11,27 @@
 set -euo pipefail
 
 CONTAINER_NAME="redroid-seeker-dev"
-IMAGE_NAME="redroid/redroid:14.0.0_64only-latest"
+IMAGE_NAME="seeker-redroid:latest"
 DEVICE_PIN="1234"
 ADB_PORT=5555
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 echo "=== SeekerStudio: Launch Redroid Dev Container ==="
 
-# Step 1: Stop existing containers (clean up orphans)
+# Step 1: Stop existing containers
 echo ""
 echo "--- Cleaning up existing containers ---"
 docker ps -a | grep redroid | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
 
-# Step 2: Launch container with memfd (no ashmem needed)
-echo "--- Launching Redroid container (memfd mode) ---"
+# Step 2: Build image if it doesn't exist
+if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+    echo "--- Building $IMAGE_NAME ---"
+    docker build -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Dockerfile.seeker" "$REPO_ROOT"
+fi
+
+# Step 3: Launch container
+echo "--- Launching Redroid container ---"
 docker run -d \
   --name "$CONTAINER_NAME" \
   --privileged \
@@ -36,10 +42,10 @@ docker run -d \
   androidboot.redroid_height=2400 \
   androidboot.redroid_dpi=420
 
-echo "Container started. Waiting for Android boot (30s)..."
+echo "Waiting for Android boot (30s)..."
 sleep 30
 
-# Step 3: Enable ADB TCP mode
+# Step 4: Enable ADB TCP mode
 echo "--- Enabling ADB TCP mode ---"
 docker exec "$CONTAINER_NAME" setprop service.adb.tcp.port "$ADB_PORT" 2>/dev/null || true
 sleep 2
@@ -48,36 +54,68 @@ sleep 2
 docker exec "$CONTAINER_NAME" start adbd 2>/dev/null || true
 sleep 5
 
-# Step 4: Connect ADB
+# Step 5: Connect ADB
 echo "--- Connecting ADB ---"
 adb connect "localhost:$ADB_PORT"
 sleep 2
 
-# Step 5: Verify connection
-if adb devices | grep -q "localhost:${ADB_PORT}.*device"; then
-    echo "ADB connected!"
-else
+# Step 6: Verify connection
+if ! adb devices | grep -q "localhost:${ADB_PORT}.*device"; then
     echo "ADB connection failed. Check container logs."
     exit 1
 fi
+echo "ADB connected!"
 
-# Step 6: Set device PIN (required for MWA)
+# Step 7: Install pre-baked APKs from repo
+echo "--- Installing pre-baked APKs ---"
+
+install_apk() {
+    local src="$1"
+    local name=$(basename "$src")
+    if [ ! -f "$src" ]; then
+        echo "  ✗ $name not found at $src"
+        return 1
+    fi
+    echo "  Installing $name..."
+    OUTPUT=$(adb -s "localhost:$ADB_PORT" install -r "$src" 2>&1)
+    if echo "$OUTPUT" | grep -q "Success"; then
+        echo "  ✓ $name installed"
+    else
+        echo "  ✗ $name failed: $OUTPUT"
+        return 1
+    fi
+}
+
+install_apk "$REPO_ROOT/backend/template/mock-wallet/v1.0.0/fakewallet-debug.apk"
+install_apk "$REPO_ROOT/backend/template/mock-wallet/v1.0.0/fakedapp-debug.apk"
+install_apk "$REPO_ROOT/backend/template/dev-client/v1.0.0/app-debug.apk"
+
+# Step 8: Set device PIN
 echo "--- Setting device PIN ---"
-adb -s "localhost:$ADB_PORT" push "$SCRIPT_DIR/entrypoint.sh" /data/local/tmp/device-setup.sh 2>&1
-adb -s "localhost:$ADB_PORT" shell "sh /data/local/tmp/device-setup.sh" 2>&1
+adb -s "localhost:$ADB_PORT" shell "locksettings set-pin $DEVICE_PIN" 2>/dev/null || echo "  PIN may already be set"
 
-# Step 7: Keep display awake (infinite timeout + wake screen)
+# Step 9: Keep display awake
 echo "--- Keeping display awake ---"
 adb -s "localhost:$ADB_PORT" shell "settings put system screen_off_timeout 2147483647" 2>&1
 sleep 1
 adb -s "localhost:$ADB_PORT" shell "input keyevent KEYCODE_WAKEUP" 2>&1
 sleep 1
 adb -s "localhost:$ADB_PORT" shell "input keyevent 82" 2>&1
-sleep 2
+
+# Step 10: Verify
+echo ""
+echo "--- Verifying installations ---"
+PACKAGES=$(adb -s "localhost:$ADB_PORT" shell "pm list packages" 2>/dev/null | grep -iE "fake|seeker" || true)
+if [ -n "$PACKAGES" ]; then
+    echo "$PACKAGES" | sed 's/^/  /'
+else
+    echo "  No packages found — APK install may have failed"
+fi
 
 echo ""
 echo "=== Container Ready ==="
 echo "Container:   $CONTAINER_NAME"
+echo "Image:       $IMAGE_NAME (wallet + dev-client pre-installed)"
 echo "ADB:         adb -s localhost:$ADB_PORT shell"
 echo "Resolution:  1080x2400 @ 420 DPI"
 echo "Device PIN:  $DEVICE_PIN"

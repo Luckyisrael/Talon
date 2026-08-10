@@ -36,8 +36,11 @@ for control of the default route, causing intermittent internet loss on the host
 
 Instead, use Docker's default bridge network and expose only the required ports explicitly, e.g.:
 ```
-docker run -d --name redroid-seeker-dev --privileged -p 5555:5555 redroid/redroid:14.0.0_64only-latest androidboot.use_memfd=1 androidboot.redroid_width=1080 androidboot.redroid_height=2400 androidboot.redroid_dpi=420
+bash infra/redroid/launch-dev.sh
 ```
+
+This uses the `seeker-redroid:latest` image (mock wallet + dev-client pre-installed) and handles
+container cleanup, APK installation, and PIN setup automatically.
 
 Also always clean up old/orphaned redroid containers before starting a new one:
 ```
