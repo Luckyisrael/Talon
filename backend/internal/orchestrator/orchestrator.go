@@ -112,9 +112,26 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 		}
 
 		if len(result.ToolUses) == 0 {
-			sess.TransitionTo(PhaseDone)
-			sess.Emitter.EmitDone("success")
-			return nil
+			// Check if any files were staged — if so, we're done
+			staged, _ := sess.Staging.ListFiles()
+			if len(staged) > 0 {
+				sess.TransitionTo(PhaseDone)
+				sess.Emitter.EmitDone("success")
+				return nil
+			}
+			// No files generated and no tool calls — nudge and retry
+			if result.Text != "" {
+				history = append(history, ai.PromptMessage{
+					Role:    "assistant",
+					Content: result.Text,
+				})
+			}
+			history = append(history, ai.PromptMessage{
+				Role:    "user",
+				Content: "You returned text but did not use any tools to write files. You MUST use the write_file tool to create the actual code files. Do not just describe what to write — actually write the files using write_file tool. Try again.",
+			})
+			sess.Emitter.EmitToolCall("guardrail", "", "", "no files generated, retrying with nudge")
+			continue
 		}
 
 		assistantContent, _ := json.Marshal(result.ToolUses)
@@ -124,6 +141,7 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 		})
 
 		var toolResults []ai.ToolResultBlock
+		var wroteFiles bool
 		for _, toolUse := range result.ToolUses {
 			// Phase 7: Emit specific verb based on tool type
 			verb := o.getToolVerb(toolUse.Name, toolUse.Input)
@@ -167,6 +185,7 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 
 			// Phase 7: Check read-before-write for write_file
 			if toolUse.Name == "write_file" {
+				wroteFiles = true
 				var writeArgs struct {
 					Path string `json:"path"`
 				}
@@ -192,11 +211,26 @@ func (o *Orchestrator) RunBuildWithTools(ctx context.Context, sess *SessionState
 			Content: string(resultsJSON),
 		})
 
-		if result.Text != "" {
+		// Check if we're done — either files were written, or model returned text with tool results
+		staged, _ := sess.Staging.ListFiles()
+		if wroteFiles || len(staged) > 0 {
 			sess.TransitionTo(PhaseDone)
 			sess.Emitter.EmitDone("success")
 			return nil
 		}
+
+		// Had tool calls but no write_file — nudge the model
+		if result.Text != "" {
+			history = append(history, ai.PromptMessage{
+				Role:    "assistant",
+				Content: result.Text,
+			})
+		}
+		history = append(history, ai.PromptMessage{
+			Role:    "user",
+			Content: "You used tools but did not call write_file. You MUST use the write_file tool to create the actual code files. Do not just read files or list directories — write the code. Try again.",
+		})
+		sess.Emitter.EmitToolCall("guardrail", "", "", "no files written, retrying with nudge")
 	}
 
 	sess.TransitionTo(PhaseFailed)

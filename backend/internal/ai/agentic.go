@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -80,6 +81,9 @@ func (c *Client) ChatWithTools(ctx context.Context, system string, history []Pro
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	// Debug: log tool count in request
+	log.Printf("ChatWithTools: sending %d tools to %s", len(tools), c.baseURL)
+
 	url := c.baseURL + "/v1/messages"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
@@ -128,6 +132,9 @@ func (c *Client) ChatWithTools(ctx context.Context, system string, history []Pro
 			})
 		}
 	}
+
+	// Debug: log response summary
+	log.Printf("ChatWithTools: response stop_reason=%s, text_len=%d, tool_uses=%d", result.StopReason, len(result.Text), len(result.ToolUses))
 
 	return result, nil
 }

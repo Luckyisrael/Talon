@@ -18,6 +18,11 @@ type Manager struct {
 	mu         sync.Mutex
 }
 
+// TemplateDir returns the template directory path.
+func (m *Manager) TemplateDir() string {
+	return m.templateDir
+}
+
 type Mount struct {
 	ProjectID  int64
 	UpperDir   string // writable layer (per-project)

@@ -181,6 +181,14 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 				buildResp.Files = append(buildResp.Files, ai.File{Path: path, Content: content})
 			}
 		}
+
+		// Promote staged files to live workspace
+		if len(stagedFiles) > 0 {
+			if err := sess.Staging.PromoteAll(); err != nil {
+				log.Printf("promote failed for project %d: %v", req.ProjectID, err)
+			}
+		}
+
 		buildResp.Message = "Build completed successfully"
 
 		// Check if build introduced new native dependencies requiring rebuild
@@ -305,21 +313,14 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	go func() {
+		defer sess.Emitter.Close()
 		err := h.orch.RunBuildWithTools(ctx, sess, req.Prompt, systemPrompt, history, buildTools, toolExecutor)
 		if err != nil {
 			log.Printf("stream build error for user %d: %v", userID, err)
 			mu.Lock()
 			fullText.WriteString("\n\nBuild failed. Check server logs for details.")
 			mu.Unlock()
-			// Send error event to client
-			select {
-			case evtChan <- events.Event{
-				Type:   events.ErrorEvent,
-				Status: "error",
-				Error:  err.Error(),
-			}:
-			default:
-			}
+			sess.Emitter.EmitError(err.Error())
 		}
 	}()
 
@@ -343,6 +344,16 @@ done:
 	for evt := range sess.Emitter.Events() {
 		h.writeEventAsSSE(w, evt)
 		flusher.Flush()
+	}
+
+	// Promote staged files to live workspace
+	stagedFiles, _ := sess.Staging.ListFiles()
+	if len(stagedFiles) > 0 {
+		if err := sess.Staging.PromoteAll(); err != nil {
+			log.Printf("promote failed for project %d: %v", req.ProjectID, err)
+		} else {
+			log.Printf("promoted %d files for project %d", len(stagedFiles), req.ProjectID)
+		}
 	}
 
 	responseText := fullText.String()

@@ -10,35 +10,21 @@ import (
 // RenderConfigs writes the project's identity values into the workspace's
 // config files (app.json, package.json). This is a deterministic Go-side
 // operation — never an LLM tool call.
-func RenderConfigs(upperDir string, id ProjectIdentity) error {
-	if err := renderAppJSON(upperDir, id); err != nil {
+func RenderConfigs(upperDir string, id ProjectIdentity, templateDir string) error {
+	if err := renderAppJSON(upperDir, id, templateDir); err != nil {
 		return fmt.Errorf("render app.json: %w", err)
 	}
-	if err := renderPackageJSON(upperDir, id); err != nil {
+	if err := renderPackageJSON(upperDir, id, templateDir); err != nil {
 		return fmt.Errorf("render package.json: %w", err)
 	}
 	return nil
 }
 
 // renderAppJSON writes identity values into app.json.
-func renderAppJSON(upperDir string, id ProjectIdentity) error {
+func renderAppJSON(upperDir string, id ProjectIdentity, templateDir string) error {
 	appJSONPath := filepath.Join(upperDir, "app.json")
 
-	// Try to find template app.json — walk up from upperDir to find backend/template/
-	var templatePath string
-	for _, rel := range []string{
-		filepath.Join("..", "..", "backend", "template", "app.json"),
-		filepath.Join("..", "..", "..", "backend", "template", "app.json"),
-		filepath.Join("..", "..", "template", "app.json"),
-		filepath.Join("..", "template", "app.json"),
-	} {
-		candidate := filepath.Join(upperDir, rel)
-		if _, err := os.Stat(candidate); err == nil {
-			templatePath = candidate
-			break
-		}
-	}
-
+	templatePath := filepath.Join(templateDir, "app.json")
 	data, err := os.ReadFile(templatePath)
 	if err != nil {
 		// Fallback: try to construct from known structure
@@ -76,24 +62,10 @@ func renderAppJSON(upperDir string, id ProjectIdentity) error {
 }
 
 // renderPackageJSON writes identity values into package.json.
-func renderPackageJSON(upperDir string, id ProjectIdentity) error {
+func renderPackageJSON(upperDir string, id ProjectIdentity, templateDir string) error {
 	pkgPath := filepath.Join(upperDir, "package.json")
 
-	// Try to find template package.json
-	var templatePath string
-	for _, rel := range []string{
-		filepath.Join("..", "..", "backend", "template", "package.json"),
-		filepath.Join("..", "..", "..", "backend", "template", "package.json"),
-		filepath.Join("..", "..", "template", "package.json"),
-		filepath.Join("..", "template", "package.json"),
-	} {
-		candidate := filepath.Join(upperDir, rel)
-		if _, err := os.Stat(candidate); err == nil {
-			templatePath = candidate
-			break
-		}
-	}
-
+	templatePath := filepath.Join(templateDir, "package.json")
 	data, err := os.ReadFile(templatePath)
 	if err != nil {
 		return fmt.Errorf("read template package.json: %w", err)

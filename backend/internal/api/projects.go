@@ -82,7 +82,7 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WARN: workspace creation failed for project %d: %v", project.ID, err)
 	} else if mount != nil {
 		// Render identity into config files after mount
-		if err := identity.RenderConfigs(mount.UpperDir, id); err != nil {
+		if err := identity.RenderConfigs(mount.UpperDir, id, h.workspace.TemplateDir()); err != nil {
 			log.Printf("WARN: identity render failed for project %d: %v", project.ID, err)
 		}
 	}
