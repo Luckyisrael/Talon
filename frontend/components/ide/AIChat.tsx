@@ -4,9 +4,9 @@ import { useState, useRef, useEffect, useImperativeHandle, forwardRef, useCallba
 import { Message, Send, Document, ArrowRight } from "iconsax-reactjs";
 import { streamPrompt, type StreamEvent } from "@/lib/api";
 import { useIDEStore } from "@/lib/store";
-import StreamRenderer, { type StreamMessage, type ToolCall } from "./StreamRenderer";
-import type { TimelineEvent } from "./Timeline";
-import type { ChatMessage } from "@/lib/types";
+import AgentTrace from "./AgentTrace";
+import { getToolLabel, isReadOnlyTool } from "./AgentTrace";
+import type { ChatMessage, StreamMessage, TraceRow } from "@/lib/types";
 
 interface AIChatProps {
   projectId: number;
@@ -25,6 +25,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const filesReadRef = useRef<Set<string>>(new Set());
 
   const addFiles = useIDEStore((s) => s.addFiles);
   const setCurrentPlan = useIDEStore((s) => s.setCurrentPlan);
@@ -41,129 +42,176 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Cleanup abort controller on unmount
   useEffect(() => () => abortRef.current?.abort(), []);
 
   const processStreamEvents = useCallback(
-    (streamMsg: StreamMessage, setStreamMsg: (updater: (prev: StreamMessage) => StreamMessage) => void) => {
+    (setStreamMsg: (updater: (prev: StreamMessage) => StreamMessage) => void) => {
       return (event: StreamEvent) => {
         switch (event.type) {
+          // ── Narration (§11.1 thought events) ──
           case "thinking.start":
-            setStreamMsg((prev) => ({ ...prev, thinking: "" }));
+          case "text.start":
+            setStreamMsg((prev) => {
+              const lastRow = prev.traceRows[prev.traceRows.length - 1];
+              if (lastRow?.kind === "narration" && lastRow.streaming) return prev;
+              return {
+                ...prev,
+                traceRows: [
+                  ...prev.traceRows,
+                  { id: crypto.randomUUID(), kind: "narration", text: "", streaming: true },
+                ],
+              };
+            });
             break;
 
           case "thinking.delta":
-            setStreamMsg((prev) => ({
-              ...prev,
-              thinking: (prev.thinking || "") + (event.data?.text || ""),
-            }));
+          case "text.delta":
+            setStreamMsg((prev) => {
+              const rows = [...prev.traceRows];
+              const lastRow = rows[rows.length - 1];
+              if (lastRow?.kind === "narration" && lastRow.streaming) {
+                rows[rows.length - 1] = {
+                  ...lastRow,
+                  text: (lastRow.text || "") + (event.data?.text || ""),
+                };
+              }
+              return { ...prev, traceRows: rows };
+            });
             break;
 
           case "thinking.end":
-            break;
-
-          case "text.start":
-            setStreamMsg((prev) => ({ ...prev, text: "" }));
-            break;
-
-          case "text.delta":
-            setStreamMsg((prev) => ({
-              ...prev,
-              text: (prev.text || "") + (event.data?.text || ""),
-            }));
-            break;
-
           case "text.end":
+            setStreamMsg((prev) => {
+              const rows = [...prev.traceRows];
+              const lastRow = rows[rows.length - 1];
+              if (lastRow?.kind === "narration" && lastRow.streaming) {
+                rows[rows.length - 1] = { ...lastRow, streaming: false };
+              }
+              return { ...prev, traceRows: rows };
+            });
             break;
 
+          // ── Tool start → running row ──
           case "tool.start": {
-            const tool: ToolCall = {
-              name: event.data?.name || "unknown",
-              input: event.data?.input,
+            const toolName = event.data?.name || "unknown";
+            const input = event.data?.input;
+            const { label, target } = getToolLabel(toolName, input, filesReadRef.current);
+
+            // Track reads for read-before-write audit
+            if (toolName === "read_file" && input?.path) {
+              filesReadRef.current.add(input.path);
+            }
+
+            const row: TraceRow = {
+              id: crypto.randomUUID(),
+              kind: "tool",
+              tool: toolName,
+              label,
+              target,
               status: "running",
             };
+
             setStreamMsg((prev) => ({
               ...prev,
-              toolCalls: [...(prev.toolCalls || []), tool],
+              traceRows: [...prev.traceRows, row],
             }));
             break;
           }
 
+          // ── Tool end → done/fail ──
           case "tool.end": {
-            setStreamMsg((prev) => ({
-              ...prev,
-              toolCalls: (prev.toolCalls || []).map((t) =>
-                t.name === event.data?.name && t.status === "running"
-                  ? { ...t, status: "completed" as const, result: event.data?.result }
-                  : t,
-              ),
-            }));
+            setStreamMsg((prev) => {
+              const rows = [...prev.traceRows];
+              // Find the last running row for this tool
+              for (let i = rows.length - 1; i >= 0; i--) {
+                if (rows[i].kind === "tool" && rows[i].tool === event.data?.name && rows[i].status === "running") {
+                  rows[i] = {
+                    ...rows[i],
+                    status: event.data?.fixed === false ? "fail" : "done",
+                    summary: event.data?.result,
+                  };
+                  break;
+                }
+              }
+              return { ...prev, traceRows: rows };
+            });
             break;
           }
 
+          // ── Legacy timeline events (phase, tool_call, verify, guardrail_reject) ──
+          // Map these to TraceRows for backward compatibility
           case "phase": {
-            const timelineEvt: TimelineEvent = {
-              type: "phase",
-              phase: event.data?.phase || "",
-              status: event.data?.status || "started",
+            const row: TraceRow = {
+              id: crypto.randomUUID(),
+              kind: "tool",
+              tool: "phase",
+              label: event.data?.phase || "Phase",
+              target: "",
+              status: event.data?.status === "done" ? "done" : event.data?.status === "failed" ? "fail" : "running",
             };
-            setStreamMsg((prev) => ({
-              ...prev,
-              timelineEvents: [...(prev.timelineEvents || []), timelineEvt],
-            }));
+            setStreamMsg((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
             break;
           }
 
           case "tool_call": {
-            const timelineEvt: TimelineEvent = {
-              type: "tool_call",
-              tool: event.data?.tool || "",
-              path: event.data?.path || "",
-              name: event.data?.name || "",
-              status: event.data?.status || "running",
+            const toolName = event.data?.tool || "";
+            const { label, target } = getToolLabel(toolName, { path: event.data?.path, name: event.data?.name }, filesReadRef.current);
+            const row: TraceRow = {
+              id: crypto.randomUUID(),
+              kind: "tool",
+              tool: toolName,
+              label,
+              target: target || event.data?.path || "",
+              status: event.data?.status === "done" ? "done" : event.data?.status === "failed" ? "fail" : "running",
             };
-            setStreamMsg((prev) => ({
-              ...prev,
-              timelineEvents: [...(prev.timelineEvents || []), timelineEvt],
-            }));
+            setStreamMsg((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
             break;
           }
 
           case "verify": {
-            const timelineEvt: TimelineEvent = {
-              type: "verify",
-              tool: event.data?.stage || "",
-              status: event.data?.status || "running",
-              error: event.data?.error || "",
+            const row: TraceRow = {
+              id: crypto.randomUUID(),
+              kind: "tool",
+              tool: "verify",
+              label: event.data?.stage || "Verify",
+              target: "",
+              status: event.data?.status === "done" || event.data?.status === "pass" ? "done" : event.data?.status === "failed" || event.data?.status === "fail" ? "fail" : "running",
+              summary: event.data?.error,
             };
-            setStreamMsg((prev) => ({
-              ...prev,
-              timelineEvents: [...(prev.timelineEvents || []), timelineEvt],
-            }));
+            setStreamMsg((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
             break;
           }
 
           case "guardrail_reject": {
-            const timelineEvt: TimelineEvent = {
-              type: "guardrail_reject",
-              tool: event.data?.tool || "",
-              status: "rejected",
-              error: event.data?.error || "",
+            const row: TraceRow = {
+              id: crypto.randomUUID(),
+              kind: "tool",
+              tool: "guardrail",
+              label: "Blocked",
+              target: event.data?.error || "guardrail violation",
+              status: "fail",
             };
-            setStreamMsg((prev) => ({
-              ...prev,
-              timelineEvents: [...(prev.timelineEvents || []), timelineEvt],
-            }));
+            setStreamMsg((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
             break;
           }
 
+          // ── Build result appended as narration ──
           case "build.result":
             setStreamMsg((prev) => ({
               ...prev,
-              text: (prev.text || "") + "\n\n" + (event.data?.output || ""),
+              traceRows: [
+                ...prev.traceRows,
+                {
+                  id: crypto.randomUUID(),
+                  kind: "narration",
+                  text: event.data?.output || "",
+                  streaming: false,
+                },
+              ],
             }));
             break;
 
+          // ── Error ──
           case "error":
             setStreamMsg((prev) => ({
               ...prev,
@@ -172,6 +220,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
             }));
             break;
 
+          // ── Done ──
           case "done":
             setStreamMsg((prev) => ({ ...prev, isStreaming: false }));
             break;
@@ -188,8 +237,8 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
     const userMessage = input.trim();
     setInput("");
     setError("");
+    filesReadRef.current = new Set();
 
-    // Add user message
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
@@ -198,21 +247,15 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
     };
     setMessages((prev) => [...prev, userMsg]);
 
-    // Create streaming assistant message
     const streamMsgId = crypto.randomUUID();
     const streamMsg: StreamMessage = {
       id: streamMsgId,
       role: "assistant",
-      thinking: undefined,
-      text: undefined,
-      toolCalls: [],
-      timelineEvents: [],
+      traceRows: [],
       isStreaming: true,
     };
     setMessages((prev) => [...prev, streamMsg]);
 
-    // Start streaming
-    const updater = (prev: StreamMessage): StreamMessage => prev;
     const setStreamMsg = (fn: (prev: StreamMessage) => StreamMessage) => {
       setMessages((prev) =>
         prev.map((m) => (m.id === streamMsgId ? fn(m as StreamMessage) : m)),
@@ -223,26 +266,24 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
       projectId,
       userMessage,
       mode,
-      processStreamEvents(streamMsg, setStreamMsg),
+      processStreamEvents(setStreamMsg),
       (err) => {
         setError(err.message);
         setStreamMsg((prev) => ({ ...prev, isStreaming: false, error: err.message }));
       },
     );
 
-    // Capture the stream message for file/plan extraction
-    // We'll poll for completion and extract files
+    // Poll for completion and extract files
     const checkComplete = setInterval(() => {
       setMessages((prev) => {
         const sm = prev.find((m) => m.id === streamMsgId) as StreamMessage | undefined;
         if (sm && !sm.isStreaming) {
           clearInterval(checkComplete);
 
-          // Extract files from tool calls if build mode
-          if (mode === "build" && sm.toolCalls && sm.toolCalls.length > 0) {
-            const fileEntries = sm.toolCalls
-              .filter((t) => t.name === "write_file" && t.status === "completed")
-              .map((t) => ({ path: t.input?.path || "", content: "" }));
+          if (mode === "build" && sm.traceRows.length > 0) {
+            const fileEntries = sm.traceRows
+              .filter((r) => r.kind === "tool" && r.tool === "write_file" && r.status === "done" && r.target)
+              .map((r) => ({ path: r.target!, content: "" }));
             if (fileEntries.length > 0) {
               addFiles(fileEntries);
             }
@@ -252,7 +293,6 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
       });
     }, 200);
 
-    // Safety: stop checking after 120s
     setTimeout(() => clearInterval(checkComplete), 120000);
   }
 
@@ -267,15 +307,17 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
     );
   }
 
+  const isStreaming = messages.some((m) => "isStreaming" in m && (m as StreamMessage).isStreaming);
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface-1">
       {/* Header */}
-      <div className="h-12 flex items-center justify-between px-4 flex-shrink-0 bg-surface-1">
+      <div className="h-12 flex items-center justify-between px-4 flex-shrink-0 bg-surface-1 border-b border-white/5">
         <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">AI Assistant</span>
         <div className="flex gap-1">
           <button
             onClick={() => setMode("plan")}
-            className={`rounded-full h-7 px-3 text-xs font-medium transition-colors ${
+            className={`rounded-full h-7 px-3 text-xs font-medium transition-all duration-150 ${
               mode === "plan" ? "bg-accent text-background" : "bg-surface-3 text-text-secondary hover:bg-surface-4"
             }`}
           >
@@ -283,7 +325,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
           </button>
           <button
             onClick={() => setMode("build")}
-            className={`rounded-full h-7 px-3 text-xs font-medium transition-colors ${
+            className={`rounded-full h-7 px-3 text-xs font-medium transition-all duration-150 ${
               mode === "build" ? "bg-accent text-background" : "bg-surface-3 text-text-secondary hover:bg-surface-4"
             }`}
           >
@@ -313,15 +355,39 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
         )}
 
         {messages.map((msg) => {
-          // Streaming message
+          // Streaming message with trace
           if ("isStreaming" in msg) {
-            return <StreamRenderer key={msg.id} message={msg as StreamMessage} />;
+            const streamMsg = msg as StreamMessage;
+            return (
+              <div key={streamMsg.id} className="space-y-3 animate-fade-in">
+                {/* Trace rows */}
+                {streamMsg.traceRows.length > 0 && (
+                  <AgentTrace rows={streamMsg.traceRows} />
+                )}
+
+                {/* Error */}
+                {streamMsg.error && (
+                  <div className="rounded-xl px-4 py-3 text-sm bg-error/10 text-error border border-error/20">
+                    {streamMsg.error}
+                  </div>
+                )}
+
+                {/* Loading dots (no content yet) */}
+                {streamMsg.isStreaming && streamMsg.traceRows.length === 0 && !streamMsg.error && (
+                  <div className="flex gap-1 py-2">
+                    <div className="w-2 h-2 bg-text-secondary/40 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                    <div className="w-2 h-2 bg-text-secondary/40 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                    <div className="w-2 h-2 bg-text-secondary/40 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                  </div>
+                )}
+              </div>
+            );
           }
 
           // Completed message
           const chatMsg = msg as ChatMessage;
           return (
-            <div key={chatMsg.id} className="space-y-3">
+            <div key={chatMsg.id} className="space-y-3 animate-fade-in">
               <div className={`flex ${chatMsg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
                   className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap ${
@@ -377,7 +443,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
                       const screenNames = chatMsg.plan!.screens.map((s) => s.name).join(", ");
                       setInput(`Build the following screens: ${screenNames}. Generate all necessary components with full implementation.`);
                     }}
-                    className="h-8 px-4 rounded-lg bg-accent text-background text-xs font-medium flex items-center gap-1.5 hover:bg-accent-hover transition-colors"
+                    className="h-8 px-4 rounded-lg bg-accent text-background text-xs font-medium flex items-center gap-1.5 hover:bg-accent-hover transition-colors active:scale-[0.98]"
                   >
                     <Document size="12" variant="Linear" />
                     Approve &amp; Build
@@ -406,7 +472,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
       </div>
 
       {/* Input */}
-      <form ref={formRef} onSubmit={handleSubmit} className="p-4 flex-shrink-0">
+      <form ref={formRef} onSubmit={handleSubmit} className="p-4 flex-shrink-0 border-t border-white/5">
         <div className="flex gap-2">
           <input
             type="text"
@@ -414,13 +480,13 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
             onChange={(e) => setInput(e.target.value)}
             placeholder={mode === "plan" ? "Describe your app idea..." : "What should I build?"}
             className="flex-1 h-10 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all text-sm"
-            disabled={messages.some((m) => "isStreaming" in m && (m as StreamMessage).isStreaming)}
+            disabled={isStreaming}
           />
-          {messages.some((m) => "isStreaming" in m && (m as StreamMessage).isStreaming) ? (
+          {isStreaming ? (
             <button
               type="button"
               onClick={handleCancel}
-              className="rounded-full h-10 w-10 flex items-center justify-center bg-red-500 text-white hover:bg-red-600 transition-colors"
+              className="rounded-full h-10 w-10 flex items-center justify-center bg-error text-white hover:bg-error/80 transition-colors active:scale-[0.98]"
             >
               <span className="text-xs font-bold">Stop</span>
             </button>
@@ -428,7 +494,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
             <button
               type="submit"
               disabled={!input.trim()}
-              className="rounded-full h-10 w-10 flex items-center justify-center bg-accent text-background hover:bg-accent-hover transition-colors disabled:opacity-50"
+              className="rounded-full h-10 w-10 flex items-center justify-center bg-accent text-background hover:bg-accent-hover transition-colors disabled:opacity-50 active:scale-[0.98]"
             >
               <Send size="16" variant="Linear" />
             </button>

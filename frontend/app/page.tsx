@@ -143,8 +143,8 @@ export default function Home() {
             </div>
 
             <div className="bg-surface-3 rounded-[20px] p-6">
-              <div className="w-10 h-10 rounded-full bg-solana-purple/10 flex items-center justify-center mb-4">
-                <Mobile size="20" className="text-solana-purple" variant="Linear" />
+              <div className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center mb-4">
+                <Mobile size="20" className="text-accent" variant="Linear" />
               </div>
               <h3 className="text-base font-semibold text-text-primary mb-2">Live Device Preview</h3>
               <p className="text-sm text-text-secondary leading-relaxed">
@@ -163,8 +163,8 @@ export default function Home() {
             </div>
 
             <div className="bg-surface-3 rounded-[20px] p-6">
-              <div className="w-10 h-10 rounded-full bg-warning/10 flex items-center justify-center mb-4">
-                <ShieldSecurity size="20" className="text-warning" variant="Linear" />
+              <div className="w-10 h-10 rounded-full bg-solana-purple/10 flex items-center justify-center mb-4">
+                <ShieldSecurity size="20" className="text-solana-purple" variant="Linear" />
               </div>
               <h3 className="text-base font-semibold text-text-primary mb-2">Solana Native</h3>
               <p className="text-sm text-text-secondary leading-relaxed">

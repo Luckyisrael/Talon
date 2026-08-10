@@ -136,7 +136,7 @@ export default function Terminal({ sessionId }: TerminalProps) {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-3 h-7 text-xs font-mono transition-colors ${
+            className={`px-3 h-7 text-xs font-mono transition-all duration-150 ${
               activeTab === tab.id
                 ? "text-accent border-b-2 border-accent"
                 : "text-text-secondary hover:text-text-primary"

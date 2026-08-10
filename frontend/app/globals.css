@@ -120,3 +120,54 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--surface-5);
 }
+
+/* Animation Keyframes */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Animation Utilities */
+.animate-fade-in {
+  animation: fade-in var(--duration-normal) var(--easing) both;
+}
+
+.animate-slide-up {
+  animation: slide-up var(--duration-normal) var(--easing) both;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right var(--duration-normal) var(--easing) both;
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s var(--easing) infinite;
+}
+
+/* Focus Ring Utility */
+.focus-ring:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Transition Utility */
+.transition-base {
+  transition-property: color, background-color, border-color, opacity, transform;
+  transition-duration: var(--duration-normal);
+  transition-timing-function: var(--easing);
+}

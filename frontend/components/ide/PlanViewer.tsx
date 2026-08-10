@@ -239,7 +239,7 @@ export default function PlanViewer({ message, plan, onApprove }: PlanViewerProps
         <div className="mt-8 mb-12">
           <button
             onClick={onApprove}
-            className="w-full h-12 rounded-xl bg-accent text-background font-medium text-sm flex items-center justify-center gap-2 hover:bg-accent-hover transition-colors"
+            className="w-full h-12 rounded-xl bg-accent text-background font-medium text-sm flex items-center justify-center gap-2 hover:bg-accent-hover transition-all duration-150 active:scale-[0.98]"
           >
             <Check size="18" variant="Linear" />
             Approve &amp; Start Building

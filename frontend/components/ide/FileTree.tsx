@@ -81,7 +81,7 @@ function FileNodeItem({
           }
         }}
         onContextMenu={handleContextMenu}
-        className={`w-full flex items-center gap-2 px-2 py-1 text-sm rounded-lg transition-colors ${
+        className={`w-full flex items-center gap-2 px-2 py-1 text-sm rounded-lg transition-all duration-150 ${
           selectedFile === fullPath
             ? "bg-accent/10 text-accent"
             : "text-text-primary hover:bg-surface-3"

@@ -127,15 +127,15 @@ export default function PhonePreview({ status = "idle", sessionId, onStartSessio
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface-1">
-      <div className="h-12 flex items-center justify-between px-4 flex-shrink-0 bg-surface-1">
+      <div className="h-12 flex items-center justify-between px-4 flex-shrink-0 bg-surface-1 border-b border-white/5">
         <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">Preview</span>
         <div className="flex items-center gap-2">
           <div
-            className={`w-2 h-2 rounded-full ${
+            className={`w-2 h-2 rounded-full transition-colors duration-300 ${
               status === "streaming"
-                ? "bg-success animate-pulse"
+                ? "bg-success animate-pulse-subtle"
                 : status === "connecting"
-                  ? "bg-warning animate-pulse"
+                  ? "bg-warning animate-pulse-subtle"
                   : status === "error"
                     ? "bg-error"
                     : "bg-text-secondary/40"
@@ -170,7 +170,7 @@ export default function PhonePreview({ status = "idle", sessionId, onStartSessio
                     {onStartSession && (
                       <button
                         onClick={onStartSession}
-                        className="px-4 py-1.5 rounded-full bg-accent text-background text-[10px] font-medium hover:bg-accent-hover transition-colors"
+                        className="px-4 py-1.5 rounded-full bg-accent text-background text-[10px] font-medium hover:bg-accent-hover transition-all duration-150 active:scale-[0.98]"
                       >
                         Start Session
                       </button>
@@ -181,7 +181,7 @@ export default function PhonePreview({ status = "idle", sessionId, onStartSessio
                 {status === "connecting" && (
                   <div className="text-center">
                     <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                    <p className="text-[10px] text-text-secondary">Connecting...</p>
+                    <p className="text-[10px] text-text-secondary">Connecting to device...</p>
                   </div>
                 )}
 
@@ -203,7 +203,7 @@ export default function PhonePreview({ status = "idle", sessionId, onStartSessio
                     {onStartSession && (
                       <button
                         onClick={onStartSession}
-                        className="mt-2 px-4 py-1.5 rounded-full bg-accent text-background text-[10px] font-medium hover:bg-accent-hover transition-colors"
+                        className="mt-2 px-4 py-1.5 rounded-full bg-accent text-background text-[10px] font-medium hover:bg-accent-hover transition-all duration-150 active:scale-[0.98]"
                       >
                         Retry
                       </button>

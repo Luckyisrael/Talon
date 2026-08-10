@@ -85,3 +85,31 @@ export interface AuthResponse {
   token: string;
   user: User;
 }
+
+// ── Agent Trace (§11) ─────────────────────────────────
+
+export interface TraceRow {
+  id: string;
+  kind: "narration" | "tool" | "group";
+  // Narration
+  text?: string;
+  streaming?: boolean;
+  // Tool
+  tool?: string;
+  label?: string;
+  target?: string;
+  status?: "running" | "done" | "fail";
+  summary?: string;
+  // Group
+  children?: TraceRow[];
+  collapsed?: boolean;
+}
+
+export interface StreamMessage {
+  id: string;
+  role: "assistant";
+  traceRows: TraceRow[];
+  text?: string;
+  error?: string;
+  isStreaming: boolean;
+}

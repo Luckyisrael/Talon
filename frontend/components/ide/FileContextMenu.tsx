@@ -50,7 +50,7 @@ export default function FileContextMenu({
   return (
     <div
       ref={menuRef}
-      className="fixed z-50 min-w-[180px] rounded-xl border border-surface-3 bg-surface-1 py-1 shadow-lg"
+      className="fixed z-50 min-w-[180px] rounded-xl border border-surface-3 bg-surface-1 py-1 shadow-lg animate-fade-in"
       style={{ left: adjustedX, top: adjustedY }}
     >
       <MenuItem icon={<Add size="14" variant="Linear" />} label="New File" onClick={onNewFile} />
@@ -88,7 +88,7 @@ function MenuItem({
 }) {
   return (
     <button
-      className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] text-left transition-colors
+      className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] text-left transition-all duration-150
         ${danger ? "text-red-400 hover:bg-red-500/10" : "text-text-secondary hover:bg-surface-2"}`}
       onClick={(e) => {
         e.stopPropagation();

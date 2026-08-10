@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const systemPromptPlan = `CRITICAL RULES — VIOLATION IS FAILURE:
@@ -641,94 +643,131 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, history []P
 		return
 	}
 
-	url := c.baseURL + "/v1/messages"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		events <- StreamEvent{Type: "error", Error: "failed to create request: " + err.Error()}
-		return
-	}
+	const maxRetries = 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("streamAnthropic: retry attempt %d/%d", attempt+1, maxRetries)
+			time.Sleep(time.Duration(attempt*3) * time.Second)
+		}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
+		url := c.baseURL + "/v1/messages"
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			events <- StreamEvent{Type: "error", Error: "failed to create request: " + err.Error()}
+			return
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		events <- StreamEvent{Type: "error", Error: "request failed: " + err.Error()}
-		return
-	}
-	defer resp.Body.Close()
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
 
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		events <- StreamEvent{Type: "error", Error: fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(respBody))}
-		return
-	}
-
-	// Parse SSE stream
-	scanner := newSSEScanner(resp.Body)
-	for scanner.Next() {
-		event := scanner.Event()
-
-		switch event.Type {
-		case "content_block_start":
-			var data struct {
-				ContentBlock struct {
-					Type string `json:"type"`
-				} `json:"content_block"`
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if attempt < maxRetries-1 {
+				log.Printf("streamAnthropic: request error (attempt %d): %v", attempt+1, err)
+				continue
 			}
-			if json.Unmarshal(event.Data, &data) == nil {
-				switch data.ContentBlock.Type {
-				case "thinking":
-					events <- StreamEvent{Type: "thinking.start"}
-				case "text":
-					events <- StreamEvent{Type: "text.start"}
+			events <- StreamEvent{Type: "error", Error: "Connection failed. The AI service may be temporarily unavailable. Please try again."}
+			return
+		}
+
+		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			resp.Body.Close()
+			if attempt < maxRetries-1 {
+				log.Printf("streamAnthropic: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				continue
+			}
+			var errMsg string
+			switch resp.StatusCode {
+			case 429:
+				errMsg = "Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again."
+			case 502:
+				errMsg = "AI service temporarily unavailable. This usually resolves quickly — please try again."
+			case 503:
+				errMsg = "AI service is currently overloaded. Please wait a moment and try again."
+			case 504:
+				errMsg = "AI service request timed out. The service may be under heavy load — please try again."
+			default:
+				errMsg = fmt.Sprintf("AI service error (HTTP %d). Please try again.", resp.StatusCode)
+			}
+			events <- StreamEvent{Type: "error", Error: errMsg}
+			return
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			events <- StreamEvent{Type: "error", Error: fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(respBody))}
+			return
+		}
+
+		// Parse SSE stream
+		scanner := newSSEScanner(resp.Body)
+		for scanner.Next() {
+			event := scanner.Event()
+
+			switch event.Type {
+			case "content_block_start":
+				var data struct {
+					ContentBlock struct {
+						Type string `json:"type"`
+					} `json:"content_block"`
 				}
-			}
-
-		case "content_block_delta":
-			var data struct {
-				Delta struct {
-					Type      string `json:"type"`
-					Text      string `json:"text"`
-					Thinking  string `json:"thinking"`
-				} `json:"delta"`
-			}
-			if json.Unmarshal(event.Data, &data) == nil {
-				switch data.Delta.Type {
-				case "thinking_delta":
-					events <- StreamEvent{Type: "thinking.delta", Data: StreamTextDelta{Text: data.Delta.Thinking}}
-				case "text_delta":
-					events <- StreamEvent{Type: "text.delta", Data: StreamTextDelta{Text: data.Delta.Text}}
+				if json.Unmarshal(event.Data, &data) == nil {
+					switch data.ContentBlock.Type {
+					case "thinking":
+						events <- StreamEvent{Type: "thinking.start"}
+					case "text":
+						events <- StreamEvent{Type: "text.start"}
+					}
 				}
-			}
 
-		case "content_block_stop":
-			// We don't know which block type stopped without tracking index.
-			// The text.end / thinking.end will be inferred by the caller
-			// when it sees text.start followed by the next content_block_start or message_stop.
+			case "content_block_delta":
+				var data struct {
+					Delta struct {
+						Type     string `json:"type"`
+						Text     string `json:"text"`
+						Thinking string `json:"thinking"`
+					} `json:"delta"`
+				}
+				if json.Unmarshal(event.Data, &data) == nil {
+					switch data.Delta.Type {
+					case "thinking_delta":
+						events <- StreamEvent{Type: "thinking.delta", Data: StreamTextDelta{Text: data.Delta.Thinking}}
+					case "text_delta":
+						events <- StreamEvent{Type: "text.delta", Data: StreamTextDelta{Text: data.Delta.Text}}
+					}
+				}
 
-		case "message_delta":
-			events <- StreamEvent{Type: "text.end"}
+			case "content_block_stop":
+				// We don't know which block type stopped without tracking index.
+				// The text.end / thinking.end will be inferred by the caller
+				// when it sees text.start followed by the next content_block_start or message_stop.
 
-		case "message_stop":
-			events <- StreamEvent{Type: "done"}
+			case "message_delta":
+				events <- StreamEvent{Type: "text.end"}
 
-		case "error":
-			var data struct {
-				Error struct {
-					Message string `json:"message"`
-				} `json:"error"`
-			}
-			if json.Unmarshal(event.Data, &data) == nil {
-				events <- StreamEvent{Type: "error", Error: data.Error.Message}
+			case "message_stop":
+				events <- StreamEvent{Type: "done"}
+
+			case "error":
+				var data struct {
+					Error struct {
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+				if json.Unmarshal(event.Data, &data) == nil {
+					events <- StreamEvent{Type: "error", Error: data.Error.Message}
+				}
 			}
 		}
-	}
+		resp.Body.Close()
 
-	if err := scanner.Err(); err != nil {
-		events <- StreamEvent{Type: "error", Error: "stream read error: " + err.Error()}
+		if err := scanner.Err(); err != nil {
+			events <- StreamEvent{Type: "error", Error: "stream read error: " + err.Error()}
+		}
+		return
 	}
 }
 

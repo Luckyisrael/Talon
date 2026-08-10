@@ -139,7 +139,17 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		planResp, err := h.ai.Plan(context.Background(), history)
 		if err != nil {
 			log.Printf("AI plan error for user %d: %v", userID, err)
-			writeError(w, http.StatusInternalServerError, "AI request failed")
+			// Provide user-friendly error messages for common failures
+			errMsg := "AI request failed"
+			errStr := err.Error()
+			if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limit") {
+				errMsg = "Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again."
+			} else if strings.Contains(errStr, "502") || strings.Contains(errStr, "503") {
+				errMsg = "AI service temporarily unavailable. This usually resolves quickly — please try again."
+			} else if strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") {
+				errMsg = "AI service request timed out. The service may be under heavy load — please try again."
+			}
+			writeError(w, http.StatusInternalServerError, errMsg)
 			return
 		}
 		respBytes, _ := json.Marshal(planResp)
@@ -169,7 +179,19 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		err := h.orch.RunBuildWithTools(context.Background(), sess, req.Prompt, systemPrompt, history, buildTools, toolExecutor)
 		if err != nil {
 			log.Printf("build error for user %d project %d: %v", userID, req.ProjectID, err)
-			writeError(w, http.StatusInternalServerError, "build failed")
+			// Provide user-friendly error messages for common failures
+			errMsg := "Build failed"
+			errStr := err.Error()
+			if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limit") {
+				errMsg = "Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again."
+			} else if strings.Contains(errStr, "502") || strings.Contains(errStr, "503") {
+				errMsg = "AI service temporarily unavailable. This usually resolves quickly — please try again."
+			} else if strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") {
+				errMsg = "AI service request timed out. The service may be under heavy load — please try again."
+			} else if strings.Contains(errStr, "exceeded max rounds") {
+				errMsg = "Build took too many iterations. Try simplifying your request or breaking it into smaller steps."
+			}
+			writeError(w, http.StatusInternalServerError, errMsg)
 			return
 		}
 
@@ -317,10 +339,24 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		err := h.orch.RunBuildWithTools(ctx, sess, req.Prompt, systemPrompt, history, buildTools, toolExecutor)
 		if err != nil {
 			log.Printf("stream build error for user %d: %v", userID, err)
+			// Provide user-friendly error message
+			errMsg := "Build failed"
+			errStr := err.Error()
+			if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limit") {
+				errMsg = "Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again."
+			} else if strings.Contains(errStr, "502") || strings.Contains(errStr, "503") {
+				errMsg = "AI service temporarily unavailable. This usually resolves quickly — please try again."
+			} else if strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") {
+				errMsg = "AI service request timed out. The service may be under heavy load — please try again."
+			} else if strings.Contains(errStr, "exceeded max rounds") {
+				errMsg = "Build took too many iterations. Try simplifying your request or breaking it into smaller steps."
+			} else {
+				errMsg = "Build failed. " + errStr
+			}
 			mu.Lock()
-			fullText.WriteString("\n\nBuild failed. Check server logs for details.")
+			fullText.WriteString("\n\n" + errMsg)
 			mu.Unlock()
-			sess.Emitter.EmitError(err.Error())
+			sess.Emitter.EmitError(errMsg)
 		}
 	}()
 

@@ -87,6 +87,7 @@ interface IDEState {
   previewStatus: "idle" | "connecting" | "streaming" | "error";
   buildOutput: string;
   terminalOpen: boolean;
+  commandPaletteOpen: boolean;
 
   setFilesFromEntries: (entries: FileEntry[]) => void;
   addFiles: (entries: FileEntry[]) => void;
@@ -97,6 +98,7 @@ interface IDEState {
   setPreviewStatus: (status: IDEState["previewStatus"]) => void;
   appendBuildOutput: (text: string) => void;
   setTerminalOpen: (open: boolean) => void;
+  setCommandPaletteOpen: (open: boolean) => void;
 }
 
 export const useIDEStore = create<IDEState>((set) => ({
@@ -107,7 +109,8 @@ export const useIDEStore = create<IDEState>((set) => ({
   sessionId: null,
   previewStatus: "idle",
   buildOutput: "",
-  terminalOpen: true,
+  terminalOpen: false,
+  commandPaletteOpen: false,
 
   setFilesFromEntries: (entries) =>
     set({
@@ -151,4 +154,6 @@ export const useIDEStore = create<IDEState>((set) => ({
     set((state) => ({ buildOutput: state.buildOutput ? `${state.buildOutput}\n${text}` : text })),
 
   setTerminalOpen: (open) => set({ terminalOpen: open }),
+
+  setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
 }));

@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { Menu } from "iconsax-reactjs";
 import { PillButton, StatusBadge } from "@/components/ui";
 
 interface TopBarProps {
@@ -9,7 +8,6 @@ interface TopBarProps {
   tier?: "free" | "pro";
   promptsUsed?: number;
   promptsLimit?: number;
-  onMenuToggle?: () => void;
 }
 
 export default function TopBar({
@@ -17,21 +15,10 @@ export default function TopBar({
   tier = "free",
   promptsUsed = 0,
   promptsLimit = 20,
-  onMenuToggle,
 }: TopBarProps) {
   return (
     <header className="h-14 flex items-center justify-between px-4 bg-surface-1">
       <div className="flex items-center gap-3">
-        {onMenuToggle && (
-          <button
-            onClick={onMenuToggle}
-            className="md:hidden p-2 rounded-lg hover:bg-surface-3"
-            aria-label="Toggle menu"
-          >
-            <Menu size="20" className="text-text-secondary" variant="Linear" />
-          </button>
-        )}
-
         <Link href="/" className="flex items-center gap-3">
           <div className="w-3 h-3 rounded-full bg-text-primary" />
           <span className="font-semibold text-sm hidden sm:inline text-text-primary">SeekerStudio</span>
