@@ -449,65 +449,99 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := c.baseURL + "/v1/messages"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var anthResp anthropicResponse
-	if err := json.Unmarshal(respBody, &anthResp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if anthResp.Error != nil {
-		return "", fmt.Errorf("API error: %s", anthResp.Error.Message)
-	}
-
-	if len(anthResp.Content) == 0 {
-		return "", fmt.Errorf("empty response from AI")
-	}
-
-	// Find the text block (skip thinking and tool_use blocks)
-	for _, block := range anthResp.Content {
-		if block.Type == "text" && block.Text != "" {
-			return block.Text, nil
+	const maxRetries = 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("chatAnthropic: retry attempt %d/%d", attempt+1, maxRetries)
+			time.Sleep(time.Duration(attempt*3) * time.Second)
 		}
-	}
 
-	// Fallback: some providers return only thinking blocks with no text.
-	// Concatenate thinking content as a last resort.
-	var thinkingParts []string
-	for _, block := range anthResp.Content {
-		if block.Type == "thinking" && block.Thinking != "" {
-			thinkingParts = append(thinkingParts, block.Thinking)
+		url := c.baseURL + "/v1/messages"
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return "", fmt.Errorf("failed to create request: %w", err)
 		}
-	}
-	if len(thinkingParts) > 0 {
-		return strings.Join(thinkingParts, "\n"), nil
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if attempt < maxRetries-1 {
+				log.Printf("chatAnthropic: request error (attempt %d): %v", attempt+1, err)
+				continue
+			}
+			return "", fmt.Errorf("Connection failed. The AI service may be temporarily unavailable. Please try again.")
+		}
+
+		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			resp.Body.Close()
+			if attempt < maxRetries-1 {
+				log.Printf("chatAnthropic: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				continue
+			}
+			switch resp.StatusCode {
+			case 429:
+				return "", fmt.Errorf("Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again.")
+			case 502:
+				return "", fmt.Errorf("AI service temporarily unavailable. This usually resolves quickly — please try again.")
+			case 503:
+				return "", fmt.Errorf("AI service is currently overloaded. Please wait a moment and try again.")
+			case 504:
+				return "", fmt.Errorf("AI service request timed out. The service may be under heavy load — please try again.")
+			default:
+				return "", fmt.Errorf("AI service error (HTTP %d). Please try again.", resp.StatusCode)
+			}
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return "", fmt.Errorf("failed to read response: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		}
+
+		var anthResp anthropicResponse
+		if err := json.Unmarshal(respBody, &anthResp); err != nil {
+			return "", fmt.Errorf("failed to parse response: %w", err)
+		}
+
+		if anthResp.Error != nil {
+			return "", fmt.Errorf("API error: %s", anthResp.Error.Message)
+		}
+
+		if len(anthResp.Content) == 0 {
+			return "", fmt.Errorf("empty response from AI")
+		}
+
+		// Find the text block (skip thinking and tool_use blocks)
+		for _, block := range anthResp.Content {
+			if block.Type == "text" && block.Text != "" {
+				return block.Text, nil
+			}
+		}
+
+		// Fallback: some providers return only thinking blocks with no text.
+		// Concatenate thinking content as a last resort.
+		var thinkingParts []string
+		for _, block := range anthResp.Content {
+			if block.Type == "thinking" && block.Thinking != "" {
+				thinkingParts = append(thinkingParts, block.Thinking)
+			}
+		}
+		if len(thinkingParts) > 0 {
+			return strings.Join(thinkingParts, "\n"), nil
+		}
+
+		return "", fmt.Errorf("no text content in AI response")
 	}
 
-	return "", fmt.Errorf("no text content in AI response")
+	return "", fmt.Errorf("max retries exceeded")
 }
 
 func (c *Client) chatOpenAI(ctx context.Context, system string, history []PromptMessage) (string, error) {
@@ -531,46 +565,80 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := c.baseURL + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+	const maxRetries = 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("chatOpenAI: retry attempt %d/%d", attempt+1, maxRetries)
+			time.Sleep(time.Duration(attempt*3) * time.Second)
+		}
+
+		url := c.baseURL + "/chat/completions"
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return "", fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("HTTP-Referer", "https://seekerstudio.app")
+		req.Header.Set("X-Title", "SeekerStudio")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if attempt < maxRetries-1 {
+				log.Printf("chatOpenAI: request error (attempt %d): %v", attempt+1, err)
+				continue
+			}
+			return "", fmt.Errorf("Connection failed. The AI service may be temporarily unavailable. Please try again.")
+		}
+
+		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			resp.Body.Close()
+			if attempt < maxRetries-1 {
+				log.Printf("chatOpenAI: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				continue
+			}
+			switch resp.StatusCode {
+			case 429:
+				return "", fmt.Errorf("Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again.")
+			case 502:
+				return "", fmt.Errorf("AI service temporarily unavailable. This usually resolves quickly — please try again.")
+			case 503:
+				return "", fmt.Errorf("AI service is currently overloaded. Please wait a moment and try again.")
+			case 504:
+				return "", fmt.Errorf("AI service request timed out. The service may be under heavy load — please try again.")
+			default:
+				return "", fmt.Errorf("AI service error (HTTP %d). Please try again.", resp.StatusCode)
+			}
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return "", fmt.Errorf("failed to read response: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		}
+
+		var oaiResp openaiResponse
+		if err := json.Unmarshal(respBody, &oaiResp); err != nil {
+			return "", fmt.Errorf("failed to parse response: %w", err)
+		}
+
+		if oaiResp.Error != nil {
+			return "", fmt.Errorf("API error: %s", oaiResp.Error.Message)
+		}
+
+		if len(oaiResp.Choices) == 0 {
+			return "", fmt.Errorf("empty response from AI")
+		}
+
+		return oaiResp.Choices[0].Message.Content, nil
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("HTTP-Referer", "https://seekerstudio.app")
-	req.Header.Set("X-Title", "SeekerStudio")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var oaiResp openaiResponse
-	if err := json.Unmarshal(respBody, &oaiResp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if oaiResp.Error != nil {
-		return "", fmt.Errorf("API error: %s", oaiResp.Error.Message)
-	}
-
-	if len(oaiResp.Choices) == 0 {
-		return "", fmt.Errorf("empty response from AI")
-	}
-
-	return oaiResp.Choices[0].Message.Content, nil
+	return "", fmt.Errorf("max retries exceeded")
 }
 
 // ── Streaming ─────────────────────────────────────────
