@@ -168,9 +168,9 @@ func New() *Client {
 			baseURL = "https://openrouter.ai/api/v1"
 		}
 		apiKey = os.Getenv("OPENROUTER_API_KEY")
-		model = os.Getenv("AI_MODEL")
+		model = os.Getenv("OPENROUTER_MODEL")
 		if model == "" {
-			model = "anthropic/claude-sonnet-4"
+			model = "deepseek/deepseek-v4-flash"
 		}
 	default: // agentrouter
 		baseURL = os.Getenv("ANTHROPIC_BASE_URL")
@@ -183,7 +183,7 @@ func New() *Client {
 		}
 		model = os.Getenv("ANTHROPIC_MODEL")
 		if model == "" {
-			model = "claude-opus-5"
+			model = "claude-opus-4-6"
 		}
 	}
 
@@ -463,9 +463,9 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
+		req.Header.Set("User-Agent", "SeekerStudio/1.0")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -677,8 +677,7 @@ func (c *Client) ChatStream(ctx context.Context, system string, history []Prompt
 		defer close(events)
 
 		if c.provider == ProviderOpenRouter {
-			// OpenRouter doesn't support streaming in our setup — fall back to non-streaming
-			c.fallbackStream(ctx, system, history, events)
+			c.streamOpenRouter(ctx, system, history, events)
 			return
 		}
 
@@ -686,6 +685,132 @@ func (c *Client) ChatStream(ctx context.Context, system string, history []Prompt
 	}()
 
 	return events
+}
+
+func (c *Client) streamOpenRouter(ctx context.Context, system string, history []PromptMessage, events chan<- StreamEvent) {
+	messages := []openaiMessage{
+		{Role: "system", Content: system},
+	}
+	for _, h := range history {
+		messages = append(messages, openaiMessage{
+			Role:    h.Role,
+			Content: h.Content,
+		})
+	}
+
+	reqBody := map[string]interface{}{
+		"model":    c.model,
+		"messages": messages,
+		"stream":   true,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		events <- StreamEvent{Type: "error", Error: "failed to marshal request: " + err.Error()}
+		return
+	}
+
+	const maxRetries = 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("streamOpenRouter: retry attempt %d/%d", attempt+1, maxRetries)
+			time.Sleep(time.Duration(attempt*3) * time.Second)
+		}
+
+		url := c.baseURL + "/chat/completions"
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			events <- StreamEvent{Type: "error", Error: "failed to create request: " + err.Error()}
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("HTTP-Referer", "https://seekerstudio.app")
+		req.Header.Set("X-Title", "SeekerStudio")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if attempt < maxRetries-1 {
+				log.Printf("streamOpenRouter: request error (attempt %d): %v", attempt+1, err)
+				continue
+			}
+			events <- StreamEvent{Type: "error", Error: "Connection failed. The AI service may be temporarily unavailable. Please try again."}
+			return
+		}
+
+		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			resp.Body.Close()
+			if attempt < maxRetries-1 {
+				log.Printf("streamOpenRouter: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				continue
+			}
+			var errMsg string
+			switch resp.StatusCode {
+			case 429:
+				errMsg = "Rate limit exceeded. Please wait a moment and try again."
+			case 502:
+				errMsg = "AI service temporarily unavailable. Please try again."
+			case 503:
+				errMsg = "AI service is currently overloaded. Please try again."
+			case 504:
+				errMsg = "AI service request timed out. Please try again."
+			default:
+				errMsg = fmt.Sprintf("AI service error (HTTP %d). Please try again.", resp.StatusCode)
+			}
+			events <- StreamEvent{Type: "error", Error: errMsg}
+			return
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			events <- StreamEvent{Type: "error", Error: fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(respBody))}
+			return
+		}
+
+		events <- StreamEvent{Type: "thinking.start"}
+		events <- StreamEvent{Type: "text.start"}
+
+		scanner := newSSEScanner(resp.Body)
+		for scanner.Next() {
+			event := scanner.Event()
+			if event.Type == "" || event.Type == "message" {
+				continue
+			}
+			if event.Type == "done" {
+				break
+			}
+
+			// OpenAI SSE format: data: {"choices":[{"delta":{"content":"..."}}]}
+			if event.Type == "message.stop" || event.Type == "message.complete" {
+				break
+			}
+
+			var data struct {
+				Choices []struct {
+					Delta struct {
+						Content string `json:"content"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+			if json.Unmarshal(event.Data, &data) == nil && len(data.Choices) > 0 {
+				if content := data.Choices[0].Delta.Content; content != "" {
+					events <- StreamEvent{Type: "text.delta", Data: StreamTextDelta{Text: content}}
+				}
+			}
+		}
+		resp.Body.Close()
+
+		if err := scanner.Err(); err != nil {
+			events <- StreamEvent{Type: "error", Error: "stream read error: " + err.Error()}
+			return
+		}
+
+		events <- StreamEvent{Type: "text.end"}
+		events <- StreamEvent{Type: "done"}
+		return
+	}
 }
 
 func (c *Client) streamAnthropic(ctx context.Context, system string, history []PromptMessage, events chan<- StreamEvent) {
@@ -726,9 +851,9 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, history []P
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Set("User-Agent", "claude-cli/2.1.195 (external, sdk-cli)")
+		req.Header.Set("User-Agent", "SeekerStudio/1.0")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {

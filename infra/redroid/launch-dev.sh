@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-CONTAINER_NAME="redroid-seeker-dev"
+CONTAINER_NAME="seeker-dev"
 IMAGE_NAME="seeker-redroid:latest"
 DEVICE_PIN="1234"
 ADB_PORT=5555
@@ -22,7 +22,7 @@ echo "=== SeekerStudio: Launch Redroid Dev Container ==="
 # Step 1: Stop existing containers
 echo ""
 echo "--- Cleaning up existing containers ---"
-docker ps -a | grep redroid | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+docker ps -a | grep seeker | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
 
 # Step 2: Build image if it doesn't exist
 if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
