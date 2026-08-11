@@ -141,12 +141,23 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
           // ── Legacy timeline events (phase, tool_call, verify, guardrail_reject) ──
           // Map these to TraceRows for backward compatibility
           case "phase": {
+            const phase = event.data?.phase || "";
+            const phaseLabels: Record<string, string> = {
+              CONTEXT_BUILD: "Scanning project",
+              GENERATE: "Generating code",
+              STAGE_WRITE: "Writing files",
+              VERIFY_STATIC: "Running checks",
+              HEAL: "Fixing errors",
+              PROMOTE: "Deploying files",
+              DONE: "Complete",
+              FAILED: "Failed",
+            };
             const row: TraceRow = {
               id: crypto.randomUUID(),
               kind: "tool",
               tool: "phase",
-              label: event.data?.phase || "Phase",
-              target: "",
+              label: phaseLabels[phase] || phase,
+              target: event.data?.status || "",
               status: event.data?.status === "done" ? "done" : event.data?.status === "failed" ? "fail" : "running",
             };
             setStreamMsg((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
@@ -156,13 +167,15 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
           case "tool_call": {
             const toolName = event.data?.tool || "";
             const { label, target } = getToolLabel(toolName, { path: event.data?.path, name: event.data?.name }, filesReadRef.current);
+            const status = event.data?.status === "done" ? "done" : event.data?.status === "failed" ? "fail" : "running";
             const row: TraceRow = {
               id: crypto.randomUUID(),
               kind: "tool",
               tool: toolName,
               label,
               target: target || event.data?.path || "",
-              status: event.data?.status === "done" ? "done" : event.data?.status === "failed" ? "fail" : "running",
+              status,
+              summary: event.data?.status === "failed" ? "failed" : undefined,
             };
             setStreamMsg((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
             break;

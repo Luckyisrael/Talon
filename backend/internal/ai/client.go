@@ -210,7 +210,7 @@ func New() *Client {
 		baseURL:      cfg.BaseURL,
 		apiKey:       cfg.APIKey,
 		model:        cfg.Model,
-		httpClient:   &http.Client{},
+		httpClient:   &http.Client{Timeout: 120 * time.Second},
 		workspaceDir: workspaceDir,
 	}
 }
