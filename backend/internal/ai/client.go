@@ -140,12 +140,12 @@ Rules:
 type Provider string
 
 const (
-	ProviderAgentRouter Provider = "agentrouter"
-	ProviderOpenRouter  Provider = "openrouter"
+	ProtocolAnthropic Provider = "anthropic"
+	ProtocolOpenAI    Provider = "openai"
 )
 
 type Client struct {
-	provider     Provider
+	protocol     Provider
 	baseURL      string
 	apiKey       string
 	model        string
@@ -153,38 +153,51 @@ type Client struct {
 	workspaceDir string
 }
 
-func New() *Client {
-	provider := Provider(os.Getenv("AI_PROVIDER"))
-	if provider == "" {
-		provider = ProviderAgentRouter
+// ProviderConfig holds all configuration for an AI provider.
+// All fields map 1:1 to environment variables.
+type ProviderConfig struct {
+	Protocol string // AI_PROTOCOL: "anthropic" or "openai"
+	BaseURL  string // AI_BASE_URL
+	APIKey   string // AI_API_KEY
+	Model    string // AI_MODEL
+}
+
+func loadConfig() ProviderConfig {
+	return ProviderConfig{
+		Protocol: os.Getenv("AI_PROTOCOL"),
+		BaseURL:  os.Getenv("AI_BASE_URL"),
+		APIKey:   os.Getenv("AI_API_KEY"),
+		Model:    os.Getenv("AI_MODEL"),
 	}
+}
 
-	var baseURL, apiKey, model string
+func (c ProviderConfig) validate() error {
+	var missing []string
+	if c.BaseURL == "" {
+		missing = append(missing, "AI_BASE_URL")
+	}
+	if c.APIKey == "" {
+		missing = append(missing, "AI_API_KEY")
+	}
+	if c.Model == "" {
+		missing = append(missing, "AI_MODEL")
+	}
+	if c.Protocol == "" {
+		missing = append(missing, "AI_PROTOCOL")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
+	}
+	if c.Protocol != string(ProtocolAnthropic) && c.Protocol != string(ProtocolOpenAI) {
+		return fmt.Errorf("AI_PROTOCOL must be 'anthropic' or 'openai', got '%s'", c.Protocol)
+	}
+	return nil
+}
 
-	switch provider {
-	case ProviderOpenRouter:
-		baseURL = os.Getenv("OPENROUTER_BASE_URL")
-		if baseURL == "" {
-			baseURL = "https://openrouter.ai/api/v1"
-		}
-		apiKey = os.Getenv("OPENROUTER_API_KEY")
-		model = os.Getenv("OPENROUTER_MODEL")
-		if model == "" {
-			model = "deepseek/deepseek-v4-flash"
-		}
-	default: // agentrouter
-		baseURL = os.Getenv("ANTHROPIC_BASE_URL")
-		if baseURL == "" {
-			baseURL = "https://agentrouter.org"
-		}
-		apiKey = os.Getenv("ANTHROPIC_AUTH_TOKEN")
-		if apiKey == "" {
-			apiKey = os.Getenv("AGENTROUTER_API_KEY")
-		}
-		model = os.Getenv("ANTHROPIC_MODEL")
-		if model == "" {
-			model = "claude-opus-4-6"
-		}
+func New() *Client {
+	cfg := loadConfig()
+	if err := cfg.validate(); err != nil {
+		log.Fatalf("AI provider configuration error: %v", err)
 	}
 
 	workspaceDir := os.Getenv("WORKSPACE_DIR")
@@ -193,10 +206,10 @@ func New() *Client {
 	}
 
 	return &Client{
-		provider:     provider,
-		baseURL:      baseURL,
-		apiKey:       apiKey,
-		model:        model,
+		protocol:     Provider(cfg.Protocol),
+		baseURL:      cfg.BaseURL,
+		apiKey:       cfg.APIKey,
+		model:        cfg.Model,
 		httpClient:   &http.Client{},
 		workspaceDir: workspaceDir,
 	}
@@ -422,7 +435,7 @@ func (c *Client) ReadProjectFiles(workspacePath string) string {
 }
 
 func (c *Client) chat(ctx context.Context, system string, history []PromptMessage) (string, error) {
-	if c.provider == ProviderOpenRouter {
+	if c.protocol == ProtocolOpenAI {
 		return c.chatOpenAI(ctx, system, history)
 	}
 	return c.chatAnthropic(ctx, system, history)
@@ -463,7 +476,7 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Set("User-Agent", "SeekerStudio/1.0")
 
@@ -676,7 +689,7 @@ func (c *Client) ChatStream(ctx context.Context, system string, history []Prompt
 	go func() {
 		defer close(events)
 
-		if c.provider == ProviderOpenRouter {
+		if c.protocol == ProtocolOpenAI {
 			c.streamOpenRouter(ctx, system, history, events)
 			return
 		}
@@ -851,7 +864,7 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, history []P
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Set("User-Agent", "SeekerStudio/1.0")
 

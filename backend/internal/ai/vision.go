@@ -74,7 +74,7 @@ Respond with JSON:
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("User-Agent", "SeekerStudio/1.0")
 

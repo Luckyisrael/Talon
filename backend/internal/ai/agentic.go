@@ -57,7 +57,7 @@ type agenticMessage struct {
 }
 
 func (c *Client) ChatWithTools(ctx context.Context, system string, history []PromptMessage, tools []ToolDefinition) (*AgenticChatResult, error) {
-	if c.provider == ProviderOpenRouter {
+	if c.protocol == ProtocolOpenAI {
 		return c.chatWithToolsOpenRouter(ctx, system, history, tools)
 	}
 	return c.chatWithToolsAnthropic(ctx, system, history, tools)
@@ -249,7 +249,7 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Set("User-Agent", "SeekerStudio/1.0")
 
