@@ -62,7 +62,13 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	// Device feedback. Registered only when a device is actually attached —
 	// offering a tool that can only fail wastes rounds.
 	if adbTarget != "" {
-		reg.Register(&tools.CaptureScreenshot{ADBTarget: adbTarget})
+		// capture_screenshot verifies through the model; give it one only when we
+		// have a client, otherwise it degrades to a plain capture.
+		var vision tools.VisionChecker
+		if h.ai != nil {
+			vision = visionAdapter{c: h.ai}
+		}
+		reg.Register(&tools.CaptureScreenshot{ADBTarget: adbTarget, Vision: vision})
 		reg.Register(&tools.TailLogcat{ADBTarget: adbTarget})
 		reg.Register(&tools.TestWalletRoundtrip{ADBTarget: adbTarget})
 	}
@@ -92,6 +98,25 @@ func (h *PromptHandler) storeAdapter() *tools.StoreAdapter {
 		},
 		AddMemoryFn: h.store.AddMemory,
 	}
+}
+
+// visionAdapter lets *ai.Client satisfy tools.VisionChecker. It exists so the
+// tools package can consume vision analysis without importing the ai client and
+// the provider machinery behind it — the tool depends on the small interface,
+// this maps it onto the concrete result.
+type visionAdapter struct{ c *ai.Client }
+
+func (v visionAdapter) VisionCheck(ctx context.Context, screenshot []byte, intendedScreen string) (*tools.VisionVerdict, error) {
+	r, err := v.c.VisionCheck(ctx, screenshot, intendedScreen)
+	if err != nil {
+		return nil, err
+	}
+	return &tools.VisionVerdict{
+		Matches:  r.Matches,
+		Reason:   r.Reason,
+		HasError: r.HasError,
+		ErrorMsg: r.ErrorMsg,
+	}, nil
 }
 
 // executor adapts the registry to the orchestrator's ToolExecutor. A tool

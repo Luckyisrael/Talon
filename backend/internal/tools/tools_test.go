@@ -370,3 +370,128 @@ func TestWalkSourceSkipsVendorDirs(t *testing.T) {
 		t.Errorf("walk missed real source: %v", files)
 	}
 }
+
+// ── capture_screenshot: honest visual verification ────
+
+// fakeVision stands in for the model. It records what it was handed so a test
+// can prove the captured image actually reached it — the bug being fixed is that
+// the old tool captured a screenshot and threw the pixels away.
+type fakeVision struct {
+	verdict *VisionVerdict
+	err     error
+
+	calls    int
+	gotBytes []byte
+	gotWant  string
+}
+
+func (f *fakeVision) VisionCheck(_ context.Context, png []byte, intended string) (*VisionVerdict, error) {
+	f.calls++
+	f.gotBytes = png
+	f.gotWant = intended
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.verdict, nil
+}
+
+func TestCaptureScreenshotVision(t *testing.T) {
+	png := []byte("\x89PNG-fake-bytes")
+	// Skip the real adb call; feed a fixed image in so the analysis path runs
+	// without a device attached.
+	fixedCapture := func([]byte) func(context.Context) ([]byte, error) {
+		return func(context.Context) ([]byte, error) { return png, nil }
+	}
+	decode := func(t *testing.T, res ToolResult) ScreenshotResult {
+		t.Helper()
+		var sr ScreenshotResult
+		if err := json.Unmarshal([]byte(res.Content), &sr); err != nil {
+			t.Fatalf("result is not ScreenshotResult JSON: %v (%q)", err, res.Content)
+		}
+		return sr
+	}
+
+	t.Run("no vision configured: captured, not analyzed, no invented verdict", func(t *testing.T) {
+		cs := &CaptureScreenshot{capture: fixedCapture(png)}
+		res, _ := cs.Execute(context.Background(), rawArgs(t, map[string]any{"intended_screen": "home"}))
+		sr := decode(t, res)
+		if res.IsError || !sr.Success || sr.Analyzed {
+			t.Fatalf("want captured-but-not-analyzed, got %+v (is_error=%v)", sr, res.IsError)
+		}
+		if sr.Bytes != len(png) {
+			t.Errorf("captured byte count not reported: got %d want %d", sr.Bytes, len(png))
+		}
+	})
+
+	t.Run("vision set but no intended_screen: not analyzed, model left alone", func(t *testing.T) {
+		fv := &fakeVision{verdict: &VisionVerdict{Matches: true}}
+		cs := &CaptureScreenshot{Vision: fv, capture: fixedCapture(png)}
+		res, _ := cs.Execute(context.Background(), rawArgs(t, map[string]any{}))
+		if sr := decode(t, res); sr.Analyzed || res.IsError {
+			t.Fatalf("want not-analyzed with nothing to check against, got %+v", sr)
+		}
+		if fv.calls != 0 {
+			t.Errorf("vision was called with no target to compare against")
+		}
+	})
+
+	t.Run("match: captured bytes reach the checker and the verdict passes", func(t *testing.T) {
+		fv := &fakeVision{verdict: &VisionVerdict{Matches: true, Reason: "looks right"}}
+		cs := &CaptureScreenshot{Vision: fv, capture: fixedCapture(png)}
+		res, _ := cs.Execute(context.Background(), rawArgs(t, map[string]any{"intended_screen": "home"}))
+		sr := decode(t, res)
+		if res.IsError || !sr.Analyzed || !sr.Matches {
+			t.Fatalf("want a passing analyzed verdict, got %+v (is_error=%v)", sr, res.IsError)
+		}
+		// The whole point of the fix: the image used to be discarded. Prove the
+		// exact captured bytes and the target both reached the model.
+		if string(fv.gotBytes) != string(png) {
+			t.Errorf("captured image did not reach the checker: got %q", fv.gotBytes)
+		}
+		if fv.gotWant != "home" {
+			t.Errorf("intended_screen not forwarded: got %q", fv.gotWant)
+		}
+	})
+
+	t.Run("mismatch is surfaced as is_error so the loop keeps working", func(t *testing.T) {
+		fv := &fakeVision{verdict: &VisionVerdict{Matches: false, Reason: "blank screen"}}
+		cs := &CaptureScreenshot{Vision: fv, capture: fixedCapture(png)}
+		res, _ := cs.Execute(context.Background(), rawArgs(t, map[string]any{"intended_screen": "home"}))
+		sr := decode(t, res)
+		if !res.IsError || !sr.Analyzed || sr.Matches {
+			t.Fatalf("want an analyzed mismatch flagged is_error, got %+v (is_error=%v)", sr, res.IsError)
+		}
+	})
+
+	t.Run("a visible error is an error even when the layout matches", func(t *testing.T) {
+		fv := &fakeVision{verdict: &VisionVerdict{Matches: true, HasError: true, ErrorMsg: "red box"}}
+		cs := &CaptureScreenshot{Vision: fv, capture: fixedCapture(png)}
+		res, _ := cs.Execute(context.Background(), rawArgs(t, map[string]any{"intended_screen": "home"}))
+		if sr := decode(t, res); !res.IsError || !sr.HasError {
+			t.Fatalf("want a visible-error verdict flagged is_error, got %+v (is_error=%v)", sr, res.IsError)
+		}
+	})
+
+	t.Run("a failed analysis is neither a pass nor a fail", func(t *testing.T) {
+		fv := &fakeVision{err: errors.New("model timeout")}
+		cs := &CaptureScreenshot{Vision: fv, capture: fixedCapture(png)}
+		res, _ := cs.Execute(context.Background(), rawArgs(t, map[string]any{"intended_screen": "home"}))
+		sr := decode(t, res)
+		if res.IsError || sr.Analyzed {
+			t.Fatalf("a failed analysis must not read as a screen verdict, got %+v (is_error=%v)", sr, res.IsError)
+		}
+		if !strings.Contains(sr.Reason, "analysis failed") {
+			t.Errorf("reason should explain the analysis failure, got %q", sr.Reason)
+		}
+	})
+
+	t.Run("capture failure is an error", func(t *testing.T) {
+		cs := &CaptureScreenshot{capture: func(context.Context) ([]byte, error) {
+			return nil, errors.New("no device")
+		}}
+		res, _ := cs.Execute(context.Background(), rawArgs(t, map[string]any{}))
+		if sr := decode(t, res); !res.IsError || sr.Success {
+			t.Fatalf("want a failed capture, got %+v (is_error=%v)", sr, res.IsError)
+		}
+	})
+}
