@@ -2,11 +2,14 @@ import { HTMLAttributes, forwardRef } from "react";
 
 interface SpinnerProps extends HTMLAttributes<HTMLDivElement> {
   size?: "sm" | "md" | "lg";
-  color?: "primary" | "currentColor";
+  // Neutral by default — a generic wait is not the device coming alive, so it
+  // must not borrow signal green. Use "probe" only where the spin genuinely
+  // stands for the agent working.
+  color?: "neutral" | "probe" | "currentColor";
 }
 
 const Spinner = forwardRef<HTMLDivElement, SpinnerProps>(
-  ({ className = "", size = "md", color = "primary", ...props }, ref) => {
+  ({ className = "", size = "md", color = "neutral", ...props }, ref) => {
     const sizes = {
       sm: "h-4 w-4 border-2",
       md: "h-6 w-6 border-2",
@@ -14,7 +17,8 @@ const Spinner = forwardRef<HTMLDivElement, SpinnerProps>(
     };
 
     const colors = {
-      primary: "border-accent border-t-transparent",
+      neutral: "border-graphite border-t-transparent",
+      probe: "border-probe border-t-transparent",
       currentColor: "border-current border-t-transparent",
     };
 

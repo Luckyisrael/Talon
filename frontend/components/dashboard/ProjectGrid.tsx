@@ -1,4 +1,4 @@
-import { Add } from "iconsax-reactjs";
+import { Folder } from "iconsax-reactjs";
 import ProjectCard from "./ProjectCard";
 import type { Project } from "@/lib/types";
 
@@ -11,11 +11,11 @@ export default function ProjectGrid({ projects, onDelete }: ProjectGridProps) {
   if (projects.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
-        <div className="w-16 h-16 rounded-2xl bg-surface-3 flex items-center justify-center mb-4">
-          <Add size="32" className="text-text-secondary" variant="Linear" />
+        <div className="w-14 h-14 rounded-2 bg-riser border border-rail flex items-center justify-center mb-4">
+          <Folder size="28" className="text-dust" variant="Linear" />
         </div>
-        <h3 className="text-lg font-semibold text-text-primary mb-1">No projects yet</h3>
-        <p className="text-sm text-text-secondary">Create your first project to get started</p>
+        <h3 className="text-body font-semibold text-paper mb-1">No projects yet</h3>
+        <p className="text-small text-graphite">Create your first project to get started</p>
       </div>
     );
   }

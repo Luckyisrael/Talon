@@ -74,20 +74,20 @@ export default function DashboardPage() {
       <div className="max-w-5xl mx-auto px-4 py-8">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-text-primary mb-1">Projects</h1>
-            <p className="text-sm text-text-secondary">Build and manage your Solana Mobile apps</p>
+            <h1 className="text-title font-semibold text-paper mb-1">Projects</h1>
+            <p className="text-small text-graphite">Build and manage your Solana Mobile apps</p>
           </div>
 
           <div className="flex items-center gap-3">
             {user && (
-              <div className="hidden sm:flex items-center gap-2 text-xs text-text-secondary">
+              <div className="hidden sm:flex items-center gap-2 text-tiny text-graphite">
                 <span className="font-mono">{user.email}</span>
                 <StatusBadge variant={user.tier as "free" | "pro"} />
               </div>
             )}
             <PillButton onClick={() => setCreateOpen(true)}>
               <Add size="16" variant="Linear" />
-              New Project
+              New project
             </PillButton>
           </div>
         </div>
@@ -96,19 +96,19 @@ export default function DashboardPage() {
         {loading && (
           <div className="flex flex-col items-center justify-center py-20">
             <Spinner size="lg" />
-            <p className="text-sm text-text-muted mt-4">Loading projects...</p>
+            <p className="text-small text-dust mt-4">Loading projects…</p>
           </div>
         )}
 
         {/* Error state */}
         {!loading && error && (
           <div className="flex flex-col items-center justify-center py-20">
-            <div className="w-14 h-14 rounded-2xl bg-error/10 flex items-center justify-center mb-4">
-              <Warning2 size="28" className="text-error" variant="Linear" />
+            <div className="w-14 h-14 rounded-2 bg-fault/10 border border-fault/20 flex items-center justify-center mb-4">
+              <Warning2 size="28" className="text-fault" variant="Linear" />
             </div>
-            <p className="text-sm text-text-secondary mb-3">{error}</p>
+            <p className="text-small text-graphite mb-3">{error}</p>
             <PillButton variant="secondary" onClick={refresh}>
-              Try Again
+              Try again
             </PillButton>
           </div>
         )}
@@ -116,14 +116,14 @@ export default function DashboardPage() {
         {/* Empty state */}
         {!loading && !error && projectList.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20">
-            <div className="w-14 h-14 rounded-2xl bg-surface-3 flex items-center justify-center mb-4">
-              <Folder size="28" className="text-text-muted" variant="Linear" />
+            <div className="w-14 h-14 rounded-2 bg-riser border border-rail flex items-center justify-center mb-4">
+              <Folder size="28" className="text-dust" variant="Linear" />
             </div>
-            <h3 className="text-base font-medium text-text-primary mb-1">No projects yet</h3>
-            <p className="text-sm text-text-secondary mb-4">Create your first Solana Mobile app</p>
+            <h3 className="text-body font-semibold text-paper mb-1">No projects yet</h3>
+            <p className="text-small text-graphite mb-4">Create your first Solana Mobile app</p>
             <PillButton onClick={() => setCreateOpen(true)}>
               <Add size="16" variant="Linear" />
-              Create Project
+              Create project
             </PillButton>
           </div>
         )}

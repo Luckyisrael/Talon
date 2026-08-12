@@ -5,27 +5,35 @@ interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
   size?: "sm" | "md";
 }
 
+/**
+ * Mono, uppercase, tracked — the same register as an instrument label, because
+ * a badge names a real condition. Colour appears only where it states one:
+ * "active" borrows signal because the project is actually running, "error" is a
+ * fault. A tier is a plan, not a live state, so free/pro stay neutral and
+ * differ only in emphasis.
+ */
 const StatusBadge = forwardRef<HTMLSpanElement, StatusBadgeProps>(
   ({ className = "", variant = "free", size = "sm", children, ...props }, ref) => {
-    const baseStyles = "rounded-full font-mono uppercase tracking-wider inline-flex items-center";
+    const base =
+      "inline-flex items-center rounded-1 border font-mono uppercase tracking-wider";
 
     const variants = {
-      free: "bg-surface-4 text-text-secondary",
-      pro: "bg-accent text-background",
-      active: "bg-success/20 text-success",
-      paused: "bg-surface-4 text-text-secondary",
-      error: "bg-error/20 text-error",
+      free: "bg-riser border-rail text-dust",
+      pro: "bg-riser border-edge text-paper",
+      active: "bg-signal/10 border-signal/30 text-signal",
+      paused: "bg-riser border-rail text-graphite",
+      error: "bg-fault/10 border-fault/30 text-fault",
     };
 
     const sizes = {
-      sm: "h-5 px-2 text-[10px]",
-      md: "h-6 px-3 text-xs",
+      sm: "h-5 px-2 text-micro",
+      md: "h-6 px-2.5 text-tiny",
     };
 
     return (
       <span
         ref={ref}
-        className={`${baseStyles} ${variants[variant]} ${sizes[size]} ${className}`}
+        className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
         {...props}
       >
         {children || variant.toUpperCase()}

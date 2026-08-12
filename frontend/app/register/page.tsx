@@ -32,22 +32,22 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 bg-background">
+    <div className="min-h-screen flex items-center justify-center px-4 bg-ink">
       <div className="w-full max-w-sm">
         <div className="flex justify-center mb-8">
-          <Link href="/" className="flex items-center gap-3">
-            <div className="w-3 h-3 rounded-full bg-text-primary" />
-            <span className="text-xl font-bold text-text-primary">SeekerStudio</span>
+          <Link href="/" className="flex items-center gap-2.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-[1px] bg-paper" />
+            <span className="text-lead font-semibold text-paper">SeekerStudio</span>
           </Link>
         </div>
 
-        <div className="bg-surface-3 rounded-[20px] p-6">
-          <h1 className="text-xl font-bold text-text-primary text-center mb-1">Create account</h1>
-          <p className="text-sm text-text-secondary text-center mb-6">Start building Solana Mobile apps</p>
+        <div className="bay p-6">
+          <h1 className="text-lead font-semibold text-paper text-center mb-1">Create account</h1>
+          <p className="text-small text-graphite text-center mb-6">Start building Solana Mobile apps</p>
 
           <form onSubmit={handleSubmit}>
             <label className="block mb-4">
-              <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">Email</span>
+              <span className="gauge">Email</span>
               <input
                 type="email"
                 value={email}
@@ -55,13 +55,13 @@ export default function RegisterPage() {
                 placeholder="you@example.com"
                 autoComplete="email"
                 required
-                className="mt-2 w-full h-11 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all"
+                className="field mt-2"
                 autoFocus
               />
             </label>
 
             <label className="block mb-4">
-              <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">Password</span>
+              <span className="gauge">Password</span>
               <input
                 type="password"
                 value={password}
@@ -70,25 +70,23 @@ export default function RegisterPage() {
                 autoComplete="new-password"
                 minLength={10}
                 required
-                className="mt-2 w-full h-11 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all"
+                className="field mt-2"
               />
               {/* The API enforces this. Saying so up front beats a rejected form. */}
-              <span className="mt-2 block text-xs text-text-muted">
-                At least 10 characters.
-              </span>
+              <span className="mt-2 block text-tiny text-dust">At least 10 characters.</span>
             </label>
 
-            {error && <p className="text-sm text-error mb-4">{error}</p>}
+            {error && <p className="text-small text-fault mb-4">{error}</p>}
 
             <PillButton type="submit" disabled={loading} className="w-full">
-              {loading ? <Spinner size="sm" color="currentColor" /> : "Create Account"}
+              {loading ? <Spinner size="sm" color="currentColor" /> : "Create account"}
             </PillButton>
           </form>
         </div>
 
-        <p className="text-sm text-text-secondary text-center mt-6">
+        <p className="text-small text-graphite text-center mt-6">
           Already have an account?{" "}
-          <Link href="/login" className="text-accent hover:text-accent-hover transition-colors">
+          <Link href="/login" className="text-paper underline underline-offset-2 hover:text-white transition-colors">
             Sign in
           </Link>
         </p>

@@ -41,38 +41,47 @@ export default function CreateProject({ open, onClose, onCreated }: CreateProjec
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 z-50" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/60 z-50" onClick={onClose} />
 
       <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-        <div className="w-full max-w-md bg-surface-3 rounded-[20px] shadow-lg p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-semibold text-text-primary">New Project</h2>
-            <button onClick={onClose} className="p-2 rounded-lg hover:bg-surface-4 transition-colors">
-              <CloseSquare size="20" className="text-text-secondary" variant="Linear" />
+        <div className="w-full max-w-md bay p-5 rise">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="text-lead font-semibold text-paper">New project</h2>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-1 text-dust hover:text-paper hover:bg-rail transition-colors"
+            >
+              <CloseSquare size="20" variant="Linear" />
             </button>
           </div>
 
           <form onSubmit={handleSubmit}>
-            <label className="block mb-2">
-              <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">Project Name</span>
+            <label className="block">
+              <span className="gauge">Project name</span>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="My Solana Wallet"
-                className="mt-2 w-full h-12 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all"
+                className="field mt-2"
                 autoFocus
               />
             </label>
 
-            {error && <p className="text-sm text-error mt-2">{error}</p>}
+            {error && <p className="text-small text-fault mt-2">{error}</p>}
 
             <div className="flex gap-3 mt-6">
-              <PillButton type="button" variant="secondary" onClick={onClose} disabled={loading} className="flex-1">
+              <PillButton
+                type="button"
+                variant="secondary"
+                onClick={onClose}
+                disabled={loading}
+                className="flex-1"
+              >
                 Cancel
               </PillButton>
               <PillButton type="submit" disabled={loading || !name.trim()} className="flex-1">
-                {loading ? <Spinner size="sm" color="currentColor" /> : "Create Project"}
+                {loading ? <Spinner size="sm" color="currentColor" /> : "Create project"}
               </PillButton>
             </div>
           </form>
