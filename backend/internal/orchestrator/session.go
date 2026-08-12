@@ -5,22 +5,24 @@ import (
 	"time"
 
 	"github.com/seekersstudio/backend/internal/events"
-	"github.com/seekersstudio/backend/internal/staging"
 	"github.com/seekersstudio/backend/internal/store"
 )
 
 type Phase string
 
+// The phases a turn moves through. STAGE_WRITE and PROMOTE used to sit between
+// GENERATE and VERIFY_STATIC, back when writes landed in a .staging directory and
+// were copied over the workspace afterwards. Nothing mounted that directory, so
+// the agent and the file API disagreed about what the project contained; tools
+// now write to the workspace directly and checkpoints provide the undo that
+// staging was supposed to.
 const (
 	PhaseIntake        Phase = "INTAKE"
 	PhasePlan          Phase = "PLAN"
 	PhaseContextBuild  Phase = "CONTEXT_BUILD"
 	PhaseResearch      Phase = "RESEARCH"
 	PhaseGenerate      Phase = "GENERATE"
-	PhaseStageWrite    Phase = "STAGE_WRITE"
-	PhaseInstall       Phase = "INSTALL"
 	PhaseVerifyStatic  Phase = "VERIFY_STATIC"
-	PhasePromote       Phase = "PROMOTE"
 	PhaseVerifyRuntime Phase = "VERIFY_RUNTIME"
 	PhaseDone          Phase = "DONE"
 	PhaseFailed        Phase = "FAILED_NEEDS_USER"
@@ -30,20 +32,18 @@ type SessionState struct {
 	ID              int64
 	ProjectID       int64
 	WorkspacePath   string
-	StagingPath     string
 	CurrentPhase    Phase
 	HealAttempts    int
 	MaxHealAttempts int
 	PatchHistory    []PatchRecord
 	StartedAt       time.Time
 	Emitter         *events.SessionEmitter
-	Staging         *staging.Manager
 
 	// Phase 7: Engineering Intelligence
-	ReadFiles       map[string]bool     // files read in current turn (enforces read-before-write)
-	ADRs            []store.ArchitectureDecision // loaded ADRs for this project
-	Memory          []store.ProjectMemory        // loaded project memory
-	TaskTracker     *TaskTracker                 // visible task breakdown
+	ReadFiles   map[string]bool              // files read in current turn (enforces read-before-write)
+	ADRs        []store.ArchitectureDecision // loaded ADRs for this project
+	Memory      []store.ProjectMemory        // loaded project memory
+	TaskTracker *TaskTracker                 // visible task breakdown
 
 	mu sync.Mutex
 }
@@ -68,18 +68,16 @@ type Task struct {
 	Result      string `json:"result,omitempty"`
 }
 
-func NewSession(id, projectID int64, workspacePath, stagingPath string, emitter *events.SessionEmitter) *SessionState {
+func NewSession(id, projectID int64, workspacePath string, emitter *events.SessionEmitter) *SessionState {
 	return &SessionState{
 		ID:              id,
 		ProjectID:       projectID,
 		WorkspacePath:   workspacePath,
-		StagingPath:     stagingPath,
 		CurrentPhase:    PhaseIntake,
 		HealAttempts:    0,
 		MaxHealAttempts: 3,
 		StartedAt:       time.Now(),
 		Emitter:         emitter,
-		Staging:         staging.NewManager(stagingPath, workspacePath),
 		ReadFiles:       make(map[string]bool),
 		TaskTracker:     NewTaskTracker(),
 	}

@@ -14,21 +14,21 @@ import (
 
 // Manager handles dev-client lifecycle: installation, rebuild detection, and async rebuilds.
 type Manager struct {
-	templateDir   string
-	allowlist     *Allowlist
-	rebuilds      map[int64]*RebuildState // sessionID -> rebuild state
-	mu            sync.Mutex
+	templateDir string
+	allowlist   *Allowlist
+	rebuilds    map[int64]*RebuildState // sessionID -> rebuild state
+	mu          sync.Mutex
 }
 
 // RebuildState tracks an in-progress background rebuild.
 type RebuildState struct {
-	SessionID    int64
-	Status       string    // "pending", "building", "success", "failed"
-	StartedAt    time.Time
-	CompletedAt  *time.Time
-	Error        string
-	LastGoodAPK  string    // path to the last-known-good APK
-	NewAPK       string    // path to the new APK (if success)
+	SessionID   int64
+	Status      string // "pending", "building", "success", "failed"
+	StartedAt   time.Time
+	CompletedAt *time.Time
+	Error       string
+	LastGoodAPK string // path to the last-known-good APK
+	NewAPK      string // path to the new APK (if success)
 }
 
 // NewManager creates a dev-client manager for the given template directory.

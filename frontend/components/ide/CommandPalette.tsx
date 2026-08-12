@@ -1,8 +1,16 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
-import { Document, Folder, Message } from "iconsax-reactjs";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileNode } from "@/lib/types";
+
+/**
+ * Jump to anything.
+ *
+ * Two changes of substance over the old palette: matching is subsequence-based,
+ * so "shbal" finds "screens/Balance.tsx" the way every other editor's palette
+ * would; and results are capped at 40 rather than 10, because a ten-item cap on
+ * a generated project silently hides most of it.
+ */
 
 interface CommandPaletteProps {
   open: boolean;
@@ -15,17 +23,47 @@ interface CommandPaletteProps {
   onStartSession: () => void;
 }
 
-interface Command {
+interface Entry {
   id: string;
   label: string;
-  description?: string;
-  icon: React.ReactNode;
-  action: () => void;
-  keywords: string[];
+  hint?: string;
+  kind: "action" | "file";
+  run: () => void;
+  haystack: string;
 }
 
-export default function CommandPalette({
-  open,
+const LIMIT = 40;
+
+/**
+ * Subsequence match, scored so the closest thing lands first: a run of adjacent
+ * characters beats a scattered one, and a match on the filename beats the same
+ * match buried in a directory name.
+ */
+function score(haystack: string, needle: string): number {
+  if (!needle) return 1;
+  let hi = 0;
+  let points = 0;
+  let streak = 0;
+  for (const ch of needle) {
+    const found = haystack.indexOf(ch, hi);
+    if (found === -1) return -1;
+    streak = found === hi ? streak + 1 : 0;
+    points += 1 + streak * 3;
+    hi = found + 1;
+  }
+  // Prefer the shorter of two otherwise-equal matches.
+  return points * 100 - haystack.length;
+}
+
+export default function CommandPalette({ open, ...rest }: CommandPaletteProps) {
+  // Mounting only while open is what resets the query and the cursor. Keeping it
+  // mounted and clearing the state in an effect on `open` meant a render pass
+  // with last session's search still in the box.
+  if (!open) return null;
+  return <Palette {...rest} />;
+}
+
+function Palette({
   onClose,
   files,
   onOpenFile,
@@ -33,190 +71,207 @@ export default function CommandPalette({
   onSwitchToFiles,
   onToggleTerminal,
   onStartSession,
-}: CommandPaletteProps) {
+}: Omit<CommandPaletteProps, "open">) {
   const [query, setQuery] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [rawCursor, setRawCursor] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Flatten files for search
   const flatFiles = useMemo(() => {
-    const result: { path: string; name: string }[] = [];
+    const out: { path: string; name: string }[] = [];
     function walk(nodes: FileNode[], prefix: string) {
       for (const node of nodes) {
         const path = prefix ? `${prefix}/${node.name}` : node.name;
-        if (node.type === "file") {
-          result.push({ path, name: node.name });
-        }
-        if (node.children) {
-          walk(node.children, path);
-        }
+        if (node.type === "file") out.push({ path, name: node.name });
+        if (node.children) walk(node.children, path);
       }
     }
     walk(files, "");
-    return result;
+    return out;
   }, [files]);
 
-  // Build commands list
-  const commands: Command[] = useMemo(() => {
-    const cmds: Command[] = [
+  const entries: Entry[] = useMemo(() => {
+    const actions: Entry[] = [
       {
         id: "chat",
-        label: "Open Chat",
-        description: "Switch to AI assistant",
-        icon: <Message size="14" variant="Linear" />,
-        action: () => { onSwitchToChat(); onClose(); },
-        keywords: ["chat", "ai", "assistant"],
+        label: "Talk to the agent",
+        hint: "left panel",
+        kind: "action",
+        run: onSwitchToChat,
+        haystack: "talk to the agent chat ai assistant build",
       },
       {
         id: "files",
-        label: "Open Files",
-        description: "Switch to file tree",
-        icon: <Folder size="14" variant="Linear" />,
-        action: () => { onSwitchToFiles(); onClose(); },
-        keywords: ["files", "tree", "browse"],
+        label: "Show the workspace",
+        hint: "left panel",
+        kind: "action",
+        run: onSwitchToFiles,
+        haystack: "show the workspace files tree browse",
       },
       {
         id: "terminal",
-        label: "Toggle Terminal",
-        description: "Show or hide the terminal",
-        icon: (
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-          </svg>
-        ),
-        action: () => { onToggleTerminal(); onClose(); },
-        keywords: ["terminal", "shell", "console"],
+        label: "Toggle the shell",
+        hint: "⌘J",
+        kind: "action",
+        run: onToggleTerminal,
+        haystack: "toggle the shell terminal console logs output",
       },
       {
         id: "session",
-        label: "Start Session",
-        description: "Start a device preview session",
-        icon: (
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-          </svg>
-        ),
-        action: () => { onStartSession(); onClose(); },
-        keywords: ["session", "preview", "device", "start"],
+        label: "Start a device",
+        hint: "right panel",
+        kind: "action",
+        run: onStartSession,
+        haystack: "start a device session preview emulator run",
       },
     ];
 
-    // Add file commands
-    for (const file of flatFiles) {
-      cmds.push({
-        id: `file-${file.path}`,
-        label: file.name,
-        description: file.path,
-        icon: <Document size="14" variant="Linear" />,
-        action: () => { onOpenFile(file.path); onClose(); },
-        keywords: [file.name.toLowerCase(), file.path.toLowerCase()],
-      });
-    }
+    const fileEntries: Entry[] = flatFiles.map((f) => ({
+      id: `file:${f.path}`,
+      label: f.name,
+      hint: f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : undefined,
+      kind: "file",
+      run: () => onOpenFile(f.path),
+      // The filename is repeated so a match there outweighs the same match in a
+      // directory name.
+      haystack: `${f.name.toLowerCase()} ${f.path.toLowerCase()}`,
+    }));
 
-    return cmds;
-  }, [flatFiles, onOpenFile, onSwitchToChat, onSwitchToFiles, onToggleTerminal, onStartSession, onClose]);
+    return [...actions, ...fileEntries];
+  }, [flatFiles, onOpenFile, onSwitchToChat, onSwitchToFiles, onToggleTerminal, onStartSession]);
 
-  // Filter commands
-  const filtered = useMemo(() => {
-    if (!query.trim()) return commands.slice(0, 10);
-    const q = query.toLowerCase();
-    return commands
-      .filter((cmd) => cmd.keywords.some((kw) => kw.includes(q)) || cmd.label.toLowerCase().includes(q))
-      .slice(0, 10);
-  }, [commands, query]);
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return entries.slice(0, LIMIT);
+    return entries
+      .map((e) => ({ e, s: score(e.haystack, q) }))
+      .filter((r) => r.s >= 0)
+      .sort((a, b) => b.s - a.s)
+      .slice(0, LIMIT)
+      .map((r) => r.e);
+  }, [entries, query]);
 
-  // Reset on open
+  // The list shrinks as you type, so the cursor is clamped where it is read
+  // rather than corrected in an effect — otherwise Enter fires on a row that no
+  // longer exists for one render.
+  const cursor = Math.min(rawCursor, Math.max(0, results.length - 1));
+
   useEffect(() => {
-    if (open) {
-      setQuery("");
-      setSelectedIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
-  }, [open]);
-
-  // Keyboard navigation
-  useEffect(() => {
-    if (!open) return;
-
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "ArrowDown") {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "ArrowDown" || (e.key === "n" && e.ctrlKey)) {
         e.preventDefault();
-        setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1));
-      } else if (e.key === "ArrowUp") {
+        setRawCursor(results.length === 0 ? 0 : (cursor + 1) % results.length);
+      } else if (e.key === "ArrowUp" || (e.key === "p" && e.ctrlKey)) {
         e.preventDefault();
-        setSelectedIndex((i) => Math.max(i - 1, 0));
+        setRawCursor(results.length === 0 ? 0 : (cursor - 1 + results.length) % results.length);
       } else if (e.key === "Enter") {
         e.preventDefault();
-        filtered[selectedIndex]?.action();
+        const hit = results[cursor];
+        if (hit) {
+          hit.run();
+          onClose();
+        }
       } else if (e.key === "Escape") {
+        e.preventDefault();
         onClose();
       }
     }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [results, cursor, onClose]);
 
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, filtered, selectedIndex, onClose]);
-
-  // Scroll selected item into view
   useEffect(() => {
-    if (listRef.current) {
-      const item = listRef.current.children[selectedIndex] as HTMLElement;
-      item?.scrollIntoView({ block: "nearest" });
-    }
-  }, [selectedIndex]);
-
-  if (!open) return null;
+    const item = listRef.current?.children[cursor] as HTMLElement | undefined;
+    item?.scrollIntoView({ block: "nearest" });
+  }, [cursor]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]">
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-background/80 backdrop-blur-sm animate-fade-in" onClick={onClose} />
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[16vh]">
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default bg-ink/70 backdrop-blur-[2px]"
+      />
 
-      {/* Palette */}
-      <div className="relative w-full max-w-[480px] mx-4 bg-surface-1 rounded-xl border border-white/10 shadow-lg overflow-hidden animate-slide-up">
-        {/* Search input */}
-        <div className="flex items-center gap-3 px-4 h-12 border-b border-white/5">
-          <svg className="w-4 h-4 text-text-muted flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Jump to a file or an action"
+        className="rise relative mx-4 w-full max-w-lg overflow-hidden rounded-3 border border-edge bg-slate shadow-[0_28px_70px_-20px_rgba(0,0,0,0.9)]"
+      >
+        <div className="flex h-11 items-center gap-2.5 border-b border-rail px-3.5">
+          <svg
+            aria-hidden
+            className="h-3.5 w-3.5 flex-shrink-0 text-dust"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
-            ref={inputRef}
+            autoFocus
             type="text"
             value={query}
-            onChange={(e) => { setQuery(e.target.value); setSelectedIndex(0); }}
-            placeholder="Search files and actions..."
-            className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setRawCursor(0);
+            }}
+            placeholder="Jump to a file, or run something"
+            className="min-w-0 flex-1 bg-transparent font-mono text-small text-paper placeholder:font-sans placeholder:text-dust focus:outline-none"
           />
-          <kbd className="text-[10px] text-text-muted bg-surface-3 px-1.5 py-0.5 rounded">ESC</kbd>
+          <span className="gauge flex-shrink-0">esc</span>
         </div>
 
-        {/* Results */}
-        <div ref={listRef} className="max-h-[300px] overflow-y-auto py-1">
-          {filtered.length === 0 ? (
-            <div className="px-4 py-8 text-center">
-              <p className="text-sm text-text-muted">No results found</p>
+        <div ref={listRef} className="max-h-[46vh] overflow-y-auto py-1">
+          {results.length === 0 ? (
+            <div className="px-4 py-7 text-center">
+              <p className="text-small text-graphite">Nothing matches that.</p>
             </div>
           ) : (
-            filtered.map((cmd, i) => (
-              <button
-                key={cmd.id}
-                onClick={cmd.action}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors duration-75 ${
-                  i === selectedIndex ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-surface-2"
-                }`}
-              >
-                <span className={`flex-shrink-0 ${i === selectedIndex ? "text-accent" : "text-text-muted"}`}>
-                  {cmd.icon}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm font-medium block truncate">{cmd.label}</span>
-                  {cmd.description && (
-                    <span className="text-[11px] text-text-muted block truncate">{cmd.description}</span>
+            results.map((entry, i) => {
+              const active = i === cursor;
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  onClick={() => {
+                    entry.run();
+                    onClose();
+                  }}
+                  onMouseMove={() => setRawCursor(i)}
+                  className={`flex w-full items-baseline gap-2.5 px-3.5 py-1.5 text-left transition-colors ${
+                    active ? "bg-riser text-paper" : "text-graphite"
+                  }`}
+                >
+                  <span
+                    className={`min-w-0 truncate ${
+                      entry.kind === "file" ? "font-mono text-tiny" : "text-small"
+                    }`}
+                  >
+                    {entry.label}
+                  </span>
+                  {entry.hint && (
+                    <span
+                      className={`ml-auto flex-shrink-0 truncate pl-3 text-tiny ${
+                        entry.kind === "file" ? "font-mono text-dust" : "text-dust"
+                      }`}
+                    >
+                      {entry.hint}
+                    </span>
                   )}
-                </div>
-              </button>
-            ))
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 border-t border-rail px-3.5 py-1.5">
+          <span className="gauge">↑↓ move</span>
+          <span className="gauge">↵ open</span>
+          {results.length >= LIMIT && (
+            <span className="gauge ml-auto">first {LIMIT} — keep typing</span>
           )}
         </div>
       </div>

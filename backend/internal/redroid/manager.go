@@ -119,7 +119,7 @@ func (m *Manager) CreateContainer(sessionID int64) (*ContainerInfo, error) {
 	}
 
 	hostCfg := &container.HostConfig{
-		Privileged:  true,
+		Privileged:   true,
 		PortBindings: portBindings,
 		Resources: container.Resources{
 			Memory:   1 << 30, // 1GB

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,42 +22,20 @@ import (
 )
 
 type PromptHandler struct {
-	store       *store.Store
-	ai          *ai.Client
+	store        *store.Store
+	ai           *ai.Client
 	workspaceDir string
-	orch        *orchestrator.Orchestrator
-	toolReg     *tools.Registry
-	devClient   *devclient.Manager
+	orch         *orchestrator.Orchestrator
+	devClient    *devclient.Manager
 }
 
 func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager) *PromptHandler {
-	reg := tools.NewRegistry()
-	reg.Register(&tools.ListFiles{})
-	reg.Register(&tools.ReadFile{})
-	reg.Register(&tools.RunCommand{})
-	reg.Register(&tools.RunTypecheck{})
-	reg.Register(&tools.RunLint{})
-	reg.Register(&tools.InstallPackage{})
-	reg.Register(&tools.BuildAPK{})
-
-	// Phase 7: Register ADR and memory tools
-	storeAdapter := &tools.StoreAdapter{
-		CreateADRFn: func(projectID int64, decision, context, options, outcome string) error {
-			_, err := s.CreateADR(projectID, decision, context, options, outcome)
-			return err
-		},
-		AddMemoryFn: s.AddMemory,
-	}
-	reg.Register(tools.NewWriteADR(storeAdapter))
-	reg.Register(tools.NewWriteMemory(storeAdapter))
-
 	return &PromptHandler{
-		store:       s,
-		ai:          a,
+		store:        s,
+		ai:           a,
 		workspaceDir: workspaceDir,
-		orch:        orch,
-		toolReg:     reg,
-		devClient:   dc,
+		orch:         orch,
+		devClient:    dc,
 	}
 }
 
@@ -68,363 +45,212 @@ type promptRequest struct {
 	Mode      string `json:"mode"`
 }
 
+const maxPromptLength = 50_000
+
+// historyTurns is how many stored turns are replayed into a new request. The
+// model also compacts on its own once the context gets large; this bound just
+// keeps the query and the JSON decode cheap.
+const historyTurns = 60
+
+// promptLimitFor returns the monthly prompt allowance for a tier. -1 is
+// unlimited. Previously every user was checked against a hardcoded 20 and the
+// tier column was ignored entirely.
+func promptLimitFor(tier string) int {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "pro":
+		return 2000
+	case "team", "enterprise", "unlimited":
+		return -1
+	default:
+		return 20
+	}
+}
+
+// checkQuota validates ownership-independent limits and returns false having
+// already written the response.
+func (h *PromptHandler) checkQuota(w http.ResponseWriter, userID int64) bool {
+	user, err := h.store.GetUserByID(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load your account")
+		return false
+	}
+	usage, err := h.store.GetUsage(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not check your usage")
+		return false
+	}
+	limit := promptLimitFor(user.Tier)
+	if limit >= 0 && usage.PromptsUsed >= limit {
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
+			"You have used all %d prompts for this month. Upgrade your plan to keep building.", limit))
+		return false
+	}
+	return true
+}
+
+// validate checks the request shape and the caller's right to touch the project.
+func (h *PromptHandler) validate(w http.ResponseWriter, r *http.Request, req *promptRequest) bool {
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		writeError(w, http.StatusBadRequest, "could not read the request body")
+		return false
+	}
+	req.Prompt = strings.TrimSpace(req.Prompt)
+	if req.Prompt == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return false
+	}
+	if len(req.Prompt) > maxPromptLength {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("that prompt is %d characters; the limit is %d", len(req.Prompt), maxPromptLength))
+		return false
+	}
+	if req.Mode != "plan" && req.Mode != "build" {
+		writeError(w, http.StatusBadRequest, "mode must be 'plan' or 'build'")
+		return false
+	}
+	if req.ProjectID <= 0 {
+		writeError(w, http.StatusBadRequest, "project_id is required")
+		return false
+	}
+	if _, ok := h.ownedProject(w, r, req.ProjectID); !ok {
+		return false
+	}
+	return h.checkQuota(w, GetUserID(r.Context()))
+}
+
+// ownedProject loads a project and confirms the caller owns it. A project
+// someone else owns is reported as missing rather than forbidden, so the
+// endpoint does not confirm that an id exists.
+func (h *PromptHandler) ownedProject(w http.ResponseWriter, r *http.Request, projectID int64) (*store.Project, bool) {
+	project, err := h.store.GetProject(projectID)
+	if err != nil || project.UserID != GetUserID(r.Context()) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return nil, false
+	}
+	return project, true
+}
+
+// ── Non-streaming ─────────────────────────────────────
+
+// Create runs one turn and returns the whole result at once. The streaming
+// endpoint is what the IDE uses; this exists for scripted callers.
 func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := GetUserID(r.Context())
 
 	var req promptRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !h.validate(w, r, &req) {
 		return
 	}
 
-	if req.Prompt == "" || req.Mode == "" {
-		writeError(w, http.StatusBadRequest, "prompt and mode required")
+	prompt, err := h.store.CreatePrompt(req.ProjectID, req.Mode, req.Prompt)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not save the prompt")
 		return
 	}
 
-	if req.Mode != "plan" && req.Mode != "build" {
-		writeError(w, http.StatusBadRequest, "mode must be 'plan' or 'build'")
-		return
-	}
+	// The request context, not Background: if the caller hangs up there is no
+	// reason to keep spending tokens on their behalf.
+	ctx := r.Context()
 
-	// Validate prompt length
-	if len(req.Prompt) > 50000 {
-		writeError(w, http.StatusBadRequest, "prompt too long (max 50000 characters)")
-		return
-	}
-
-	// Validate project ownership (IDOR prevention)
-	if req.ProjectID > 0 {
-		project, err := h.store.GetProject(req.ProjectID)
-		if err != nil || project.UserID != userID {
-			writeError(w, http.StatusNotFound, "project not found")
+	if req.Mode == "plan" {
+		planResp, err := h.ai.Plan(ctx, h.planHistory(req.ProjectID, req.Prompt))
+		if err != nil {
+			log.Printf("plan failed (user %d, project %d): %v", userID, req.ProjectID, err)
+			writeError(w, http.StatusBadGateway, friendlyAIError(err))
 			return
 		}
-	}
+		h.savePlan(req.ProjectID, planResp)
 
-	if req.Mode == "plan" && isExecutionRequest(req.Prompt) {
+		respBytes, _ := json.Marshal(planResp)
+		h.store.UpdatePromptResponse(prompt.ID, string(respBytes))
+		h.store.IncrementPrompts(userID)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"id":   0,
-			"mode": "plan",
-			"response": map[string]interface{}{
-				"message": "You're currently in Plan mode. To generate code, switch to Build mode.",
-				"plan":    nil,
-			},
+			"id":       prompt.ID,
+			"mode":     "plan",
+			"response": json.RawMessage(respBytes),
 		})
 		return
 	}
 
-	usage, err := h.store.GetUsage(userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check usage")
+	outcome, buildErr := h.runBuild(ctx, req.ProjectID, prompt.ID, userID, req.Prompt, nil)
+
+	response := map[string]interface{}{
+		"id":            prompt.ID,
+		"mode":          "build",
+		"message":       "",
+		"files_touched": []string{},
+		"verified":      false,
+		"rounds":        0,
+	}
+	if outcome != nil {
+		response["message"] = outcome.FinalText
+		response["files_touched"] = outcome.FilesTouched
+		response["verified"] = outcome.Verified
+		response["rounds"] = outcome.Rounds
+		response["usage"] = outcome.Usage
+	}
+
+	if buildErr != nil {
+		log.Printf("build failed (user %d, project %d): %v", userID, req.ProjectID, buildErr)
+		response["error"] = friendlyAIError(buildErr)
+		writeJSON(w, http.StatusOK, response)
 		return
 	}
 
-	if usage.PromptsUsed >= 20 {
-		writeError(w, http.StatusTooManyRequests, "free tier limit reached (20 prompts/month)")
-		return
-	}
-
-	prompt, err := h.store.CreatePrompt(req.ProjectID, req.Mode, req.Prompt)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create prompt")
-		return
-	}
-
-	history := h.buildHistoryWithMemory(req.ProjectID, req.Prompt)
-
-	var response string
-
-	if req.Mode == "plan" {
-		planResp, err := h.ai.Plan(context.Background(), history)
-		if err != nil {
-			log.Printf("AI plan error for user %d: %v", userID, err)
-			// Provide user-friendly error messages for common failures
-			errMsg := "AI request failed"
-			errStr := err.Error()
-			if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limit") {
-				errMsg = "Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again."
-			} else if strings.Contains(errStr, "502") || strings.Contains(errStr, "503") {
-				errMsg = "AI service temporarily unavailable. This usually resolves quickly — please try again."
-			} else if strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") {
-				errMsg = "AI service request timed out. The service may be under heavy load — please try again."
-			}
-			writeError(w, http.StatusInternalServerError, errMsg)
-			return
-		}
-		respBytes, _ := json.Marshal(planResp)
-		response = string(respBytes)
-
-		if planResp.Plan != nil {
-			planJSON, _ := json.Marshal(planResp.Plan)
-			h.store.UpdateProjectPlan(req.ProjectID, string(planJSON))
-			h.store.AddMemory(req.ProjectID, "plan", planResp.Message, "")
-			for _, screen := range planResp.Plan.Screens {
-				h.store.AddMemory(req.ProjectID, "pending_screen", screen.Name+": "+screen.Description, "")
-			}
-			for _, feature := range planResp.Plan.Features {
-				h.store.AddMemory(req.ProjectID, "pending_feature", feature, "")
-			}
-		}
-	} else {
-		workspacePath := h.getWorkspacePath(req.ProjectID)
-
-		sess := h.orch.CreateSession(prompt.ID, req.ProjectID, workspacePath)
-		sess.Staging.Init()
-
-		buildTools := h.buildToolList(workspacePath, sess.StagingPath)
-		toolExecutor := h.makeToolExecutor(workspacePath, sess.StagingPath)
-
-		systemPrompt := h.buildSystemPrompt(workspacePath)
-		err := h.orch.RunBuildWithTools(context.Background(), sess, req.Prompt, systemPrompt, history, buildTools, toolExecutor)
-		if err != nil {
-			log.Printf("build error for user %d project %d: %v", userID, req.ProjectID, err)
-			// Provide user-friendly error messages for common failures
-			errMsg := "Build failed"
-			errStr := err.Error()
-			if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limit") {
-				errMsg = "Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again."
-			} else if strings.Contains(errStr, "502") || strings.Contains(errStr, "503") {
-				errMsg = "AI service temporarily unavailable. This usually resolves quickly — please try again."
-			} else if strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") {
-				errMsg = "AI service request timed out. The service may be under heavy load — please try again."
-			} else if strings.Contains(errStr, "exceeded max rounds") {
-				errMsg = "Build took too many iterations. Try simplifying your request or breaking it into smaller steps."
-			}
-			writeError(w, http.StatusInternalServerError, errMsg)
-			return
-		}
-
-		var buildResp ai.BuildResponse
-		stagedFiles, _ := sess.Staging.ListFiles()
-		for _, path := range stagedFiles {
-			content, readErr := sess.Staging.ReadFile(path)
-			if readErr == nil {
-				buildResp.Files = append(buildResp.Files, ai.File{Path: path, Content: content})
-			}
-		}
-
-		// Promote staged files to live workspace
-		if len(stagedFiles) > 0 {
-			if err := sess.Staging.PromoteAll(); err != nil {
-				log.Printf("promote failed for project %d: %v", req.ProjectID, err)
-			}
-		}
-
-		buildResp.Message = "Build completed successfully"
-
-		// Check if build introduced new native dependencies requiring rebuild
-		h.checkAndTriggerRebuild(context.Background(), req.ProjectID, workspacePath, stagedFiles, sess)
-
-		respBytes, _ := json.Marshal(buildResp)
-		response = string(respBytes)
-
-		h.updateMemoryAfterBuild(req.ProjectID, buildResp.Files, req.Prompt)
-		h.orch.RemoveSession(prompt.ID)
-	}
-
-	h.store.UpdatePromptResponse(prompt.ID, response)
-	h.store.IncrementPrompts(userID)
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"id":       prompt.ID,
-		"mode":     req.Mode,
-		"response": json.RawMessage(response),
-	})
+	writeJSON(w, http.StatusOK, response)
 }
 
+// ── Streaming ─────────────────────────────────────────
+
+// Stream runs one turn and reports progress as server-sent events.
 func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	userID := GetUserID(r.Context())
 
 	var req promptRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.Prompt == "" || req.Mode == "" {
-		writeError(w, http.StatusBadRequest, "prompt and mode required")
-		return
-	}
-
-	if req.Mode != "plan" && req.Mode != "build" {
-		writeError(w, http.StatusBadRequest, "mode must be 'plan' or 'build'")
-		return
-	}
-
-	if req.Mode == "plan" && isExecutionRequest(req.Prompt) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			writeError(w, http.StatusInternalServerError, "streaming not supported")
-			return
-		}
-		msg := "You're currently in Plan mode. To generate code, switch to Build mode."
-		writeSSE(w, "text.start", nil)
-		writeSSE(w, "text.delta", ai.StreamTextDelta{Text: msg})
-		writeSSE(w, "text.end", nil)
-		writeSSE(w, "done", nil)
-		flusher.Flush()
-		return
-	}
-
-	usage, err := h.store.GetUsage(userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check usage")
-		return
-	}
-
-	if usage.PromptsUsed >= 20 {
-		writeError(w, http.StatusTooManyRequests, "free tier limit reached (20 prompts/month)")
+	if !h.validate(w, r, &req) {
 		return
 	}
 
 	prompt, err := h.store.CreatePrompt(req.ProjectID, req.Mode, req.Prompt)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create prompt")
+		writeError(w, http.StatusInternalServerError, "could not save the prompt")
 		return
 	}
 
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "this server cannot stream responses")
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
-		return
-	}
-
-	history := h.buildHistoryWithMemory(req.ProjectID, req.Prompt)
 	ctx := r.Context()
 
 	if req.Mode == "plan" {
-		h.streamPlanMode(ctx, w, flusher, prompt.ID, req.ProjectID, history)
+		h.streamPlan(ctx, w, flusher, prompt.ID, req.ProjectID, req.Prompt)
 		h.store.IncrementPrompts(userID)
 		return
 	}
 
-	workspacePath := h.getWorkspacePath(req.ProjectID)
-	sess := h.orch.CreateSession(prompt.ID, req.ProjectID, workspacePath)
-	sess.Staging.Init()
-
-	systemPrompt := h.buildSystemPrompt(workspacePath)
-	buildTools := h.buildToolList(workspacePath, sess.StagingPath)
-	toolExecutor := h.makeToolExecutor(workspacePath, sess.StagingPath)
-
-	var mu sync.Mutex
-	var fullText strings.Builder
-
-	evtChan := make(chan events.Event, 64)
-	go func() {
-		defer close(evtChan)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case evt, ok := <-sess.Emitter.Events():
-				if !ok {
-					return
-				}
-				evtChan <- evt
-			}
-		}
-	}()
-
-	go func() {
-		defer sess.Emitter.Close()
-		err := h.orch.RunBuildWithTools(ctx, sess, req.Prompt, systemPrompt, history, buildTools, toolExecutor)
-		if err != nil {
-			log.Printf("stream build error for user %d: %v", userID, err)
-			// Provide user-friendly error message
-			errMsg := "Build failed"
-			errStr := err.Error()
-			if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limit") {
-				errMsg = "Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again."
-			} else if strings.Contains(errStr, "502") || strings.Contains(errStr, "503") {
-				errMsg = "AI service temporarily unavailable. This usually resolves quickly — please try again."
-			} else if strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") {
-				errMsg = "AI service request timed out. The service may be under heavy load — please try again."
-			} else if strings.Contains(errStr, "exceeded max rounds") {
-				errMsg = "Build took too many iterations. Try simplifying your request or breaking it into smaller steps."
-			} else {
-				errMsg = "Build failed. " + errStr
-			}
-			mu.Lock()
-			fullText.WriteString("\n\n" + errMsg)
-			mu.Unlock()
-			sess.Emitter.EmitError(errMsg)
-		}
-	}()
-
-	writeSSE(w, "text.start", nil)
-	flusher.Flush()
-
-done:
-	for {
-		select {
-		case <-ctx.Done():
-			break done
-		case evt, ok := <-evtChan:
-			if !ok {
-				break done
-			}
-			h.writeEventAsSSE(w, evt)
-			flusher.Flush()
-		}
-	}
-
-	for evt := range sess.Emitter.Events() {
-		h.writeEventAsSSE(w, evt)
-		flusher.Flush()
-	}
-
-	// Promote staged files to live workspace
-	stagedFiles, _ := sess.Staging.ListFiles()
-	if len(stagedFiles) > 0 {
-		if err := sess.Staging.PromoteAll(); err != nil {
-			log.Printf("promote failed for project %d: %v", req.ProjectID, err)
-		} else {
-			log.Printf("promoted %d files for project %d", len(stagedFiles), req.ProjectID)
-		}
-
-		// Phase 7: Write project memory after successful build
-		var buildFiles []ai.File
-		for _, path := range stagedFiles {
-			content, readErr := sess.Staging.ReadFile(path)
-			if readErr == nil {
-				buildFiles = append(buildFiles, ai.File{Path: path, Content: content})
-			}
-		}
-		h.updateMemoryAfterBuild(req.ProjectID, buildFiles, req.Prompt)
-	}
-
-	responseText := fullText.String()
-	if responseText == "" {
-		responseText = "Build completed"
-	}
-
-	h.store.UpdatePromptResponse(prompt.ID, responseText)
-	h.store.IncrementPrompts(userID)
-
-	h.orch.RemoveSession(prompt.ID)
-	writeSSE(w, "done", nil)
-	flusher.Flush()
+	h.streamBuild(ctx, w, flusher, req, prompt.ID, userID)
 }
 
-func (h *PromptHandler) streamPlanMode(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID int64, history []ai.PromptMessage) {
-	streamEvents := h.ai.ChatStream(ctx, "", history)
+// streamPlan proxies the model's stream to the client, then parses the finished
+// text into a plan.
+func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID int64, userPrompt string) {
+	// The system prompt was previously omitted here while the output was still
+	// parsed as a plan, so plan mode had no instructions at all.
+	stream := h.ai.ChatStream(ctx, ai.SystemPromptPlan, h.planHistory(projectID, userPrompt))
 
-	var fullText strings.Builder
+	var full strings.Builder
+	sawError := false
 
-	for event := range streamEvents {
-		if ctx.Err() != nil {
-			break
-		}
-
+	for event := range stream {
 		switch event.Type {
 		case "thinking.start", "thinking.delta", "thinking.end":
 			writeSSE(w, event.Type, event.Data)
@@ -432,265 +258,354 @@ func (h *PromptHandler) streamPlanMode(ctx context.Context, w http.ResponseWrite
 			writeSSE(w, "text.start", nil)
 		case "text.delta":
 			if td, ok := event.Data.(ai.StreamTextDelta); ok {
-				fullText.WriteString(td.Text)
+				full.WriteString(td.Text)
 			}
 			writeSSE(w, "text.delta", event.Data)
 		case "text.end":
 			writeSSE(w, "text.end", nil)
-		case "done":
-			responseText := fullText.String()
-			responseText = ai.StripCodeBlocks(responseText)
-
-			var planResp ai.PlanResponse
-			if json.Unmarshal([]byte(responseText), &planResp) == nil {
-				if planResp.Plan != nil {
-					planJSON, _ := json.Marshal(planResp.Plan)
-					h.store.UpdateProjectPlan(projectID, string(planJSON))
-					h.store.AddMemory(projectID, "plan", planResp.Message, "")
-					for _, screen := range planResp.Plan.Screens {
-						writeSSE(w, "tool.start", ai.StreamToolStart{
-							Name:  "plan_screen",
-							Input: map[string]string{"name": screen.Name, "description": screen.Description},
-						})
-						h.store.AddMemory(projectID, "pending_screen", screen.Name+": "+screen.Description, "")
-						writeSSE(w, "tool.end", ai.StreamToolEnd{Name: "plan_screen", Result: "planned"})
-					}
-				}
-				h.store.UpdatePromptResponse(promptID, responseText)
-			} else {
-				h.store.UpdatePromptResponse(promptID, responseText)
-			}
-
-			writeSSE(w, "done", nil)
 		case "error":
+			sawError = true
 			writeSSE(w, "error", map[string]string{"message": event.Error})
 			h.store.UpdatePromptResponse(promptID, "Error: "+event.Error)
 		}
-
 		flusher.Flush()
+	}
+
+	if sawError || ctx.Err() != nil {
+		writeSSE(w, "done", map[string]string{"status": "error"})
+		flusher.Flush()
+		return
+	}
+
+	// The model is asked for JSON. Send the human-readable message to the client
+	// as its own event so the UI never has to display raw JSON, and hand over the
+	// structured plan alongside it.
+	raw := ai.StripCodeBlocks(full.String())
+	var planResp ai.PlanResponse
+	if json.Unmarshal([]byte(raw), &planResp) == nil && (planResp.Message != "" || planResp.Plan != nil) {
+		h.savePlan(projectID, &planResp)
+		payload, _ := json.Marshal(planResp)
+		h.store.UpdatePromptResponse(promptID, string(payload))
+		writeSSE(w, "plan", planResp)
+	} else {
+		h.store.UpdatePromptResponse(promptID, raw)
+	}
+
+	writeSSE(w, "done", map[string]string{"status": "success"})
+	flusher.Flush()
+}
+
+// streamBuild runs the agent loop while forwarding its events to the client.
+func (h *PromptHandler) streamBuild(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, req promptRequest, promptID, userID int64) {
+	type result struct {
+		outcome *orchestrator.BuildOutcome
+		err     error
+	}
+	resultCh := make(chan result, 1)
+	emitterCh := make(chan *events.SessionEmitter, 1)
+
+	go func() {
+		outcome, err := h.runBuild(ctx, req.ProjectID, promptID, userID, req.Prompt, emitterCh)
+		resultCh <- result{outcome, err}
+	}()
+
+	// runBuild publishes its emitter as soon as the session exists.
+	var emitter *events.SessionEmitter
+	select {
+	case emitter = <-emitterCh:
+	case res := <-resultCh:
+		// Failed before the session was created.
+		h.finishBuildStream(w, flusher, res.outcome, res.err)
+		return
+	case <-ctx.Done():
+		return
+	}
+
+	var res result
+	var got bool
+
+drain:
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt := <-emitter.Events():
+			h.writeBuildEvent(w, evt)
+			flusher.Flush()
+		case res = <-resultCh:
+			got = true
+			break drain
+		}
+	}
+
+	// The loop has returned but events queued just before it finished are still
+	// buffered. Deliver them before the terminal event.
+	for emitter.Pending() > 0 {
+		select {
+		case evt := <-emitter.Events():
+			h.writeBuildEvent(w, evt)
+		default:
+		}
+	}
+	flusher.Flush()
+
+	if got {
+		h.finishBuildStream(w, flusher, res.outcome, res.err)
 	}
 }
 
-func (h *PromptHandler) writeEventAsSSE(w http.ResponseWriter, evt events.Event) {
+func (h *PromptHandler) finishBuildStream(w http.ResponseWriter, flusher http.Flusher, outcome *orchestrator.BuildOutcome, err error) {
+	if err != nil {
+		writeSSE(w, "error", map[string]string{"message": friendlyAIError(err)})
+	}
+	payload := map[string]interface{}{"status": "success"}
+	if err != nil {
+		payload["status"] = "failed"
+	}
+	if outcome != nil {
+		payload["message"] = outcome.FinalText
+		payload["files_touched"] = outcome.FilesTouched
+		payload["verified"] = outcome.Verified
+		payload["rounds"] = outcome.Rounds
+	}
+	writeSSE(w, "done", payload)
+	flusher.Flush()
+}
+
+// writeBuildEvent maps an internal event onto the SSE vocabulary the IDE knows.
+func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event) {
 	switch evt.Type {
 	case events.PhaseEvent:
-		writeSSE(w, "phase", map[string]interface{}{
-			"phase":  evt.Phase,
-			"status": evt.Status,
-		})
+		writeSSE(w, "phase", map[string]interface{}{"phase": evt.Phase, "status": evt.Status})
 	case events.ToolCallEvent:
 		writeSSE(w, "tool_call", map[string]interface{}{
-			"tool":   evt.Tool,
-			"path":   evt.Path,
-			"name":   evt.Name,
-			"status": evt.Status,
+			"tool": evt.Tool, "path": evt.Path, "name": evt.Name, "status": evt.Status,
 		})
 	case events.VerifyEvent:
 		writeSSE(w, "verify", map[string]interface{}{
-			"stage":  evt.Tool,
-			"status": evt.Status,
-			"error":  evt.Error,
+			"stage": evt.Tool, "status": evt.Status, "error": evt.Error,
 		})
+	case events.TextEvent:
+		// The agent's prose, forwarded as it works. Previously the build stream
+		// carried no text at all and the stored response was the literal string
+		// "Build completed".
+		writeSSE(w, "text.delta", ai.StreamTextDelta{Text: evt.Text})
+	case events.ThinkingEvent:
+		writeSSE(w, "thinking.delta", ai.StreamTextDelta{Text: evt.Text})
+	case events.UsageEvent:
+		writeSSE(w, "usage", evt.Data)
+	case events.TaskUpdateEvent:
+		writeSSE(w, "task_update", map[string]interface{}{
+			"id": evt.Tool, "description": evt.Name, "status": evt.Status, "result": evt.Error,
+		})
+	case events.RebuildEvent:
+		writeSSE(w, "rebuild", map[string]interface{}{"status": evt.Status, "detail": evt.Error})
 	case events.GuardrailEvent:
 		writeSSE(w, "guardrail_reject", map[string]interface{}{
-			"tool":   evt.Tool,
-			"status": evt.Status,
-			"error":  evt.Error,
+			"tool": evt.Tool, "status": evt.Status, "error": evt.Error,
 		})
 	case events.ErrorEvent:
 		writeSSE(w, "error", map[string]string{"message": evt.Error})
 	case events.DoneEvent:
-		writeSSE(w, "done", map[string]string{"status": evt.Status})
+		// The terminal event is written by finishBuildStream, which knows the
+		// outcome. Swallowing it here keeps the client from finishing early.
 	}
 }
 
-func (h *PromptHandler) buildToolList(workspacePath, stagingPath string) []ai.ToolDefinition {
-	h.toolReg = tools.NewRegistry()
+// ── The build itself ──────────────────────────────────
 
-	fileTools := &tools.ListFiles{WorkspacePath: workspacePath}
-	h.toolReg.Register(fileTools)
+// runBuild executes one agentic turn: replay the stored conversation, run the
+// loop, persist what happened, and checkpoint the files it changed.
+//
+// If emitterCh is non-nil the session's emitter is published to it as soon as
+// the session exists, so a streaming caller can start forwarding events.
+func (h *PromptHandler) runBuild(
+	ctx context.Context,
+	projectID, promptID, userID int64,
+	userPrompt string,
+	emitterCh chan<- *events.SessionEmitter,
+) (*orchestrator.BuildOutcome, error) {
+	workspacePath, err := h.workspacePath(projectID)
+	if err != nil {
+		return nil, err
+	}
 
-	readTool := &tools.ReadFile{WorkspacePath: workspacePath}
-	h.toolReg.Register(readTool)
+	sess := h.orch.CreateSession(promptID, projectID, workspacePath)
+	defer h.orch.RemoveSession(promptID)
+	defer sess.Emitter.Close()
 
-	writeTool := &tools.WriteFileStaged{StagingPath: stagingPath}
-	h.toolReg.Register(writeTool)
+	if emitterCh != nil {
+		emitterCh <- sess.Emitter
+	}
 
-	deleteTool := &tools.DeleteFileStaged{StagingPath: stagingPath}
-	h.toolReg.Register(deleteTool)
+	bs := h.newBuildSession(workspacePath, projectID, h.adbTargetFor(projectID))
 
-	grepTool := &tools.GrepCodebase{WorkspacePath: workspacePath}
-	h.toolReg.Register(grepTool)
+	history := h.conversation(projectID)
+	userTurn := ai.UserText(userPrompt)
+	history = append(history, userTurn)
 
-	cmdTool := &tools.RunCommand{WorkspacePath: workspacePath}
-	h.toolReg.Register(cmdTool)
+	outcome, runErr := h.orch.RunAgentLoop(ctx, sess, orchestrator.RunOptions{
+		SystemPrompt: h.systemPrompt(),
+		History:      history,
+		Tools:        bs.defs,
+		Execute:      bs.executor(),
+		ReadOnlyTool: bs.reg.IsReadOnly,
+		FilesTouched: bs.fs.Touched,
+	})
 
-	typecheckTool := &tools.RunTypecheck{WorkspacePath: workspacePath}
-	h.toolReg.Register(typecheckTool)
+	// Everything below runs whether or not the loop succeeded: a failed turn
+	// still changed files and still cost tokens, and losing that record is how
+	// the next turn ends up contradicting this one.
+	h.persistTurn(projectID, promptID, userID, userTurn, outcome)
+	h.checkpoint(projectID, promptID, userPrompt, bs.fs.Journal())
 
-	lintTool := &tools.RunLint{WorkspacePath: workspacePath}
-	h.toolReg.Register(lintTool)
+	if outcome != nil && len(outcome.FilesTouched) > 0 {
+		h.checkNativeRebuild(ctx, projectID, workspacePath, outcome.FilesTouched, sess)
+	}
 
-	// InstallPackage uses the dev-client allowlist for native detection
-	var allowlist *devclient.Allowlist
+	return outcome, runErr
+}
+
+// persistTurn records the turn's messages, its final text and its token cost.
+func (h *PromptHandler) persistTurn(projectID, promptID, userID int64, userTurn ai.Message, outcome *orchestrator.BuildOutcome) {
+	if err := h.store.AppendMessage(projectID, promptID, userTurn.Role,
+		ai.MarshalBlocks(userTurn.Blocks), 0, 0); err != nil {
+		log.Printf("project %d: could not store the user turn: %v", projectID, err)
+	}
+
+	if outcome == nil {
+		return
+	}
+
+	for _, m := range outcome.Messages {
+		if err := h.store.AppendMessage(projectID, promptID, m.Role,
+			ai.MarshalBlocks(m.Blocks), 0, 0); err != nil {
+			log.Printf("project %d: could not store a turn: %v", projectID, err)
+			break
+		}
+	}
+
+	response := outcome.FinalText
+	if response == "" {
+		if len(outcome.FilesTouched) > 0 {
+			response = "Changed: " + strings.Join(outcome.FilesTouched, ", ")
+		} else {
+			response = "No changes were made."
+		}
+	}
+	h.store.UpdatePromptResponse(promptID, response)
+	h.store.RecordPromptTokens(promptID, userID,
+		outcome.Usage.InputTokens, outcome.Usage.OutputTokens, outcome.Usage.CacheReadTokens)
+	h.store.IncrementPrompts(userID)
+
+	// Keep the stored conversation bounded. The tail is what matters for
+	// continuity; the whole history would eventually dominate the database.
+	h.store.TrimConversation(projectID, 400)
+}
+
+// checkpoint stores the pre-change content of every file the turn touched, so
+// the change can be undone afterwards.
+func (h *PromptHandler) checkpoint(projectID, promptID int64, label string, journal []tools.FileSnapshot) {
+	if len(journal) == 0 {
+		return
+	}
+	files := make([]store.CheckpointFile, 0, len(journal))
+	for _, s := range journal {
+		files = append(files, store.CheckpointFile{Path: s.Path, Content: s.Content, Existed: s.Existed})
+	}
+	if _, err := h.store.CreateCheckpoint(projectID, promptID, truncateLabel(label, 160), files); err != nil {
+		log.Printf("project %d: could not save a checkpoint: %v", projectID, err)
+		return
+	}
+	h.store.PruneCheckpoints(projectID, 30)
+}
+
+func truncateLabel(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+// conversation replays the project's stored turns.
+func (h *PromptHandler) conversation(projectID int64) []ai.Message {
+	stored, err := h.store.GetConversation(projectID, historyTurns)
+	if err != nil {
+		log.Printf("project %d: could not load the conversation: %v", projectID, err)
+		return nil
+	}
+
+	msgs := make([]ai.Message, 0, len(stored))
+	for _, m := range stored {
+		blocks := ai.UnmarshalBlocks(m.Blocks)
+		if len(blocks) == 0 {
+			continue
+		}
+		msgs = append(msgs, ai.Message{Role: m.Role, Blocks: blocks})
+	}
+
+	// A replayed conversation must not begin with tool results or end mid tool
+	// call — both providers reject an orphaned tool_use or tool_result.
+	return ai.TrimToValidHistory(msgs)
+}
+
+// planHistory builds the flat history Plan mode uses. Plan mode calls no tools,
+// so only the prose turns are relevant.
+func (h *PromptHandler) planHistory(projectID int64, userPrompt string) []ai.PromptMessage {
+	var history []ai.PromptMessage
+
+	if summary := h.memorySummary(projectID); summary != "" {
+		history = append(history, ai.PromptMessage{
+			Role:    "user",
+			Content: "Context on this project so far:\n\n" + summary,
+		})
+		history = append(history, ai.PromptMessage{
+			Role:    "assistant",
+			Content: "Got it — I have the current state of the project in mind.",
+		})
+	}
+
+	for _, m := range h.conversation(projectID) {
+		if text := strings.TrimSpace(m.Text()); text != "" {
+			history = append(history, ai.PromptMessage{Role: m.Role, Content: text})
+		}
+	}
+
+	return append(history, ai.PromptMessage{Role: "user", Content: userPrompt})
+}
+
+// systemPrompt returns the build-mode system prompt plus the native-module
+// allowlist, when the platform has one.
+func (h *PromptHandler) systemPrompt() string {
+	prompt := ai.SystemPromptBuild
 	if h.devClient != nil {
-		allowlist = h.devClient.Allowlist()
-	}
-	installTool := &tools.InstallPackage{WorkspacePath: workspacePath, Allowlist: allowlist}
-	h.toolReg.Register(installTool)
-
-	buildTool := &tools.BuildAPK{WorkspacePath: workspacePath, Allowlist: allowlist}
-	h.toolReg.Register(buildTool)
-
-	// Wallet round-trip test tool (auto-detects ADB target)
-	walletTestTool := &tools.TestWalletRoundtrip{}
-	h.toolReg.Register(walletTestTool)
-
-	defs := h.toolReg.List()
-	result := make([]ai.ToolDefinition, len(defs))
-	for i, d := range defs {
-		result[i] = ai.ToolDefinition{
-			Name:        d.Name,
-			Description: d.Description,
-			InputSchema: d.InputSchema,
+		if al := h.devClient.Allowlist(); al != nil {
+			prompt += "\n\n" + al.FormatForPrompt()
 		}
 	}
-	return result
+	return prompt
 }
 
-func (h *PromptHandler) makeToolExecutor(workspacePath, stagingPath string) func(ctx context.Context, name string, input json.RawMessage) (string, error) {
-	return func(ctx context.Context, name string, input json.RawMessage) (string, error) {
-		result, err := h.toolReg.Execute(ctx, name, input)
-		if err != nil {
-			return result.Content, err
-		}
-		return result.Content, nil
+// ── Plan persistence ──────────────────────────────────
+
+// savePlan stores the plan on the project. The plan itself is the durable
+// record; writing one memory row per screen duplicated it and then went stale as
+// soon as the app changed.
+func (h *PromptHandler) savePlan(projectID int64, resp *ai.PlanResponse) {
+	if resp == nil || resp.Plan == nil {
+		return
+	}
+	planJSON, err := json.Marshal(resp.Plan)
+	if err != nil {
+		return
+	}
+	if err := h.store.UpdateProjectPlan(projectID, string(planJSON)); err != nil {
+		log.Printf("project %d: could not save the plan: %v", projectID, err)
 	}
 }
 
-func (h *PromptHandler) buildSystemPrompt(workspacePath string) string {
-	existingFiles := h.ai.ReadProjectFiles(workspacePath)
-	contextPart := ""
-	if existingFiles != "" {
-		contextPart = "\n\nExisting project files:\n\n" + existingFiles
-	}
-
-	// Inject native-module allowlist into AI context
-	allowlistPart := ""
-	if h.devClient != nil {
-		al := h.devClient.Allowlist()
-		if al != nil {
-			allowlistPart = "\n\n" + al.FormatForPrompt()
-		}
-	}
-
-	return systemPromptBuild + allowlistPart + contextPart
-}
-
-const systemPromptBuild = `CRITICAL RULES — VIOLATION IS FAILURE:
-1. You are building a REACT NATIVE / EXPO mobile app for ANDROID (Seeker device).
-2. You must NEVER generate HTML, CSS, vanilla JavaScript, index.html, or any web code.
-3. You must NEVER create website files. This is NOT a web app.
-4. ONLY use React Native components: View, Text, StyleSheet, TouchableOpacity, ScrollView, FlatList, TextInput, Switch, SafeAreaView, etc.
-5. ONLY use Expo libraries and expo-router for navigation.
-
-You are a React Native engineer specializing in Solana Mobile apps for the Seeker device.
-
-=== CRITICAL GUARDRAILS ===
-
-1. REACT NATIVE ONLY: Use View, Text, StyleSheet, TouchableOpacity, ScrollView, FlatList, TextInput, Switch, SafeAreaView. NEVER use div, span, p, button, input, or any HTML elements.
-
-2. READ BEFORE EDIT: The existing project files are provided in context. Read them before generating code.
-
-3. NEVER DELETE: Do not remove existing functionality unless the user explicitly says "delete" or "remove".
-
-4. PRESERVE PATTERNS: Match the existing code style exactly.
-
-5. VALIDATE PATHS: File paths must be relative to the project root (e.g., "src/screens/HomeScreen.tsx").
-
-6. TYPE SAFETY: All components must have proper TypeScript types.
-
-7. WALLET PATTERNS: All Solana wallet interactions MUST use MWA protocol. Use transact() from mobile-wallet-adapter-protocol-web3js for signing.
-
-8. SEED VAULT LIMITATION: Seed Vault requires real Seeker hardware and CANNOT be tested in this environment. All wallet implementations must use MWA flows. Any Seed Vault-specific code you produce will be UNVERIFIED on this platform. Default to MWA for anything that needs to be tested here.
-
-9. SINGLE RESPONSIBILITY: Each file should do one thing.
-
-=== PROTECTED FILES — NEVER OVERWRITE ===
-These files are auto-managed by the platform. NEVER call write_file on them:
-- package.json (contains all 40+ dependencies — your code needs them)
-- tsconfig.json (configured for Expo with path aliases)
-- app.json (Expo configuration)
-- babel.config.js, metro.config.js (build toolchain)
-- index.js (app entry point)
-- eslint.config.js (linting rules)
-- .gitignore, expo-env.d.ts
-
-If you need a package not already installed, use install_package instead of overwriting package.json.
-Attempting to overwrite these files will be BLOCKED and waste your limited rounds.
-
-The project already has these packages installed:
-- expo, react-native
-- @solana/web3.js, @solana/spl-token
-- @solana-mobile/mobile-wallet-adapter-protocol-web3js
-- @solana-mobile/mobile-wallet-adapter-protocol
-- react-native-gesture-handler, react-native-reanimated
-- react-native-safe-area-context, react-native-screens
-- react-native-quick-crypto, js-base64
-- @react-native-async-storage/async-storage
-- expo-router, expo-constants, expo-linking, expo-status-bar
-- react-native-svg, react-native-webview
-
-=== MWA WALLET INTEGRATION GUIDE ===
-When building wallet/Solana apps, use these patterns:
-
-1. Import: import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js'
-2. Connect:
-   const session = await transact(async (wallet) => {
-     const authorizationResult = await wallet.authorize(
-       'https://seeker.app',
-       'Seeker Studio',
-       ['solana:mainnet', 'solana:devnet']
-     );
-     return authorizationResult;
-   });
-3. Sign transaction:
-   const signedTx = await transact(async (wallet) => {
-     return await wallet.signTransaction(transaction);
-   });
-4. Sign message:
-   const signedMsg = await transact(async (wallet) => {
-     return await wallet.signMessage(message);
-   });
-
-The mock wallet on the device auto-approves all requests for testing.
-
-Use the tools provided to:
-- write_file: Create or overwrite files in the staging area (config files are BLOCKED)
-- read_file: Read existing files to understand the codebase
-- list_files: List directory contents
-- grep_codebase: Search for patterns in the code
-- run_command: Execute build commands (npm, npx, tsc, eslint, expo)
-- run_typecheck: Run TypeScript type checking
-- run_lint: Run ESLint
-- install_package: Install additional npm packages (MWA, Seed Vault, Expo modules)
-- build_apk: Build Android APK and install on device (runs expo prebuild + gradle assembleDebug)
-- test_wallet_roundtrip: Test MWA wallet connection on device (launches fakedapp, verifies MWA protocol)
-
-Write files using write_file tool. The files will be staged and promoted after verification.
-
-=== CRITICAL EXECUTION RULE ===
-You have a LIMITED number of rounds. DO NOT spend rounds exploring the codebase with list_files, read_file, or grep_codebase. The existing files are already provided in context above. START WRITING CODE IMMEDIATELY using write_file. Create ALL the files you need in the FIRST round. Exploration before writing is wasteful and will cause you to run out of rounds.`
-
-func writeSSE(w http.ResponseWriter, eventType string, data interface{}) {
-	var dataBytes []byte
-	if data != nil {
-		dataBytes, _ = json.Marshal(data)
-	} else {
-		dataBytes = []byte("{}")
-	}
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, string(dataBytes))
-}
+// ── Read endpoints ────────────────────────────────────
 
 func (h *PromptHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
@@ -705,6 +620,11 @@ func (h *PromptHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A prompt is readable only through the project that owns it.
+	if _, ok := h.ownedProject(w, r, prompt.ProjectID); !ok {
+		return
+	}
+
 	writeJSON(w, http.StatusOK, prompt)
 }
 
@@ -714,245 +634,307 @@ func (h *PromptHandler) GetMemory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid project id")
 		return
 	}
-
-	memories, err := h.store.GetAllMemory(projectID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get memory")
+	if _, ok := h.ownedProject(w, r, projectID); !ok {
 		return
 	}
 
-	summary := h.buildMemorySummary(memories)
+	memories, err := h.store.GetAllMemory(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project memory")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"memories": memories,
-		"summary":  summary,
+		"summary":  h.memorySummary(projectID),
 	})
 }
 
-func (h *PromptHandler) buildHistoryWithMemory(projectID int64, userPrompt string) []ai.PromptMessage {
-	history := []ai.PromptMessage{}
-
-	memories, err := h.store.GetAllMemory(projectID)
-	if err == nil && len(memories) > 0 {
-		summary := h.buildMemorySummary(memories)
-		if summary != "" {
-			history = append(history, ai.PromptMessage{
-				Role:    "user",
-				Content: "PROJECT CONTEXT (what has been done so far):\n\n" + summary,
-			})
-			history = append(history, ai.PromptMessage{
-				Role:    "assistant",
-				Content: "I understand the project context. I'll review the existing code and continue from where we left off.",
-			})
-		}
-	}
-
-	history = append(history, ai.PromptMessage{
-		Role:    "user",
-		Content: userPrompt,
-	})
-
-	return history
-}
-
-func (h *PromptHandler) buildMemorySummary(memories []store.ProjectMemory) string {
-	var completed []string
-	var pending []string
-	var notes []string
-
-	maxEntries := 10
-	startIdx := 0
-	if len(memories) > maxEntries {
-		startIdx = len(memories) - maxEntries
-	}
-
-	for _, m := range memories[startIdx:] {
-		switch m.EntryType {
-		case "completed_screen", "completed_feature":
-			name := m.Content
-			if idx := strings.Index(name, ":"); idx > 0 {
-				name = name[:idx]
-			}
-			completed = append(completed, name)
-		case "pending_screen", "pending_feature":
-			name := m.Content
-			if idx := strings.Index(name, ":"); idx > 0 {
-				name = name[:idx]
-			}
-			pending = append(pending, name)
-		case "note":
-			note := m.Content
-			if len(note) > 100 {
-				note = note[:100] + "..."
-			}
-			notes = append(notes, note)
-		}
-	}
-
-	var parts []string
-	if len(completed) > 0 {
-		parts = append(parts, "BUILT: "+strings.Join(completed, ", "))
-	}
-	if len(pending) > 0 {
-		parts = append(parts, "TODO: "+strings.Join(pending, ", "))
-	}
-	if len(notes) > 0 {
-		parts = append(parts, "NOTES: "+strings.Join(notes, " | "))
-	}
-
-	return strings.Join(parts, "\n")
-}
-
-func (h *PromptHandler) updateMemoryAfterBuild(projectID int64, files []ai.File, userPrompt string) {
-	for _, file := range files {
-		if strings.Contains(file.Path, "screens/") {
-			name := filepath.Base(file.Path)
-			name = strings.TrimSuffix(name, filepath.Ext(name))
-			h.store.AddMemory(projectID, "completed_screen", "Screen: "+name+" (in "+file.Path+")", "")
-			h.removePendingByName(projectID, name)
-		} else if strings.Contains(file.Path, "components/") {
-			name := filepath.Base(file.Path)
-			name = strings.TrimSuffix(name, filepath.Ext(name))
-			h.store.AddMemory(projectID, "completed_feature", "Component: "+name+" (in "+file.Path+")", "")
-		}
-	}
-	h.store.AddMemory(projectID, "note", "User requested: "+userPrompt, "")
-}
-
-func (h *PromptHandler) removePendingByName(projectID int64, name string) {
-	memories, err := h.store.GetMemoryByType(projectID, "pending_screen")
+// GetConversation returns the stored turns for a project so the IDE can restore
+// the chat after a reload.
+func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
 	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
 		return
 	}
-	for _, m := range memories {
-		if strings.Contains(strings.ToLower(m.Content), strings.ToLower(name)) {
-			h.store.DeleteMemory(m.ID)
-		}
+	if _, ok := h.ownedProject(w, r, projectID); !ok {
+		return
 	}
+
+	stored, err := h.store.GetConversation(projectID, historyTurns)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load the conversation")
+		return
+	}
+
+	type turn struct {
+		Role   string     `json:"role"`
+		Blocks []ai.Block `json:"blocks"`
+		At     string     `json:"at"`
+	}
+	out := make([]turn, 0, len(stored))
+	for _, m := range stored {
+		out = append(out, turn{Role: m.Role, Blocks: ai.UnmarshalBlocks(m.Blocks), At: m.CreatedAt.Format("2006-01-02T15:04:05Z07:00")})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"turns": out})
 }
 
-func (h *PromptHandler) getWorkspacePath(projectID int64) string {
-	if h.workspaceDir == "" {
-		return ""
+// ClearConversation forgets the stored turns for a project, starting the chat
+// fresh without touching the code.
+func (h *PromptHandler) ClearConversation(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
 	}
-
-	projectDir := filepath.Join(h.workspaceDir, strconv.FormatInt(projectID, 10))
-	os.MkdirAll(projectDir, 0755)
-	return projectDir
+	if _, ok := h.ownedProject(w, r, projectID); !ok {
+		return
+	}
+	if err := h.store.ClearConversation(projectID); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not clear the conversation")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 }
 
-func isExecutionRequest(prompt string) bool {
-	lower := strings.ToLower(prompt)
-	triggers := []string{
-		"start coding", "let's code", "code this now",
-		"write the code now", "generate the code now",
-		"make it work now", "just build it",
-		"skip the plan", "no plan needed", "don't plan",
+// ── Checkpoints ───────────────────────────────────────
+
+// ListCheckpoints returns the undo points for a project, newest first.
+func (h *PromptHandler) ListCheckpoints(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
 	}
-	for _, t := range triggers {
-		if strings.Contains(lower, t) {
-			return true
-		}
+	if _, ok := h.ownedProject(w, r, projectID); !ok {
+		return
 	}
-	return false
+
+	checkpoints, err := h.store.ListCheckpoints(projectID, 30)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load checkpoints")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"checkpoints": checkpoints})
 }
 
-// checkAndTriggerRebuild detects if the build introduced new native dependencies
-// and triggers an async rebuild if needed. The current dev client remains installed
-// and usable while the rebuild runs in the background.
-func (h *PromptHandler) checkAndTriggerRebuild(ctx context.Context, projectID int64, workspacePath string, stagedFiles []string, sess *orchestrator.SessionState) {
+// RestoreCheckpoint puts the workspace back to the state a checkpoint captured.
+func (h *PromptHandler) RestoreCheckpoint(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	if _, ok := h.ownedProject(w, r, projectID); !ok {
+		return
+	}
+
+	checkpointID, err := strconv.ParseInt(chi.URLParam(r, "checkpointID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid checkpoint id")
+		return
+	}
+
+	cp, err := h.store.GetCheckpoint(checkpointID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "checkpoint not found")
+		return
+	}
+	// A checkpoint id from another project must not restore into this one.
+	if cp.ProjectID != projectID {
+		writeError(w, http.StatusNotFound, "checkpoint not found")
+		return
+	}
+
+	workspacePath, err := h.workspacePath(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not open the workspace")
+		return
+	}
+
+	snaps := make([]tools.FileSnapshot, 0, len(cp.Files))
+	for _, f := range cp.Files {
+		snaps = append(snaps, tools.FileSnapshot{Path: f.Path, Content: f.Content, Existed: f.Existed})
+	}
+
+	if err := tools.NewFS(workspacePath).Restore(snaps); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not restore every file: "+err.Error())
+		return
+	}
+
+	paths := make([]string, 0, len(cp.Files))
+	for _, f := range cp.Files {
+		paths = append(paths, f.Path)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":   "restored",
+		"restored": paths,
+	})
+}
+
+// ── Native rebuild ────────────────────────────────────
+
+// checkNativeRebuild notices when a turn added a dependency with native code and
+// kicks off a background dev-client rebuild. The installed client keeps working
+// while that runs; if the rebuild fails, the last known good APK goes back on.
+func (h *PromptHandler) checkNativeRebuild(ctx context.Context, projectID int64, workspacePath string, changed []string, sess *orchestrator.SessionState) {
 	if h.devClient == nil {
 		return
 	}
 
-	// Detect package.json changes in staged files
-	pkgChange, err := devclient.DetectPackageChanges(workspacePath, stagedFiles)
-	if err != nil || pkgChange == nil {
+	pkgChange, err := devclient.DetectPackageChanges(workspacePath, changed)
+	if err != nil || pkgChange == nil || len(pkgChange.Added) == 0 {
 		return
 	}
 
-	if len(pkgChange.Added) == 0 {
-		return
-	}
-
-	// Check if any added packages need a native rebuild
 	needsRebuild, reason := h.devClient.CheckRebuildNeeded(workspacePath, pkgChange.Added)
 	if !needsRebuild {
+		return
+	}
+
+	adbTarget := h.adbTargetFor(projectID)
+	if adbTarget == "" {
+		// Nothing to install onto. Tell the user rather than silently skipping:
+		// their next preview would otherwise crash on a missing native module.
+		sess.Emitter.EmitRebuild("deferred", reason+" — start a device to pick up the new native module")
 		return
 	}
 
 	log.Printf("project %d: native rebuild needed: %s", projectID, reason)
 	sess.Emitter.EmitRebuild("needed", reason)
 
-	// Get session's ADB target for rebuild install
-	project, err := h.store.GetProject(projectID)
-	if err != nil {
-		log.Printf("project %d: cannot get project for rebuild: %v", projectID, err)
-		return
-	}
+	// The rebuild outlives this request, so it gets its own context. Using
+	// r.Context() here would kill the rebuild the moment the client disconnected
+	// and leave the device on a dev client that cannot load the new module.
+	rebuildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Minute)
 
-	// Find active session for this project to get ADB target
-	sessions, err := h.store.GetActiveSessions()
-	if err != nil {
-		return
-	}
+	h.devClient.StartRebuild(rebuildCtx, projectID, workspacePath, adbTarget)
+	sess.Emitter.EmitRebuild("started", "rebuilding the dev client in the background: "+reason)
 
-	var adbTarget string
-	for _, s := range sessions {
-		if s.ProjectID == project.ID && s.ADBPort > 0 {
-			adbTarget = fmt.Sprintf("localhost:%d", s.ADBPort)
-			break
-		}
-	}
-
-	if adbTarget == "" {
-		log.Printf("project %d: no active session with device for rebuild", projectID)
-		return
-	}
-
-	// Start async rebuild — current dev client stays installed
-	h.devClient.StartRebuild(ctx, projectID, workspacePath, adbTarget)
-	sess.Emitter.EmitRebuild("started", fmt.Sprintf("background rebuild started for: %s", reason))
-
-	// Monitor rebuild in background and surface completion/failure
 	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				state := h.devClient.GetRebuildState(projectID)
-				if state == nil {
-					return
-				}
-
-				switch state.Status {
-				case "success":
-					sess.Emitter.EmitRebuild("success", fmt.Sprintf("new dev-client installed: %s", state.NewAPK))
-					log.Printf("project %d: background rebuild succeeded", projectID)
-					h.devClient.ClearRebuild(projectID)
-					return
-				case "failed":
-					// Fallback: reinstall last-known-good APK
-					sess.Emitter.EmitRebuild("failed", fmt.Sprintf("rebuild failed: %s — falling back to last-known-good dev client", state.Error))
-					log.Printf("project %d: rebuild failed: %s — attempting fallback reinstall", projectID, state.Error)
-
-					if state.LastGoodAPK != "" {
-						if err := h.devClient.InstallDevClient(ctx, adbTarget); err != nil {
-							sess.Emitter.EmitRebuild("fallback_failed", fmt.Sprintf("fallback install also failed: %v", err))
-							log.Printf("project %d: fallback reinstall failed: %v", projectID, err)
-						} else {
-							sess.Emitter.EmitRebuild("fallback_success", "restored last-known-good dev client")
-							log.Printf("project %d: fallback reinstall succeeded", projectID)
-						}
-					}
-
-					h.devClient.ClearRebuild(projectID)
-					return
-				}
-
-				time.Sleep(1 * time.Second)
-			}
-		}
+		defer cancel()
+		h.watchRebuild(rebuildCtx, projectID, adbTarget, sess)
 	}()
+}
+
+// watchRebuild polls a running rebuild and reports how it ends.
+func (h *PromptHandler) watchRebuild(ctx context.Context, projectID int64, adbTarget string, sess *orchestrator.SessionState) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sess.Emitter.Done():
+			// Nobody is listening any more. The rebuild itself continues; only
+			// the reporting stops.
+			return
+		case <-ticker.C:
+		}
+
+		state := h.devClient.GetRebuildState(projectID)
+		if state == nil {
+			return
+		}
+
+		switch state.Status {
+		case "success":
+			sess.Emitter.EmitRebuild("success", "installed a new dev client: "+filepath.Base(state.NewAPK))
+			log.Printf("project %d: native rebuild succeeded", projectID)
+			h.devClient.ClearRebuild(projectID)
+			return
+
+		case "failed":
+			sess.Emitter.EmitRebuild("failed", "rebuild failed: "+state.Error)
+			log.Printf("project %d: native rebuild failed: %s", projectID, state.Error)
+
+			if state.LastGoodAPK != "" {
+				if err := h.devClient.InstallDevClient(ctx, adbTarget); err != nil {
+					sess.Emitter.EmitRebuild("fallback_failed", "could not reinstall the previous dev client: "+err.Error())
+					log.Printf("project %d: fallback reinstall failed: %v", projectID, err)
+				} else {
+					sess.Emitter.EmitRebuild("fallback_success", "restored the previous dev client")
+				}
+			}
+
+			h.devClient.ClearRebuild(projectID)
+			return
+		}
+	}
+}
+
+// ── Helpers ───────────────────────────────────────────
+
+func (h *PromptHandler) workspacePath(projectID int64) (string, error) {
+	if h.workspaceDir == "" {
+		return "", fmt.Errorf("no workspace directory is configured on this server")
+	}
+	dir := filepath.Join(h.workspaceDir, strconv.FormatInt(projectID, 10))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("could not open the project workspace: %w", err)
+	}
+	return dir, nil
+}
+
+// memorySummary condenses project memory for a prompt.
+func (h *PromptHandler) memorySummary(projectID int64) string {
+	memories, err := h.store.GetAllMemory(projectID)
+	if err != nil || len(memories) == 0 {
+		return ""
+	}
+
+	const maxEntries = 25
+	if len(memories) > maxEntries {
+		memories = memories[len(memories)-maxEntries:]
+	}
+
+	var b strings.Builder
+	for _, m := range memories {
+		content := strings.Join(strings.Fields(m.Content), " ")
+		if len(content) > 240 {
+			content = content[:240] + "…"
+		}
+		fmt.Fprintf(&b, "- [%s] %s\n", m.EntryType, content)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func writeSSE(w http.ResponseWriter, eventType string, data interface{}) {
+	payload := []byte("{}")
+	if data != nil {
+		if encoded, err := json.Marshal(data); err == nil {
+			payload = encoded
+		}
+	}
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, payload)
+}
+
+// friendlyAIError turns a provider or loop failure into something worth showing
+// a user, without hiding what actually happened.
+func friendlyAIError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "429"), strings.Contains(msg, "rate limit"):
+		return "The AI service is rate limiting us right now. Wait a moment and try again."
+	case strings.Contains(msg, "401"), strings.Contains(msg, "403"):
+		return "The AI service rejected our credentials. Check the server's AI_API_KEY."
+	case strings.Contains(msg, "502"), strings.Contains(msg, "503"):
+		return "The AI service is unavailable right now. This usually clears in a minute."
+	case strings.Contains(msg, "504"), strings.Contains(msg, "timeout"), strings.Contains(msg, "deadline"):
+		return "The AI service took too long to respond. Try again, or break the request into smaller steps."
+	case strings.Contains(msg, "cancelled"), strings.Contains(msg, "context canceled"):
+		return "The build was cancelled."
+	case strings.Contains(msg, "without finishing"):
+		return "The build ran out of rounds before finishing. Try a narrower request — one screen or one feature at a time."
+	case strings.Contains(msg, "does not compile"):
+		return msg
+	default:
+		return msg
+	}
 }

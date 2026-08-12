@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import { Warning2, CloseSquare } from "iconsax-reactjs";
 import PillButton from "@/components/ui/PillButton";
 import { projects } from "@/lib/api";
@@ -13,29 +13,26 @@ interface DeleteProjectModalProps {
   onDeleted: () => void;
 }
 
-export default function DeleteProjectModal({
-  open,
+export default function DeleteProjectModal({ open, ...rest }: DeleteProjectModalProps) {
+  // Mounting only while open is what clears the typed confirmation. Resetting it
+  // from an effect on `open` instead left the previous project's name sitting in
+  // the box for a render — on the one dialog whose entire job is being certain
+  // which project you meant.
+  if (!open) return null;
+  return <Confirm {...rest} />;
+}
+
+function Confirm({
   projectId,
   projectName,
   onClose,
   onDeleted,
-}: DeleteProjectModalProps) {
+}: Omit<DeleteProjectModalProps, "open">) {
   const [confirmName, setConfirmName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const isValid = confirmName === projectName;
-
-  useEffect(() => {
-    if (open) {
-      setConfirmName("");
-      setError("");
-      setTimeout(() => inputRef.current?.focus(), 100);
-    }
-  }, [open]);
-
-  if (!open) return null;
 
   async function handleDelete() {
     if (!isValid) return;
@@ -91,7 +88,7 @@ export default function DeleteProjectModal({
                 Type <span className="text-text-primary font-semibold">{projectName}</span> to confirm
               </span>
               <input
-                ref={inputRef}
+                autoFocus
                 type="text"
                 value={confirmName}
                 onChange={(e) => setConfirmName(e.target.value)}

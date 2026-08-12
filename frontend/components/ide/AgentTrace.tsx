@@ -1,12 +1,20 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { memo, useMemo, useState } from "react";
+import Markdown from "@/components/ui/Markdown";
 import type { TraceRow } from "@/lib/types";
 
-// ── Verb Mapping (§11.4) — one place for all tool labels ──
+// ── Verb mapping — one place for all tool labels ──
 
-const READ_ONLY_TOOLS = new Set(["read_file", "list_files", "grep_codebase", "web_search", "github_search"]);
-const MUTATING_TOOLS = new Set(["write_file", "install_package", "run_build", "run_typecheck", "run_lint", "run_command", "context_build"]);
+const READ_ONLY_TOOLS = new Set([
+  "read_file",
+  "list_files",
+  "grep_codebase",
+  "web_search",
+  "github_search",
+  "fetch_url",
+  "context_build",
+]);
 
 export function getToolLabel(
   tool: string,
@@ -15,32 +23,43 @@ export function getToolLabel(
 ): { label: string; target: string } {
   switch (tool) {
     case "read_file":
-      return { label: "Reading", target: input?.path || "" };
+      return { label: "Read", target: input?.path || "" };
     case "write_file": {
       const path = input?.path || "";
-      const label = filesReadThisTurn.has(path) ? "Updating" : "Creating";
-      return { label, target: path };
+      // Writing a file the agent never read is a different act from editing one
+      // it did, and the verb is the only place that shows up.
+      return { label: filesReadThisTurn.has(path) ? "Edited" : "Created", target: path };
     }
     case "delete_file":
-      return { label: "Deleting", target: input?.path || "" };
+      return { label: "Deleted", target: input?.path || "" };
     case "list_files":
-      return { label: "Listing", target: input?.path || "files" };
+      return { label: "Listed", target: input?.path || "project" };
     case "grep_codebase":
-      return { label: "Searching", target: input?.pattern || "codebase" };
+      return { label: "Searched", target: input?.pattern || "codebase" };
+    case "web_search":
+      return { label: "Searched the web", target: input?.name || input?.pattern || "" };
+    case "github_search":
+      return { label: "Searched GitHub", target: input?.pattern || input?.name || "" };
+    case "fetch_url":
+      return { label: "Fetched", target: input?.path || input?.name || "" };
     case "install_package":
-      return { label: "Installing", target: input?.name || "package" };
+      return { label: "Installed", target: input?.name || "package" };
     case "run_typecheck":
-      return { label: "Checking types", target: "" };
+      return { label: "Checked types", target: "" };
     case "run_lint":
-      return { label: "Linting", target: "" };
+      return { label: "Linted", target: "" };
     case "run_build":
-      return { label: "Building", target: "" };
+      return { label: "Built", target: "" };
     case "run_command":
-      return { label: "Shell", target: input?.command || "" };
+      return { label: "Ran", target: input?.command || "" };
+    case "capture_screenshot":
+      return { label: "Looked at the device", target: "" };
+    case "tail_logcat":
+      return { label: "Read the device log", target: "" };
     case "context_build":
-      return { label: "Scanning project", target: "" };
+      return { label: "Scanned the project", target: "" };
     default:
-      return { label: tool, target: "" };
+      return { label: tool.replace(/_/g, " "), target: input?.path || input?.name || "" };
   }
 }
 
@@ -48,33 +67,65 @@ export function isReadOnlyTool(tool: string): boolean {
   return READ_ONLY_TOOLS.has(tool);
 }
 
-// ── Component ──
+// A run of consecutive look-at-things calls is one act, not twelve. Collapsing
+// them keeps the interesting rows — writes, installs, checks — visible instead
+// of buried under twenty "Read" lines.
+const GROUP_THRESHOLD = 3;
+
+function groupRows(rows: TraceRow[]): TraceRow[] {
+  const out: TraceRow[] = [];
+  let run: TraceRow[] = [];
+
+  const flushRun = () => {
+    if (run.length === 0) return;
+    if (run.length < GROUP_THRESHOLD) {
+      out.push(...run);
+    } else {
+      const failed = run.some((r) => r.status === "fail");
+      const running = run.some((r) => r.status === "running");
+      out.push({
+        id: `group-${run[0].id}`,
+        kind: "group",
+        status: running ? "running" : failed ? "fail" : "done",
+        summary: running ? "Looking through the project" : "Looked through the project",
+        children: run,
+      });
+    }
+    run = [];
+  };
+
+  for (const row of rows) {
+    if (row.kind === "tool" && row.tool && isReadOnlyTool(row.tool)) {
+      run.push(row);
+      continue;
+    }
+    flushRun();
+    out.push(row);
+  }
+  flushRun();
+
+  return out;
+}
 
 interface AgentTraceProps {
   rows: TraceRow[];
 }
 
-export default function AgentTrace({ rows }: AgentTraceProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [rows]);
+function AgentTrace({ rows }: AgentTraceProps) {
+  const grouped = useMemo(() => groupRows(rows), [rows]);
 
   if (rows.length === 0) return null;
 
   return (
-    <div ref={containerRef} className="space-y-0.5">
-      {rows.map((row) => (
+    <div className="flex flex-col gap-px">
+      {grouped.map((row) => (
         <TraceRowItem key={row.id} row={row} />
       ))}
     </div>
   );
 }
 
-// ── Row Renderer ──
+export default memo(AgentTrace);
 
 function TraceRowItem({ row }: { row: TraceRow }) {
   switch (row.kind) {
@@ -89,54 +140,84 @@ function TraceRowItem({ row }: { row: TraceRow }) {
   }
 }
 
-// ── Narration ──
+// ── Narration — the agent's own voice ──
 
 function NarrationRow({ text, streaming }: { text: string; streaming?: boolean }) {
+  if (!text && !streaming) return null;
   return (
-    <div className="py-1.5 text-sm text-text-secondary leading-relaxed">
-      {text}
-      {streaming && <span className="inline-block w-1.5 h-4 bg-accent ml-0.5 animate-pulse" />}
+    <div className="py-1.5">
+      <Markdown>{text}</Markdown>
+      {streaming && (
+        <span
+          className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 bg-probe"
+          style={{ animation: "breathe 1s var(--ease) infinite" }}
+        />
+      )}
     </div>
   );
 }
 
-// ── Tool Row ──
+// ── Status glyph ──
+
+function Glyph({ status }: { status?: TraceRow["status"] }) {
+  if (status === "running") {
+    return (
+      <span
+        aria-hidden
+        className="h-2.5 w-2.5 rounded-full border-2 border-probe border-t-transparent"
+        style={{ animation: "spin 0.7s linear infinite" }}
+      />
+    );
+  }
+  if (status === "fail") {
+    return <span className="text-fault leading-none">✕</span>;
+  }
+  if (status === "done") {
+    return <span className="text-signal-dim leading-none">✓</span>;
+  }
+  return <span className="h-1 w-1 rounded-full bg-dust" />;
+}
+
+// ── Tool row ──
 
 function ToolRow({ row }: { row: TraceRow }) {
-  return (
-    <div className="flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-surface-2/50 transition-colors group">
-      {/* Status icon */}
-      <div className="w-4 flex justify-center flex-shrink-0">
-        {row.status === "running" ? (
-          <span className="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-        ) : row.status === "done" ? (
-          <span className="text-success text-xs">&#10003;</span>
-        ) : row.status === "fail" ? (
-          <span className="text-error text-xs">&#10007;</span>
-        ) : (
-          <span className="w-3 h-3" />
-        )}
-      </div>
+  const running = row.status === "running";
 
-      {/* Label */}
-      <span className={`text-xs font-semibold ${row.status === "running" ? "text-accent" : "text-text-primary"}`}>
+  return (
+    <div
+      className={`group flex items-baseline gap-2 rounded-1 px-1.5 py-1 ${
+        running ? "sweeping" : "hover:bg-riser"
+      }`}
+    >
+      <span className="flex h-4 w-3.5 flex-shrink-0 items-center justify-center self-start pt-0.5 text-tiny">
+        <Glyph status={row.status} />
+      </span>
+
+      <span
+        className={`flex-shrink-0 text-small ${running ? "text-probe" : "text-paper"}`}
+      >
         {row.label}
       </span>
 
-      {/* Target */}
+      {/* The path is the machine's word for the thing, so it is set in mono and
+          truncated from the left — the filename matters more than the folder. */}
       {row.target && (
-        <span className="text-xs font-mono text-text-muted truncate max-w-[200px]">
-          {row.kind === "tool" && row.tool === "run_command" ? (
-            <code className="bg-surface-3 px-1.5 py-0.5 rounded text-[11px]">{row.target}</code>
-          ) : (
-            `\`{row.target}\``
-          )}
+        <span
+          dir="rtl"
+          title={row.target}
+          className="min-w-0 flex-1 truncate text-left font-mono text-tiny text-graphite"
+        >
+          <span dir="ltr">{row.target}</span>
         </span>
       )}
 
-      {/* Summary on completion */}
-      {row.summary && row.status !== "running" && (
-        <span className="text-[11px] text-text-muted ml-auto truncate max-w-[150px]">
+      {row.summary && !running && (
+        <span
+          title={row.summary}
+          className={`ml-auto max-w-[45%] flex-shrink-0 truncate font-mono text-tiny ${
+            row.status === "fail" ? "text-fault" : "text-dust"
+          }`}
+        >
           {row.summary}
         </span>
       )}
@@ -144,54 +225,45 @@ function ToolRow({ row }: { row: TraceRow }) {
   );
 }
 
-// ── Group Row (collapsed read-only calls) ──
+// ── Collapsed run of read-only calls ──
 
 function GroupRow({ row }: { row: TraceRow }) {
   const [expanded, setExpanded] = useState(false);
-  const childCount = row.children?.length || 0;
+  const count = row.children?.length ?? 0;
 
   return (
-    <div className="rounded-lg">
+    <div>
       <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 py-1 px-2 hover:bg-surface-2/50 transition-colors text-left"
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className={`flex w-full items-center gap-2 rounded-1 px-1.5 py-1 text-left ${
+          row.status === "running" ? "sweeping" : "hover:bg-riser"
+        }`}
       >
-        {/* Chevron */}
+        <span className="flex h-4 w-3.5 flex-shrink-0 items-center justify-center text-tiny">
+          <Glyph status={row.status} />
+        </span>
+        <span className="text-small text-graphite">{row.summary}</span>
+        <span className="gauge tnum ml-auto flex-shrink-0">
+          {count} {count === 1 ? "call" : "calls"}
+        </span>
         <svg
-          className={`w-3 h-3 text-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
-          fill="none"
+          aria-hidden
           viewBox="0 0 24 24"
+          fill="none"
           stroke="currentColor"
           strokeWidth={2}
+          className={`h-3 w-3 flex-shrink-0 text-dust transition-transform ${
+            expanded ? "rotate-90" : ""
+          }`}
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
-
-        {/* Status dot */}
-        <div className="w-4 flex justify-center flex-shrink-0">
-          {row.status === "running" ? (
-            <span className="w-2.5 h-2.5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          ) : row.status === "done" ? (
-            <span className="text-success text-xs">&#10003;</span>
-          ) : (
-            <span className="w-2.5 h-2.5 rounded-full bg-text-muted/40" />
-          )}
-        </div>
-
-        {/* Summary */}
-        <span className="text-xs font-medium text-text-secondary">
-          {row.summary || `Explored ${childCount} calls`}
-        </span>
-
-        {/* Detail count */}
-        <span className="text-[10px] text-text-muted">
-          {childCount} {childCount === 1 ? "call" : "calls"}
-        </span>
       </button>
 
-      {/* Expanded children */}
       {expanded && row.children && (
-        <div className="ml-6 space-y-0.5">
+        <div className="ml-3 border-l border-rail pl-2">
           {row.children.map((child) => (
             <TraceRowItem key={child.id} row={child} />
           ))}

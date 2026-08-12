@@ -1,111 +1,312 @@
 @import "tailwindcss";
 
+/*
+ * SeekerStudio — the bench
+ *
+ * The subject is hardware: you are building an app for a physical Solana phone,
+ * and a real device is running two feet away behind a WebSocket. So the surface
+ * is a lab bench, not a "workspace" — cool graphite with visible structure,
+ * instruments arranged around a device.
+ *
+ * The palette carries meaning, and each hue has exactly one referent:
+ *   signal   → the device. Live frames, an attached target, a running app.
+ *   probe    → the agent. Its voice, its tools, its turn in progress.
+ *   filament → you. Something is waiting on a decision.
+ *   fault    → it broke.
+ * Nothing is coloured for decoration. If something is green, the device is alive.
+ *
+ * Typeface carries the speaker: mono is the machine (paths, traces, telemetry,
+ * code, timings), sans is a person (prose, controls, headings).
+ */
+
 :root {
-  /* Rork-inspired Dark Theme */
-  --background: #0A0A0A;
-  --surface: #0A0A0A;
-  --surface-1: #111111;
-  --surface-2: #161616;
-  --surface-3: #1A1A1A;
-  --surface-4: #222222;
-  --surface-5: #2A2A2A;
+  /* Bench. Cool undertone, so it reads as metal rather than void. */
+  --ink: #0b0e13;
+  --slate: #12171f;
+  --riser: #181f29;
+  --rail: #232c39;
+  --edge: #303c4d;
 
-  /* Text */
-  --text-primary: #FFFFFF;
-  --text-secondary: #9CA3AF;
-  --text-muted: #6B7280;
+  /* Semantic hues — one meaning each. */
+  --signal: #14f195;
+  --signal-dim: #0d9d63;
+  --probe: #9945ff;
+  --probe-dim: #6b2fb5;
+  --filament: #ffb020;
+  --fault: #ff5f56;
 
-  /* Accent */
-  --accent: #F5A623;
-  --accent-hover: #E6951A;
+  /* Text ladder. */
+  --paper: #e6ebf2;
+  --graphite: #8794a6;
+  --dust: #5b667a;
 
-  /* Status */
-  --success: #22C55E;
-  --error: #EF4444;
-  --warning: #F59E0B;
+  /* Radii. Deliberately tight — this is machined, not soft. The only
+     fully-round thing in the product is the signal indicator. */
+  --r-1: 3px;
+  --r-2: 6px;
+  --r-3: 10px;
 
-  /* Solana */
-  --solana-purple: #9945FF;
-  --solana-green: #14F195;
+  /* Type. */
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", monospace;
 
-  /* Spacing */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-10: 40px;
-  --space-12: 48px;
-  --space-16: 64px;
+  --t-micro: 0.625rem; /* 10px — instrument labels, mono, tracked out */
+  --t-tiny: 0.6875rem; /* 11px — metadata */
+  --t-small: 0.78125rem; /* 12.5px — interface default */
+  --t-body: 0.875rem; /* 14px — prose */
+  --t-lead: 1.0625rem; /* 17px — panel headings */
+  --t-title: 1.375rem; /* 22px */
 
-  /* Border Radius */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-full: 9999px;
-
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
-
-  /* Typography */
-  --font-sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
-
-  /* Transitions */
-  --duration-fast: 80ms;
-  --duration-normal: 150ms;
-  --duration-slow: 200ms;
-  --easing: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Motion. Fast enough to feel mechanical rather than animated. */
+  --tick: 90ms;
+  --sweep: 180ms;
+  --ease: cubic-bezier(0.2, 0, 0.3, 1);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--text-primary);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--ink);
+  --color-foreground: var(--paper);
 
-  /* Surfaces */
-  --color-surface: var(--surface);
-  --color-surface-1: var(--surface-1);
-  --color-surface-2: var(--surface-2);
-  --color-surface-3: var(--surface-3);
-  --color-surface-4: var(--surface-4);
-  --color-surface-5: var(--surface-5);
+  --color-ink: var(--ink);
+  --color-slate: var(--slate);
+  --color-riser: var(--riser);
+  --color-rail: var(--rail);
+  --color-edge: var(--edge);
 
-  /* Text */
-  --color-text-primary: var(--text-primary);
-  --color-text-secondary: var(--text-secondary);
-  --color-text-muted: var(--text-muted);
+  --color-signal: var(--signal);
+  --color-signal-dim: var(--signal-dim);
+  --color-probe: var(--probe);
+  --color-probe-dim: var(--probe-dim);
+  --color-filament: var(--filament);
+  --color-fault: var(--fault);
 
-  /* Accent */
-  --color-accent: var(--accent);
-  --color-accent-hover: var(--accent-hover);
+  --color-paper: var(--paper);
+  --color-graphite: var(--graphite);
+  --color-dust: var(--dust);
 
-  /* Status */
-  --color-success: var(--success);
-  --color-error: var(--error);
-  --color-warning: var(--warning);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 
-  /* Solana */
-  --color-solana-purple: var(--solana-purple);
-  --color-solana-green: var(--solana-green);
+  --text-micro: var(--t-micro);
+  --text-tiny: var(--t-tiny);
+  --text-small: var(--t-small);
+  --text-body: var(--t-body);
+  --text-lead: var(--t-lead);
+  --text-title: var(--t-title);
+
+  --radius-1: var(--r-1);
+  --radius-2: var(--r-2);
+  --radius-3: var(--r-3);
+
+  /* ── Legacy names ───────────────────────────────────────────────
+     The old palette was six near-identical near-blacks plus one amber, spread
+     across ~440 class names. These aliases point the old names at the new
+     values so nothing renders unstyled while screens migrate one at a time.
+     New code should use the semantic names above; `accent` in particular is a
+     poor name here, because whether something is signal, probe, or filament is
+     the whole point. */
+  --color-surface-1: var(--ink);
+  --color-surface-2: var(--slate);
+  --color-surface-3: var(--riser);
+  --color-surface-4: var(--rail);
+  --color-surface-5: var(--edge);
+  --color-border: var(--rail);
+  --color-text-primary: var(--paper);
+  --color-text-secondary: var(--graphite);
+  --color-text-muted: var(--dust);
+  --color-accent: var(--signal);
+  --color-accent-hover: color-mix(in srgb, var(--signal) 85%, white);
+  --color-success: var(--signal);
+  --color-warning: var(--filament);
+  --color-error: var(--fault);
+  --color-solana-purple: var(--probe);
+  --color-solana-green: var(--signal);
+}
+
+* {
+  border-color: var(--rail);
 }
 
 body {
-  background: var(--background);
-  color: var(--text-primary);
+  background: var(--ink);
+  color: var(--paper);
   font-family: var(--font-sans);
+  font-size: var(--t-small);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* Scrollbar Styling */
-::-webkit-scrollbar {
+/* ── Instrument label ──────────────────────────────────────────────
+   Every panel header uses this, and it must always name the real thing it
+   sits above — the adb target, the file path, the model. A label that reads
+   "PREVIEW" tells you nothing you could not see. */
+.gauge {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--dust);
+}
+
+/* ── Panel ──────────────────────────────────────────────────────── */
+.bay {
+  background: var(--slate);
+  border: 1px solid var(--rail);
+  border-radius: var(--r-2);
+}
+
+.bay-head {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-bottom: 1px solid var(--rail);
+  flex-shrink: 0;
+}
+
+/* ── Signal indicator ─────────────────────────────────────────────
+   The one round element in the product. Its colour is the honest state of
+   the connection, never a decoration. */
+.lamp {
   width: 6px;
   height: 6px;
+  border-radius: 999px;
+  background: var(--dust);
+  flex-shrink: 0;
+}
+
+.lamp[data-state="live"] {
+  background: var(--signal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal) 18%, transparent);
+  animation: breathe 2.4s var(--ease) infinite;
+}
+
+.lamp[data-state="working"] {
+  background: var(--probe);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--probe) 20%, transparent);
+  animation: breathe 1.1s var(--ease) infinite;
+}
+
+.lamp[data-state="waiting"] {
+  background: var(--filament);
+}
+
+.lamp[data-state="fault"] {
+  background: var(--fault);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fault) 18%, transparent);
+}
+
+/* ── Controls ───────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  height: 1.75rem;
+  padding: 0 0.6875rem;
+  border: 1px solid var(--rail);
+  border-radius: var(--r-1);
+  background: var(--riser);
+  color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: var(--t-small);
+  font-weight: 450;
+  white-space: nowrap;
+  transition:
+    background var(--tick) var(--ease),
+    border-color var(--tick) var(--ease),
+    color var(--tick) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--rail);
+  border-color: var(--edge);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-go {
+  background: var(--signal);
+  border-color: var(--signal);
+  color: #04160e;
+  font-weight: 550;
+}
+
+.btn-go:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--signal) 88%, white);
+  border-color: color-mix(in srgb, var(--signal) 88%, white);
+}
+
+.btn-stop {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--fault) 45%, transparent);
+  color: var(--fault);
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fault) 12%, transparent);
+  border-color: var(--fault);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--graphite);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--riser);
+  border-color: var(--rail);
+  color: var(--paper);
+}
+
+.btn-ghost[aria-pressed="true"],
+.btn-ghost[data-active="true"] {
+  background: var(--riser);
+  border-color: var(--edge);
+  color: var(--paper);
+}
+
+.field {
+  width: 100%;
+  background: var(--ink);
+  border: 1px solid var(--rail);
+  border-radius: var(--r-1);
+  color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  padding: 0.5rem 0.6875rem;
+  transition:
+    border-color var(--tick) var(--ease),
+    background var(--tick) var(--ease);
+}
+
+.field::placeholder {
+  color: var(--dust);
+}
+
+.field:focus {
+  outline: none;
+  border-color: var(--edge);
+  background: var(--slate);
+}
+
+/* ── Keyboard focus ───────────────────────────────────────────────
+   One ring, everywhere, always visible. */
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 1px;
+  border-radius: var(--r-1);
+}
+
+/* ── Scrollbars ─────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
 }
 
 ::-webkit-scrollbar-track {
@@ -113,61 +314,215 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--surface-4);
-  border-radius: var(--radius-full);
+  background: var(--rail);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--surface-5);
+  background: var(--edge);
+  background-clip: content-box;
 }
 
-/* Animation Keyframes */
-@keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
-@keyframes slide-up {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+/* ── Motion ─────────────────────────────────────────────────────── */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
 }
 
-@keyframes slide-in-right {
-  from { opacity: 0; transform: translateX(-8px); }
-  to { opacity: 1; transform: translateX(0); }
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
-@keyframes pulse-subtle {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+@keyframes wipe {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
 }
 
-/* Animation Utilities */
-.animate-fade-in {
-  animation: fade-in var(--duration-normal) var(--easing) both;
+/* Declared here rather than relying on the utility class, because the spinning
+   glyphs set `animation` inline and Tailwind only emits its own keyframes when
+   the matching utility appears in the markup. */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-.animate-slide-up {
-  animation: slide-up var(--duration-normal) var(--easing) both;
+.rise {
+  animation: rise var(--sweep) var(--ease) both;
 }
 
-.animate-slide-in-right {
-  animation: slide-in-right var(--duration-normal) var(--easing) both;
+/* A running row draws a slow sweep across itself — the one ambient motion in
+   the product, and it only ever means "this is happening right now". */
+.sweeping {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--probe) 9%, transparent) 45%,
+    transparent 90%
+  );
+  background-size: 200% 100%;
+  animation: wipe 1.6s linear infinite;
 }
 
-.animate-pulse-subtle {
-  animation: pulse-subtle 2s var(--easing) infinite;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .lamp[data-state="live"],
+  .lamp[data-state="working"] {
+    animation: none;
+    opacity: 1;
+  }
+
+  .sweeping {
+    background-image: none;
+    animation: none;
+  }
 }
 
-/* Focus Ring Utility */
-.focus-ring:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+/* ── Agent prose ──────────────────────────────────────────────────
+   The agent writes in sentences and in code. Both need to be readable in a
+   320px column, which is why the code blocks scroll on their own axis
+   instead of stretching the panel. */
+.prose-agent {
+  font-size: var(--t-body);
+  line-height: 1.6;
+  color: var(--paper);
 }
 
-/* Transition Utility */
-.transition-base {
-  transition-property: color, background-color, border-color, opacity, transform;
-  transition-duration: var(--duration-normal);
-  transition-timing-function: var(--easing);
+.prose-agent > * + * {
+  margin-top: 0.625rem;
+}
+
+.prose-agent h1,
+.prose-agent h2,
+.prose-agent h3 {
+  font-size: var(--t-small);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--paper);
+}
+
+.prose-agent strong {
+  font-weight: 600;
+  color: var(--paper);
+}
+
+.prose-agent em {
+  font-style: italic;
+  color: var(--graphite);
+}
+
+.prose-agent a {
+  color: var(--signal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.prose-agent ul,
+.prose-agent ol {
+  padding-left: 1.125rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.prose-agent ul {
+  list-style: none;
+}
+
+.prose-agent ul > li {
+  position: relative;
+}
+
+.prose-agent ul > li::before {
+  content: "";
+  position: absolute;
+  left: -0.8125rem;
+  top: 0.5rem;
+  width: 3px;
+  height: 3px;
+  background: var(--dust);
+}
+
+.prose-agent ol {
+  list-style: decimal;
+}
+
+.prose-agent ol::marker,
+.prose-agent li::marker {
+  color: var(--dust);
+  font-family: var(--font-mono);
+  font-size: var(--t-tiny);
+}
+
+.prose-agent code {
+  font-family: var(--font-mono);
+  font-size: 0.8125em;
+  background: var(--ink);
+  border: 1px solid var(--rail);
+  border-radius: var(--r-1);
+  padding: 0.0625rem 0.25rem;
+  color: var(--signal);
+  word-break: break-word;
+}
+
+.prose-agent pre {
+  background: var(--ink);
+  border: 1px solid var(--rail);
+  border-radius: var(--r-2);
+  overflow-x: auto;
+  padding: 0.625rem 0.75rem;
+}
+
+.prose-agent pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--paper);
+  font-size: var(--t-tiny);
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.prose-agent blockquote {
+  border-left: 2px solid var(--rail);
+  padding-left: 0.6875rem;
+  color: var(--graphite);
+}
+
+/* ── Utilities ──────────────────────────────────────────────────── */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.hairline {
+  background: var(--rail);
 }

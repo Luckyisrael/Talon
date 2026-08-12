@@ -21,7 +21,7 @@ export default function RegisterPage() {
     setError("");
 
     try {
-      const data = await auth.register(email, password, email.split("@")[0]);
+      const data = await auth.register(email, password);
       setToken(data.token);
       router.push("/dashboard");
     } catch (err) {
@@ -53,6 +53,8 @@ export default function RegisterPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
+                autoComplete="email"
+                required
                 className="mt-2 w-full h-11 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all"
                 autoFocus
               />
@@ -65,8 +67,15 @@ export default function RegisterPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
+                autoComplete="new-password"
+                minLength={10}
+                required
                 className="mt-2 w-full h-11 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all"
               />
+              {/* The API enforces this. Saying so up front beats a rejected form. */}
+              <span className="mt-2 block text-xs text-text-muted">
+                At least 10 characters.
+              </span>
             </label>
 
             {error && <p className="text-sm text-error mb-4">{error}</p>}

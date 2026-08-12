@@ -13,6 +13,8 @@ backend/bin/
 frontend/.next/
 frontend/out/
 frontend/build/
+# Stray Next.js trace artifacts (wrong-cwd build runs)
+**/.next/
 
 # Environment & secrets
 .env

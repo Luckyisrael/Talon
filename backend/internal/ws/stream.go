@@ -1,10 +1,8 @@
 package ws
 
 import (
-	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -43,31 +41,11 @@ func (h *StreamHandler) Routes() chi.Router {
 }
 
 func (h *StreamHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	// Authenticate via query param (browsers can't set WS headers)
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		http.Error(w, `{"error":"missing token"}`, http.StatusUnauthorized)
+	device, ok := authorize(w, r, h.authSvc, h.store)
+	if !ok {
 		return
 	}
-	if _, err := h.authSvc.ValidateToken(token); err != nil {
-		http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
-		return
-	}
-
-	// Resolve session → ADB target
-	sessionID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, `{"error":"invalid session id"}`, http.StatusBadRequest)
-		return
-	}
-
-	session, err := h.store.GetSession(sessionID)
-	if err != nil || session.ADBPort == 0 {
-		http.Error(w, `{"error":"session not found or no device attached"}`, http.StatusNotFound)
-		return
-	}
-
-	adbTarget := fmt.Sprintf("localhost:%d", session.ADBPort)
+	sessionID, adbTarget := device.ID, device.ADBTarget
 	adbClient := adb.New(adbTarget)
 
 	conn, err := upgrader.Upgrade(w, r, nil)

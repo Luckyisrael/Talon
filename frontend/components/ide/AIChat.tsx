@@ -1,15 +1,33 @@
 "use client";
 
-import { useState, useRef, useEffect, useImperativeHandle, forwardRef, useCallback } from "react";
-import { Message, Send, Document, ArrowRight } from "iconsax-reactjs";
-import { streamPrompt, type StreamEvent } from "@/lib/api";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  conversation,
+  streamPrompt,
+  type ConversationTurn,
+  type StreamEvent,
+} from "@/lib/api";
 import { useIDEStore } from "@/lib/store";
-import AgentTrace from "./AgentTrace";
-import { getToolLabel, isReadOnlyTool } from "./AgentTrace";
-import type { ChatMessage, StreamMessage, TraceRow } from "@/lib/types";
+import type { ChatMessage, PlanData, StreamMessage, TraceRow } from "@/lib/types";
+import AgentTrace, { getToolLabel } from "./AgentTrace";
 
 interface AIChatProps {
   projectId: number;
+  /** Called with the paths a finished turn changed, so the tree can refetch. */
+  onFilesTouched?: (paths: string[]) => void;
+  /** A plan arrived — the layout puts it in the centre panel to be read. */
+  onPlan?: (plan: PlanData, message: string) => void;
+  /** Approving a plan is one behaviour, owned by the layout, reachable from
+      both the card here and the full plan view. */
+  onApprovePlan?: (plan: PlanData) => void;
 }
 
 export interface AIChatHandle {
@@ -17,506 +35,823 @@ export interface AIChatHandle {
   sendMessage: (msg: string) => void;
 }
 
-const AIChat = forwardRef<AIChatHandle, AIChatProps>(({ projectId }, ref) => {
-  const [messages, setMessages] = useState<(ChatMessage | StreamMessage)[]>([]);
-  const [input, setInput] = useState("");
-  const [mode, setMode] = useState<"plan" | "build">("plan");
-  const [error, setError] = useState("");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const formRef = useRef<HTMLFormElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const filesReadRef = useRef<Set<string>>(new Set());
+type Entry = ChatMessage | StreamMessage;
 
-  const addFiles = useIDEStore((s) => s.addFiles);
-  const setCurrentPlan = useIDEStore((s) => s.setCurrentPlan);
+const isAssistant = (m: Entry): m is StreamMessage => "isStreaming" in m;
 
-  useImperativeHandle(ref, () => ({
-    switchToBuild: () => setMode("build"),
-    sendMessage: (msg: string) => {
-      setInput(msg);
-      setTimeout(() => formRef.current?.requestSubmit(), 50);
-    },
-  }));
+// What the agent is doing, in words that describe the work rather than the
+// internal state machine. STAGE_WRITE and PROMOTE used to be listed here; both
+// phases were removed when writes started landing in the workspace directly.
+const PHASE_LABELS: Record<string, string> = {
+  INTAKE: "Reading your request",
+  PLAN: "Planning",
+  CONTEXT_BUILD: "Scanning the project",
+  RESEARCH: "Looking things up",
+  GENERATE: "Writing code",
+  VERIFY_STATIC: "Checking types",
+  VERIFY_RUNTIME: "Running it on the device",
+  DONE: "Done",
+  FAILED_NEEDS_USER: "Needs you",
+};
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+function phaseLabel(phase?: string): string {
+  if (!phase) return "";
+  return PHASE_LABELS[phase] ?? phase.toLowerCase().replace(/_/g, " ");
+}
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+function compactTokens(n: number): string {
+  if (n < 1000) return String(n);
+  return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+}
 
-  const processStreamEvents = useCallback(
-    (setStreamMsg: (updater: (prev: StreamMessage) => StreamMessage) => void) => {
-      return (event: StreamEvent) => {
-        switch (event.type) {
-          // ── Narration (§11.1 thought events) ──
-          case "thinking.start":
-          case "text.start":
-            setStreamMsg((prev) => {
-              const lastRow = prev.traceRows[prev.traceRows.length - 1];
-              if (lastRow?.kind === "narration" && lastRow.streaming) return prev;
-              return {
-                ...prev,
-                traceRows: [
-                  ...prev.traceRows,
-                  { id: crypto.randomUUID(), kind: "narration", text: "", streaming: true },
-                ],
-              };
-            });
-            break;
+/**
+ * Rebuild the chat from the turns the server stored.
+ *
+ * Reloading the page used to empty the panel even though every turn was on
+ * disk, which made the agent look like it had forgotten the project it was
+ * still perfectly able to continue.
+ */
+function turnsToEntries(turns: ConversationTurn[]): Entry[] {
+  const entries: Entry[] = [];
 
-          case "thinking.delta":
-          case "text.delta":
-            setStreamMsg((prev) => {
-              const rows = [...prev.traceRows];
-              const lastRow = rows[rows.length - 1];
-              if (lastRow?.kind === "narration" && lastRow.streaming) {
-                rows[rows.length - 1] = {
-                  ...lastRow,
-                  text: (lastRow.text || "") + (event.data?.text || ""),
-                };
-              }
-              return { ...prev, traceRows: rows };
-            });
-            break;
+  // A tool_result arrives in the turn *after* the call, so collect them all up
+  // front and look each call's outcome up by id.
+  const results = new Map<string, { content: string; isError: boolean }>();
+  for (const turn of turns) {
+    for (const block of turn.blocks ?? []) {
+      if (block.type === "tool_result" && block.tool_use_id) {
+        results.set(block.tool_use_id, {
+          content: block.content ?? "",
+          isError: block.is_error ?? false,
+        });
+      }
+    }
+  }
 
-          case "thinking.end":
-          case "text.end":
-            setStreamMsg((prev) => {
-              const rows = [...prev.traceRows];
-              const lastRow = rows[rows.length - 1];
-              if (lastRow?.kind === "narration" && lastRow.streaming) {
-                rows[rows.length - 1] = { ...lastRow, streaming: false };
-              }
-              return { ...prev, traceRows: rows };
-            });
-            break;
+  const filesRead = new Set<string>();
 
-          // ── Tool start → running row ──
-          case "tool.start": {
-            const toolName = event.data?.name || "unknown";
-            const input = event.data?.input;
-            const { label, target } = getToolLabel(toolName, input, filesReadRef.current);
+  turns.forEach((turn, i) => {
+    const blocks = turn.blocks ?? [];
+    if (blocks.length === 0) return;
 
-            // Track reads for read-before-write audit
-            if (toolName === "read_file" && input?.path) {
-              filesReadRef.current.add(input.path);
-            }
-
-            const row: TraceRow = {
-              id: crypto.randomUUID(),
-              kind: "tool",
-              tool: toolName,
-              label,
-              target,
-              status: "running",
-            };
-
-            setStreamMsg((prev) => ({
-              ...prev,
-              traceRows: [...prev.traceRows, row],
-            }));
-            break;
-          }
-
-          // ── Tool end → done/fail ──
-          case "tool.end": {
-            setStreamMsg((prev) => {
-              const rows = [...prev.traceRows];
-              // Find the last running row for this tool
-              for (let i = rows.length - 1; i >= 0; i--) {
-                if (rows[i].kind === "tool" && rows[i].tool === event.data?.name && rows[i].status === "running") {
-                  rows[i] = {
-                    ...rows[i],
-                    status: event.data?.fixed === false ? "fail" : "done",
-                    summary: event.data?.result,
-                  };
-                  break;
-                }
-              }
-              return { ...prev, traceRows: rows };
-            });
-            break;
-          }
-
-          // ── Legacy timeline events (phase, tool_call, verify, guardrail_reject) ──
-          // Map these to TraceRows for backward compatibility
-          case "phase": {
-            const phase = event.data?.phase || "";
-            const phaseLabels: Record<string, string> = {
-              CONTEXT_BUILD: "Scanning project",
-              GENERATE: "Generating code",
-              STAGE_WRITE: "Writing files",
-              VERIFY_STATIC: "Running checks",
-              HEAL: "Fixing errors",
-              PROMOTE: "Deploying files",
-              DONE: "Complete",
-              FAILED: "Failed",
-            };
-            const row: TraceRow = {
-              id: crypto.randomUUID(),
-              kind: "tool",
-              tool: "phase",
-              label: phaseLabels[phase] || phase,
-              target: event.data?.status || "",
-              status: event.data?.status === "done" ? "done" : event.data?.status === "failed" ? "fail" : "running",
-            };
-            setStreamMsg((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
-            break;
-          }
-
-          case "tool_call": {
-            const toolName = event.data?.tool || "";
-            const { label, target } = getToolLabel(toolName, { path: event.data?.path, name: event.data?.name }, filesReadRef.current);
-            const status = event.data?.status === "done" ? "done" : event.data?.status === "failed" ? "fail" : "running";
-            const row: TraceRow = {
-              id: crypto.randomUUID(),
-              kind: "tool",
-              tool: toolName,
-              label,
-              target: target || event.data?.path || "",
-              status,
-              summary: event.data?.status === "failed" ? "failed" : undefined,
-            };
-            setStreamMsg((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
-            break;
-          }
-
-          case "verify": {
-            const row: TraceRow = {
-              id: crypto.randomUUID(),
-              kind: "tool",
-              tool: "verify",
-              label: event.data?.stage || "Verify",
-              target: "",
-              status: event.data?.status === "done" || event.data?.status === "pass" ? "done" : event.data?.status === "failed" || event.data?.status === "fail" ? "fail" : "running",
-              summary: event.data?.error,
-            };
-            setStreamMsg((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
-            break;
-          }
-
-          case "guardrail_reject": {
-            const row: TraceRow = {
-              id: crypto.randomUUID(),
-              kind: "tool",
-              tool: "guardrail",
-              label: "Blocked",
-              target: event.data?.error || "guardrail violation",
-              status: "fail",
-            };
-            setStreamMsg((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
-            break;
-          }
-
-          // ── Build result appended as narration ──
-          case "build.result":
-            setStreamMsg((prev) => ({
-              ...prev,
-              traceRows: [
-                ...prev.traceRows,
-                {
-                  id: crypto.randomUUID(),
-                  kind: "narration",
-                  text: event.data?.output || "",
-                  streaming: false,
-                },
-              ],
-            }));
-            break;
-
-          // ── Error ──
-          case "error":
-            setStreamMsg((prev) => ({
-              ...prev,
-              error: event.data?.message || "Unknown error",
-              isStreaming: false,
-            }));
-            break;
-
-          // ── Done ──
-          case "done":
-            setStreamMsg((prev) => ({ ...prev, isStreaming: false }));
-            break;
-        }
-      };
-    },
-    [],
-  );
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!input.trim()) return;
-
-    const userMessage = input.trim();
-    setInput("");
-    setError("");
-    filesReadRef.current = new Set();
-
-    const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: userMessage,
-      timestamp: Date.now(),
-    };
-    setMessages((prev) => [...prev, userMsg]);
-
-    const streamMsgId = crypto.randomUUID();
-    const streamMsg: StreamMessage = {
-      id: streamMsgId,
-      role: "assistant",
-      traceRows: [],
-      isStreaming: true,
-    };
-    setMessages((prev) => [...prev, streamMsg]);
-
-    const setStreamMsg = (fn: (prev: StreamMessage) => StreamMessage) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === streamMsgId ? fn(m as StreamMessage) : m)),
-      );
-    };
-
-    abortRef.current = streamPrompt(
-      projectId,
-      userMessage,
-      mode,
-      processStreamEvents(setStreamMsg),
-      (err) => {
-        setError(err.message);
-        setStreamMsg((prev) => ({ ...prev, isStreaming: false, error: err.message }));
-      },
-    );
-
-    // Poll for completion and extract files
-    const checkComplete = setInterval(() => {
-      setMessages((prev) => {
-        const sm = prev.find((m) => m.id === streamMsgId) as StreamMessage | undefined;
-        if (sm && !sm.isStreaming) {
-          clearInterval(checkComplete);
-
-          if (mode === "build" && sm.traceRows.length > 0) {
-            const fileEntries = sm.traceRows
-              .filter((r) => r.kind === "tool" && r.tool === "write_file" && r.status === "done" && r.target)
-              .map((r) => ({ path: r.target!, content: "" }));
-            if (fileEntries.length > 0) {
-              addFiles(fileEntries);
-            }
-          }
-        }
-        return prev;
+    if (turn.role === "user") {
+      // A user turn that only carries tool results is plumbing, not something
+      // the person said.
+      const text = blocks
+        .filter((b) => b.type === "text")
+        .map((b) => b.text ?? "")
+        .join("")
+        .trim();
+      if (!text) return;
+      entries.push({
+        id: `restored-u${i}`,
+        role: "user",
+        content: text,
+        timestamp: Date.parse(turn.at) || 0,
       });
-    }, 200);
+      return;
+    }
 
-    setTimeout(() => clearInterval(checkComplete), 120000);
-  }
+    const rows: TraceRow[] = [];
+    for (const [j, block] of blocks.entries()) {
+      if (block.type === "text" && block.text?.trim()) {
+        rows.push({
+          id: `restored-a${i}-${j}`,
+          kind: "narration",
+          text: block.text,
+        });
+      }
+      if (block.type === "tool_use") {
+        const input = (block.input ?? {}) as {
+          path?: string;
+          name?: string;
+          command?: string;
+          pattern?: string;
+        };
+        const { label, target } = getToolLabel(block.name ?? "", input, filesRead);
+        if (block.name === "read_file" && input.path) filesRead.add(input.path);
+        const outcome = block.id ? results.get(block.id) : undefined;
+        rows.push({
+          id: `restored-a${i}-${j}`,
+          kind: "tool",
+          tool: block.name,
+          label,
+          target,
+          // No stored result means the turn was cut off mid-call.
+          status: outcome ? (outcome.isError ? "fail" : "done") : undefined,
+          summary: outcome?.isError ? firstLine(outcome.content) : undefined,
+        });
+      }
+    }
 
-  function handleCancel() {
-    abortRef.current?.abort();
-    setMessages((prev) =>
-      prev.map((m) =>
-        (m as StreamMessage).isStreaming
-          ? { ...m, isStreaming: false, error: "Cancelled" }
-          : m,
-      ),
+    if (rows.length === 0) return;
+    entries.push({
+      id: `restored-a${i}`,
+      role: "assistant",
+      traceRows: rows,
+      isStreaming: false,
+      restored: true,
+    });
+  });
+
+  return entries;
+}
+
+function firstLine(s: string): string {
+  const line = s.split("\n").find((l) => l.trim() !== "") ?? "";
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+}
+
+const AIChat = forwardRef<AIChatHandle, AIChatProps>(
+  ({ projectId, onFilesTouched, onPlan, onApprovePlan }, ref) => {
+    const [messages, setMessages] = useState<Entry[]>([]);
+    const [input, setInput] = useState("");
+    const [mode, setMode] = useState<"plan" | "build">("plan");
+    // Which project's history has finished loading. Derived into `restoring`
+    // rather than flipped on in the effect, so switching projects reads as
+    // restoring immediately instead of after an extra render pass.
+    const [restoredFor, setRestoredFor] = useState<number | null>(null);
+    const restoring = restoredFor !== projectId;
+    const [confirmClear, setConfirmClear] = useState(false);
+
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const endRef = useRef<HTMLDivElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const abortRef = useRef<AbortController | null>(null);
+    const filesReadRef = useRef<Set<string>>(new Set());
+    const pinnedRef = useRef(true);
+
+    // ── History ──
+    useEffect(() => {
+      let cancelled = false;
+      conversation
+        .get(projectId)
+        .then((turns) => {
+          if (!cancelled) setMessages(turnsToEntries(turns));
+        })
+        .catch(() => {
+          // An unreachable history is not worth an error banner over an empty
+          // panel the person can still type into.
+        })
+        .finally(() => {
+          // Marks this project restored either way: a failed fetch still ends
+          // the restoring state, or the panel would spin forever.
+          if (!cancelled) setRestoredFor(projectId);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [projectId]);
+
+    useEffect(() => () => abortRef.current?.abort(), []);
+
+    // ── Scroll ──
+    // Only follow the stream while the person is already at the bottom.
+    // Yanking the view back mid-scroll is how a log becomes unreadable.
+    const onScroll = useCallback(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+      pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    }, []);
+
+    useEffect(() => {
+      if (pinnedRef.current) {
+        endRef.current?.scrollIntoView({ block: "end" });
+      }
+    }, [messages]);
+
+    const isStreaming = useMemo(
+      () => messages.some((m) => isAssistant(m) && m.isStreaming),
+      [messages],
     );
-  }
 
-  const isStreaming = messages.some((m) => "isStreaming" in m && (m as StreamMessage).isStreaming);
+    const liveMessage = useMemo(
+      () => messages.find((m): m is StreamMessage => isAssistant(m) && m.isStreaming),
+      [messages],
+    );
 
-  return (
-    <div className="flex flex-col h-full min-h-0 bg-surface-1">
-      {/* Header */}
-      <div className="h-12 flex items-center justify-between px-4 flex-shrink-0 bg-surface-1 border-b border-white/5">
-        <span className="text-xs font-mono uppercase tracking-wider text-text-secondary">AI Assistant</span>
-        <div className="flex gap-1">
-          <button
-            onClick={() => setMode("plan")}
-            className={`rounded-full h-7 px-3 text-xs font-medium transition-all duration-150 ${
-              mode === "plan" ? "bg-accent text-background" : "bg-surface-3 text-text-secondary hover:bg-surface-4"
-            }`}
-          >
-            Plan
-          </button>
-          <button
-            onClick={() => setMode("build")}
-            className={`rounded-full h-7 px-3 text-xs font-medium transition-all duration-150 ${
-              mode === "build" ? "bg-accent text-background" : "bg-surface-3 text-text-secondary hover:bg-surface-4"
-            }`}
-          >
-            Build
-          </button>
-        </div>
-      </div>
+    // ── Event handling ──
 
-      {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <div className="w-12 h-12 rounded-2xl bg-surface-3 flex items-center justify-center mb-4">
-              <Message size="24" className="text-text-secondary" variant="Linear" />
-            </div>
-            <p className="text-sm text-text-secondary mb-1">
-              {mode === "plan"
-                ? "Describe your app idea and I'll plan the screens and features"
-                : "Tell me what to build and I'll generate the code"}
-            </p>
-            <p className="text-xs text-text-muted">
-              {mode === "plan"
-                ? "Switch to Build mode when you're ready to generate code"
-                : "Switch to Plan mode to design the app first"}
-            </p>
-          </div>
-        )}
+    const handleEvent = useCallback(
+      (
+        id: string,
+        patch: (updater: (prev: StreamMessage) => StreamMessage) => void,
+      ) =>
+        (event: StreamEvent) => {
+          const d = event.data ?? {};
 
-        {messages.map((msg) => {
-          // Streaming message with trace
-          if ("isStreaming" in msg) {
-            const streamMsg = msg as StreamMessage;
-            return (
-              <div key={streamMsg.id} className="space-y-3 animate-fade-in">
-                {/* Trace rows */}
-                {streamMsg.traceRows.length > 0 && (
-                  <AgentTrace rows={streamMsg.traceRows} />
-                )}
+          const appendRow = (row: TraceRow) =>
+            patch((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
 
-                {/* Error */}
-                {streamMsg.error && (
-                  <div className="rounded-xl px-4 py-3 text-sm bg-error/10 text-error border border-error/20">
-                    {streamMsg.error}
-                  </div>
-                )}
+          switch (event.type) {
+            // The agent's prose and its private reasoning both stream as deltas.
+            // They land in the same narration row so a reply reads as one piece
+            // of writing rather than a stack of fragments.
+            case "text.start":
+            case "thinking.start":
+              patch((prev) => {
+                const last = prev.traceRows[prev.traceRows.length - 1];
+                if (last?.kind === "narration" && last.streaming) return prev;
+                return {
+                  ...prev,
+                  traceRows: [
+                    ...prev.traceRows,
+                    { id: `${id}-n${prev.traceRows.length}`, kind: "narration", text: "", streaming: true },
+                  ],
+                };
+              });
+              break;
 
-                {/* Loading dots (no content yet) */}
-                {streamMsg.isStreaming && streamMsg.traceRows.length === 0 && !streamMsg.error && (
-                  <div className="flex gap-1 py-2">
-                    <div className="w-2 h-2 bg-text-secondary/40 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                    <div className="w-2 h-2 bg-text-secondary/40 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                    <div className="w-2 h-2 bg-text-secondary/40 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                  </div>
-                )}
-              </div>
-            );
+            case "text.delta":
+            case "thinking.delta":
+              patch((prev) => {
+                const rows = [...prev.traceRows];
+                const last = rows[rows.length - 1];
+                if (last?.kind === "narration" && last.streaming) {
+                  rows[rows.length - 1] = { ...last, text: (last.text ?? "") + (d.text ?? "") };
+                } else {
+                  // The build stream sends deltas with no preceding start event.
+                  rows.push({
+                    id: `${id}-n${rows.length}`,
+                    kind: "narration",
+                    text: d.text ?? "",
+                    streaming: true,
+                  });
+                }
+                return { ...prev, traceRows: rows };
+              });
+              break;
+
+            case "text.end":
+            case "thinking.end":
+              patch((prev) => {
+                const rows = [...prev.traceRows];
+                const last = rows[rows.length - 1];
+                if (last?.kind === "narration" && last.streaming) {
+                  rows[rows.length - 1] = { ...last, streaming: false };
+                }
+                return { ...prev, traceRows: rows };
+              });
+              break;
+
+            case "phase":
+              patch((prev) => ({ ...prev, phase: d.phase }));
+              break;
+
+            case "tool_call": {
+              const tool = d.tool ?? "";
+              const { label, target } = getToolLabel(
+                tool,
+                { path: d.path, name: d.name },
+                filesReadRef.current,
+              );
+              if (tool === "read_file" && d.path) filesReadRef.current.add(d.path);
+
+              const status =
+                d.status === "done"
+                  ? "done"
+                  : d.status === "failed" || d.status === "error"
+                    ? "fail"
+                    : "running";
+
+              // A call arrives twice — once running, once resolved. Update the
+              // open row instead of stacking a second one under it.
+              patch((prev) => {
+                const rows = [...prev.traceRows];
+                for (let i = rows.length - 1; i >= 0; i--) {
+                  const r = rows[i];
+                  if (r.kind === "tool" && r.tool === tool && r.status === "running") {
+                    if (status === "running") break;
+                    rows[i] = { ...r, status, target: target || r.target };
+                    return { ...prev, traceRows: rows };
+                  }
+                }
+                rows.push({
+                  id: `${id}-t${rows.length}`,
+                  kind: "tool",
+                  tool,
+                  label,
+                  target: target || d.path || "",
+                  status,
+                });
+                return { ...prev, traceRows: rows };
+              });
+              break;
+            }
+
+            case "verify":
+              // The trace shows one line; the whole compiler output goes to the
+              // Output pane, which had nothing writing to it at all before this.
+              if (d.error) {
+                useIDEStore
+                  .getState()
+                  .appendBuildOutput(`$ verify ${d.stage ?? ""}\n${d.error}`);
+              }
+              appendRow({
+                id: `${id}-v${Math.random().toString(36).slice(2, 8)}`,
+                kind: "tool",
+                tool: "verify",
+                label: d.stage ? `Checked ${d.stage}` : "Checked",
+                target: "",
+                status:
+                  d.status === "done" || d.status === "pass"
+                    ? "done"
+                    : d.status === "failed" || d.status === "fail"
+                      ? "fail"
+                      : "running",
+                summary: d.error ? firstLine(d.error) : undefined,
+              });
+              break;
+
+            case "task_update":
+              appendRow({
+                id: `${id}-k${d.id ?? Math.random().toString(36).slice(2, 8)}`,
+                kind: "tool",
+                tool: "task",
+                label: d.description ?? "Task",
+                target: "",
+                status: d.status === "done" ? "done" : d.status === "failed" ? "fail" : "running",
+                summary: d.result ? firstLine(d.result) : undefined,
+              });
+              break;
+
+            case "rebuild":
+              if (d.detail) {
+                useIDEStore.getState().appendBuildOutput(`$ rebuild dev client\n${d.detail}`);
+              }
+              appendRow({
+                id: `${id}-r${Math.random().toString(36).slice(2, 8)}`,
+                kind: "tool",
+                tool: "rebuild",
+                // A native dependency means the dev client itself has to be
+                // rebuilt, which takes minutes. Saying so beats silence.
+                label: "Rebuilding the dev client",
+                target: d.detail ?? "",
+                status: d.status === "done" ? "done" : d.status === "failed" ? "fail" : "running",
+              });
+              break;
+
+            case "guardrail_reject":
+              appendRow({
+                id: `${id}-g${Math.random().toString(36).slice(2, 8)}`,
+                kind: "tool",
+                tool: "guardrail",
+                label: "Blocked",
+                target: d.tool ?? "",
+                status: "fail",
+                summary: d.error ? firstLine(d.error) : undefined,
+              });
+              break;
+
+            case "usage":
+              patch((prev) => ({
+                ...prev,
+                usage: {
+                  input_tokens: (prev.usage?.input_tokens ?? 0) + (d.input_tokens ?? 0),
+                  output_tokens: (prev.usage?.output_tokens ?? 0) + (d.output_tokens ?? 0),
+                  cache_read_tokens:
+                    (prev.usage?.cache_read_tokens ?? 0) + (d.cache_read_tokens ?? 0),
+                },
+              }));
+              break;
+
+            case "plan": {
+              const plan = (d.plan ?? null) as PlanData | null;
+              patch((prev) => ({
+                ...prev,
+                plan,
+                planMessage: d.message,
+                traceRows:
+                  d.message && prev.traceRows.length === 0
+                    ? [{ id: `${id}-pm`, kind: "narration", text: d.message }]
+                    : prev.traceRows,
+              }));
+              if (plan) onPlan?.(plan, d.message ?? "");
+              break;
+            }
+
+            case "error":
+              patch((prev) => ({
+                ...prev,
+                error: d.message ?? "The turn failed without saying why.",
+                isStreaming: false,
+              }));
+              break;
+
+            case "done": {
+              const touched = d.files_touched ?? [];
+              patch((prev) => ({
+                ...prev,
+                isStreaming: false,
+                phase: d.status === "failed" ? "FAILED_NEEDS_USER" : "DONE",
+                filesTouched: touched,
+                verified: d.verified,
+                rounds: d.rounds,
+                traceRows: prev.traceRows.map((r) =>
+                  r.status === "running" ? { ...r, status: "done" } : r,
+                ),
+              }));
+              // Refetch rather than trusting the paths: the old code inserted
+              // each path with empty content, so opening a file the agent had
+              // just written showed a blank editor.
+              if (touched.length > 0) onFilesTouched?.(touched);
+              break;
+            }
           }
+        },
+      [onFilesTouched, onPlan],
+    );
 
-          // Completed message
-          const chatMsg = msg as ChatMessage;
-          return (
-            <div key={chatMsg.id} className="space-y-3 animate-fade-in">
-              <div className={`flex ${chatMsg.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap ${
-                    chatMsg.role === "user" ? "bg-accent text-background" : "bg-surface-3 text-text-primary"
+    // ── Sending ──
+
+    const send = useCallback(
+      async (raw: string) => {
+        const prompt = raw.trim();
+        if (!prompt || isStreaming) return;
+
+        setInput("");
+        setConfirmClear(false);
+        filesReadRef.current = new Set();
+        pinnedRef.current = true;
+
+        const streamId = crypto.randomUUID();
+        setMessages((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), role: "user", content: prompt, timestamp: Date.now() },
+          { id: streamId, role: "assistant", traceRows: [], isStreaming: true },
+        ]);
+
+        const patch = (fn: (prev: StreamMessage) => StreamMessage) =>
+          setMessages((prev) =>
+            prev.map((m) => (m.id === streamId && isAssistant(m) ? fn(m) : m)),
+          );
+
+        abortRef.current = streamPrompt(
+          projectId,
+          prompt,
+          mode,
+          handleEvent(streamId, patch),
+          (err) => patch((prev) => ({ ...prev, isStreaming: false, error: err.message })),
+        );
+      },
+      [handleEvent, isStreaming, mode, projectId],
+    );
+
+    // Declared after `send` on purpose: reading it from above the declaration is
+    // a temporal-dead-zone hazard, and it only worked because the handle body
+    // does not run until after the first render.
+    useImperativeHandle(ref, () => ({
+      switchToBuild: () => setMode("build"),
+      sendMessage: (msg: string) => {
+        void send(msg);
+      },
+    }));
+
+    function handleSubmit(e: React.FormEvent) {
+      e.preventDefault();
+      void send(input);
+    }
+
+    function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+      // Enter sends, Shift+Enter breaks the line. The composer used to be a
+      // single-line input, so a prompt describing three screens had to be
+      // written as one unbroken sentence.
+      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        void send(input);
+      }
+    }
+
+    function stop() {
+      abortRef.current?.abort();
+      setMessages((prev) =>
+        prev.map((m) =>
+          isAssistant(m) && m.isStreaming
+            ? {
+                ...m,
+                isStreaming: false,
+                error: "You stopped this turn. The files it already wrote are still there.",
+                traceRows: m.traceRows.map((r) =>
+                  r.status === "running" ? { ...r, status: "fail" } : r,
+                ),
+              }
+            : m,
+        ),
+      );
+    }
+
+    async function clearHistory() {
+      if (!confirmClear) {
+        setConfirmClear(true);
+        return;
+      }
+      setConfirmClear(false);
+      try {
+        await conversation.clear(projectId);
+        setMessages([]);
+      } catch {
+        setConfirmClear(false);
+      }
+    }
+
+    // Grow the composer with its content, up to a ceiling.
+    useEffect(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 168)}px`;
+    }, [input]);
+
+    const approvePlan = (plan: PlanData) => {
+      // The layout owns what approval means, so the card here and the full plan
+      // view in the centre panel cannot drift apart.
+      onApprovePlan?.(plan);
+    };
+
+    return (
+      <section className="flex h-full min-h-0 flex-col bg-ink">
+        <header className="bay-head justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="lamp" data-state={isStreaming ? "working" : "idle"} />
+            <span className="gauge truncate">
+              {isStreaming ? phaseLabel(liveMessage?.phase) || "Working" : "Agent"}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {messages.length > 0 && !isStreaming && (
+              <button
+                type="button"
+                onClick={clearHistory}
+                onBlur={() => setConfirmClear(false)}
+                className="btn btn-ghost text-tiny"
+              >
+                {confirmClear ? "Clear it?" : "Clear history"}
+              </button>
+            )}
+            <div
+              role="group"
+              aria-label="What the agent should do with your next message"
+              className="flex overflow-hidden rounded-1 border border-rail"
+            >
+              {(["plan", "build"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMode(m)}
+                  aria-pressed={mode === m}
+                  title={
+                    m === "plan"
+                      ? "Talk through the app first. Nothing gets written."
+                      : "Write the code and run the checks."
+                  }
+                  className={`h-6 px-2.5 text-tiny capitalize transition-colors ${
+                    mode === m
+                      ? "bg-riser text-paper"
+                      : "text-dust hover:bg-riser hover:text-graphite"
                   }`}
                 >
-                  {chatMsg.content}
-                </div>
-              </div>
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+        </header>
 
-              {chatMsg.role === "assistant" && chatMsg.plan && (
-                <div className="ml-4 space-y-3">
-                  {chatMsg.plan.screens.length > 0 && (
-                    <div className="bg-surface-2 rounded-xl p-3">
-                      <p className="text-xs font-mono uppercase tracking-wider text-text-secondary mb-2">Screens</p>
-                      <div className="space-y-2">
-                        {chatMsg.plan.screens.map((screen, j) => (
-                          <div key={j} className="flex items-start gap-2">
-                            <ArrowRight size="14" className="text-accent mt-0.5 flex-shrink-0" variant="Linear" />
-                            <div>
-                              <span className="text-sm font-medium text-text-primary">{screen.name}</span>
-                              <p className="text-xs text-text-secondary">{screen.description}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
+        >
+          {restoring && messages.length === 0 && (
+            <p className="gauge py-4 text-center">Loading this project&rsquo;s history</p>
+          )}
 
-                  {chatMsg.plan.features.length > 0 && (
-                    <div className="bg-surface-2 rounded-xl p-3">
-                      <p className="text-xs font-mono uppercase tracking-wider text-text-secondary mb-2">Features</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {chatMsg.plan.features.map((feature, j) => (
-                          <span key={j} className="h-6 px-2.5 rounded-full bg-surface-3 text-xs text-text-secondary">
-                            {feature}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {chatMsg.plan.navigation && (
-                    <div className="bg-surface-2 rounded-xl p-3">
-                      <p className="text-xs font-mono uppercase tracking-wider text-text-secondary mb-1">Navigation</p>
-                      <p className="text-sm text-text-primary">{chatMsg.plan.navigation}</p>
-                    </div>
-                  )}
-
+          {!restoring && messages.length === 0 && (
+            <div className="flex h-full flex-col justify-center px-2">
+              <p className="text-body text-paper">
+                {mode === "plan"
+                  ? "Describe the app you want."
+                  : "Say what to build next."}
+              </p>
+              <p className="mt-1.5 text-small text-graphite">
+                {mode === "plan"
+                  ? "Plan mode talks it through — screens, navigation, which packages are needed — and writes nothing until you approve it."
+                  : "Build mode writes files into the project, type-checks them, and installs the result on the device."}
+              </p>
+              <div className="mt-5 flex flex-col gap-1.5">
+                {(mode === "plan"
+                  ? [
+                      "A wallet app that shows my SOL balance and recent transactions",
+                      "A ticket scanner that verifies NFT tickets with the camera",
+                    ]
+                  : [
+                      "Add a pull-to-refresh to the balance screen",
+                      "Wire the Connect button to Mobile Wallet Adapter",
+                    ]
+                ).map((example) => (
                   <button
+                    key={example}
+                    type="button"
                     onClick={() => {
-                      setMode("build");
-                      const screenNames = chatMsg.plan!.screens.map((s) => s.name).join(", ");
-                      setInput(`Build the following screens: ${screenNames}. Generate all necessary components with full implementation.`);
+                      setInput(example);
+                      textareaRef.current?.focus();
                     }}
-                    className="h-8 px-4 rounded-lg bg-accent text-background text-xs font-medium flex items-center gap-1.5 hover:bg-accent-hover transition-colors active:scale-[0.98]"
+                    className="rounded-1 border border-rail bg-slate px-2.5 py-2 text-left text-small text-graphite transition-colors hover:border-edge hover:text-paper"
                   >
-                    <Document size="12" variant="Linear" />
-                    Approve &amp; Build
+                    {example}
                   </button>
-                </div>
-              )}
+                ))}
+              </div>
+            </div>
+          )}
 
-              {chatMsg.role === "assistant" && chatMsg.files && chatMsg.files.length > 0 && (
-                <div className="ml-4 bg-surface-2 rounded-xl p-3">
-                  <p className="text-xs font-mono uppercase tracking-wider text-text-secondary mb-2">Generated Files</p>
-                  <div className="space-y-1">
-                    {chatMsg.files.map((file, j) => (
-                      <div key={j} className="flex items-center gap-2 text-sm">
-                        <Document size="14" className="text-accent flex-shrink-0" variant="Linear" />
-                        <span className="text-text-primary font-mono text-xs">{file.path}</span>
-                      </div>
-                    ))}
+          <div className="flex flex-col gap-4">
+            {messages.map((msg) =>
+              isAssistant(msg) ? (
+                <AssistantEntry key={msg.id} msg={msg} onApprove={approvePlan} />
+              ) : (
+                <div key={msg.id} className="flex justify-end">
+                  <div className="max-w-[88%] whitespace-pre-wrap rounded-2 border border-edge bg-riser px-3 py-2 text-body text-paper">
+                    {msg.content}
                   </div>
                 </div>
-              )}
-            </div>
-          );
-        })}
+              ),
+            )}
+          </div>
 
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input */}
-      <form ref={formRef} onSubmit={handleSubmit} className="p-4 flex-shrink-0 border-t border-white/5">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={mode === "plan" ? "Describe your app idea..." : "What should I build?"}
-            className="flex-1 h-10 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all text-sm"
-            disabled={isStreaming}
-          />
-          {isStreaming ? (
-            <button
-              type="button"
-              onClick={handleCancel}
-              className="rounded-full h-10 w-10 flex items-center justify-center bg-error text-white hover:bg-error/80 transition-colors active:scale-[0.98]"
-            >
-              <span className="text-xs font-bold">Stop</span>
-            </button>
-          ) : (
-            <button
-              type="submit"
-              disabled={!input.trim()}
-              className="rounded-full h-10 w-10 flex items-center justify-center bg-accent text-background hover:bg-accent-hover transition-colors disabled:opacity-50 active:scale-[0.98]"
-            >
-              <Send size="16" variant="Linear" />
-            </button>
-          )}
+          <div ref={endRef} />
         </div>
-      </form>
-    </div>
-  );
-});
+
+        <form onSubmit={handleSubmit} className="border-t border-rail p-3">
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                mode === "plan" ? "Describe the app…" : "What should I build?"
+              }
+              className="field resize-none leading-snug"
+              disabled={isStreaming}
+            />
+            {isStreaming ? (
+              <button type="button" onClick={stop} className="btn btn-stop h-8 flex-shrink-0">
+                Stop
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!input.trim()}
+                className="btn btn-go h-8 flex-shrink-0"
+              >
+                {mode === "plan" ? "Ask" : "Build"}
+              </button>
+            )}
+          </div>
+          <p className="gauge mt-1.5 select-none">
+            Enter sends · Shift+Enter adds a line
+          </p>
+        </form>
+      </section>
+    );
+  },
+);
 
 AIChat.displayName = "AIChat";
 export default AIChat;
+
+// ── One assistant turn ──
+
+function AssistantEntry({
+  msg,
+  onApprove,
+}: {
+  msg: StreamMessage;
+  onApprove: (plan: PlanData) => void;
+}) {
+  const waiting = msg.isStreaming && msg.traceRows.length === 0 && !msg.error;
+
+  return (
+    <div className="rise flex flex-col gap-2">
+      <AgentTrace rows={msg.traceRows} />
+
+      {waiting && <p className="gauge py-1">Thinking</p>}
+
+      {msg.plan && <PlanCard plan={msg.plan} onApprove={onApprove} />}
+
+      {msg.error && (
+        <p className="rounded-2 border border-fault/35 bg-fault/10 px-3 py-2 text-small text-fault">
+          {msg.error}
+        </p>
+      )}
+
+      <TurnFooter msg={msg} />
+    </div>
+  );
+}
+
+function TurnFooter({ msg }: { msg: StreamMessage }) {
+  if (msg.isStreaming || msg.restored) return null;
+
+  const parts: string[] = [];
+  if (msg.filesTouched?.length) {
+    parts.push(`${msg.filesTouched.length} ${msg.filesTouched.length === 1 ? "file" : "files"}`);
+  }
+  if (msg.rounds) parts.push(`${msg.rounds} ${msg.rounds === 1 ? "round" : "rounds"}`);
+  if (msg.usage?.input_tokens || msg.usage?.output_tokens) {
+    parts.push(
+      `${compactTokens(msg.usage.input_tokens ?? 0)} in · ${compactTokens(msg.usage.output_tokens ?? 0)} out`,
+    );
+  }
+  if (parts.length === 0) return null;
+
+  return (
+    <p className="gauge tnum flex items-center gap-2">
+      {msg.verified === false && <span className="text-filament">checks did not pass</span>}
+      {parts.join("  ·  ")}
+    </p>
+  );
+}
+
+function PlanCard({
+  plan,
+  onApprove,
+}: {
+  plan: PlanData;
+  onApprove: (plan: PlanData) => void;
+}) {
+  const screens = plan.screens ?? [];
+  const features = plan.features ?? [];
+  const packages = plan.packages ?? [];
+
+  return (
+    <div className="bay overflow-hidden">
+      {screens.length > 0 && (
+        <div className="border-b border-rail p-3">
+          <p className="gauge mb-2">
+            {screens.length} {screens.length === 1 ? "screen" : "screens"}
+          </p>
+          <ul className="flex flex-col gap-2">
+            {screens.map((screen, i) => (
+              <li key={`${screen.name}-${i}`} className="flex gap-2">
+                <span className="gauge tnum mt-0.5 flex-shrink-0">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-small text-paper">{screen.name}</span>
+                  {screen.description && (
+                    <span className="block text-tiny text-graphite">{screen.description}</span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {features.length > 0 && (
+        <div className="border-b border-rail p-3">
+          <p className="gauge mb-2">Features</p>
+          <div className="flex flex-wrap gap-1">
+            {features.map((f, i) => (
+              <span
+                key={`${f}-${i}`}
+                className="rounded-1 border border-rail bg-riser px-1.5 py-0.5 text-tiny text-graphite"
+              >
+                {f}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {plan.navigation && (
+        <div className="border-b border-rail p-3">
+          <p className="gauge mb-1">Navigation</p>
+          <p className="text-small text-paper">{plan.navigation}</p>
+        </div>
+      )}
+
+      {packages.length > 0 && (
+        <div className="border-b border-rail p-3">
+          <p className="gauge mb-2">Packages to install</p>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-tiny text-graphite">
+            {packages.map((p, i) => (
+              <span key={`${p}-${i}`}>{p}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 p-3">
+        <button type="button" onClick={() => onApprove(plan)} className="btn btn-go">
+          Build this
+        </button>
+        <span className="gauge">or keep refining it above</span>
+      </div>
+    </div>
+  );
+}

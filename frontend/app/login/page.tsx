@@ -15,6 +15,23 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  /**
+   * An expired session bounces here with ?next=<where you were>. Returning you
+   * to that page is the difference between an interruption and losing your place.
+   *
+   * Read at submit time from the URL rather than through `useSearchParams`: that
+   * hook opts the whole client tree out of prerendering — it fails the build
+   * outright unless the tree sits in a Suspense boundary — and nothing here
+   * *renders* the value. It is only ever needed once, in this handler, after a
+   * real interaction, by which point the URL is authoritative.
+   */
+  function destination(): string {
+    const next = new URLSearchParams(window.location.search).get("next");
+    // Same-origin paths only. An open redirect on the sign-in page would let a
+    // crafted link hand a freshly-authenticated visitor to another site.
+    return next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -23,7 +40,7 @@ export default function LoginPage() {
     try {
       const data = await auth.login(email, password);
       setToken(data.token);
-      router.push("/dashboard");
+      router.push(destination());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -53,6 +70,8 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
+                autoComplete="email"
+                required
                 className="mt-2 w-full h-11 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all"
                 autoFocus
               />
@@ -65,6 +84,8 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
+                autoComplete="current-password"
+                required
                 className="mt-2 w-full h-11 px-4 rounded-xl bg-surface-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all"
               />
             </label>

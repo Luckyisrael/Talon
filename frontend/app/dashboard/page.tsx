@@ -10,6 +10,17 @@ import { projects as projectsApi, usage as usageApi } from "@/lib/api";
 import { isAuthenticated } from "@/lib/auth";
 import type { Project } from "@/lib/types";
 
+/**
+ * Fetches without touching state, so the caller keeps its setState calls on the
+ * awaited side of the effect boundary. Pulled out of the component because a
+ * loader that both fetches and assigns cannot be reused by the effect and the
+ * refresh handlers without one of them cascading a render.
+ */
+async function fetchDashboard() {
+  const [projectsData, usageData] = await Promise.all([projectsApi.list(), usageApi.get()]);
+  return { projectList: projectsData || [], tier: usageData.tier };
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [projectList, setProjectList] = useState<Project[]>([]);
@@ -18,28 +29,45 @@ export default function DashboardPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [user, setUser] = useState<{ email: string; tier: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
-  const loadData = useCallback(async () => {
+  // Refetching from a button or after a mutation asks the effect to run again
+  // rather than kicking off a second loader of its own. One code path means two
+  // overlapping refreshes cannot land out of order, which is what `cancelled`
+  // below settles.
+  const refresh = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    setReloadKey((k) => k + 1);
+  }, []);
+
+  useEffect(() => {
     if (!isAuthenticated()) {
       router.push("/login");
       return;
     }
 
-    try {
-      setLoading(true);
-      setError(null);
-      const [projectsData, usageData] = await Promise.all([projectsApi.list(), usageApi.get()]);
-      setProjectList(projectsData || []);
-      setUser({ email: "user@example.com", tier: usageData.tier });
-    } catch (err) {
-      console.error("Failed to load dashboard:", err);
-      setError("Failed to load projects. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  }, [router]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await fetchDashboard();
+        if (cancelled) return;
+        setProjectList(data.projectList);
+        setUser({ email: "user@example.com", tier: data.tier });
+        setError(null);
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Failed to load dashboard:", err);
+        setError("Failed to load projects. Please try again.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
 
-  useEffect(() => { loadData(); }, [loadData]);
+    return () => {
+      cancelled = true;
+    };
+  }, [router, reloadKey]);
 
   return (
     <AppShell>
@@ -79,7 +107,7 @@ export default function DashboardPage() {
               <Warning2 size="28" className="text-error" variant="Linear" />
             </div>
             <p className="text-sm text-text-secondary mb-3">{error}</p>
-            <PillButton variant="secondary" onClick={loadData}>
+            <PillButton variant="secondary" onClick={refresh}>
               Try Again
             </PillButton>
           </div>
@@ -109,7 +137,7 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <CreateProject open={createOpen} onClose={() => setCreateOpen(false)} onCreated={loadData} />
+      <CreateProject open={createOpen} onClose={() => setCreateOpen(false)} onCreated={refresh} />
 
       {deleteTarget && (
         <DeleteProjectModal
@@ -119,7 +147,7 @@ export default function DashboardPage() {
           onClose={() => setDeleteTarget(null)}
           onDeleted={() => {
             setDeleteTarget(null);
-            loadData();
+            refresh();
           }}
         />
       )}

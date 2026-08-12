@@ -63,11 +63,22 @@ export interface PromptResponse {
   };
 }
 
+/**
+ * A device session, exactly as /v1/sessions returns it.
+ *
+ * This used to declare `status` and `created_at`, neither of which the API has
+ * ever sent — the real fields are `state` and `started_at`, and the adb port is
+ * how you address the device.
+ */
 export interface Session {
   id: number;
   project_id: number;
-  status: string;
-  created_at: string;
+  state: string;
+  started_at: string;
+  adb_port?: number;
+  container_id?: string;
+  container_state?: string;
+  metro_port?: number;
 }
 
 export interface ChatMessage {
@@ -105,6 +116,13 @@ export interface TraceRow {
   collapsed?: boolean;
 }
 
+/** Token spend the provider reported for a turn, from the `usage` SSE event. */
+export interface TurnUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+}
+
 export interface StreamMessage {
   id: string;
   role: "assistant";
@@ -112,4 +130,17 @@ export interface StreamMessage {
   text?: string;
   error?: string;
   isStreaming: boolean;
+  /** The phase the turn is in, from the `phase` event. */
+  phase?: string;
+  /** Accumulated across every `usage` event in the turn. */
+  usage?: TurnUsage;
+  /** Set by the `plan` event when a planning turn returns structured output. */
+  plan?: PlanData | null;
+  planMessage?: string;
+  /** From the terminal `done` event. */
+  filesTouched?: string[];
+  verified?: boolean;
+  rounds?: number;
+  /** True for turns restored from the stored conversation rather than streamed. */
+  restored?: boolean;
 }

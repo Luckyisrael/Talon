@@ -5,167 +5,136 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
 
-// Manager handles workspace creation using OverlayFS mounts.
-// Each project gets a writable upper layer on top of a read-only template lower layer.
+// Manager provisions one directory per project.
+//
+// This used to describe itself as an OverlayFS manager with a read-only template
+// lower layer and a writable `upper/`, but nothing ever mounted an overlay — the
+// fallback copy was the only code path. What it left behind was worse than a
+// plain directory: the agent's tools wrote to the project root while the file API
+// read from `upper/`, so generated code was invisible in the IDE, and the config
+// files existed twice and drifted apart.
+//
+// So there is one directory. node_modules is a symlink into the shared template,
+// which is what makes provisioning instant.
 type Manager struct {
-	templateDir string
+	templateDir   string
 	workspacesDir string
-	mounts     map[int64]*Mount
-	mu         sync.Mutex
+
+	mu       sync.Mutex
+	projects map[int64]string
 }
 
-// TemplateDir returns the template directory path.
-func (m *Manager) TemplateDir() string {
-	return m.templateDir
-}
-
-type Mount struct {
-	ProjectID  int64
-	UpperDir   string // writable layer (per-project)
-	WorkDir    string // OverlayFS workdir
-	MountPoint string // the merged view
-	IsOverlay  bool   // true if OverlayFS, false if fallback copy
-}
+// configFiles are copied out of the template so TypeScript can resolve types and
+// Expo can read the app config.
+var configFiles = []string{"package.json", "tsconfig.json", "app.json", "babel.config.js", "metro.config.js"}
 
 func New(templateDir, workspacesDir string) (*Manager, error) {
-	// Verify template has node_modules
 	nmDir := filepath.Join(templateDir, "node_modules")
-	if _, err := os.Stat(nmDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("template node_modules not found at %s — run build-template.sh first", nmDir)
+	if _, err := os.Stat(nmDir); err != nil {
+		return nil, fmt.Errorf("the template has no node_modules at %s — run build-template.sh first", nmDir)
 	}
 
-	// Verify template version file
-	verFile := filepath.Join(templateDir, ".template-version")
-	if _, err := os.Stat(verFile); os.IsNotExist(err) {
-		log.Printf("WARNING: no .template-version file in template dir")
+	if _, err := os.Stat(filepath.Join(templateDir, ".template-version")); err != nil {
+		log.Printf("WARNING: the template has no .template-version file")
 	}
 
-	m := &Manager{
+	if err := os.MkdirAll(workspacesDir, 0o755); err != nil {
+		return nil, fmt.Errorf("could not create %s: %w", workspacesDir, err)
+	}
+
+	return &Manager{
 		templateDir:   templateDir,
 		workspacesDir: workspacesDir,
-		mounts:        make(map[int64]*Mount),
-	}
-
-	// Ensure workspaces dir exists
-	os.MkdirAll(workspacesDir, 0755)
-
-	return m, nil
+		projects:      make(map[int64]string),
+	}, nil
 }
 
-// CreateWorkspace creates a new workspace for a project.
-// Uses symlinked node_modules (shared from template, not duplicated).
-func (m *Manager) CreateWorkspace(projectID int64) (*Mount, error) {
+func (m *Manager) TemplateDir() string { return m.templateDir }
+
+// Path returns a project's workspace directory. This is the single location the
+// agent writes to, the typechecker runs in, and the file API reads from.
+func (m *Manager) Path(projectID int64) string {
+	return filepath.Join(m.workspacesDir, strconv.FormatInt(projectID, 10))
+}
+
+// Create provisions a project's workspace. It is destructive: an existing
+// workspace for the same id is removed first.
+func (m *Manager) Create(projectID int64) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	projectDir := filepath.Join(m.workspacesDir, fmt.Sprintf("%d", projectID))
-	upperDir := filepath.Join(projectDir, "upper")
-	workDir := filepath.Join(projectDir, "work")
-
-	// Clean up any existing workspace
-	os.RemoveAll(projectDir)
-
-	// Create directories
-	os.MkdirAll(upperDir, 0755)
-	os.MkdirAll(workDir, 0755)
-
-	// Copy template files to upper layer with symlinked node_modules
-	if err := m.fallbackCopy(projectDir, upperDir); err != nil {
-		os.RemoveAll(projectDir)
-		return nil, fmt.Errorf("failed to create workspace: %w", err)
+	dir := m.Path(projectID)
+	if err := os.RemoveAll(dir); err != nil {
+		return "", fmt.Errorf("could not clear the old workspace: %w", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("could not create the workspace: %w", err)
 	}
 
-	mount := &Mount{
-		ProjectID:  projectID,
-		UpperDir:   upperDir,
-		WorkDir:    workDir,
-		MountPoint: projectDir,
-		IsOverlay:  false,
+	if err := m.provision(dir); err != nil {
+		os.RemoveAll(dir)
+		return "", err
 	}
-	m.mounts[projectID] = mount
-	log.Printf("workspace %d: created (symlinked node_modules)", projectID)
-	return mount, nil
+
+	m.projects[projectID] = dir
+	log.Printf("workspace %d: ready at %s", projectID, dir)
+	return dir, nil
 }
 
-// fallbackCopy creates an upper layer with symlinked node_modules and essential config files.
-// Template files are NOT copied — the file-tree reads only from the upper layer,
-// so a fresh project returns empty. AI-generated files go here.
-// We DO copy package.json + tsconfig.json + app.json so tsc resolves types correctly.
-func (m *Manager) fallbackCopy(projectDir, upperDir string) error {
-	// Symlink node_modules from template (shared, not duplicated)
+// provision links the shared dependencies and copies the config files a new
+// project needs to typecheck and run.
+func (m *Manager) provision(dir string) error {
 	srcNM := filepath.Join(m.templateDir, "node_modules")
-	dstNM := filepath.Join(upperDir, "node_modules")
-	if _, err := os.Stat(srcNM); err == nil {
-		os.Remove(dstNM) // remove if exists
-		if err := os.Symlink(srcNM, dstNM); err != nil {
-			return fmt.Errorf("failed to symlink node_modules: %w", err)
-		}
-		// Also symlink to project root so typecheck can find types
-		dstNMRoot := filepath.Join(projectDir, "node_modules")
-		os.Remove(dstNMRoot)
-		os.Symlink(srcNM, dstNMRoot)
+	dstNM := filepath.Join(dir, "node_modules")
+	os.Remove(dstNM)
+	if err := os.Symlink(srcNM, dstNM); err != nil {
+		return fmt.Errorf("could not link the shared node_modules: %w", err)
 	}
 
-	// Copy essential config files so tsc can resolve types
-	// Copy to BOTH upperDir (for overlay) AND projectDir (for typecheck which runs here)
-	for _, fname := range []string{"package.json", "tsconfig.json", "app.json"} {
-		src := filepath.Join(m.templateDir, fname)
-		if _, err := os.Stat(src); err != nil {
-			continue
-		}
+	for _, name := range configFiles {
+		src := filepath.Join(m.templateDir, name)
 		data, err := os.ReadFile(src)
 		if err != nil {
+			// Not every template carries every optional config.
 			continue
 		}
-		// Copy to upper dir
-		os.WriteFile(filepath.Join(upperDir, fname), data, 0644)
-		// Copy to project root (where typecheck runs)
-		os.WriteFile(filepath.Join(projectDir, fname), data, 0644)
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+			return fmt.Errorf("could not copy %s: %w", name, err)
+		}
+	}
+
+	// An expo-router app needs an app/ directory to exist before anything can be
+	// routed into it.
+	if err := os.MkdirAll(filepath.Join(dir, "app"), 0o755); err != nil {
+		return fmt.Errorf("could not create app/: %w", err)
 	}
 
 	return nil
 }
 
-// GetWorkspacePath returns the merged workspace path for a project.
-func (m *Manager) GetWorkspacePath(projectID int64) string {
-	return filepath.Join(m.workspacesDir, fmt.Sprintf("%d", projectID))
-}
-
-// GetUpperPath returns the writable upper layer path for a project.
-func (m *Manager) GetUpperPath(projectID int64) string {
-	return filepath.Join(m.workspacesDir, fmt.Sprintf("%d", projectID), "upper")
-}
-
-// DestroyWorkspace removes a project's workspace.
-func (m *Manager) DestroyWorkspace(projectID int64) {
+// Destroy removes a project's workspace.
+func (m *Manager) Destroy(projectID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	projectDir := filepath.Join(m.workspacesDir, fmt.Sprintf("%d", projectID))
-	delete(m.mounts, projectID)
-	os.RemoveAll(projectDir)
-	log.Printf("workspace %d: destroyed", projectID)
+	delete(m.projects, projectID)
+	if err := os.RemoveAll(m.Path(projectID)); err != nil {
+		log.Printf("workspace %d: could not remove: %v", projectID, err)
+		return
+	}
+	log.Printf("workspace %d: removed", projectID)
 }
 
-// TemplateVersion reads the template version from the version file.
+// TemplateVersion reads the version the template was built at.
 func (m *Manager) TemplateVersion() string {
-	verFile := filepath.Join(m.templateDir, ".template-version")
-	data, err := os.ReadFile(verFile)
+	data, err := os.ReadFile(filepath.Join(m.templateDir, ".template-version"))
 	if err != nil {
 		return "unknown"
 	}
 	return strings.TrimSpace(string(data))
-}
-
-// IsOverlayFSAvailable checks if OverlayFS is usable.
-func IsOverlayFSAvailable() bool {
-	data, err := os.ReadFile("/proc/filesystems")
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(data), "overlay")
 }

@@ -52,31 +52,11 @@ func (h *InputHandler) Routes() chi.Router {
 }
 
 func (h *InputHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	// Authenticate via query param (browsers can't set WS headers)
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		http.Error(w, `{"error":"missing token"}`, http.StatusUnauthorized)
+	device, ok := authorize(w, r, h.authSvc, h.store)
+	if !ok {
 		return
 	}
-	if _, err := h.authSvc.ValidateToken(token); err != nil {
-		http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
-		return
-	}
-
-	// Resolve session → ADB target
-	sessionID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, `{"error":"invalid session id"}`, http.StatusBadRequest)
-		return
-	}
-
-	session, err := h.store.GetSession(sessionID)
-	if err != nil || session.ADBPort == 0 {
-		http.Error(w, `{"error":"session not found or no device attached"}`, http.StatusNotFound)
-		return
-	}
-
-	adbTarget := fmt.Sprintf("localhost:%d", session.ADBPort)
+	sessionID, adbTarget := device.ID, device.ADBTarget
 
 	// Initialize scrcpy control client for persistent input
 	controlClient := scrcpy.NewControlClient(adbTarget)
@@ -142,7 +122,13 @@ func (h *InputHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			case "key":
 				if controlClient != nil {
 					keycode := parseKeycode(input.Keycode)
-					inputErr = controlClient.Key(keycode)
+					if keycode == 0 {
+						// Sending KEYCODE_UNKNOWN down the control socket looks
+						// like a delivered keypress and does nothing. Say so.
+						inputErr = fmt.Errorf("unknown keycode %q", input.Keycode)
+					} else {
+						inputErr = controlClient.Key(keycode)
+					}
 				} else {
 					inputErr = adbKey(adbTarget, input.Keycode)
 				}
@@ -200,6 +186,7 @@ func parseKeycode(keycode string) int {
 	keycodes := map[string]int{
 		"BACK":        4,
 		"HOME":        3,
+		"APP_SWITCH":  187,
 		"ENTER":       66,
 		"DELETE":      67,
 		"DPAD_UP":     19,

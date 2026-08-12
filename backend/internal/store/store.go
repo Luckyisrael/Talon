@@ -1,12 +1,19 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
+
+// ErrDuplicateEmail is returned by CreateUser when the address is already taken,
+// so the handler can tell that apart from a database failure.
+var ErrDuplicateEmail = errors.New("email already registered")
 
 type User struct {
 	ID           int64     `json:"id"`
@@ -85,23 +92,22 @@ type Store struct {
 }
 
 func New(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// WAL + a busy timeout let multiple readers run alongside a single writer.
+	// Without _busy_timeout, concurrent builds fail immediately with SQLITE_BUSY.
+	dsn := dbPath + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=synchronous(NORMAL)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	// Configure for concurrent access
-	db.SetMaxOpenConns(1) // SQLite only supports one writer
-	db.SetMaxIdleConns(1)
+	// SQLite serialises writes internally; a small pool lets reads proceed in
+	// parallel instead of queueing behind whatever build is currently writing.
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(8)
 	db.SetConnMaxLifetime(0)
 
 	if err := db.Ping(); err != nil {
 		return nil, err
-	}
-
-	// Enable WAL mode for better concurrent read performance
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		log.Printf("WARNING: could not enable WAL mode: %v", err)
 	}
 
 	// Restrict database file permissions to owner-only (0600)
@@ -120,6 +126,11 @@ func New(dbPath string) (*Store, error) {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// Ping checks that the database is reachable, for the readiness endpoint.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
 }
 
 func (s *Store) migrate() error {
@@ -186,6 +197,34 @@ func (s *Store) migrate() error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
+		// conversation_messages is the agent's actual memory: the verbatim turn
+		// sequence, including tool_use / tool_result blocks, replayed to the model
+		// on every request so follow-up prompts ("now make it blue") resolve.
+		`CREATE TABLE IF NOT EXISTS conversation_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			prompt_id INTEGER DEFAULT 0,
+			seq INTEGER NOT NULL,
+			role TEXT NOT NULL,
+			blocks TEXT NOT NULL,
+			input_tokens INTEGER DEFAULT 0,
+			output_tokens INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_conv_project_seq ON conversation_messages(project_id, seq)`,
+		// checkpoints hold the pre-promotion content of every file a turn touches,
+		// so a build can be rewound after the fact.
+		`CREATE TABLE IF NOT EXISTS checkpoints (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			prompt_id INTEGER DEFAULT 0,
+			label TEXT DEFAULT '',
+			files TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_checkpoints_project ON checkpoints(project_id, id DESC)`,
 	}
 
 	for _, q := range queries {
@@ -214,12 +253,27 @@ func (s *Store) migrate() error {
 	s.db.Exec("ALTER TABLE sessions ADD COLUMN adb_port INTEGER DEFAULT 0")
 	s.db.Exec("ALTER TABLE sessions ADD COLUMN container_state TEXT DEFAULT ''")
 
+	// Migration: per-prompt token accounting
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN input_tokens INTEGER DEFAULT 0")
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN output_tokens INTEGER DEFAULT 0")
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN cache_read_tokens INTEGER DEFAULT 0")
+
+	// Migration: aggregate token counters on usage
+	s.db.Exec("ALTER TABLE usage ADD COLUMN input_tokens INTEGER DEFAULT 0")
+	s.db.Exec("ALTER TABLE usage ADD COLUMN output_tokens INTEGER DEFAULT 0")
+
 	return nil
 }
 
 func (s *Store) CreateUser(email, passwordHash string) (*User, error) {
 	res, err := s.db.Exec("INSERT INTO users (email, password_hash) VALUES (?, ?)", email, passwordHash)
 	if err != nil {
+		// Registration used to report every failure here as "email already exists",
+		// which leaked whether an address was registered and hid real problems like
+		// a read-only database behind a message that made no sense.
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return nil, ErrDuplicateEmail
+		}
 		return nil, err
 	}
 	id, _ := res.LastInsertId()

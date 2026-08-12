@@ -19,22 +19,22 @@ import (
 )
 
 type SessionHandler struct {
-	store       *store.Store
-	manager     *redroid.Manager
-	portAlloc   *redroid.PortAllocator
+	store        *store.Store
+	manager      *redroid.Manager
+	portAlloc    *redroid.PortAllocator
 	workspaceDir string
-	devClient   *devclient.Manager
-	wallet      *devclient.WalletManager
+	devClient    *devclient.Manager
+	wallet       *devclient.WalletManager
 }
 
 func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.PortAllocator, workspaceDir string, dc *devclient.Manager, wm *devclient.WalletManager) *SessionHandler {
 	return &SessionHandler{
-		store:       s,
-		manager:     mgr,
-		portAlloc:   portAlloc,
+		store:        s,
+		manager:      mgr,
+		portAlloc:    portAlloc,
 		workspaceDir: workspaceDir,
-		devClient:   dc,
-		wallet:      wm,
+		devClient:    dc,
+		wallet:       wm,
 	}
 }
 
@@ -135,11 +135,11 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Build response
 	response := map[string]interface{}{
-		"id":          session.ID,
-		"project_id":  session.ProjectID,
-		"state":       session.State,
-		"started_at":  session.StartedAt,
-		"adb_port":    containerInfo.ADBPort,
+		"id":           session.ID,
+		"project_id":   session.ProjectID,
+		"state":        session.State,
+		"started_at":   session.StartedAt,
+		"adb_port":     containerInfo.ADBPort,
 		"container_id": containerInfo.ContainerID,
 	}
 	if metroServer != nil {

@@ -8,10 +8,10 @@ import (
 // PortAllocator manages a pool of ADB ports for Redroid containers.
 // It guarantees no two concurrent sessions share the same port.
 type PortAllocator struct {
-	minPort  int
-	maxPort  int
-	ports    map[int]int64 // port -> sessionID
-	mu       sync.Mutex
+	minPort int
+	maxPort int
+	ports   map[int]int64 // port -> sessionID
+	mu      sync.Mutex
 }
 
 // NewPortAllocator creates a port allocator for the given range.

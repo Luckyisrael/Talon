@@ -4,11 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
-// WriteMemory writes an entry to project memory.
+// WriteMemory records a durable fact about the project. The ProjectID is bound
+// when the tool is constructed rather than read out of the context: a tool built
+// per request already knows which project it belongs to, and pulling it from an
+// untyped context value was a panic waiting for the one call that lacked it.
 type WriteMemory struct {
-	Store *StoreAdapter
+	Store     *StoreAdapter
+	ProjectID int64
 }
 
 type WriteMemoryArgs struct {
@@ -17,23 +22,36 @@ type WriteMemoryArgs struct {
 	Metadata string `json:"metadata,omitempty"`
 }
 
-func NewWriteMemory(store *StoreAdapter) *WriteMemory {
-	return &WriteMemory{Store: store}
+func NewWriteMemory(store *StoreAdapter, projectID int64) *WriteMemory {
+	return &WriteMemory{Store: store, ProjectID: projectID}
 }
 
 func (t *WriteMemory) Name() string { return "write_memory" }
 
 func (t *WriteMemory) Description() string {
-	return "Write an entry to project memory. Use this after meaningful changes to persist architectural decisions, conventions, or key facts about what was built."
+	return "Record something about this project worth remembering in later turns: a convention you " +
+		"established, a decision you made, a constraint you discovered, or a warning about something " +
+		"fragile. Memory is included in the context of every future turn, so keep entries short and " +
+		"specific — one fact each."
 }
 
 func (t *WriteMemory) InputSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"type": {"type": "string", "enum": ["convention", "decision", "architecture", "fact", "warning"], "description": "Type of memory entry"},
-			"content": {"type": "string", "description": "The memory content to persist"},
-			"metadata": {"type": "string", "description": "Optional metadata (e.g., file path, date)"}
+			"type": {
+				"type": "string",
+				"enum": ["convention", "decision", "architecture", "fact", "warning"],
+				"description": "What kind of entry this is"
+			},
+			"content": {
+				"type": "string",
+				"description": "The fact itself, in one or two sentences"
+			},
+			"metadata": {
+				"type": "string",
+				"description": "Optional: the file or area it applies to"
+			}
 		},
 		"required": ["type", "content"]
 	}`)
@@ -42,20 +60,29 @@ func (t *WriteMemory) InputSchema() json.RawMessage {
 func (t *WriteMemory) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var a WriteMemoryArgs
 	if err := json.Unmarshal(args, &a); err != nil {
-		return ToolResult{Content: "invalid arguments", IsError: true}, err
+		return errResult("invalid arguments: %v", err), nil
+	}
+	if strings.TrimSpace(a.Content) == "" {
+		return errResult("content is required"), nil
+	}
+	if t.Store == nil {
+		return errResult("project memory is not available in this session"), nil
+	}
+	if a.Type == "" {
+		a.Type = "fact"
 	}
 
-	projectID := ctx.Value("project_id").(int64)
-	if err := t.Store.AddMemory(projectID, a.Type, a.Content, a.Metadata); err != nil {
-		return ToolResult{Content: fmt.Sprintf("failed to write memory: %v", err), IsError: true}, err
+	if err := t.Store.AddMemory(t.ProjectID, a.Type, a.Content, a.Metadata); err != nil {
+		return errResult("could not save that: %v", err), nil
 	}
 
-	return ToolResult{Content: fmt.Sprintf("Memory written (%s): %s", a.Type, truncate(a.Content, 50))}, nil
+	return ToolResult{Content: fmt.Sprintf("Remembered (%s): %s", a.Type, truncate(a.Content, 80))}, nil
 }
 
 func truncate(s string, n int) string {
+	s = strings.TrimSpace(s)
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return s[:n] + "…"
 }

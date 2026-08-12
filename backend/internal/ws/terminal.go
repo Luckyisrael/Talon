@@ -4,7 +4,6 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
-	"strconv"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
@@ -12,10 +11,6 @@ import (
 	"github.com/seekersstudio/backend/internal/auth"
 	"github.com/seekersstudio/backend/internal/store"
 )
-
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
 
 type TerminalHandler struct {
 	store   *store.Store
@@ -36,31 +31,11 @@ func (h *TerminalHandler) Routes() chi.Router {
 }
 
 func (h *TerminalHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	// Authenticate via query param (browsers can't set WS headers)
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		http.Error(w, `{"error":"missing token"}`, http.StatusUnauthorized)
+	device, ok := authorize(w, r, h.authSvc, h.store)
+	if !ok {
 		return
 	}
-	if _, err := h.authSvc.ValidateToken(token); err != nil {
-		http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
-		return
-	}
-
-	// Resolve session → ADB target
-	sessionID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, `{"error":"invalid session id"}`, http.StatusBadRequest)
-		return
-	}
-
-	session, err := h.store.GetSession(sessionID)
-	if err != nil || session.ADBPort == 0 {
-		http.Error(w, `{"error":"session not found or no device attached"}`, http.StatusNotFound)
-		return
-	}
-
-	adbTarget := "localhost:" + strconv.Itoa(session.ADBPort)
+	sessionID, adbTarget := device.ID, device.ADBTarget
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -69,9 +44,9 @@ func (h *TerminalHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Spawn adb shell process directly (native Linux)
-	args := []string{"-s", adbTarget, "shell"}
-	cmd := exec.Command("adb", args...)
+	// Spawn adb shell process directly (native Linux). The command dies when the
+	// request context does, so a disconnected browser cannot leave a shell behind.
+	cmd := exec.CommandContext(r.Context(), "adb", "-s", adbTarget, "shell")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

@@ -13,7 +13,7 @@ import (
 
 type InstallPackage struct {
 	WorkspacePath string
-	Allowlist      *devclient.Allowlist
+	Allowlist     *devclient.Allowlist
 }
 
 func (t *InstallPackage) Name() string { return "install_package" }

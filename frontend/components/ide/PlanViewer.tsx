@@ -1,252 +1,126 @@
 "use client";
 
-import { Check, ArrowRight, Box, Document, Star } from "iconsax-reactjs";
-
-interface PlanData {
-  screens: { name: string; description: string }[];
-  features: string[];
-  navigation: string;
-  packages: string[];
-}
+import Markdown from "@/components/ui/Markdown";
+import type { PlanData } from "@/lib/types";
 
 interface PlanViewerProps {
   message: string;
   plan: PlanData;
   onApprove: () => void;
+  /** Put the centre panel back on the code without approving anything. */
+  onDismiss?: () => void;
 }
 
-function renderMarkdown(text: string) {
-  const lines = text.split("\n");
-  const elements: React.ReactNode[] = [];
+/**
+ * The plan, at reading size.
+ *
+ * This used to carry its own hand-rolled markdown renderer that understood bold
+ * and nothing else — a code fence in a plan came out as literal backticks. It
+ * now shares the one renderer with the chat.
+ */
+export default function PlanViewer({
+  message,
+  plan,
+  onApprove,
+  onDismiss,
+}: PlanViewerProps) {
+  const screens = plan.screens ?? [];
+  const features = plan.features ?? [];
+  const packages = plan.packages ?? [];
 
-  let inList = false;
-  let listItems: React.ReactNode[] = [];
-
-  const flushList = () => {
-    if (listItems.length > 0) {
-      elements.push(
-        <ul key={`list-${elements.length}`} className="space-y-1.5 my-3">
-          {listItems}
-        </ul>
-      );
-      listItems = [];
-      inList = false;
-    }
-  };
-
-  lines.forEach((line, i) => {
-    const trimmed = line.trim();
-
-    // Empty line
-    if (!trimmed) {
-      flushList();
-      return;
-    }
-
-    // Bold text
-    const formatInline = (s: string) => {
-      const parts: React.ReactNode[] = [];
-      const regex = /\*\*(.*?)\*\*/g;
-      let lastIndex = 0;
-      let match;
-      while ((match = regex.exec(s)) !== null) {
-        if (match.index > lastIndex) {
-          parts.push(s.slice(lastIndex, match.index));
-        }
-        parts.push(
-          <strong key={match.index} className="text-text-primary font-semibold">
-            {match[1]}
-          </strong>
-        );
-        lastIndex = regex.lastIndex;
-      }
-      if (lastIndex < s.length) {
-        parts.push(s.slice(lastIndex));
-      }
-      return parts.length > 0 ? parts : s;
-    };
-
-    // Header
-    if (trimmed.startsWith("### ")) {
-      flushList();
-      elements.push(
-        <h3 key={i} className="text-sm font-semibold text-text-primary mt-4 mb-2">
-          {formatInline(trimmed.slice(4))}
-        </h3>
-      );
-      return;
-    }
-    if (trimmed.startsWith("## ")) {
-      flushList();
-      elements.push(
-        <h2 key={i} className="text-base font-bold text-text-primary mt-5 mb-2">
-          {formatInline(trimmed.slice(3))}
-        </h2>
-      );
-      return;
-    }
-
-    // List item
-    if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-      inList = true;
-      listItems.push(
-        <li key={i} className="flex items-start gap-2 text-sm text-text-secondary">
-          <span className="w-1.5 h-1.5 rounded-full bg-accent mt-1.5 flex-shrink-0" />
-          <span>{formatInline(trimmed.slice(2))}</span>
-        </li>
-      );
-      return;
-    }
-
-    // Numbered list
-    const numberedMatch = trimmed.match(/^\d+\.\s+(.*)/);
-    if (numberedMatch) {
-      inList = true;
-      listItems.push(
-        <li key={i} className="flex items-start gap-2 text-sm text-text-secondary">
-          <span className="text-accent font-mono text-xs mt-0.5 flex-shrink-0">
-            {trimmed.match(/^(\d+)\./)?.[1]}.
-          </span>
-          <span>{formatInline(numberedMatch[1])}</span>
-        </li>
-      );
-      return;
-    }
-
-    // Regular paragraph
-    flushList();
-    elements.push(
-      <p key={i} className="text-sm text-text-secondary leading-relaxed my-1">
-        {formatInline(trimmed)}
-      </p>
-    );
-  });
-
-  flushList();
-  return elements;
-}
-
-export default function PlanViewer({ message, plan, onApprove }: PlanViewerProps) {
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-8 py-8">
-        {/* Header badge */}
-        <div className="flex items-center gap-2 mb-6">
-          <div className="h-6 px-3 rounded-full bg-accent/15 flex items-center">
-            <span className="text-xs font-medium text-accent">Plan</span>
-          </div>
+    <div className="flex h-full min-h-0 flex-col bg-ink">
+      <header className="bay-head justify-between">
+        <div className="flex items-center gap-2">
+          <span className="lamp" data-state="waiting" />
+          {/* Filament means the same thing everywhere: this is waiting on you. */}
+          <span className="gauge">Plan · needs your go-ahead</span>
         </div>
-
-        {/* Message content */}
-        <div className="mb-8">{renderMarkdown(message)}</div>
-
-        {/* Plan sections */}
-        <div className="space-y-5">
-          {/* Screens */}
-          {plan.screens.length > 0 && (
-            <div className="bg-surface-2 rounded-xl p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <Document size="14" className="text-accent" variant="Linear" />
-                <p className="text-xs font-mono uppercase tracking-wider text-text-secondary">
-                  Screens
-                </p>
-                <span className="ml-auto text-[10px] text-text-muted font-mono">
-                  {plan.screens.length}
-                </span>
-              </div>
-              <div className="space-y-3">
-                {plan.screens.map((screen, i) => (
-                  <div key={i} className="flex items-start gap-3 group">
-                    <div className="w-7 h-7 rounded-lg bg-surface-3 flex items-center justify-center flex-shrink-0 mt-0.5">
-                      <span className="text-[11px] font-mono text-accent">{i + 1}</span>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-text-primary">{screen.name}</p>
-                      <p className="text-xs text-text-secondary mt-0.5 leading-relaxed">
-                        {screen.description}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Features */}
-          {plan.features.length > 0 && (
-            <div className="bg-surface-2 rounded-xl p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <Star size="14" className="text-accent" variant="Linear" />
-                <p className="text-xs font-mono uppercase tracking-wider text-text-secondary">
-                  Features
-                </p>
-                <span className="ml-auto text-[10px] text-text-muted font-mono">
-                  {plan.features.length}
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {plan.features.map((feature, i) => (
-                  <span
-                    key={i}
-                    className="h-7 px-3 rounded-full bg-surface-3 text-xs text-text-secondary flex items-center"
-                  >
-                    {feature}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Navigation */}
-          {plan.navigation && (
-            <div className="bg-surface-2 rounded-xl p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <ArrowRight size="14" className="text-accent" variant="Linear" />
-                <p className="text-xs font-mono uppercase tracking-wider text-text-secondary">
-                  Navigation
-                </p>
-              </div>
-              <p className="text-sm text-text-secondary leading-relaxed">
-                {plan.navigation}
-              </p>
-            </div>
-          )}
-
-          {/* Packages */}
-          {plan.packages.length > 0 && (
-            <div className="bg-surface-2 rounded-xl p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <Box size="14" className="text-accent" variant="Linear" />
-                <p className="text-xs font-mono uppercase tracking-wider text-text-secondary">
-                  Packages
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {plan.packages.map((pkg, i) => (
-                  <code
-                    key={i}
-                    className="h-7 px-3 rounded-lg bg-surface-3 text-xs text-accent font-mono flex items-center"
-                  >
-                    {pkg}
-                  </code>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Approve button */}
-        <div className="mt-8 mb-12">
-          <button
-            onClick={onApprove}
-            className="w-full h-12 rounded-xl bg-accent text-background font-medium text-sm flex items-center justify-center gap-2 hover:bg-accent-hover transition-all duration-150 active:scale-[0.98]"
-          >
-            <Check size="18" variant="Linear" />
-            Approve &amp; Start Building
+        {onDismiss && (
+          <button type="button" onClick={onDismiss} className="btn btn-ghost text-tiny">
+            Back to the code
           </button>
-          <p className="text-[11px] text-text-muted text-center mt-3">
-            Switches to Build mode and begins generating code
-          </p>
+        )}
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-2xl px-6 py-6 pb-16">
+          {message && <Markdown>{message}</Markdown>}
+
+          <div className="mt-7 flex flex-col gap-3">
+            {screens.length > 0 && (
+              <section className="bay p-4">
+                <div className="mb-3 flex items-baseline justify-between">
+                  <h2 className="gauge">Screens</h2>
+                  <span className="gauge tnum">{screens.length}</span>
+                </div>
+                <ol className="flex flex-col gap-3">
+                  {screens.map((screen, i) => (
+                    <li key={`${screen.name}-${i}`} className="flex gap-3">
+                      <span className="gauge tnum mt-0.5 flex-shrink-0">
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-body text-paper">{screen.name}</p>
+                        {screen.description && (
+                          <p className="mt-0.5 text-small leading-relaxed text-graphite">
+                            {screen.description}
+                          </p>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
+
+            {plan.navigation && (
+              <section className="bay p-4">
+                <h2 className="gauge mb-2">Navigation</h2>
+                <p className="text-body leading-relaxed text-paper">{plan.navigation}</p>
+              </section>
+            )}
+
+            {features.length > 0 && (
+              <section className="bay p-4">
+                <h2 className="gauge mb-2.5">Features</h2>
+                <ul className="flex flex-wrap gap-1.5">
+                  {features.map((feature, i) => (
+                    <li
+                      key={`${feature}-${i}`}
+                      className="rounded-1 border border-rail bg-riser px-2 py-1 text-small text-graphite"
+                    >
+                      {feature}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {packages.length > 0 && (
+              <section className="bay p-4">
+                <h2 className="gauge mb-2.5">Packages to install</h2>
+                <ul className="flex flex-col gap-1 font-mono text-tiny text-graphite">
+                  {packages.map((pkg, i) => (
+                    <li key={`${pkg}-${i}`}>{pkg}</li>
+                  ))}
+                </ul>
+                <p className="mt-2.5 text-tiny text-dust">
+                  A package with native code means the dev client gets rebuilt,
+                  which takes a few minutes the first time.
+                </p>
+              </section>
+            )}
+          </div>
+
+          <div className="mt-7 flex items-center gap-3">
+            <button type="button" onClick={onApprove} className="btn btn-go h-9 px-4">
+              Build this
+            </button>
+            <p className="text-small text-graphite">
+              Or keep talking in the chat to change it first.
+            </p>
+          </div>
         </div>
       </div>
     </div>

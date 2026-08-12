@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Yarn's generated runtime. It carries its own eslint-disable directives,
+    // which get reported as unused, and it is not ours to fix.
+    ".pnp.cjs",
+    ".pnp.loader.mjs",
+    ".yarn/**",
   ]),
 ]);
 

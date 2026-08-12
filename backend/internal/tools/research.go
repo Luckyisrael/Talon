@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -52,18 +54,20 @@ func (t *WebSearch) Execute(ctx context.Context, args json.RawMessage) (ToolResu
 		return ToolResult{Content: "invalid arguments", IsError: true}, err
 	}
 
+	a.Query = strings.TrimSpace(a.Query)
 	if a.Query == "" {
 		return ToolResult{Content: "query is required", IsError: true}, fmt.Errorf("query is required")
 	}
 
-	// Use DuckDuckGo HTML search (no API key needed)
-	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", url.QueryEscape(a.Query))
+	// DuckDuckGo's HTML endpoint needs no API key.
+	searchURL := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(a.Query)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
 		return ToolResult{Content: fmt.Sprintf("search failed: %v", err), IsError: true}, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; SeekerStudio/1.0)")
+	req.Header.Set("Accept", "text/html")
 
 	client := t.HTTPClient
 	if client == nil {
@@ -76,73 +80,103 @@ func (t *WebSearch) Execute(ctx context.Context, args json.RawMessage) (ToolResu
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	// A rate-limited or blocked request returns a perfectly valid HTML page with
+	// no results in it. Treated as a 200 it looks identical to "nothing found".
+	if resp.StatusCode != http.StatusOK {
+		msg := fmt.Sprintf("search unavailable: DuckDuckGo returned HTTP %d. Rely on what you already know, or read a specific URL with fetch_url.", resp.StatusCode)
+		return ToolResult{Content: msg, IsError: true}, nil
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSearchBytes))
 	if err != nil {
 		return ToolResult{Content: fmt.Sprintf("search failed: %v", err), IsError: true}, err
 	}
 
-	// Parse results from HTML
 	results := parseDuckDuckGoResults(string(body))
+	if len(results) == 0 {
+		// Reporting an empty success here is how a scraper breaks silently: the
+		// agent reads "no results" as fact about the world rather than a broken
+		// tool, and quietly proceeds on whatever it guessed instead.
+		return ToolResult{
+			Content: fmt.Sprintf("no results could be read for %q — the search page returned nothing this parser recognised, which usually means DuckDuckGo changed its markup or throttled the request. Do not treat this as evidence that nothing exists.", a.Query),
+			IsError: true,
+		}, nil
+	}
 
-	// Format output
 	var formatted strings.Builder
-	formatted.WriteString(fmt.Sprintf("Search results for: %s\n\n", a.Query))
+	fmt.Fprintf(&formatted, "Search results for: %s\n\n", a.Query)
 	for i, r := range results {
-		if i >= 5 {
+		if i >= maxSearchResults {
 			break
 		}
-		formatted.WriteString(fmt.Sprintf("%d. %s\n   %s\n   %s\n\n", i+1, r.Title, r.URL, r.Snippet))
+		fmt.Fprintf(&formatted, "%d. %s\n   %s\n", i+1, r.Title, r.URL)
+		if r.Snippet != "" {
+			fmt.Fprintf(&formatted, "   %s\n", r.Snippet)
+		}
+		formatted.WriteByte('\n')
 	}
 
 	return ToolResult{Content: formatted.String()}, nil
 }
 
-func parseDuckDuckGoResults(html string) []SearchResult {
-	var results []SearchResult
+const (
+	maxSearchBytes   = 4 << 20
+	maxSearchResults = 5
+)
 
-	lines := strings.Split(html, "\n")
-	var currentTitle, currentURL, currentSnippet string
+var (
+	// DuckDuckGo's HTML is served minified, so the previous line-by-line scan
+	// found at most one result per document and usually none at all. These match
+	// across the whole body instead.
+	ddgResultRe  = regexp.MustCompile(`(?is)class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
+	ddgSnippetRe = regexp.MustCompile(`(?is)class="result__snippet"[^>]*>(.*?)</a>`)
+	htmlTagRe    = regexp.MustCompile(`(?s)<[^>]*>`)
+)
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
+func parseDuckDuckGoResults(body string) []SearchResult {
+	matches := ddgResultRe.FindAllStringSubmatch(body, maxSearchResults*4)
+	snippets := ddgSnippetRe.FindAllStringSubmatch(body, maxSearchResults*4)
 
-		if strings.Contains(line, "result__a") {
-			if idx := strings.Index(line, "href=\""); idx != -1 {
-				endIdx := strings.Index(line[idx+6:], "\"")
-				if endIdx != -1 {
-					currentURL = line[idx+6 : idx+6+endIdx]
-				}
-			}
-			if idx := strings.Index(line, ">"); idx != -1 {
-				endIdx := strings.Index(line[idx+1:], "<")
-				if endIdx != -1 {
-					currentTitle = strings.TrimSpace(line[idx+1 : idx+1+endIdx])
-				}
-			}
+	results := make([]SearchResult, 0, len(matches))
+	for i, m := range matches {
+		link := unwrapDDGLink(html.UnescapeString(m[1]))
+		title := cleanHTML(m[2])
+		if link == "" || title == "" {
+			continue
 		}
-
-		if strings.Contains(line, "result__snippet") {
-			if idx := strings.Index(line, ">"); idx != -1 {
-				endIdx := strings.Index(line[idx+1:], "<")
-				if endIdx != -1 {
-					currentSnippet = strings.TrimSpace(line[idx+1 : idx+1+endIdx])
-				}
-			}
+		var snippet string
+		if i < len(snippets) {
+			snippet = cleanHTML(snippets[i][1])
 		}
+		results = append(results, SearchResult{Title: title, URL: link, Snippet: snippet})
+	}
+	return results
+}
 
-		if currentTitle != "" && currentURL != "" {
-			results = append(results, SearchResult{
-				Title:   currentTitle,
-				URL:     currentURL,
-				Snippet: currentSnippet,
-			})
-			currentTitle = ""
-			currentURL = ""
-			currentSnippet = ""
+// unwrapDDGLink pulls the real destination out of DuckDuckGo's redirector, which
+// wraps every result as //duckduckgo.com/l/?uddg=<percent-encoded target>.
+// Handing those to the agent gave it links it could not fetch.
+func unwrapDDGLink(href string) string {
+	if strings.Contains(href, "uddg=") {
+		if parsed, err := url.Parse(href); err == nil {
+			if target := parsed.Query().Get("uddg"); target != "" {
+				href = target
+			}
 		}
 	}
+	if strings.HasPrefix(href, "//") {
+		href = "https:" + href
+	}
+	if !strings.HasPrefix(href, "http://") && !strings.HasPrefix(href, "https://") {
+		return ""
+	}
+	return href
+}
 
-	return results
+func cleanHTML(s string) string {
+	s = htmlTagRe.ReplaceAllString(s, "")
+	s = html.UnescapeString(s)
+	return strings.Join(strings.Fields(s), " ")
 }
 
 type GitHubSearch struct {

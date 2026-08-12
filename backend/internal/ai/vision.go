@@ -1,14 +1,15 @@
 package ai
 
 import (
-	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"strings"
 )
 
+// VisionCheckResult is the verdict on a screenshot of the running app.
 type VisionCheckResult struct {
 	Matches  bool   `json:"matches"`
 	Reason   string `json:"reason"`
@@ -16,147 +17,152 @@ type VisionCheckResult struct {
 	ErrorMsg string `json:"error_msg,omitempty"`
 }
 
-func (c *Client) VisionCheck(ctx context.Context, screenshot []byte, intendedScreen string) (*VisionCheckResult, error) {
-	prompt := fmt.Sprintf(`You are verifying if a mobile app screenshot matches the intended screen.
+const visionPrompt = `You are looking at a screenshot from an Android phone running a React Native app that was just built.
 
-Intended screen: %s
+The screen is supposed to be: %s
 
-Look at this screenshot and determine:
-1. Does it show the intended screen?
-2. Are there any visible errors (error boundaries, blank screens, crash messages)?
-3. Does the layout look correct for a mobile app?
+Report what you actually see:
+1. Does the screen match that description?
+2. Is anything visibly broken — a red error screen, a stack trace, a blank white or black screen, "Unable to resolve module", a stuck loading spinner?
+3. Does the layout hold up on a tall phone screen — nothing clipped off the edges, no text overlapping, nothing hidden behind the status bar or the navigation bar?
 
-Respond with JSON:
+Be strict. A screen that renders but shows placeholder text, an empty list where data was expected, or an unstyled default layout does not match.
+
+Reply with JSON only:
 {
-  "matches": true/false,
-  "reason": "explanation of what you see",
-  "has_error": true/false,
-  "error_msg": "if there's an error, describe it"
-}`, intendedScreen)
+  "matches": true or false,
+  "reason": "what you see, specifically",
+  "has_error": true or false,
+  "error_msg": "the error text if one is visible"
+}`
 
-	content := []map[string]interface{}{
-		{
-			"type": "image",
-			"source": map[string]string{
-				"type":      "base64",
-				"media_type": "image/png",
-				"data":      encodeBase64(screenshot),
-			},
-		},
-		{
-			"type": "text",
-			"text": prompt,
-		},
+// VisionCheck asks the model whether a screenshot shows the screen that was
+// intended. It speaks whichever protocol the client is configured for, since the
+// image block shape differs between them.
+func (c *Client) VisionCheck(ctx context.Context, screenshot []byte, intendedScreen string) (*VisionCheckResult, error) {
+	if len(screenshot) == 0 {
+		return nil, fmt.Errorf("screenshot is empty")
 	}
 
-	contentJSON, _ := json.Marshal(content)
+	encoded := base64.StdEncoding.EncodeToString(screenshot)
+	prompt := fmt.Sprintf(visionPrompt, intendedScreen)
 
-	reqBody := map[string]interface{}{
-		"model":      c.model,
-		"max_tokens": 1024,
-		"messages": []map[string]interface{}{
-			{
-				"role":    "user",
-				"content": json.RawMessage(contentJSON),
-			},
-		},
+	var (
+		url  string
+		body []byte
+		err  error
+	)
+
+	if c.protocol == ProtocolOpenAI {
+		url = c.baseURL + "/chat/completions"
+		body, err = json.Marshal(map[string]any{
+			"model":      c.model,
+			"max_tokens": 1024,
+			"messages": []map[string]any{{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "image_url", "image_url": map[string]string{
+						"url": "data:image/png;base64," + encoded,
+					}},
+					{"type": "text", "text": prompt},
+				},
+			}},
+		})
+	} else {
+		url = c.baseURL + "/messages"
+		body, err = json.Marshal(map[string]any{
+			"model":      c.model,
+			"max_tokens": 1024,
+			"messages": []map[string]any{{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "image", "source": map[string]string{
+						"type":       "base64",
+						"media_type": "image/png",
+						"data":       encoded,
+					}},
+					{"type": "text", "text": prompt},
+				},
+			}},
+		})
 	}
-
-	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("could not encode the vision request: %w", err)
 	}
 
-	url := c.baseURL + "/v1/messages"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	respBody, err := c.doWithRetry(ctx, url, body, func(req *http.Request) {
+		if c.protocol == ProtocolOpenAI {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
+			if strings.Contains(c.baseURL, "openrouter") {
+				req.Header.Set("HTTP-Referer", "https://seekerstudio.dev")
+				req.Header.Set("X-Title", "Seeker Studio")
+			}
+		} else {
+			req.Header.Set("x-api-key", c.apiKey)
+			req.Header.Set("anthropic-version", "2023-06-01")
+		}
+	}, "vision_check")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("User-Agent", "SeekerStudio/1.0")
-
-	resp, err := c.httpClient.Do(req)
+	text, err := extractVisionText(respBody, c.protocol)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, err
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+	var result VisionCheckResult
+	if json.Unmarshal([]byte(StripCodeBlocks(text)), &result) != nil {
+		// The model answered in prose. Its description is still useful, but a
+		// verdict we could not read must not be reported as a pass.
+		return &VisionCheckResult{Matches: false, Reason: text}, nil
+	}
+	return &result, nil
+}
+
+func extractVisionText(respBody []byte, protocol Provider) (string, error) {
+	if protocol == ProtocolOpenAI {
+		var r struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(respBody, &r); err != nil {
+			return "", fmt.Errorf("could not parse the vision response: %w", err)
+		}
+		if r.Error != nil {
+			return "", fmt.Errorf("vision check failed: %s", r.Error.Message)
+		}
+		if len(r.Choices) == 0 || r.Choices[0].Message.Content == "" {
+			return "", fmt.Errorf("the model returned no description of the screenshot")
+		}
+		return r.Choices[0].Message.Content, nil
 	}
 
-	var anthResp struct {
+	var r struct {
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
 		Error *struct {
 			Message string `json:"message"`
-		} `json:"error,omitempty"`
+		} `json:"error"`
 	}
-
-	if err := json.Unmarshal(respBody, &anthResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := json.Unmarshal(respBody, &r); err != nil {
+		return "", fmt.Errorf("could not parse the vision response: %w", err)
 	}
-
-	if anthResp.Error != nil {
-		return nil, fmt.Errorf("API error: %s", anthResp.Error.Message)
+	if r.Error != nil {
+		return "", fmt.Errorf("vision check failed: %s", r.Error.Message)
 	}
-
-	for _, block := range anthResp.Content {
-		if block.Type == "text" && block.Text != "" {
-			var result VisionCheckResult
-			if err := json.Unmarshal([]byte(StripCodeBlocks(block.Text)), &result); err != nil {
-				return &VisionCheckResult{
-					Matches:  false,
-					Reason:   block.Text,
-					HasError: false,
-				}, nil
-			}
-			return &result, nil
+	for _, b := range r.Content {
+		if b.Type == "text" && b.Text != "" {
+			return b.Text, nil
 		}
 	}
-
-	return nil, fmt.Errorf("no text content in vision check response")
-}
-
-func encodeBase64(data []byte) string {
-	import_b64 := make([]byte, 0, len(data)*4/3+4)
-	_ = import_b64
-
-	result := ""
-	for i := 0; i < len(data); i += 3 {
-		var b [4]byte
-		b[0] = data[i] >> 2
-		b[1] = (data[i]&3)<<4 | data[i+1]>>4
-		if i+1 < len(data) {
-			b[2] = (data[i+1]&15)<<2 | data[i+2]>>6
-		}
-		if i+2 < len(data) {
-			b[3] = data[i+2] & 63
-		}
-		for _, c := range b {
-			switch {
-			case c < 26:
-				result += string(rune('A' + c))
-			case c < 52:
-				result += string(rune('a' + c - 26))
-			case c < 62:
-				result += string(rune('0' + c - 52))
-			case c == 62:
-				result += "+"
-			default:
-				result += "/"
-			}
-		}
-	}
-	return result
+	return "", fmt.Errorf("the model returned no description of the screenshot")
 }

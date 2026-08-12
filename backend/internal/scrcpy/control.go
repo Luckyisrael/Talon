@@ -15,18 +15,18 @@ import (
 
 // Control message types (from scrcpy protocol)
 const (
-	msgTypeInjectKeycode    = 0
-	msgTypeInjectText       = 1
-	msgTypeInjectTouchEvent = 2
-	msgTypeInjectScroll     = 3
-	msgTypeBackOrScreenOn   = 4
+	msgTypeInjectKeycode      = 0
+	msgTypeInjectText         = 1
+	msgTypeInjectTouchEvent   = 2
+	msgTypeInjectScroll       = 3
+	msgTypeBackOrScreenOn     = 4
 	msgTypeExpandNotification = 5
-	msgTypeExpandSettings   = 6
-	msgTypeCollapsePanels   = 7
-	msgTypeGetClipboard     = 8
-	msgTypeSetClipboard     = 9
+	msgTypeExpandSettings     = 6
+	msgTypeCollapsePanels     = 7
+	msgTypeGetClipboard       = 8
+	msgTypeSetClipboard       = 9
 	msgTypeSetScreenPowerMode = 10
-	msgTypeRotateDevice     = 11
+	msgTypeRotateDevice       = 11
 )
 
 // Device dimensions (Seeker device)

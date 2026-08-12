@@ -10,9 +10,9 @@ import (
 
 // NativeModule represents a single native module baked into the dev client.
 type NativeModule struct {
-	Name          string `json:"name"`
-	Version       string `json:"version"`
-	NativeLinking bool   `json:"nativeLinking"`
+	Name           string `json:"name"`
+	Version        string `json:"version"`
+	NativeLinking  bool   `json:"nativeLinking"`
 	AndroidPackage string `json:"androidPackage,omitempty"`
 }
 

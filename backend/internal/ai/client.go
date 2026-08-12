@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,133 +10,9 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
-
-const systemPromptPlan = `CRITICAL RULES — VIOLATION IS FAILURE:
-1. You are in PLAN mode. You must NEVER write code, generate file contents, create files, or provide implementation details.
-2. You must NEVER generate HTML, CSS, JavaScript, index.html, or any web code.
-3. You must NEVER generate React Native code, TypeScript code, or any code at all.
-4. If the user asks you to write code, build something, create an app, or implement anything, you MUST refuse and tell them to switch to Build mode.
-
-You are a Solana Mobile app architect helping users DESIGN apps for the Seeker device (Android, React Native/Expo).
-
-The Seeker device specs:
-- Screen: 6.36" AMOLED, 2670x1200, 460 PPI, 120Hz
-- Android-based, runs React Native/Expo apps
-- Has Mobile Wallet Adapter (MWA) for Solana wallet integration
-- Seed Vault for secure key storage
-
-Your job: help the user plan their app's screens, features, and navigation. NOTHING ELSE.
-
-If the user says anything like "create me...", "build me...", "make me...", "I want a...", "I need a...", "can you create...", "add two numbers", "simple app", "calculator", "todo app" — you MUST respond:
-"I'm in Plan mode, which is for designing your app — not writing code. To start building, switch to Build mode using the toggle at the top of the chat.
-
-In Plan mode I can help you:
-- Define screens and features
-- Plan navigation flow
-- Choose packages and architecture
-- Discuss UI/UX patterns
-
-Switch to Build mode when you're ready to generate code."
-
-Plan mode is ONLY for:
-- Discussing and refining the app idea
-- Defining screens and features
-- Planning navigation and architecture
-- Choosing packages
-
-When the user describes their app idea:
-1. Ask clarifying questions if needed
-2. Propose a screen list with descriptions
-3. Suggest navigation flow
-4. List key features
-
-Respond in this JSON format:
-{
-  "message": "your conversational response to the user",
-  "plan": {
-    "screens": [
-      {"name": "ScreenName", "description": "What this screen shows/does"}
-    ],
-    "features": ["feature1", "feature2"],
-    "navigation": "Description of how screens connect",
-    "packages": ["any extra npm packages needed"]
-  }
-}
-
-If you're still discussing (not ready to finalize), set plan to null.`
-
-const systemPromptBuild = `CRITICAL RULES — VIOLATION IS FAILURE:
-1. You are building a REACT NATIVE / EXPO mobile app for ANDROID (Seeker device).
-2. You must NEVER generate HTML, CSS, vanilla JavaScript, index.html, or any web code.
-3. You must NEVER create website files. This is NOT a web app.
-4. ONLY use React Native components: View, Text, StyleSheet, TouchableOpacity, ScrollView, FlatList, TextInput, Switch, etc.
-5. ONLY use Expo libraries and expo-router for navigation.
-6. Your output MUST be valid JSON with a "files" array containing TypeScript/TSX files.
-
-You are a React Native engineer specializing in Solana Mobile apps for the Seeker device.
-
-=== CRITICAL GUARDRAILS — READ EVERY ONE ===
-
-1. REACT NATIVE ONLY: Use View, Text, StyleSheet, TouchableOpacity, ScrollView, FlatList, TextInput, Switch, SafeAreaView, etc. NEVER use div, span, p, button, input, or any HTML elements. NEVER use CSS files. NEVER use document.getElementById or any DOM API.
-
-2. READ BEFORE EDIT: The existing project files are provided in the context below. You MUST read and understand them before generating any code. Never generate code for a file you haven't seen. If a file already exists, your output must preserve its existing structure and only add/modify what the user requested.
-
-3. NEVER DELETE: Do not remove existing functionality, screens, components, or features unless the user explicitly says "delete" or "remove". If a file exists and the user didn't ask to change it, do NOT include it in your response.
-
-4. PRESERVE PATTERNS: Match the existing code style exactly. If the project uses named exports, use named exports. If it uses a specific folder structure, follow it. If it uses a particular state management approach, continue using it.
-
-5. VALIDATE PATHS: File paths must be relative to the project root (e.g., "src/screens/HomeScreen.tsx", not "MyApp/src/screens/HomeScreen.tsx"). Never use absolute paths.
-
-6. NO CONFIG CHANGES: Do not modify package.json, app.json, tsconfig.json, or babel.config.js unless the user explicitly asks. Never add new dependencies without the user requesting them.
-
-6. TYPE SAFETY: All components must have proper TypeScript types. Use interfaces for props. Never use 'any' type.
-
-7. ERROR BOUNDARIES: Every screen component must be wrapped in an ErrorBoundary. If an ErrorBoundary doesn't exist yet, create it.
-
-8. WALLET PATTERNS: All Solana wallet interactions MUST use MWA (Mobile Wallet Adapter) protocol. Never store private keys in app state. Use transact() for signing.
-
-9. SINGLE RESPONSIBILITY: Each file should do one thing. Don't create mega-components. Split complex UIs into smaller, focused components.
-
-10. EXPLAIN CHANGES: Your "message" field must clearly explain:
-    - What files you created vs modified
-    - Why you made each change
-    - Any decisions or assumptions you made
-
-The project already has these packages installed:
-- expo, react-native
-- @solana/web3.js, @solana/spl-token
-- @solana-mobile/mobile-wallet-adapter-protocol-web3js
-- @solana-mobile/mobile-wallet-adapter-protocol
-- react-native-gesture-handler, react-native-reanimated
-- react-native-safe-area-context, react-native-screens
-- react-native-quick-crypto, js-base64
-- @react-native-async-storage/async-storage
-- expo-router, expo-constants, expo-linking, expo-status-bar
-- react-native-svg, react-native-webview
-
-Your response MUST be valid JSON:
-
-{
-  "message": "explanation of what you generated and why",
-  "files": [
-    {"path": "src/screens/HomeScreen.tsx", "content": "full file content"}
-  ],
-  "commands": ["cd MyApp && npm install extra-package"]
-}
-
-Rules:
-- Use TypeScript
-- Use named default exports for all components
-- Wrap wallet calls in transact() from mobile-wallet-adapter-protocol-web3js
-- Target 1080x2400 resolution, dark theme
-- Import polyfills from '../polyfill' if needed
-- Never use Buffer without importing it
-- Always wrap app root in ErrorBoundary
-- Keep files focused and clean`
 
 type Provider string
 
@@ -194,10 +71,10 @@ func (c ProviderConfig) validate() error {
 	return nil
 }
 
-func New() *Client {
+func New() (*Client, error) {
 	cfg := loadConfig()
 	if err := cfg.validate(); err != nil {
-		log.Fatalf("AI provider configuration error: %v", err)
+		return nil, err
 	}
 
 	workspaceDir := os.Getenv("WORKSPACE_DIR")
@@ -206,14 +83,19 @@ func New() *Client {
 	}
 
 	return &Client{
-		protocol:     Provider(cfg.Protocol),
-		baseURL:      cfg.BaseURL,
-		apiKey:       cfg.APIKey,
-		model:        cfg.Model,
-		httpClient:   &http.Client{Timeout: 120 * time.Second},
+		protocol: Provider(cfg.Protocol),
+		baseURL:  strings.TrimSuffix(cfg.BaseURL, "/"),
+		apiKey:   cfg.APIKey,
+		model:    cfg.Model,
+		// Generous: an agentic turn asks for up to 16k output tokens and a
+		// reasoning model can spend minutes on one before the first byte.
+		httpClient:   &http.Client{Timeout: 10 * time.Minute},
 		workspaceDir: workspaceDir,
-	}
+	}, nil
 }
+
+// Model reports the configured model id, for logging and usage accounting.
+func (c *Client) Model() string { return c.model }
 
 type PlanResponse struct {
 	Message string   `json:"message"`
@@ -230,12 +112,6 @@ type AppPlan struct {
 type Screen struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-}
-
-type BuildResponse struct {
-	Message  string   `json:"message"`
-	Files    []File   `json:"files"`
-	Commands []string `json:"commands"`
 }
 
 type File struct {
@@ -264,8 +140,8 @@ type anthropicMessage struct {
 // Anthropic Messages API response
 type anthropicResponse struct {
 	Content []struct {
-		Type  string `json:"type"`
-		Text  string `json:"text"`
+		Type     string `json:"type"`
+		Text     string `json:"text"`
 		Thinking string `json:"thinking,omitempty"`
 	} `json:"content"`
 	Error *struct {
@@ -296,73 +172,52 @@ type openaiResponse struct {
 	} `json:"error,omitempty"`
 }
 
+// Plan runs one Plan-mode turn and parses the structured plan out of the reply.
+// The model is asked for JSON; if the first attempt is not parseable it gets one
+// chance to correct itself, because a malformed reply loses the plan entirely.
 func (c *Client) Plan(ctx context.Context, history []PromptMessage) (*PlanResponse, error) {
-	resp, err := c.chatWithRetry(ctx, systemPromptPlan, history, 2)
+	resp, err := c.chat(ctx, SystemPromptPlan, history)
 	if err != nil {
 		return nil, err
 	}
 
-	var planResp PlanResponse
-	if err := json.Unmarshal([]byte(resp), &planResp); err != nil {
-		planResp = PlanResponse{Message: resp}
+	if plan, ok := parsePlan(resp); ok {
+		return plan, nil
 	}
 
-	return &planResp, nil
+	retry := make([]PromptMessage, 0, len(history)+2)
+	retry = append(retry, history...)
+	retry = append(retry, PromptMessage{Role: "assistant", Content: resp})
+	retry = append(retry, PromptMessage{
+		Role: "user",
+		Content: "That was not valid JSON. Send the same reply again as a single JSON object " +
+			"with \"message\" and \"plan\" keys, and nothing outside the object.",
+	})
+
+	resp2, err := c.chat(ctx, SystemPromptPlan, retry)
+	if err != nil {
+		// The first reply is still worth showing even though the plan is lost.
+		return &PlanResponse{Message: StripCodeBlocks(resp)}, nil
+	}
+	if plan, ok := parsePlan(resp2); ok {
+		return plan, nil
+	}
+
+	// Both attempts were prose. Show it rather than failing the request — the
+	// text is usually a perfectly good answer that simply was not wrapped.
+	return &PlanResponse{Message: StripCodeBlocks(resp2)}, nil
 }
 
-func (c *Client) Build(ctx context.Context, history []PromptMessage, workspacePath string) (*BuildResponse, error) {
-	// Read existing files and inject into context
-	existingFiles := c.ReadProjectFiles(workspacePath)
-	if len(existingFiles) > 0 {
-		contextMsg := PromptMessage{
-			Role:    "user",
-			Content: "Here are the existing project files. Read them carefully before making any changes:\n\n" + existingFiles,
-		}
-		history = append([]PromptMessage{contextMsg}, history...)
+// parsePlan reports whether a reply is a usable PlanResponse.
+func parsePlan(resp string) (*PlanResponse, bool) {
+	var p PlanResponse
+	if err := json.Unmarshal([]byte(StripCodeBlocks(resp)), &p); err != nil {
+		return nil, false
 	}
-
-	resp, err := c.chatWithRetry(ctx, systemPromptBuild, history, 2)
-	if err != nil {
-		return nil, err
+	if p.Message == "" && p.Plan == nil {
+		return nil, false
 	}
-
-	var buildResp BuildResponse
-	if err := json.Unmarshal([]byte(resp), &buildResp); err != nil {
-		buildResp = BuildResponse{Message: resp}
-	}
-
-	return &buildResp, nil
-}
-
-// chatWithRetry sends the request and retries once if the response is invalid JSON
-func (c *Client) chatWithRetry(ctx context.Context, system string, history []PromptMessage, maxRetries int) (string, error) {
-	resp, err := c.chat(ctx, system, history)
-	if err != nil {
-		return "", err
-	}
-
-	// Strip markdown code blocks if present
-	resp = StripCodeBlocks(resp)
-
-	// Check if response is valid JSON (for build mode, it must be)
-	if strings.Contains(system, "You generate COMPLETE") {
-		var testResp map[string]interface{}
-		if err := json.Unmarshal([]byte(resp), &testResp); err != nil {
-			// Invalid JSON — retry with error context
-			if maxRetries > 0 {
-				retryHistory := make([]PromptMessage, len(history))
-				copy(retryHistory, history)
-				retryHistory = append(retryHistory, PromptMessage{Role: "assistant", Content: resp})
-				retryHistory = append(retryHistory, PromptMessage{
-					Role:    "user",
-					Content: "Your response was not valid JSON. You MUST respond with valid JSON only. No markdown, no code blocks, just raw JSON. The JSON must have 'message', 'files', and 'commands' fields. Try again.",
-				})
-				return c.chatWithRetry(ctx, system, retryHistory, maxRetries-1)
-			}
-		}
-	}
-
-	return resp, nil
+	return &p, true
 }
 
 // StripCodeBlocks removes markdown code block wrappers from AI responses.
@@ -383,55 +238,6 @@ func StripCodeBlocks(s string) string {
 	}
 
 	return strings.TrimSpace(s)
-}
-
-// readProjectFiles reads key files from the project workspace
-func (c *Client) ReadProjectFiles(workspacePath string) string {
-	if workspacePath == "" {
-		return ""
-	}
-
-	var files []string
-	keyFiles := []string{
-		"App.tsx",
-		"index.js",
-		"package.json",
-		"tsconfig.json",
-		"babel.config.js",
-		"polyfill.js",
-		"app.json",
-	}
-
-	// Read root-level key files
-	for _, f := range keyFiles {
-		path := filepath.Join(workspacePath, f)
-		content, err := os.ReadFile(path)
-		if err == nil {
-			files = append(files, fmt.Sprintf("=== %s ===\n%s", f, string(content)))
-		}
-	}
-
-	// Read src/ directory recursively
-	srcDir := filepath.Join(workspacePath, "src")
-	if _, err := os.Stat(srcDir); err == nil {
-		filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
-			}
-			// Skip node_modules and other non-essential files
-			if strings.Contains(path, "node_modules") || strings.Contains(path, ".expo") {
-				return nil
-			}
-			relPath, _ := filepath.Rel(workspacePath, path)
-			content, err := os.ReadFile(path)
-			if err == nil {
-				files = append(files, fmt.Sprintf("=== %s ===\n%s", relPath, string(content)))
-			}
-			return nil
-		})
-	}
-
-	return strings.Join(files, "\n\n")
 }
 
 func (c *Client) chat(ctx context.Context, system string, history []PromptMessage) (string, error) {
@@ -681,410 +487,463 @@ type StreamToolEnd struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// ChatStream sends a streaming request to the AI and returns a channel of events.
-// The channel is closed when the stream ends or an error occurs.
+// ChatStream streams a plain-text (no tools) response and returns a channel of
+// events. The channel is closed when the stream ends or fails; an "error" event
+// is always sent before closing on failure, so a consumer that only watches for
+// "done" will not hang.
 func (c *Client) ChatStream(ctx context.Context, system string, history []PromptMessage) <-chan StreamEvent {
 	events := make(chan StreamEvent, 64)
 
 	go func() {
 		defer close(events)
-
 		if c.protocol == ProtocolOpenAI {
-			c.streamOpenRouter(ctx, system, history, events)
+			c.streamOpenAI(ctx, system, history, events)
 			return
 		}
-
 		c.streamAnthropic(ctx, system, history, events)
 	}()
 
 	return events
 }
 
-func (c *Client) streamOpenRouter(ctx context.Context, system string, history []PromptMessage, events chan<- StreamEvent) {
-	messages := []openaiMessage{
-		{Role: "system", Content: system},
-	}
-	for _, h := range history {
-		messages = append(messages, openaiMessage{
-			Role:    h.Role,
-			Content: h.Content,
-		})
-	}
-
-	reqBody := map[string]interface{}{
-		"model":    c.model,
-		"messages": messages,
-		"stream":   true,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		events <- StreamEvent{Type: "error", Error: "failed to marshal request: " + err.Error()}
-		return
-	}
-
-	const maxRetries = 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			log.Printf("streamOpenRouter: retry attempt %d/%d", attempt+1, maxRetries)
-			time.Sleep(time.Duration(attempt*3) * time.Second)
-		}
-
-		url := c.baseURL + "/chat/completions"
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-		if err != nil {
-			events <- StreamEvent{Type: "error", Error: "failed to create request: " + err.Error()}
-			return
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-		req.Header.Set("HTTP-Referer", "https://seekerstudio.app")
-		req.Header.Set("X-Title", "SeekerStudio")
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			if attempt < maxRetries-1 {
-				log.Printf("streamOpenRouter: request error (attempt %d): %v", attempt+1, err)
-				continue
-			}
-			events <- StreamEvent{Type: "error", Error: "Connection failed. The AI service may be temporarily unavailable. Please try again."}
-			return
-		}
-
-		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
-			resp.Body.Close()
-			if attempt < maxRetries-1 {
-				log.Printf("streamOpenRouter: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
-				continue
-			}
-			var errMsg string
-			switch resp.StatusCode {
-			case 429:
-				errMsg = "Rate limit exceeded. Please wait a moment and try again."
-			case 502:
-				errMsg = "AI service temporarily unavailable. Please try again."
-			case 503:
-				errMsg = "AI service is currently overloaded. Please try again."
-			case 504:
-				errMsg = "AI service request timed out. Please try again."
-			default:
-				errMsg = fmt.Sprintf("AI service error (HTTP %d). Please try again.", resp.StatusCode)
-			}
-			events <- StreamEvent{Type: "error", Error: errMsg}
-			return
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			respBody, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			events <- StreamEvent{Type: "error", Error: fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(respBody))}
-			return
-		}
-
-		events <- StreamEvent{Type: "thinking.start"}
-		events <- StreamEvent{Type: "text.start"}
-
-		scanner := newSSEScanner(resp.Body)
-		for scanner.Next() {
-			event := scanner.Event()
-			if event.Type == "" || event.Type == "message" {
-				continue
-			}
-			if event.Type == "done" {
-				break
-			}
-
-			// OpenAI SSE format: data: {"choices":[{"delta":{"content":"..."}}]}
-			if event.Type == "message.stop" || event.Type == "message.complete" {
-				break
-			}
-
-			var data struct {
-				Choices []struct {
-					Delta struct {
-						Content string `json:"content"`
-					} `json:"delta"`
-				} `json:"choices"`
-			}
-			if json.Unmarshal(event.Data, &data) == nil && len(data.Choices) > 0 {
-				if content := data.Choices[0].Delta.Content; content != "" {
-					events <- StreamEvent{Type: "text.delta", Data: StreamTextDelta{Text: content}}
-				}
-			}
-		}
-		resp.Body.Close()
-
-		if err := scanner.Err(); err != nil {
-			events <- StreamEvent{Type: "error", Error: "stream read error: " + err.Error()}
-			return
-		}
-
-		events <- StreamEvent{Type: "text.end"}
-		events <- StreamEvent{Type: "done"}
-		return
+// emit sends an event unless the caller has gone away. Without the ctx guard a
+// disconnected client would block the producer goroutine forever once the
+// buffer filled.
+func emit(ctx context.Context, events chan<- StreamEvent, e StreamEvent) bool {
+	select {
+	case events <- e:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
-func (c *Client) streamAnthropic(ctx context.Context, system string, history []PromptMessage, events chan<- StreamEvent) {
-	messages := make([]anthropicMessage, 0, len(history))
+func emitStreamError(ctx context.Context, events chan<- StreamEvent, format string, args ...interface{}) {
+	emit(ctx, events, StreamEvent{Type: "error", Error: fmt.Sprintf(format, args...)})
+}
+
+// openStream issues the request and hands back the body for SSE reading. The
+// caller closes it.
+func (c *Client) openStream(ctx context.Context, url string, body []byte, setHeaders func(*http.Request)) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("could not build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("could not reach the AI service: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		return nil, fmt.Errorf("AI service returned HTTP %d: %s", resp.StatusCode, truncate(string(detail), 500))
+	}
+	return resp.Body, nil
+}
+
+// ── OpenAI-compatible streaming ───────────────────────
+
+// streamOpenAI reads a Chat Completions stream. These streams carry no `event:`
+// lines — every frame is a bare `data: {...}` — so the scanner must surface
+// data-only events or nothing arrives at all.
+func (c *Client) streamOpenAI(ctx context.Context, system string, history []PromptMessage, events chan<- StreamEvent) {
+	messages := make([]openaiMessage, 0, len(history)+1)
+	if system != "" {
+		messages = append(messages, openaiMessage{Role: "system", Content: system})
+	}
 	for _, h := range history {
-		messages = append(messages, anthropicMessage{
-			Role:    h.Role,
-			Content: h.Content,
-		})
+		messages = append(messages, openaiMessage{Role: h.Role, Content: h.Content})
 	}
 
 	reqBody := map[string]interface{}{
 		"model":      c.model,
-		"max_tokens": 8192,
-		"system":     system,
 		"messages":   messages,
 		"stream":     true,
+		"max_tokens": maxOutputTokens,
 	}
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		events <- StreamEvent{Type: "error", Error: "failed to marshal request: " + err.Error()}
+		emitStreamError(ctx, events, "could not encode the request: %v", err)
 		return
 	}
 
-	const maxRetries = 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			log.Printf("streamAnthropic: retry attempt %d/%d", attempt+1, maxRetries)
-			time.Sleep(time.Duration(attempt*3) * time.Second)
+	respBody, err := c.openStream(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		if strings.Contains(c.baseURL, "openrouter") {
+			req.Header.Set("HTTP-Referer", "https://seekerstudio.dev")
+			req.Header.Set("X-Title", "Seeker Studio")
+		}
+	})
+	if err != nil {
+		emitStreamError(ctx, events, "%v", err)
+		return
+	}
+	defer respBody.Close()
+
+	// Reasoning and prose are separate streams to the UI, and each has to be
+	// opened before its first delta and closed before the other opens.
+	const (
+		phaseNone = iota
+		phaseThinking
+		phaseText
+	)
+	phase := phaseNone
+
+	closePhase := func() bool {
+		switch phase {
+		case phaseThinking:
+			phase = phaseNone
+			return emit(ctx, events, StreamEvent{Type: "thinking.end"})
+		case phaseText:
+			phase = phaseNone
+			return emit(ctx, events, StreamEvent{Type: "text.end"})
+		}
+		return true
+	}
+
+	openPhase := func(want int) bool {
+		if phase == want {
+			return true
+		}
+		if !closePhase() {
+			return false
+		}
+		phase = want
+		if want == phaseThinking {
+			return emit(ctx, events, StreamEvent{Type: "thinking.start"})
+		}
+		return emit(ctx, events, StreamEvent{Type: "text.start"})
+	}
+
+	scanner := newSSEScanner(respBody)
+	for scanner.Next() {
+		event := scanner.Event()
+		if len(event.Data) == 0 {
+			continue
+		}
+		// The sentinel is not JSON; it marks a clean end of stream.
+		if bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) {
+			break
 		}
 
-		url := c.baseURL + "/v1/messages"
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-		if err != nil {
-			events <- StreamEvent{Type: "error", Error: "failed to create request: " + err.Error()}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content          string `json:"content"`
+					Reasoning        string `json:"reasoning"`
+					ReasoningContent string `json:"reasoning_content"`
+				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(event.Data, &chunk); err != nil {
+			// Keep-alives and provider-specific frames are not fatal.
+			continue
+		}
+		if chunk.Error != nil {
+			closePhase()
+			emitStreamError(ctx, events, "%s", chunk.Error.Message)
 			return
 		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		choice := chunk.Choices[0]
 
-		req.Header.Set("Content-Type", "application/json")
+		reasoning := choice.Delta.Reasoning
+		if reasoning == "" {
+			reasoning = choice.Delta.ReasoningContent
+		}
+		if reasoning != "" {
+			if !openPhase(phaseThinking) || !emit(ctx, events,
+				StreamEvent{Type: "thinking.delta", Data: StreamTextDelta{Text: reasoning}}) {
+				return
+			}
+		}
+
+		if choice.Delta.Content != "" {
+			if !openPhase(phaseText) || !emit(ctx, events,
+				StreamEvent{Type: "text.delta", Data: StreamTextDelta{Text: choice.Delta.Content}}) {
+				return
+			}
+		}
+
+		if choice.FinishReason != "" {
+			break
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		closePhase()
+		emitStreamError(ctx, events, "the AI stream ended early: %v", err)
+		return
+	}
+
+	if !closePhase() {
+		return
+	}
+	emit(ctx, events, StreamEvent{Type: "done"})
+}
+
+// ── Anthropic streaming ───────────────────────────────
+
+// streamAnthropic reads a Messages API stream. Unlike the OpenAI format this
+// one names every event, and content blocks are indexed — so the block type is
+// tracked per index to close the right stream on content_block_stop.
+func (c *Client) streamAnthropic(ctx context.Context, system string, history []PromptMessage, events chan<- StreamEvent) {
+	messages := make([]anthropicMessage, 0, len(history))
+	for _, h := range history {
+		messages = append(messages, anthropicMessage{Role: h.Role, Content: h.Content})
+	}
+
+	reqBody := map[string]interface{}{
+		"model":      c.model,
+		"max_tokens": maxOutputTokens,
+		"messages":   messages,
+		"stream":     true,
+	}
+	if system != "" {
+		reqBody["system"] = system
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		emitStreamError(ctx, events, "could not encode the request: %v", err)
+		return
+	}
+
+	respBody, err := c.openStream(ctx, c.baseURL+"/messages", body, func(req *http.Request) {
 		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Set("User-Agent", "SeekerStudio/1.0")
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			if attempt < maxRetries-1 {
-				log.Printf("streamAnthropic: request error (attempt %d): %v", attempt+1, err)
-				continue
-			}
-			events <- StreamEvent{Type: "error", Error: "Connection failed. The AI service may be temporarily unavailable. Please try again."}
-			return
-		}
-
-		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
-			resp.Body.Close()
-			if attempt < maxRetries-1 {
-				log.Printf("streamAnthropic: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
-				continue
-			}
-			var errMsg string
-			switch resp.StatusCode {
-			case 429:
-				errMsg = "Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again."
-			case 502:
-				errMsg = "AI service temporarily unavailable. This usually resolves quickly — please try again."
-			case 503:
-				errMsg = "AI service is currently overloaded. Please wait a moment and try again."
-			case 504:
-				errMsg = "AI service request timed out. The service may be under heavy load — please try again."
-			default:
-				errMsg = fmt.Sprintf("AI service error (HTTP %d). Please try again.", resp.StatusCode)
-			}
-			events <- StreamEvent{Type: "error", Error: errMsg}
-			return
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			respBody, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			events <- StreamEvent{Type: "error", Error: fmt.Sprintf("API error (status %d): %s", resp.StatusCode, string(respBody))}
-			return
-		}
-
-		// Parse SSE stream
-		scanner := newSSEScanner(resp.Body)
-		for scanner.Next() {
-			event := scanner.Event()
-
-			switch event.Type {
-			case "content_block_start":
-				var data struct {
-					ContentBlock struct {
-						Type string `json:"type"`
-					} `json:"content_block"`
-				}
-				if json.Unmarshal(event.Data, &data) == nil {
-					switch data.ContentBlock.Type {
-					case "thinking":
-						events <- StreamEvent{Type: "thinking.start"}
-					case "text":
-						events <- StreamEvent{Type: "text.start"}
-					}
-				}
-
-			case "content_block_delta":
-				var data struct {
-					Delta struct {
-						Type     string `json:"type"`
-						Text     string `json:"text"`
-						Thinking string `json:"thinking"`
-					} `json:"delta"`
-				}
-				if json.Unmarshal(event.Data, &data) == nil {
-					switch data.Delta.Type {
-					case "thinking_delta":
-						events <- StreamEvent{Type: "thinking.delta", Data: StreamTextDelta{Text: data.Delta.Thinking}}
-					case "text_delta":
-						events <- StreamEvent{Type: "text.delta", Data: StreamTextDelta{Text: data.Delta.Text}}
-					}
-				}
-
-			case "content_block_stop":
-				// We don't know which block type stopped without tracking index.
-				// The text.end / thinking.end will be inferred by the caller
-				// when it sees text.start followed by the next content_block_start or message_stop.
-
-			case "message_delta":
-				events <- StreamEvent{Type: "text.end"}
-
-			case "message_stop":
-				events <- StreamEvent{Type: "done"}
-
-			case "error":
-				var data struct {
-					Error struct {
-						Message string `json:"message"`
-					} `json:"error"`
-				}
-				if json.Unmarshal(event.Data, &data) == nil {
-					events <- StreamEvent{Type: "error", Error: data.Error.Message}
-				}
-			}
-		}
-		resp.Body.Close()
-
-		if err := scanner.Err(); err != nil {
-			events <- StreamEvent{Type: "error", Error: "stream read error: " + err.Error()}
-		}
-		return
-	}
-}
-
-// fallbackStream handles non-streaming providers by making a regular request
-// and emitting events to simulate streaming.
-func (c *Client) fallbackStream(ctx context.Context, system string, history []PromptMessage, events chan<- StreamEvent) {
-	events <- StreamEvent{Type: "thinking.start"}
-
-	resp, err := c.chat(ctx, system, history)
+	})
 	if err != nil {
-		events <- StreamEvent{Type: "error", Error: err.Error()}
+		emitStreamError(ctx, events, "%v", err)
+		return
+	}
+	defer respBody.Close()
+
+	// blockKinds maps a content-block index to the event family it belongs to,
+	// so content_block_stop can close the stream it actually opened.
+	blockKinds := make(map[int]string, 4)
+
+	scanner := newSSEScanner(respBody)
+	for scanner.Next() {
+		event := scanner.Event()
+		if len(event.Data) == 0 {
+			continue
+		}
+
+		switch event.Type {
+		case "content_block_start":
+			var payload struct {
+				Index        int `json:"index"`
+				ContentBlock struct {
+					Type string `json:"type"`
+					Name string `json:"name"`
+				} `json:"content_block"`
+			}
+			if json.Unmarshal(event.Data, &payload) != nil {
+				continue
+			}
+			switch payload.ContentBlock.Type {
+			case "thinking", "redacted_thinking":
+				blockKinds[payload.Index] = "thinking"
+				if !emit(ctx, events, StreamEvent{Type: "thinking.start"}) {
+					return
+				}
+			case "tool_use":
+				blockKinds[payload.Index] = "tool"
+				if !emit(ctx, events, StreamEvent{
+					Type: "tool.start",
+					Data: StreamToolStart{Name: payload.ContentBlock.Name},
+				}) {
+					return
+				}
+			default:
+				blockKinds[payload.Index] = "text"
+				if !emit(ctx, events, StreamEvent{Type: "text.start"}) {
+					return
+				}
+			}
+
+		case "content_block_delta":
+			var payload struct {
+				Index int `json:"index"`
+				Delta struct {
+					Type     string `json:"type"`
+					Text     string `json:"text"`
+					Thinking string `json:"thinking"`
+				} `json:"delta"`
+			}
+			if json.Unmarshal(event.Data, &payload) != nil {
+				continue
+			}
+			switch payload.Delta.Type {
+			case "thinking_delta":
+				if !emit(ctx, events, StreamEvent{
+					Type: "thinking.delta",
+					Data: StreamTextDelta{Text: payload.Delta.Thinking},
+				}) {
+					return
+				}
+			case "text_delta":
+				if !emit(ctx, events, StreamEvent{
+					Type: "text.delta",
+					Data: StreamTextDelta{Text: payload.Delta.Text},
+				}) {
+					return
+				}
+			}
+
+		case "content_block_stop":
+			var payload struct {
+				Index int `json:"index"`
+			}
+			if json.Unmarshal(event.Data, &payload) != nil {
+				continue
+			}
+			kind := blockKinds[payload.Index]
+			delete(blockKinds, payload.Index)
+			switch kind {
+			case "thinking":
+				if !emit(ctx, events, StreamEvent{Type: "thinking.end"}) {
+					return
+				}
+			case "tool":
+				// Tool results come from the executor, not the stream.
+			default:
+				if !emit(ctx, events, StreamEvent{Type: "text.end"}) {
+					return
+				}
+			}
+
+		case "error":
+			var payload struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			msg := "the AI service reported an error"
+			if json.Unmarshal(event.Data, &payload) == nil && payload.Error.Message != "" {
+				msg = payload.Error.Message
+			}
+			emitStreamError(ctx, events, "%s", msg)
+			return
+
+		case "message_stop":
+			emit(ctx, events, StreamEvent{Type: "done"})
+			return
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		emitStreamError(ctx, events, "the AI stream ended early: %v", err)
 		return
 	}
 
-	events <- StreamEvent{Type: "thinking.end"}
-	events <- StreamEvent{Type: "text.start"}
-
-	// Emit text in chunks to simulate streaming
-	chunkSize := 20
-	for i := 0; i < len(resp); i += chunkSize {
-		end := i + chunkSize
-		if end > len(resp) {
-			end = len(resp)
-		}
-		events <- StreamEvent{Type: "text.delta", Data: StreamTextDelta{Text: resp[i:end]}}
-	}
-
-	events <- StreamEvent{Type: "text.end"}
-	events <- StreamEvent{Type: "done"}
+	// The stream closed without message_stop. Still finish cleanly so the client
+	// stops waiting.
+	emit(ctx, events, StreamEvent{Type: "done"})
 }
 
-// ── SSE Scanner ───────────────────────────────────────
+// ── SSE scanner ───────────────────────────────────────
 
+// sseEvent is one server-sent event. Type is empty for the data-only frames used
+// by OpenAI-compatible providers.
 type sseEvent struct {
 	Type string
 	Data json.RawMessage
 }
 
+// sseScanner reads text/event-stream frames. It is written against the SSE spec
+// rather than one provider's dialect: events are separated by a blank line,
+// `data:` may appear on several lines and is joined with newlines, lines
+// starting with `:` are comments, and a frame with data but no `event:` line is
+// still a valid event.
 type sseScanner struct {
-	reader  io.Reader
-	err     error
-	event   sseEvent
-	buf     []byte
+	reader *bufio.Reader
+	event  sseEvent
+	err    error
+	done   bool
 }
 
 func newSSEScanner(r io.Reader) *sseScanner {
-	return &sseScanner{reader: r, buf: make([]byte, 0, 4096)}
+	// Large buffer: a single tool_use frame can carry a whole file.
+	return &sseScanner{reader: bufio.NewReaderSize(r, 256*1024)}
 }
 
-func (s *sseScanner) Err() error { return s.err }
-
-func (s *sseScanner) Event() sseEvent { return s.event }
-
+// Next advances to the next event, reporting false at end of stream or on error.
 func (s *sseScanner) Next() bool {
-	tmp := make([]byte, 1024)
-	for {
-		n, err := s.reader.Read(tmp)
-		if n > 0 {
-			s.buf = append(s.buf, tmp[:n]...)
+	if s.done {
+		return false
+	}
+
+	var eventType string
+	var data []string
+
+	flush := func() bool {
+		if eventType == "" && len(data) == 0 {
+			return false
 		}
+		s.event = sseEvent{Type: eventType}
+		if len(data) > 0 {
+			s.event.Data = json.RawMessage(strings.Join(data, "\n"))
+		}
+		return true
+	}
+
+	for {
+		line, err := s.reader.ReadString('\n')
 		if err != nil {
+			s.done = true
 			if err != io.EOF {
 				s.err = err
 			}
-			// Process any remaining data
-			if len(s.buf) == 0 {
-				return false
-			}
+			// A final frame may arrive without its trailing blank line.
+			s.consumeSSELine(line, &eventType, &data)
+			return flush()
 		}
 
-		// Try to parse an SSE event from the buffer
-		for {
-			// Look for double newline (event separator)
-			idx := bytes.Index(s.buf, []byte("\n\n"))
-			if idx < 0 {
-				break
-			}
-
-			rawEvent := s.buf[:idx]
-			s.buf = s.buf[idx+2:]
-
-			event := s.parseSSEBlock(rawEvent)
-			if event.Type != "" {
-				s.event = event
+		trimmed := strings.TrimRight(line, "\r\n")
+		if trimmed == "" {
+			// End of frame. Skip blank runs between frames.
+			if flush() {
 				return true
 			}
-		}
-
-		if err != nil {
-			return false
-		}
-	}
-}
-
-func (s *sseScanner) parseSSEBlock(block []byte) sseEvent {
-	var event sseEvent
-	lines := bytes.Split(block, []byte("\n"))
-
-	for _, line := range lines {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
 			continue
 		}
-
-		if bytes.HasPrefix(line, []byte("event:")) {
-			event.Type = string(bytes.TrimSpace(line[6:]))
-		} else if bytes.HasPrefix(line, []byte("data:")) {
-			data := bytes.TrimSpace(line[5:])
-			event.Data = json.RawMessage(data)
-		}
+		s.consumeSSELine(trimmed, &eventType, &data)
 	}
-
-	return event
 }
+
+func (s *sseScanner) consumeSSELine(line string, eventType *string, data *[]string) {
+	line = strings.TrimRight(line, "\r\n")
+	if line == "" || strings.HasPrefix(line, ":") {
+		return // comment / keep-alive
+	}
+	name, value, found := strings.Cut(line, ":")
+	if !found {
+		return // a bare field name carries no value we use
+	}
+	value = strings.TrimPrefix(value, " ")
+	switch name {
+	case "event":
+		*eventType = strings.TrimSpace(value)
+	case "data":
+		*data = append(*data, value)
+	}
+}
+
+// Event returns the event most recently read by Next.
+func (s *sseScanner) Event() sseEvent { return s.event }
+
+// Err returns the first non-EOF read error, if any.
+func (s *sseScanner) Err() error { return s.err }

@@ -1,166 +1,255 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { createAuthWebSocket } from "@/lib/api";
+import { getToken } from "@/lib/auth";
 import { useIDEStore } from "@/lib/store";
+
+/**
+ * The shell on the device, and the build output.
+ *
+ * There used to be three tabs; two of them ("Build Output" and "Logs") rendered
+ * the same string, and nothing in the app ever wrote to it. The shell also lost
+ * its contents whenever you looked at another tab, because the container it was
+ * attached to was unmounted while the xterm instance held on to the detached
+ * node — reopening the tab showed a blank pane with no way back.
+ */
 
 interface TerminalProps {
   sessionId?: number | null;
 }
 
+/**
+ * xterm renders through a canvas, and `ctx.font` does not resolve `var()` — so
+ * the CSS custom property has to be read off the document and passed as a plain
+ * family list. next/font generates the real family names at build time.
+ */
+function monoStack(): string {
+  const fallback = 'ui-monospace, "SF Mono", "Cascadia Code", monospace';
+  if (typeof window === "undefined") return fallback;
+  const v = getComputedStyle(document.documentElement)
+    .getPropertyValue("--font-plex-mono")
+    .trim();
+  return v ? `${v}, ${fallback}` : fallback;
+}
+
+// The bench palette, so the shell is the same surface as everything around it
+// rather than a black rectangle with an amber cursor.
+const THEME = {
+  background: "#12171f",
+  foreground: "#e6ebf2",
+  cursor: "#14f195",
+  cursorAccent: "#12171f",
+  selectionBackground: "#303c4d",
+  black: "#12171f",
+  red: "#ff5f56",
+  green: "#14f195",
+  yellow: "#ffb020",
+  blue: "#5b9dff",
+  magenta: "#9945ff",
+  cyan: "#3bd6c6",
+  white: "#e6ebf2",
+  brightBlack: "#5b667a",
+  brightRed: "#ff8a84",
+  brightGreen: "#5ff7bb",
+  brightYellow: "#ffc95c",
+  brightBlue: "#8fbcff",
+  brightMagenta: "#bb7dff",
+  brightCyan: "#6fe4d8",
+  brightWhite: "#ffffff",
+} as const;
+
 export default function Terminal({ sessionId }: TerminalProps) {
-  const [activeTab, setActiveTab] = useState<"terminal" | "output" | "logs">("terminal");
-  const termRef = useRef<HTMLDivElement>(null);
-  const xtermRef = useRef<XTerminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
+  const [tab, setTab] = useState<"shell" | "output">("shell");
+  // Tagged with the session it describes. A bare status would keep reading
+  // "attached" for one render after the session changed, because the previous
+  // socket's "open" outlives the socket itself.
+  const [socket, setSocket] = useState<{
+    id: number;
+    state: "open" | "closed" | "error";
+  } | null>(null);
+  // Whether we hold credentials at all. Read once on mount because a socket
+  // cannot be opened without them, and that is knowable here rather than
+  // something to discover inside the effect and write back.
+  const [authed] = useState(() => Boolean(getToken()));
+  const hostRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<XTerminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const outputRef = useRef<HTMLDivElement>(null);
 
   const buildOutput = useIDEStore((s) => s.buildOutput);
+  const clearBuildOutput = useIDEStore((s) => s.clearBuildOutput);
+
+  const fit = useCallback(() => {
+    const host = hostRef.current;
+    if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
+    try {
+      fitRef.current?.fit();
+    } catch {
+      // fit() throws while the pane is mid-transition. The next resize wins.
+    }
+  }, []);
 
   useEffect(() => {
-    if (!termRef.current || xtermRef.current) return;
+    if (!hostRef.current || termRef.current) return;
 
     const term = new XTerminal({
-      theme: {
-        background: "#111111",
-        foreground: "#e0e0e0",
-        cursor: "#F5A623",
-        cursorAccent: "#111111",
-        selectionBackground: "#F5A62333",
-        black: "#111111",
-        red: "#ff6b6b",
-        green: "#51cf66",
-        yellow: "#F5A623",
-        blue: "#339af0",
-        magenta: "#cc5de8",
-        cyan: "#22b8cf",
-        white: "#e0e0e0",
-        brightBlack: "#666666",
-        brightRed: "#ff8787",
-        brightGreen: "#69db7c",
-        brightYellow: "#ffd43b",
-        brightBlue: "#4dabf7",
-        brightMagenta: "#da77f2",
-        brightCyan: "#3bc9db",
-        brightWhite: "#f8f9fa",
-      },
-      fontFamily: '"Geist Mono", "Cascadia Code", "Fira Code", monospace',
-      fontSize: 13,
-      lineHeight: 1.4,
+      theme: { ...THEME },
+      fontFamily: monoStack(),
+      fontSize: 12,
+      lineHeight: 1.45,
       cursorBlink: true,
       cursorStyle: "bar",
+      scrollback: 5000,
       allowProposedApi: true,
     });
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+    term.open(hostRef.current);
 
-    term.open(termRef.current);
-    fitAddon.fit();
+    termRef.current = term;
+    fitRef.current = fitAddon;
+    fit();
 
-    xtermRef.current = term;
-    fitAddonRef.current = fitAddon;
+    // Registered once, for the lifetime of the terminal. The old code attached a
+    // fresh onData handler on every connect, so a reconnect sent each keystroke
+    // as many times as the socket had been opened.
+    const typed = term.onData((data) => {
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+    });
 
-    const observer = new ResizeObserver(() => fitAddon.fit());
-    observer.observe(termRef.current);
+    const observer = new ResizeObserver(fit);
+    observer.observe(hostRef.current);
 
     return () => {
       observer.disconnect();
+      typed.dispose();
       term.dispose();
-      xtermRef.current = null;
+      termRef.current = null;
+      fitRef.current = null;
     };
-  }, []);
+  }, [fit]);
 
-  const connectWs = useCallback(() => {
-    if (!sessionId || wsRef.current) return;
+  // One socket per session, torn down when the session changes or goes away.
+  useEffect(() => {
+    // No `setSocket` on this branch: with no session the status reads "no
+    // device" from `sessionId` alone, so syncing a state here would only cost a
+    // second render pass to reach the same screen.
+    if (!sessionId) return;
 
     const ws = createAuthWebSocket(`/v1/sessions/${sessionId}/terminal`);
+    // A null socket means there is no token to open one with. That is read off
+    // `authed` during render instead of written back as state here, so the
+    // failure costs no extra render pass.
     if (!ws) return;
     wsRef.current = ws;
 
-    ws.onopen = () => {
-      xtermRef.current?.writeln("\x1b[32mConnected to device shell\x1b[0m\r\n");
-    };
-
+    ws.onopen = () => setSocket({ id: sessionId, state: "open" });
     ws.onmessage = (event) => {
-      if (event.data instanceof Blob) {
-        event.data.arrayBuffer().then((buf) => {
-          xtermRef.current?.write(new TextDecoder().decode(buf));
+      const data: unknown = event.data;
+      if (data instanceof Blob) {
+        void data.arrayBuffer().then((buf) => {
+          termRef.current?.write(new TextDecoder().decode(buf));
         });
-      } else {
-        xtermRef.current?.write(event.data);
+      } else if (data instanceof ArrayBuffer) {
+        termRef.current?.write(new TextDecoder().decode(data));
+      } else if (typeof data === "string") {
+        termRef.current?.write(data);
       }
     };
-
     ws.onclose = () => {
-      xtermRef.current?.writeln("\r\n\x1b[31mDisconnected\x1b[0m");
-      wsRef.current = null;
+      setSocket({ id: sessionId, state: "closed" });
+      if (wsRef.current === ws) wsRef.current = null;
     };
+    ws.onerror = () => setSocket({ id: sessionId, state: "error" });
 
-    ws.onerror = () => {
-      xtermRef.current?.writeln("\r\n\x1b[31mConnection error\x1b[0m");
-      wsRef.current = null;
+    return () => {
+      ws.onclose = null;
+      ws.close();
+      if (wsRef.current === ws) wsRef.current = null;
     };
-
-    xtermRef.current?.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(new TextEncoder().encode(data));
-      }
-    });
   }, [sessionId]);
 
   useEffect(() => {
-    if (activeTab === "terminal" && sessionId) connectWs();
-  }, [activeTab, sessionId, connectWs]);
-
-  useEffect(() => () => wsRef.current?.close(), []);
+    if (tab === "shell") fit();
+  }, [tab, fit]);
 
   useEffect(() => {
     if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
   }, [buildOutput]);
 
-  const tabs = [
-    { id: "terminal" as const, label: "Terminal" },
-    { id: "output" as const, label: "Build Output" },
-    { id: "logs" as const, label: "Logs" },
-  ];
+  const status = useMemo(() => {
+    if (!sessionId) return "no device";
+    if (!authed) return "could not attach";
+    // A record for a different session is last session's socket, not this one's.
+    if (socket?.id !== sessionId) return "attaching";
+    if (socket.state === "open") return "attached";
+    if (socket.state === "error") return "could not attach";
+    return "detached";
+  }, [socket, sessionId, authed]);
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-surface-1">
-      <div className="flex items-center h-8 px-2 flex-shrink-0 bg-surface-1">
-        {tabs.map((tab) => (
+    <div className="flex h-full min-h-0 flex-col bg-slate">
+      <div className="flex h-7 flex-shrink-0 items-center gap-1 border-b border-rail px-1.5">
+        {(["shell", "output"] as const).map((id) => (
           <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-3 h-7 text-xs font-mono transition-all duration-150 ${
-              activeTab === tab.id
-                ? "text-accent border-b-2 border-accent"
-                : "text-text-secondary hover:text-text-primary"
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            aria-pressed={tab === id}
+            className={`h-full px-2 text-micro uppercase tracking-[0.12em] transition-colors ${
+              tab === id
+                ? "text-paper shadow-[inset_0_-2px_0_0_var(--signal)]"
+                : "text-dust hover:text-graphite"
             }`}
           >
-            {tab.label}
+            {id}
           </button>
         ))}
+
+        <span className="gauge ml-auto pr-1">
+          {tab === "shell" ? status : buildOutput ? `${buildOutput.split("\n").length} lines` : "empty"}
+        </span>
+        {tab === "output" && buildOutput && (
+          <button type="button" onClick={clearBuildOutput} className="btn btn-ghost text-tiny">
+            Clear
+          </button>
+        )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {activeTab === "terminal" && <div ref={termRef} className="h-full w-full" />}
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        {/* The shell stays mounted whichever tab is showing, so its scrollback
+            and its socket survive a look at the output. */}
+        <div className={tab === "shell" ? "h-full w-full" : "hidden"}>
+          <div ref={hostRef} className="h-full w-full px-2 py-1" />
+          {!sessionId && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-slate/90 px-6 text-center">
+              <p className="text-small text-paper">No device running.</p>
+              <p className="text-tiny text-graphite">
+                Start one from the top rail and this becomes a shell on it.
+              </p>
+            </div>
+          )}
+        </div>
 
-        {activeTab === "output" && (
-          <div ref={outputRef} className="h-full overflow-y-auto p-3 font-mono text-xs text-text-secondary whitespace-pre-wrap">
-            {buildOutput || "No build output yet."}
+        <div className={tab === "output" ? "h-full" : "hidden"}>
+          <div
+            ref={outputRef}
+            className="h-full overflow-y-auto whitespace-pre-wrap px-3 py-2 font-mono text-tiny leading-relaxed text-graphite"
+          >
+            {buildOutput || (
+              <span className="text-dust">
+                Type checks and dev-client rebuilds print here as they run.
+              </span>
+            )}
           </div>
-        )}
-
-        {activeTab === "logs" && (
-          <div className="h-full overflow-y-auto p-3 font-mono text-xs text-text-secondary whitespace-pre-wrap">
-            {buildOutput || "No logs yet."}
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );

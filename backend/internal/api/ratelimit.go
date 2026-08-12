@@ -3,17 +3,25 @@ package api
 import (
 	"net"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
 
+// TrustingProxyHeaders reports whether the deployment sits behind a proxy that
+// rewrites X-Forwarded-For. The server uses it to decide whether chi's RealIP
+// middleware is safe to install.
+func TrustingProxyHeaders() bool { return trustProxyHeaders }
+
 // RateLimiter provides per-IP rate limiting using a token bucket.
 type RateLimiter struct {
-	mu       sync.Mutex
-	clients  map[string]*tokenBucket
-	rate     int           // tokens per window
-	window   time.Duration // window duration
-	cleanup  time.Duration
+	mu      sync.Mutex
+	clients map[string]*tokenBucket
+	rate    int           // tokens per window
+	window  time.Duration // window duration
+	cleanup time.Duration
 }
 
 type tokenBucket struct {
@@ -74,23 +82,56 @@ func (rl *RateLimiter) Allow(ip string) bool {
 // Middleware returns an HTTP middleware that enforces rate limiting.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			ip = fwd
-		}
-
-		// Strip port from IP address (RemoteAddr is "ip:port")
-		if host, _, err := net.SplitHostPort(ip); err == nil {
-			ip = host
-		}
-
-		if !rl.Allow(ip) {
-			http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+		if !rl.Allow(clientKey(r)) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", strconv.Itoa(int(rl.window.Seconds())))
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":"too many requests — slow down and try again shortly"}`))
 			return
 		}
-
 		next.ServeHTTP(w, r)
 	})
+}
+
+// trustProxyHeaders reports whether X-Forwarded-For can be believed.
+//
+// It could not be before: the header was used whenever present, so any client
+// could send a different X-Forwarded-For on each request and get an unlimited
+// number of buckets — the login limiter in particular was trivially bypassable.
+// Now it is only consulted when the deployment says it sits behind a proxy.
+var trustProxyHeaders = func() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUST_PROXY"))) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}()
+
+// clientKey identifies the caller for rate-limiting purposes. An authenticated
+// request is keyed by user id, which is both more accurate than an IP and
+// unspoofable; anonymous requests fall back to the peer address.
+func clientKey(r *http.Request) string {
+	if userID := GetUserID(r.Context()); userID > 0 {
+		return "user:" + strconv.FormatInt(userID, 10)
+	}
+
+	addr := r.RemoteAddr
+	if trustProxyHeaders {
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			// The left-most entry is the original client; everything after it was
+			// appended by intermediaries.
+			if first, _, found := strings.Cut(fwd, ","); found {
+				addr = strings.TrimSpace(first)
+			} else {
+				addr = strings.TrimSpace(fwd)
+			}
+		}
+	}
+
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		addr = host
+	}
+	return "ip:" + addr
 }
 
 // AuthRateLimiter returns a rate limiter for auth endpoints (stricter).
