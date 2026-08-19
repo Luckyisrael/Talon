@@ -8,17 +8,18 @@ import (
 type EventType string
 
 const (
-	PhaseEvent      EventType = "phase"
-	ToolCallEvent   EventType = "tool_call"
-	VerifyEvent     EventType = "verify"
-	GuardrailEvent  EventType = "guardrail_reject"
-	ErrorEvent      EventType = "error"
-	DoneEvent       EventType = "done"
-	TextEvent       EventType = "text"
-	ThinkingEvent   EventType = "thinking"
-	RebuildEvent    EventType = "rebuild"
-	TaskUpdateEvent EventType = "task_update"
-	UsageEvent      EventType = "usage"
+	PhaseEvent          EventType = "phase"
+	ToolCallEvent       EventType = "tool_call"
+	VerifyEvent         EventType = "verify"
+	GuardrailEvent      EventType = "guardrail_reject"
+	ErrorEvent          EventType = "error"
+	DoneEvent           EventType = "done"
+	TextEvent           EventType = "text"
+	ThinkingEvent       EventType = "thinking"
+	RebuildEvent        EventType = "rebuild"
+	TaskUpdateEvent     EventType = "task_update"
+	UsageEvent          EventType = "usage"
+	CommandOutputEvent  EventType = "command_output"
 )
 
 type Phase string
@@ -171,6 +172,17 @@ func (e *SessionEmitter) EmitRebuild(status, detail string) {
 // EmitTaskUpdate reports progress on one item of the task list the UI shows.
 func (e *SessionEmitter) EmitTaskUpdate(taskID, description, status, result string) {
 	e.Emit(Event{Type: TaskUpdateEvent, Tool: taskID, Name: description, Status: status, Error: result})
+}
+
+// EmitCommandOutput forwards the live stdout/stderr of a command the agent is
+// running. Without this the user watches a build happen with no idea what the
+// tool is actually doing — the shell and the build output pane were blind to
+// the very commands producing the APK.
+func (e *SessionEmitter) EmitCommandOutput(text string) {
+	if text == "" {
+		return
+	}
+	e.Emit(Event{Type: CommandOutputEvent, Text: text})
 }
 
 // ToJSON serialises an event.

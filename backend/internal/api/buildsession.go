@@ -4,14 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/devclient"
+	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/tools"
 )
+
+// commandOutputWriter adapts a session emitter into an io.Writer so tools can
+// stream their subprocess output to the frontend through the existing event
+// channel. Live build output is exactly the signal the developer was blind to
+// before: the trace showed build_apk as a row that flipped running→done while
+// gradle sat silent for minutes.
+type commandOutputWriter struct{ emitter *events.SessionEmitter }
+
+func (w commandOutputWriter) Write(p []byte) (int, error) {
+	if w.emitter != nil {
+		w.emitter.EmitCommandOutput(string(p))
+	}
+	return len(p), nil
+}
 
 // buildSession is everything one build turn needs: the tools it can call, the
 // file layer those tools write through, and the definitions the model sees.
@@ -26,7 +42,9 @@ type buildSession struct {
 }
 
 // newBuildSession wires the agent's tools to one project's workspace.
-func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, adbTarget string) *buildSession {
+// output, when non-nil, is attached to the command-running tools so their
+// subprocess output streams back to the frontend while the agent works.
+func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, adbTarget string, output io.Writer) *buildSession {
 	fs := tools.NewFS(workspacePath)
 	reg := tools.NewRegistry()
 
@@ -42,22 +60,29 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	reg.Register(&tools.MultiEdit{FS: fs})
 	reg.Register(&tools.DeleteFile{FS: fs})
 
-	// Running and verifying.
-	reg.Register(&tools.RunCommand{WorkspacePath: workspacePath})
-	reg.Register(&tools.RunTypecheck{WorkspacePath: workspacePath})
-	reg.Register(&tools.RunLint{WorkspacePath: workspacePath})
+	// Running and verifying. The output sink makes each one's subprocess output
+	// visible in the terminal pane instead of arriving only at tool result time.
+	reg.Register(&tools.RunCommand{WorkspacePath: workspacePath, Output: output})
+	reg.Register(&tools.RunTypecheck{WorkspacePath: workspacePath, Output: output})
+	reg.Register(&tools.RunLint{WorkspacePath: workspacePath, Output: output})
 
 	var allowlist *devclient.Allowlist
 	if h.devClient != nil {
 		allowlist = h.devClient.Allowlist()
 	}
-	reg.Register(&tools.InstallPackage{WorkspacePath: workspacePath, Allowlist: allowlist})
-	reg.Register(&tools.BuildAPK{WorkspacePath: workspacePath, Allowlist: allowlist})
+	reg.Register(&tools.InstallPackage{WorkspacePath: workspacePath, Allowlist: allowlist, Output: output})
+	reg.Register(&tools.BuildAPK{WorkspacePath: workspacePath, Allowlist: allowlist, Output: output})
 
 	// Project knowledge.
 	adapter := h.storeAdapter()
 	reg.Register(tools.NewWriteADR(adapter, projectID))
 	reg.Register(tools.NewWriteMemory(adapter, projectID))
+
+	// Skills: registered only when the knowledge layer actually loaded skills.
+	// Offering read_skill with an empty library would only ever answer "none".
+	if h.knowledge != nil && len(h.knowledge.SkillNames()) > 0 {
+		reg.Register(&tools.ReadSkill{Library: h.knowledge})
+	}
 
 	// Device feedback. Registered only when a device is actually attached —
 	// offering a tool that can only fail wastes rounds.

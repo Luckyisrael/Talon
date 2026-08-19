@@ -29,9 +29,14 @@ type Manager struct {
 	projects map[int64]string
 }
 
-// configFiles are copied out of the template so TypeScript can resolve types and
-// Expo can read the app config.
-var configFiles = []string{"package.json", "tsconfig.json", "app.json", "babel.config.js", "metro.config.js"}
+// configFiles are copied out of the template so TypeScript can resolve types,
+// Expo can read the app config, and the native build can find its entry point.
+//
+// index.js is the app entry: package.json declares `"main": "./index.js"` and
+// the gradle build resolves that file before anything else compiles. Leaving it
+// out of this list made every generated workspace build-fail with
+// `Cannot convert '' to File` in build.gradle, because the entry never existed.
+var configFiles = []string{"package.json", "tsconfig.json", "app.json", "babel.config.js", "metro.config.js", "index.js"}
 
 func New(templateDir, workspacesDir string) (*Manager, error) {
 	nmDir := filepath.Join(templateDir, "node_modules")

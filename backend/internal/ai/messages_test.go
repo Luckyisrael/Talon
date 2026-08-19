@@ -1,6 +1,9 @@
 package ai
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func msg(role string, blocks ...Block) Message { return Message{Role: role, Blocks: blocks} }
 
@@ -116,5 +119,107 @@ func TestTrimToValidHistoryEndsOnAssistantTurn(t *testing.T) {
 	}
 	if got[len(got)-1].Role != "assistant" {
 		t.Errorf("history ends on a %s turn, want assistant", got[len(got)-1].Role)
+	}
+}
+
+// Gemini's OpenAI-compatible endpoint issues a thought_signature on every
+// assistant message that calls tools and rejects the replay of that message if
+// the signature is missing. This is the exact failure that appeared as
+// "Function call is missing a thought_signature in functionCall parts" on the
+// second tool call of a build. The signature must survive the parse → Block →
+// toOpenAI round trip.
+func TestOpenAIReplayCarriesThoughtSignature(t *testing.T) {
+	history := []Message{
+		msg("user", text("build me a login screen")),
+		msg("assistant",
+			Block{Type: "tool_use", ID: "call_1", Name: "list_files", Input: json.RawMessage(`{}`),
+				ThoughtSignature: "sN7fJqkX2"},
+			text("checking the project")),
+		msg("user", toolResult("call_1")),
+	}
+
+	out := toOpenAI("", history)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 messages (user, assistant, tool), got %d", len(out))
+	}
+
+	var assistantMsg *openaiChatMessage
+	for i := range out {
+		if out[i].Role == "assistant" && len(out[i].ToolCalls) > 0 {
+			assistantMsg = &out[i]
+			break
+		}
+	}
+	if assistantMsg == nil {
+		t.Fatal("no assistant message with tool_calls in the replay")
+	}
+
+	google, ok := assistantMsg.ToolCalls[0].ExtraContent["google"].(map[string]any)
+	if !ok {
+		t.Fatalf("extra_content.google missing from first tool call replay: %#v", assistantMsg.ToolCalls[0])
+	}
+	if got := google["thought_signature"]; got != "sN7fJqkX2" {
+		t.Errorf("thought_signature = %v, want sN7fJqkX2", got)
+	}
+
+	// A tool call with no signature must not emit extra_content at all.
+	noSig := toOpenAI("", []Message{
+		msg("user", text("hi")),
+		msg("assistant", toolUse("call_2")),
+		msg("user", toolResult("call_2")),
+	})
+	var replay *openaiChatMessage
+	for i := range noSig {
+		if noSig[i].Role == "assistant" && len(noSig[i].ToolCalls) > 0 {
+			replay = &noSig[i]
+			break
+		}
+	}
+	if replay == nil {
+		t.Fatal("no assistant message in the no-signature replay")
+	}
+	if replay.ToolCalls[0].ExtraContent != nil {
+		t.Errorf("extra_content emitted without a signature: %#v", replay.ToolCalls[0].ExtraContent)
+	}
+}
+
+// Gemini only signs the FIRST part of a parallel batch of tool calls; later
+// parts come back bare. The replay must keep the signature positional — signed
+// first part, unsigned second part — or the next request dies with
+// "missing a thought_signature ... position 2".
+func TestOpenAIReplayKeepsParallelSignaturePositional(t *testing.T) {
+	history := []Message{
+		msg("user", text("check the weather in both cities")),
+		msg("assistant",
+			Block{Type: "tool_use", ID: "call_1", Name: "list_files", Input: json.RawMessage(`{}`),
+				ThoughtSignature: "SIG_A"},
+			Block{Type: "tool_use", ID: "call_2", Name: "list_files", Input: json.RawMessage(`{}`),
+				ThoughtSignature: ""},
+		),
+		msg("user", toolResult("call_1"), toolResult("call_2")),
+	}
+
+	out := toOpenAI("", history)
+
+	var assistantMsg *openaiChatMessage
+	for i := range out {
+		if out[i].Role == "assistant" && len(out[i].ToolCalls) > 0 {
+			assistantMsg = &out[i]
+			break
+		}
+	}
+	if assistantMsg == nil {
+		t.Fatal("no assistant message with tool_calls in the replay")
+	}
+	if len(assistantMsg.ToolCalls) != 2 {
+		t.Fatalf("expected 2 tool_calls, got %d", len(assistantMsg.ToolCalls))
+	}
+
+	firstGoogle, ok := assistantMsg.ToolCalls[0].ExtraContent["google"].(map[string]any)
+	if !ok || firstGoogle["thought_signature"] != "SIG_A" {
+		t.Errorf("first call signature not preserved: %#v", assistantMsg.ToolCalls[0].ExtraContent)
+	}
+	if assistantMsg.ToolCalls[1].ExtraContent != nil {
+		t.Errorf("second call must stay bare, got extra_content: %#v", assistantMsg.ToolCalls[1].ExtraContent)
 	}
 }

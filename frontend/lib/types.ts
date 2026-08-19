@@ -101,10 +101,12 @@ export interface AuthResponse {
 
 export interface TraceRow {
   id: string;
-  kind: "narration" | "tool" | "group";
-  // Narration
+  kind: "narration" | "thinking" | "tool" | "group";
+  // Narration / thinking
   text?: string;
   streaming?: boolean;
+  /** Thinking rows cap at a couple of lines; this flags a row the model is
+      still writing so the cap holds until the stream ends. */
   // Tool
   tool?: string;
   label?: string;

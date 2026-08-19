@@ -54,6 +54,11 @@ export function getToolLabel(
       return { label: "Ran", target: input?.command || "" };
     case "capture_screenshot":
       return { label: "Looked at the device", target: "" };
+    case "read_skill":
+      // The backend sends a ready-made phrase ("Consulting the wallet-mwa skill" /
+      // "Applied the wallet-mwa skill") as the path; show it as the label since
+      // there is no file to point at.
+      return { label: input?.path || "Consulted a skill", target: "" };
     case "tail_logcat":
       return { label: "Read the device log", target: "" };
     case "context_build":
@@ -131,6 +136,8 @@ function TraceRowItem({ row }: { row: TraceRow }) {
   switch (row.kind) {
     case "narration":
       return <NarrationRow text={row.text || ""} streaming={row.streaming} />;
+    case "thinking":
+      return <ThinkingRow text={row.text || ""} streaming={row.streaming} />;
     case "tool":
       return <ToolRow row={row} />;
     case "group":
@@ -153,6 +160,57 @@ function NarrationRow({ text, streaming }: { text: string; streaming?: boolean }
           style={{ animation: "breathe 1s var(--ease) infinite" }}
         />
       )}
+    </div>
+  );
+}
+
+// ── Thinking — the model's working, capped so the panel never drowns ──
+
+function ThinkingRow({ text, streaming }: { text: string; streaming?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const show = !!text || !!streaming;
+  if (!show) return null;
+
+  // Expandable only when there is something to reveal beyond the cap.
+  const clampable = text.length > 160;
+
+  return (
+    <div className="flex items-start gap-2 py-1.5 pl-1">
+      <span aria-hidden className="mt-1 flex-shrink-0 text-dust">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="h-3 w-3">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M12 3a6 6 0 0 0-6 6c0 3 1.5 4.5 1.5 6.5v.5a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2v-.5C18 13.5 18 12 18 9a6 6 0 0 0-6-6Zm-1.5 15.5a1.5 1.5 0 0 0 3 0"
+          />
+        </svg>
+      </span>
+      <div className="min-w-0 flex-1">
+        <p
+          aria-expanded={expanded}
+          onClick={() => clampable && setExpanded((v) => !v)}
+          className={`font-mono text-[0.6875rem] leading-snug text-graphite italic ${
+            !expanded && clampable ? "line-clamp-2" : ""
+          } ${clampable ? "cursor-pointer" : ""}`}
+        >
+          {text}
+          {streaming && (
+            <span
+              className="ml-0.5 inline-block h-3 w-[2px] translate-y-0.5 bg-probe"
+              style={{ animation: "breathe 1s var(--ease) infinite" }}
+            />
+          )}
+        </p>
+        {clampable && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="gauge mt-0.5 select-none text-tiny text-dust transition-colors hover:text-probe"
+          >
+            {expanded ? "hide thinking" : "show thinking"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

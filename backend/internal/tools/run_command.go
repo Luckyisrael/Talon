@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,6 +14,9 @@ import (
 
 type RunCommand struct {
 	WorkspacePath string
+	// Output, when set, receives the command's stdout/stderr as it runs, so the
+	// frontend can show the developer what the agent's command is doing live.
+	Output io.Writer
 }
 
 func (t *RunCommand) Name() string { return "run_command" }
@@ -152,7 +156,7 @@ func (t *RunCommand) Execute(ctx context.Context, args json.RawMessage) (ToolRes
 	cmd.Dir = t.WorkspacePath
 	cmd.Env = sanitizedEnv()
 
-	raw, runErr := cmd.CombinedOutput()
+	raw, runErr := runCaptured(cmd, t.Output)
 	output := clipCommandOutput(string(raw))
 
 	if ctx.Err() == context.DeadlineExceeded {

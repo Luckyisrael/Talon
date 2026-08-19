@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/seekersstudio/backend/internal/agent"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/events"
+	"github.com/seekersstudio/backend/internal/guardrails"
 	"github.com/seekersstudio/backend/internal/store"
 )
 
@@ -26,16 +29,36 @@ type Orchestrator struct {
 	sessions map[int64]*SessionState
 
 	store     *store.Store
-	maxRounds int
+	knowledge *agent.Registry
+	// preinstalled is the set the install guardrail checks against. Computed once
+	// from the knowledge layer at construction so every tool call does not rebuild
+	// it.
+	preinstalled map[string]bool
+	// discipline is the tier-specific working-discipline block appended to the
+	// build system prompt, derived once from the model's capabilities. Empty for a
+	// strong model (which needs none) and when there is no AI client.
+	discipline string
+	maxRounds  int
 }
 
-func New(aiClient *ai.Client, s *store.Store) *Orchestrator {
-	return &Orchestrator{
-		ai:        aiClient,
-		sessions:  make(map[int64]*SessionState),
-		store:     s,
-		maxRounds: 40,
+func New(aiClient *ai.Client, s *store.Store, knowledge *agent.Registry) *Orchestrator {
+	o := &Orchestrator{
+		ai:           aiClient,
+		sessions:     make(map[int64]*SessionState),
+		store:        s,
+		knowledge:    knowledge,
+		preinstalled: knowledge.PreinstalledSet(),
+		maxRounds:    40,
 	}
+	// Adapt the prompt to the model once at startup: a weaker model gets the
+	// working discipline spelled out, a strong one is trusted with the base
+	// prompt. Guarded on a real client so tests that pass nil stay silent.
+	if aiClient != nil {
+		caps := aiClient.Capabilities()
+		o.discipline = caps.WorkingDiscipline()
+		log.Printf("orchestrator: model %q classified as %s tier", caps.Model, caps.Tier)
+	}
+	return o
 }
 
 func (o *Orchestrator) CreateSession(id, projectID int64, workspacePath string) *SessionState {
@@ -107,6 +130,11 @@ type RunOptions struct {
 	// FilesTouched reports the paths changed so far, for the verification gate
 	// and the final summary.
 	FilesTouched func() []string
+	// Exists reports whether a path already exists in the workspace. The
+	// read-before-write guardrail uses it to tell creating a new file (always
+	// fine) from overwriting one the model has not read. Nil treats every path
+	// as new.
+	Exists func(path string) bool
 }
 
 // RunAgentLoop drives the agent until it stops calling tools and the code
@@ -188,11 +216,21 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			conversation = append(conversation, userTurn)
 			outcome.Messages = append(outcome.Messages, userTurn)
 
+			// Any follow-up guidance goes in a single user turn after the tool
+			// results: skills auto-attached by what the model just did, and, if the
+			// response was cut off, a truncation nudge. Folding both into one message
+			// keeps the tool_results→user shape both providers expect.
+			var followUp strings.Builder
+			followUp.WriteString(o.autoAttachSkills(sess, result.ToolUses))
 			if result.StopReason == "max_tokens" {
-				// The response was cut mid-flight. Say so plainly rather than
-				// letting the model guess why its output looks truncated.
-				nudge := ai.UserText("Your previous response hit the output limit and was truncated. " +
+				if followUp.Len() > 0 {
+					followUp.WriteString("\n\n")
+				}
+				followUp.WriteString("Your previous response hit the output limit and was truncated. " +
 					"Continue from where you stopped — work in smaller steps.")
+			}
+			if followUp.Len() > 0 {
+				nudge := ai.UserText(followUp.String())
 				conversation = append(conversation, nudge)
 				outcome.Messages = append(outcome.Messages, nudge)
 			}
@@ -221,8 +259,8 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		if verifyAttempts >= maxVerifyAttempts {
 			sess.TransitionTo(PhaseFailed)
 			outcome.FilesTouched = touched
-			sess.Emitter.EmitError(fmt.Sprintf("code still does not compile after %d repair attempts", maxVerifyAttempts))
-			return outcome, fmt.Errorf("code still does not compile after %d repair attempts", maxVerifyAttempts)
+			sess.Emitter.EmitError(fmt.Sprintf("code did not pass verification after %d repair attempts", maxVerifyAttempts))
+			return outcome, fmt.Errorf("code did not pass verification after %d repair attempts", maxVerifyAttempts)
 		}
 
 		sess.TransitionTo(PhaseVerifyStatic)
@@ -278,6 +316,20 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 	}
 
 	run := func(i int, call ai.ToolUseBlock) {
+		// Guardrails run before anything else: a refused call never executes, never
+		// emits a "running" row, and comes back as a failed tool_result so the model
+		// reads why and corrects. This is where the always-on rules become binding.
+		if dec := o.guardrail(sess, call.Name, call.Input, opts); !dec.Allowed {
+			sess.Emitter.EmitGuardrail(dec.Rule, dec.Message)
+			results[i] = ai.Block{
+				Type:      "tool_result",
+				ToolUseID: call.ID,
+				Content:   "Blocked by a project guardrail (" + dec.Rule + "): " + dec.Message,
+				IsError:   true,
+			}
+			return
+		}
+
 		verb := describeTool(call.Name, call.Input, sess.WorkspacePath)
 		sess.Emitter.EmitToolCall(call.Name, verb, "", "running")
 
@@ -309,6 +361,33 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			}
 		}
 
+		// A file the model just wrote or edited is one it now knows the contents of.
+		// Count it as read so a follow-up edit this turn is not refused by the
+		// read-before-write guardrail — the model created that content, it is not
+		// working from an assumption.
+		if !isError {
+			switch call.Name {
+			case "write_file", "edit_file", "multi_edit":
+				var w struct {
+					Path string `json:"path"`
+				}
+				if json.Unmarshal(call.Input, &w) == nil && w.Path != "" {
+					sess.MarkFileRead(w.Path)
+				}
+			}
+		}
+
+		// A skill the model reads for itself counts as delivered: auto-attach must
+		// not then inject the same body again when a trigger fires this turn.
+		if call.Name == "read_skill" && !isError {
+			var rs struct {
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(call.Input, &rs) == nil && rs.Name != "" {
+				sess.MarkSkillSeen(rs.Name)
+			}
+		}
+
 		results[i] = ai.Block{
 			Type:      "tool_result",
 			ToolUseID: call.ID,
@@ -336,55 +415,161 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 	return results
 }
 
+// guardState adapts a session to the guardrails.State interface: read tracking
+// comes from the session, existence from the workspace filesystem via RunOptions.
+type guardState struct {
+	sess   *SessionState
+	exists func(string) bool
+}
+
+func (g guardState) HasReadFile(path string) bool { return g.sess.HasReadFile(path) }
+func (g guardState) FileExists(path string) bool {
+	return g.exists != nil && g.exists(path)
+}
+
+// guardrail evaluates one tool call against the deterministic guardrails before
+// it runs. It is the single place a call can be refused for policy: the rules
+// tell the model what not to do, and this makes the security-critical ones hold
+// even when the model does not comply.
+func (o *Orchestrator) guardrail(sess *SessionState, name string, input json.RawMessage, opts RunOptions) guardrails.Decision {
+	st := guardState{sess: sess, exists: opts.Exists}
+	return guardrails.Check(name, input, st, o.preinstalled)
+}
+
+// autoAttachSkills injects the bodies of any auto-attach skills whose triggers
+// fired on the tool calls just made — each at most once per session — and returns
+// the text to append as a follow-up user turn (or "" if nothing new applies).
+// Handing the model the current, version-pinned guidance the moment it acts in a
+// skill's area is what holds quality up on models that would not otherwise know
+// the exact API shipped here.
+func (o *Orchestrator) autoAttachSkills(sess *SessionState, calls []ai.ToolUseBlock) string {
+	if o.knowledge == nil {
+		return ""
+	}
+	var bodies []string
+	for _, call := range calls {
+		for _, s := range o.knowledge.AutoAttachFor(call.Name, call.Input) {
+			if !sess.MarkSkillSeen(s.Name) {
+				continue // already delivered this session
+			}
+			bodies = append(bodies, s.Body)
+			// Show it in the trace: an auto-attached skill is a real thing that
+			// happened, and the timeline should say so rather than inject silently.
+			sess.Emitter.EmitToolCall("read_skill", "Applied the "+s.Name+" skill", "", "completed")
+		}
+	}
+	if len(bodies) == 0 {
+		return ""
+	}
+	return "A project skill applies to what you just did. Follow it for the rest of this work:\n\n" +
+		strings.Join(bodies, "\n\n---\n\n")
+}
+
 type verifyVerdict struct {
 	ok       bool
 	feedback string
 }
 
-// verify runs the static checks and turns any failure into feedback the agent
-// can act on. It parses the tool's JSON verdict rather than treating non-empty
-// output as failure — tsc prints on success too.
+// verifyResult mirrors the JSON every verification tool returns. The orchestrator
+// speaks to tools only through the executor and JSON, so it re-declares the shape
+// here rather than importing the tools package — the contract is the interface.
+type verifyResult struct {
+	Passed  bool   `json:"passed"`
+	Errors  string `json:"errors"`
+	Summary string `json:"summary"`
+}
+
+// verifyGate is one rung of the verification ladder: a named static check and the
+// repair guidance to hand back when it fails. Gates run in order and the ladder
+// stops at the first real failure — there is no point linting code that does not
+// compile, and one focused class of problem is easier to fix than a pile of mixed
+// ones.
+type verifyGate struct {
+	stage    string
+	tool     string
+	feedback func(verifyResult) string
+}
+
+// verifyGates is the ladder, ordered most-fundamental first: compilation before
+// lint. It deliberately stops short of the APK build — that needs a device and
+// minutes, and runs as its own explicit step, not on every repair iteration.
+func (o *Orchestrator) verifyGates() []verifyGate {
+	return []verifyGate{
+		{stage: "typecheck", tool: "run_typecheck", feedback: typecheckFeedback},
+		{stage: "lint", tool: "run_lint", feedback: lintFeedback},
+	}
+}
+
+// verify walks the gates in order and returns the first failure as feedback the
+// agent can act on, or ok once every gate is satisfied (or unavailable).
 func (o *Orchestrator) verify(ctx context.Context, sess *SessionState, opts RunOptions) verifyVerdict {
-	sess.Emitter.EmitVerify("typecheck", "running", "")
-	raw, isError := opts.Execute(ctx, "run_typecheck", json.RawMessage(`{}`))
+	for _, g := range o.verifyGates() {
+		if v := o.runGate(ctx, sess, opts, g); !v.ok {
+			return v
+		}
+	}
+	return verifyVerdict{ok: true}
+}
+
+// runGate runs one gate and classifies its outcome three ways: pass and skip both
+// let the ladder continue (ok), while a real failure stops it with feedback. A
+// gate whose tool could not run, or whose output does not parse, is skipped rather
+// than failed — a missing or broken checker is a platform problem, and blocking a
+// build on it would punish the agent for code that may be perfectly correct. It
+// parses the JSON verdict rather than treating non-empty output as failure, since
+// these tools print banners on success too.
+func (o *Orchestrator) runGate(ctx context.Context, sess *SessionState, opts RunOptions, g verifyGate) verifyVerdict {
+	sess.Emitter.EmitVerify(g.stage, "running", "")
+	raw, isError := opts.Execute(ctx, g.tool, json.RawMessage(`{}`))
 
 	if isError {
-		// The checker itself could not run. That is a platform problem, not the
-		// agent's code being wrong, so do not send it into a repair loop.
-		sess.Emitter.EmitVerify("typecheck", "skip", firstLine(raw))
+		sess.Emitter.EmitVerify(g.stage, "skip", firstLine(raw))
 		return verifyVerdict{ok: true}
 	}
 
-	var tc struct {
-		Passed  bool   `json:"passed"`
-		Errors  string `json:"errors"`
-		Summary string `json:"summary"`
-	}
-	if err := json.Unmarshal([]byte(raw), &tc); err != nil {
-		// Unparseable output means the contract changed; failing open is
-		// better than blocking every build on a parse error.
-		sess.Emitter.EmitVerify("typecheck", "skip", "unreadable typecheck output")
+	var vr verifyResult
+	if err := json.Unmarshal([]byte(raw), &vr); err != nil {
+		sess.Emitter.EmitVerify(g.stage, "skip", "unreadable "+g.stage+" output")
 		return verifyVerdict{ok: true}
 	}
 
-	if tc.Passed {
-		sess.Emitter.EmitVerify("typecheck", "pass", tc.Summary)
+	if vr.Passed {
+		sess.Emitter.EmitVerify(g.stage, "pass", vr.Summary)
 		return verifyVerdict{ok: true}
 	}
 
-	sess.Emitter.EmitVerify("typecheck", "fail", tc.Summary)
+	sess.Emitter.EmitVerify(g.stage, "fail", vr.Summary)
+	return verifyVerdict{feedback: g.feedback(vr)}
+}
 
+// typecheckFeedback turns a failed tsc verdict into repair guidance, naming the
+// files the compiler flagged so the agent knows where to read first.
+func typecheckFeedback(vr verifyResult) string {
 	var b strings.Builder
 	b.WriteString("The code you wrote does not compile. TypeScript reports:\n\n")
-	b.WriteString(tc.Errors)
+	b.WriteString(vr.Errors)
 	b.WriteString("\n\nFix these errors. Read each file the compiler names before changing it, and use " +
 		"edit_file for targeted changes. When you believe it is fixed, call run_typecheck to confirm.")
 
-	if files := errorFiles(tc.Errors); len(files) > 0 {
+	if files := errorFiles(vr.Errors); len(files) > 0 {
 		b.WriteString("\n\nFiles with errors: " + strings.Join(files, ", "))
 	}
+	return b.String()
+}
 
-	return verifyVerdict{feedback: b.String()}
+// lintFeedback turns a failed ESLint verdict into repair guidance. The framing
+// matters: the code already compiles, so these are the defects the type system
+// does not catch — unused bindings, missing effect dependencies, unreachable
+// code — worth fixing rather than silencing.
+func lintFeedback(vr verifyResult) string {
+	var b strings.Builder
+	b.WriteString("The code compiles, but ESLint reports problems:\n\n")
+	b.WriteString(vr.Errors)
+	b.WriteString("\n\nFix these — they flag real defects the compiler cannot see, not just style. " +
+		"Read each file the linter names before changing it. Do not silence a rule with a disable " +
+		"comment unless it is genuinely a false positive. When you believe it is fixed, call run_lint " +
+		"to confirm.")
+	return b.String()
 }
 
 // errorFiles pulls the distinct file paths out of tsc output, preserving the
@@ -428,6 +613,28 @@ func (o *Orchestrator) enrichPromptWithContext(sess *SessionState, systemPrompt 
 
 	var b strings.Builder
 	b.WriteString(systemPrompt)
+
+	// Always-on rules and the skill manifest come first: they are identical across
+	// every session, so keeping them adjacent to the base prompt keeps the cached
+	// prefix long. The per-project ADRs and memory below vary and follow after.
+	if o.knowledge != nil {
+		if rules := o.knowledge.RulesBlock(); rules != "" {
+			b.WriteString("\n\n")
+			b.WriteString(rules)
+		}
+		if manifest := o.knowledge.Manifest(); manifest != "" {
+			b.WriteString("\n\n")
+			b.WriteString(manifest)
+		}
+	}
+
+	// The working-discipline block is model-specific but session-invariant, so it
+	// belongs here in the cached prefix alongside the rules — before the per-project
+	// ADRs and memory that vary below.
+	if o.discipline != "" {
+		b.WriteString("\n\n")
+		b.WriteString(o.discipline)
+	}
 
 	if adrs := sess.GetADRs(); len(adrs) > 0 {
 		if len(adrs) > maxADRs {
@@ -552,6 +759,14 @@ func describeTool(name string, input json.RawMessage, workspacePath string) stri
 		return "Recording a decision"
 	case "write_memory":
 		return "Noting project context"
+	case "read_skill":
+		var a struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(input, &a) == nil && a.Name != "" {
+			return "Consulting the " + a.Name + " skill"
+		}
+		return "Consulting a skill"
 	case "web_search":
 		var a struct {
 			Query string `json:"query"`

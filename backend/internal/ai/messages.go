@@ -20,6 +20,13 @@ type Block struct {
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
 
+	// tool_use (Gemini): Gemini's OpenAI-compatible endpoint returns a
+	// thought_signature inside extra_content.google on every assistant message
+	// that calls tools, and refuses to accept that turn again unless the
+	// signature is echoed back. Dropping it at parse time is what surfaced as
+	// "Function call is missing a thought_signature" on the second tool call.
+	ThoughtSignature string `json:"thought_signature,omitempty"`
+
 	// tool_result
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
@@ -175,6 +182,11 @@ type openaiToolCall struct {
 	ID       string             `json:"id"`
 	Type     string             `json:"type"`
 	Function openaiToolCallFunc `json:"function"`
+	// Gemini requires the thought_signature it issued on a tool call part to be
+	// echoed back on that exact part. Parallel calls only sign the first part,
+	// so the signature must stay positional — hoisting it to the message would
+	// fail the next request ("missing a thought_signature ... position N").
+	ExtraContent map[string]any `json:"extra_content,omitempty"`
 }
 
 type openaiToolCallFunc struct {
@@ -215,11 +227,17 @@ func toOpenAI(system string, msgs []Message) []openaiChatMessage {
 				if args == "" {
 					args = "{}"
 				}
-				calls = append(calls, openaiToolCall{
+				call := openaiToolCall{
 					ID:       b.ID,
 					Type:     "function",
 					Function: openaiToolCallFunc{Name: b.Name, Arguments: args},
-				})
+				}
+				if b.ThoughtSignature != "" {
+					call.ExtraContent = map[string]any{
+						"google": map[string]any{"thought_signature": b.ThoughtSignature},
+					}
+				}
+				calls = append(calls, call)
 			case "tool_result":
 				content := b.Content
 				if b.IsError && content != "" {

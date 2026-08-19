@@ -495,3 +495,56 @@ func TestCaptureScreenshotVision(t *testing.T) {
 		}
 	})
 }
+
+// ── read_skill ────────────────────────────────────────
+
+// stubLibrary stands in for the knowledge registry so the tool can be tested
+// without embedding real content.
+type stubLibrary struct{ bodies map[string]string }
+
+func (s stubLibrary) SkillBody(name string) (string, bool) { b, ok := s.bodies[name]; return b, ok }
+func (s stubLibrary) SkillNames() []string {
+	names := make([]string, 0, len(s.bodies))
+	for n := range s.bodies {
+		names = append(names, n)
+	}
+	return names
+}
+
+func TestReadSkill(t *testing.T) {
+	rs := &ReadSkill{Library: stubLibrary{bodies: map[string]string{"wallet-mwa": "MWA body text"}}}
+
+	t.Run("known skill returns its body verbatim", func(t *testing.T) {
+		res, _ := rs.Execute(context.Background(), rawArgs(t, map[string]any{"name": "wallet-mwa"}))
+		if res.IsError || res.Content != "MWA body text" {
+			t.Fatalf("want the skill body, got is_error=%v content=%q", res.IsError, res.Content)
+		}
+	})
+
+	t.Run("unknown skill errors and lists what exists", func(t *testing.T) {
+		res, _ := rs.Execute(context.Background(), rawArgs(t, map[string]any{"name": "ghost"}))
+		if !res.IsError || !strings.Contains(res.Content, "wallet-mwa") {
+			t.Errorf("want a not-found error naming available skills, got: %s", res.Content)
+		}
+	})
+
+	t.Run("blank name is an error, not a lookup", func(t *testing.T) {
+		res, _ := rs.Execute(context.Background(), rawArgs(t, map[string]any{"name": "   "}))
+		if !res.IsError {
+			t.Errorf("want an error for a blank name, got: %s", res.Content)
+		}
+	})
+
+	t.Run("read_skill is read-only", func(t *testing.T) {
+		if !rs.ReadOnly() {
+			t.Error("read_skill must be read-only so it can run alongside other reads")
+		}
+	})
+
+	t.Run("nil library degrades instead of panicking", func(t *testing.T) {
+		res, _ := (&ReadSkill{}).Execute(context.Background(), rawArgs(t, map[string]any{"name": "x"}))
+		if !res.IsError {
+			t.Errorf("want a clean error with no library, got: %s", res.Content)
+		}
+	})
+}

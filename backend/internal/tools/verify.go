@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +35,8 @@ const (
 // status means the checker ran and found problems — that is data for the agent,
 // not an error. Anything else (binary missing, timeout, permission denied)
 // means the check never produced a verdict and must surface as a real error.
-func runVerifyCmd(ctx context.Context, dir string, name string, args ...string) (output string, failed bool, err error) {
+// output, when non-nil, receives the checker's stdout/stderr as it runs.
+func runVerifyCmd(ctx context.Context, dir string, output io.Writer, name string, args ...string) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
 
@@ -44,7 +46,7 @@ func runVerifyCmd(ctx context.Context, dir string, name string, args ...string) 
 	// agent has to read.
 	cmd.Env = append(os.Environ(), "CI=1", "FORCE_COLOR=0", "NO_COLOR=1", "npm_config_yes=true")
 
-	raw, runErr := cmd.CombinedOutput()
+	raw, runErr := runCaptured(cmd, output)
 	out := string(raw)
 
 	if ctx.Err() == context.DeadlineExceeded {
@@ -77,6 +79,8 @@ func clipOutput(s string) string {
 
 type RunTypecheck struct {
 	WorkspacePath string
+	// Output, when set, receives the checker's stdout/stderr as it runs.
+	Output io.Writer
 }
 
 func (t *RunTypecheck) Name() string { return "run_typecheck" }
@@ -95,7 +99,7 @@ func (t *RunTypecheck) Execute(ctx context.Context, args json.RawMessage) (ToolR
 		return marshalVerify(VerifyResult{Passed: true, Summary: "no tsconfig.json — typecheck skipped"}), nil
 	}
 
-	out, failed, err := runVerifyCmd(ctx, t.WorkspacePath, "npx", "--no-install", "tsc", "--noEmit", "--pretty", "false")
+	out, failed, err := runVerifyCmd(ctx, t.WorkspacePath, t.Output, "npx", "--no-install", "tsc", "--noEmit", "--pretty", "false")
 	if err != nil {
 		return errResult("typecheck could not run: %v", err), nil
 	}
@@ -125,6 +129,8 @@ func countTSErrors(out string) int {
 
 type RunLint struct {
 	WorkspacePath string
+	// Output, when set, receives the checker's stdout/stderr as it runs.
+	Output io.Writer
 }
 
 func (t *RunLint) Name() string { return "run_lint" }
@@ -149,7 +155,7 @@ func (t *RunLint) Execute(ctx context.Context, args json.RawMessage) (ToolResult
 		cmdArgs = []string{"--no-install", "eslint", "--ext", ".ts,.tsx,.js,.jsx", "."}
 	}
 
-	out, failed, err := runVerifyCmd(ctx, t.WorkspacePath, "npx", cmdArgs...)
+	out, failed, err := runVerifyCmd(ctx, t.WorkspacePath, t.Output, "npx", cmdArgs...)
 	if err != nil {
 		// A missing or misconfigured linter must not block a build; typecheck
 		// is the gate that matters.

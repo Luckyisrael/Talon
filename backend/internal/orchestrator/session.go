@@ -45,6 +45,12 @@ type SessionState struct {
 	Memory      []store.ProjectMemory        // loaded project memory
 	TaskTracker *TaskTracker                 // visible task breakdown
 
+	// SeenSkills tracks skill bodies already delivered this session, whether the
+	// model read one explicitly or a trigger auto-attached it. Unlike ReadFiles it
+	// is NOT cleared per turn: a skill's guidance, once given, holds for the rest
+	// of the build, so re-injecting it would just burn context.
+	SeenSkills map[string]bool
+
 	mu sync.Mutex
 }
 
@@ -79,6 +85,7 @@ func NewSession(id, projectID int64, workspacePath string, emitter *events.Sessi
 		StartedAt:       time.Now(),
 		Emitter:         emitter,
 		ReadFiles:       make(map[string]bool),
+		SeenSkills:      make(map[string]bool),
 		TaskTracker:     NewTaskTracker(),
 	}
 }
@@ -193,6 +200,20 @@ func (s *SessionState) ClearReadFiles() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ReadFiles = make(map[string]bool)
+}
+
+// MarkSkillSeen records that a skill's body has been delivered this session and
+// reports whether this was the first time. Auto-attach injects only when it gets
+// true back, so a body reaches the model at most once regardless of how many tool
+// calls trip its triggers. It is safe under the parallel read-only tool execution.
+func (s *SessionState) MarkSkillSeen(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.SeenSkills[name] {
+		return false
+	}
+	s.SeenSkills[name] = true
+	return true
 }
 
 // LoadADRs loads the Architecture Decision Records for this project.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,9 @@ type BuildAPK struct {
 	ADBClient     *ADBRunner
 	ADBTarget     string
 	Allowlist     AllowlistInterface
+	// Output, when set, receives the build's stdout/stderr as it runs (expo
+	// prebuild, gradle, adb install) so the frontend can show the build live.
+	Output io.Writer
 }
 
 // AllowlistInterface provides access to the native-module allowlist without importing devclient.
@@ -137,7 +141,7 @@ func (t *BuildAPK) runExpoPrebuild(ctx context.Context, javaHome, androidHome st
 		"PATH="+javaHome+"/bin:"+androidHome+"/platform-tools:"+os.Getenv("PATH"),
 	)
 
-	output, err := cmd.CombinedOutput()
+	output, err := runCaptured(cmd, t.Output)
 	return string(output), err
 }
 
@@ -158,7 +162,7 @@ func (t *BuildAPK) runGradleBuild(ctx context.Context, javaHome, androidHome str
 		"PATH="+javaHome+"/bin:"+androidHome+"/platform-tools:"+os.Getenv("PATH"),
 	)
 
-	output, err := cmd.CombinedOutput()
+	output, err := runCaptured(cmd, t.Output)
 
 	apkPath := findAPK(androidDir)
 	return apkPath, string(output), err
@@ -170,7 +174,7 @@ func (t *BuildAPK) installAPK(apkPath string) (string, error) {
 		target = "localhost:5555"
 	}
 	cmd := exec.Command("adb", "-s", target, "install", "-r", apkPath)
-	output, err := cmd.CombinedOutput()
+	output, err := runCaptured(cmd, t.Output)
 	return strings.TrimSpace(string(output)), err
 }
 

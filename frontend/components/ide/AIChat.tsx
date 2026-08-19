@@ -32,7 +32,7 @@ interface AIChatProps {
 
 export interface AIChatHandle {
   switchToBuild: () => void;
-  sendMessage: (msg: string) => void;
+  sendMessage: (msg: string, mode?: "plan" | "build") => void;
 }
 
 type Entry = ChatMessage | StreamMessage;
@@ -244,11 +244,11 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             patch((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
 
           switch (event.type) {
-            // The agent's prose and its private reasoning both stream as deltas.
-            // They land in the same narration row so a reply reads as one piece
-            // of writing rather than a stack of fragments.
+            // The agent's spoken prose streams as narration; its private
+            // reasoning streams as a separate thinking row. Keeping them apart
+            // is what lets the UI cap one to a couple of lines while the other
+            // renders in full.
             case "text.start":
-            case "thinking.start":
               patch((prev) => {
                 const last = prev.traceRows[prev.traceRows.length - 1];
                 if (last?.kind === "narration" && last.streaming) return prev;
@@ -263,7 +263,6 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               break;
 
             case "text.delta":
-            case "thinking.delta":
               patch((prev) => {
                 const rows = [...prev.traceRows];
                 const last = rows[rows.length - 1];
@@ -283,11 +282,53 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               break;
 
             case "text.end":
-            case "thinking.end":
               patch((prev) => {
                 const rows = [...prev.traceRows];
                 const last = rows[rows.length - 1];
                 if (last?.kind === "narration" && last.streaming) {
+                  rows[rows.length - 1] = { ...last, streaming: false };
+                }
+                return { ...prev, traceRows: rows };
+              });
+              break;
+
+            case "thinking.start":
+              patch((prev) => {
+                const last = prev.traceRows[prev.traceRows.length - 1];
+                if (last?.kind === "thinking" && last.streaming) return prev;
+                return {
+                  ...prev,
+                  traceRows: [
+                    ...prev.traceRows,
+                    { id: `${id}-t${prev.traceRows.length}`, kind: "thinking", text: "", streaming: true },
+                  ],
+                };
+              });
+              break;
+
+            case "thinking.delta":
+              patch((prev) => {
+                const rows = [...prev.traceRows];
+                const last = rows[rows.length - 1];
+                if (last?.kind === "thinking" && last.streaming) {
+                  rows[rows.length - 1] = { ...last, text: (last.text ?? "") + (d.text ?? "") };
+                } else {
+                  rows.push({
+                    id: `${id}-t${rows.length}`,
+                    kind: "thinking",
+                    text: d.text ?? "",
+                    streaming: true,
+                  });
+                }
+                return { ...prev, traceRows: rows };
+              });
+              break;
+
+            case "thinking.end":
+              patch((prev) => {
+                const rows = [...prev.traceRows];
+                const last = rows[rows.length - 1];
+                if (last?.kind === "thinking" && last.streaming) {
                   rows[rows.length - 1] = { ...last, streaming: false };
                 }
                 return { ...prev, traceRows: rows };
@@ -363,6 +404,15 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               });
               break;
 
+            case "command_output":
+              // Live stdout/stderr from run_command, typecheck, lint, and
+              // build_apk. Previously the Output pane stayed empty while the
+              // agent's tools ran; now the developer watches them do it.
+              if (typeof d.text === "string" && d.text.trim()) {
+                useIDEStore.getState().appendBuildOutput(d.text);
+              }
+              break;
+
             case "task_update":
               appendRow({
                 id: `${id}-k${d.id ?? Math.random().toString(36).slice(2, 8)}`,
@@ -421,10 +471,13 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                 ...prev,
                 plan,
                 planMessage: d.message,
-                traceRows:
-                  d.message && prev.traceRows.length === 0
-                    ? [{ id: `${id}-pm`, kind: "narration", text: d.message }]
-                    : prev.traceRows,
+                // The parsed plan is the canonical reply. Any narration rows the
+                // raw stream already emitted (thinking/prose/JSON) are stale the
+                // moment this lands — replace them so the chat never shows the
+                // model's private reasoning or the raw JSON envelope.
+                traceRows: d.message
+                  ? [{ id: `${id}-pm`, kind: "narration", text: d.message }]
+                  : prev.traceRows,
               }));
               if (plan) onPlan?.(plan, d.message ?? "");
               break;
@@ -465,7 +518,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     // ── Sending ──
 
     const send = useCallback(
-      async (raw: string) => {
+      async (raw: string, forcedMode?: "plan" | "build") => {
         const prompt = raw.trim();
         if (!prompt || isStreaming) return;
 
@@ -489,7 +542,11 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         abortRef.current = streamPrompt(
           projectId,
           prompt,
-          mode,
+          // Approving a plan calls switchToBuild then sendMessage in the same
+          // tick; React state has not re-rendered yet, so the closure's `mode`
+          // would still read "plan" and the build would re-plan forever. The
+          // explicit argument makes the caller decide, not the render cycle.
+          forcedMode ?? mode,
           handleEvent(streamId, patch),
           (err) => patch((prev) => ({ ...prev, isStreaming: false, error: err.message })),
         );
@@ -502,8 +559,8 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     // does not run until after the first render.
     useImperativeHandle(ref, () => ({
       switchToBuild: () => setMode("build"),
-      sendMessage: (msg: string) => {
-        void send(msg);
+      sendMessage: (msg: string, mode?: "plan" | "build") => {
+        void send(msg, mode);
       },
     }));
 

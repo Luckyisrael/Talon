@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/seekersstudio/backend/internal/agent"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/api"
 	"github.com/seekersstudio/backend/internal/auth"
@@ -66,7 +67,19 @@ func main() {
 	}
 	log.Printf("AI provider ready (model %s)", aiClient.Model())
 
-	orchestratorSvc := orchestrator.New(aiClient, s)
+	// The knowledge layer (always-on rules + load-on-demand skills) is embedded in
+	// the binary, so Load only fails on malformed authored content — which a unit
+	// test guards against. We still degrade rather than die: a build that boots and
+	// serves without rules beats one that refuses to start, and the log makes the
+	// gap loud.
+	knowledge, err := agent.Load(filepath.Join(templateDir, "package.json"))
+	if err != nil {
+		log.Printf("WARNING: agent knowledge layer unavailable: %v — builds will run without rules and skills", err)
+	} else {
+		log.Printf("agent knowledge ready (%d skills)", len(knowledge.SkillNames()))
+	}
+
+	orchestratorSvc := orchestrator.New(aiClient, s, knowledge)
 
 	portAlloc := redroid.NewPortAllocator(15555, 16555)
 	maxContainers := envInt("MAX_CONTAINERS", 5)
@@ -107,7 +120,7 @@ func main() {
 
 	authHandler := api.NewAuthHandler(s, authSvc)
 	projectHandler := api.NewProjectHandler(s, wsMgr, workspaceDir)
-	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr)
+	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr, knowledge)
 	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, workspaceDir, devClientMgr, walletMgr)
 	usageHandler := api.NewUsageHandler(s)
 	terminalHandler := ws.NewTerminalHandler(authSvc, s)

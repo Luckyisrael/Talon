@@ -206,7 +206,9 @@ export const prompts = {
  * plan path in internal/api/prompts.go. The previous version of this union
  * listed "tool.start", "tool.end" and "build.result" — none of which the server
  * has ever sent — and omitted "usage", "plan", "rebuild" and "task_update",
- * which it does.
+ * which it does. "command_output" carries live subprocess output from the
+ * command-running tools (run_command, typecheck, lint, install_package,
+ * build_apk) so the Output pane reflects what the agent's tools are printing.
  */
 export type StreamEventType =
   | "thinking.start"
@@ -221,6 +223,7 @@ export type StreamEventType =
   | "task_update"
   | "usage"
   | "rebuild"
+  | "command_output"
   | "plan"
   | "guardrail_reject"
   | "error"

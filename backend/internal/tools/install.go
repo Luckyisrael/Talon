@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 type InstallPackage struct {
 	WorkspacePath string
 	Allowlist     *devclient.Allowlist
+	// Output, when set, receives the install command's stdout/stderr as it runs.
+	Output io.Writer
 }
 
 func (t *InstallPackage) Name() string { return "install_package" }
@@ -78,7 +81,7 @@ func (t *InstallPackage) Execute(ctx context.Context, args json.RawMessage) (Too
 	cmd := exec.CommandContext(ctx, "npm", "install", pkgSpec, "--save")
 	cmd.Dir = t.WorkspacePath
 
-	output, err := cmd.CombinedOutput()
+	output, err := runCaptured(cmd, t.Output)
 	outputStr := string(output)
 
 	if err != nil {

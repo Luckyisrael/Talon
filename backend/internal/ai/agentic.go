@@ -204,7 +204,24 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 						Name      string `json:"name"`
 						Arguments string `json:"arguments"`
 					} `json:"function"`
+					// Gemini echoes a thought_signature under extra_content.google
+					// on EACH tool call it returns. Per Google's docs the signature
+					// travels positionally with the part that issued it — parallel
+					// calls only carry one on the first part — and must be echoed
+					// back exactly as received on the same part.
+					ExtraContent struct {
+						Google struct {
+							ThoughtSignature string `json:"thought_signature"`
+						} `json:"google"`
+					} `json:"extra_content"`
 				} `json:"tool_calls"`
+				// Gemini echoes a thought_signature under extra_content.google that
+				// must be round-tripped on the assistant turn it came from.
+				ExtraContent struct {
+					Google struct {
+						ThoughtSignature string `json:"thought_signature"`
+					} `json:"google"`
+				} `json:"extra_content"`
 			} `json:"message"`
 		} `json:"choices"`
 		Usage struct {
@@ -239,6 +256,14 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 		},
 	}
 
+	// The model's private reasoning comes first — it is what drove the text and
+	// the tool calls that follow, so the user reads the decision before the act.
+	// Plan mode streams this live; build mode used to vanish it entirely, so a
+	// user watching a build saw tool rows stacking up with no idea what the model
+	// was deciding.
+	if choice.Message.Reasoning != "" {
+		result.Blocks = append(result.Blocks, Block{Type: "thinking", Text: choice.Message.Reasoning})
+	}
 	if choice.Message.Content != "" {
 		result.Blocks = append(result.Blocks, Block{Type: "text", Text: choice.Message.Content})
 	}
@@ -253,11 +278,22 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 		if id == "" {
 			id = fmt.Sprintf("call_%s_%d", tc.Function.Name, len(result.ToolUses))
 		}
+		// Gemini returns the signature on each tool call part; some responses
+		// put it once on the whole message instead. Prefer the per-call value —
+		// parallel calls only sign the first part, and that positional match is
+		// what the API validates on the next request.
+		sig := tc.ExtraContent.Google.ThoughtSignature
+		if sig == "" {
+			sig = choice.Message.ExtraContent.Google.ThoughtSignature
+		}
 		result.ToolUses = append(result.ToolUses, ToolUseBlock{
 			Type: "tool_use", ID: id, Name: tc.Function.Name, Input: json.RawMessage(args),
 		})
 		result.Blocks = append(result.Blocks, Block{
 			Type: "tool_use", ID: id, Name: tc.Function.Name, Input: json.RawMessage(args),
+			// Gemini requires its thought_signature echoed back on the same
+			// part when we replay this tool call on the next request.
+			ThoughtSignature: sig,
 		})
 	}
 

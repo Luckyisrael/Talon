@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/seekersstudio/backend/internal/agent"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/events"
@@ -27,15 +28,17 @@ type PromptHandler struct {
 	workspaceDir string
 	orch         *orchestrator.Orchestrator
 	devClient    *devclient.Manager
+	knowledge    *agent.Registry
 }
 
-func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager) *PromptHandler {
+func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *agent.Registry) *PromptHandler {
 	return &PromptHandler{
 		store:        s,
 		ai:           a,
 		workspaceDir: workspaceDir,
 		orch:         orch,
 		devClient:    dc,
+		knowledge:    knowledge,
 	}
 }
 
@@ -253,16 +256,18 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 	for event := range stream {
 		switch event.Type {
 		case "thinking.start", "thinking.delta", "thinking.end":
-			writeSSE(w, event.Type, event.Data)
-		case "text.start":
-			writeSSE(w, "text.start", nil)
+			// Plan replies are JSON; the model's private reasoning is not the
+			// reply. Streaming it verbatim dumped raw chain-of-thought into the
+			// chat. Nothing is forwarded here — the parsed plan carries the
+			// message the user actually reads.
+		case "text.start", "text.end":
+			// The streamed text is the raw JSON envelope, not something the user
+			// should watch form. It is buffered below and reaches the client only
+			// as the parsed plan/message.
 		case "text.delta":
 			if td, ok := event.Data.(ai.StreamTextDelta); ok {
 				full.WriteString(td.Text)
 			}
-			writeSSE(w, "text.delta", event.Data)
-		case "text.end":
-			writeSSE(w, "text.end", nil)
 		case "error":
 			sawError = true
 			writeSSE(w, "error", map[string]string{"message": event.Error})
@@ -287,8 +292,11 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 		payload, _ := json.Marshal(planResp)
 		h.store.UpdatePromptResponse(promptID, string(payload))
 		writeSSE(w, "plan", planResp)
-	} else {
+	} else if raw != "" {
 		h.store.UpdatePromptResponse(promptID, raw)
+		// The model did not return a parseable plan. Surface its reply verbatim
+		// rather than leaving the chat staring at a blank turn.
+		writeSSE(w, "text.delta", ai.StreamTextDelta{Text: raw})
 	}
 
 	writeSSE(w, "done", map[string]string{"status": "success"})
@@ -390,6 +398,10 @@ func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event)
 		// carried no text at all and the stored response was the literal string
 		// "Build completed".
 		writeSSE(w, "text.delta", ai.StreamTextDelta{Text: evt.Text})
+	case events.CommandOutputEvent:
+		// Live subprocess output from run_command / typecheck / lint / build_apk,
+		// so the terminal pane shows what the agent's commands are printing.
+		writeSSE(w, "command_output", map[string]string{"text": evt.Text})
 	case events.ThinkingEvent:
 		writeSSE(w, "thinking.delta", ai.StreamTextDelta{Text: evt.Text})
 	case events.UsageEvent:
@@ -436,9 +448,24 @@ func (h *PromptHandler) runBuild(
 
 	if emitterCh != nil {
 		emitterCh <- sess.Emitter
+	} else {
+		// No streaming client (non-SSE build request). The emitter's channel is
+		// never closed and Emit blocks once the buffer fills, so someone has to
+		// keep draining it or a verbose command output can stall the build.
+		go func() {
+			for {
+				select {
+				case <-sess.Emitter.Done():
+					return
+				case <-sess.Emitter.Events():
+				}
+			}
+		}()
 	}
 
-	bs := h.newBuildSession(workspacePath, projectID, h.adbTargetFor(projectID))
+	// The output writer mirrors the sink for the command-running tools, so a
+	// tool's subprocess output appears in the terminal pane as it happens.
+	bs := h.newBuildSession(workspacePath, projectID, h.adbTargetFor(projectID), commandOutputWriter{emitter: sess.Emitter})
 
 	history := h.conversation(projectID)
 	userTurn := ai.UserText(userPrompt)
@@ -451,6 +478,7 @@ func (h *PromptHandler) runBuild(
 		Execute:      bs.executor(),
 		ReadOnlyTool: bs.reg.IsReadOnly,
 		FilesTouched: bs.fs.Touched,
+		Exists:       bs.fs.Exists,
 	})
 
 	// Everything below runs whether or not the loop succeeded: a failed turn

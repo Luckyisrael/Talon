@@ -102,6 +102,7 @@ export default function IDELayout({ projectId }: IDELayoutProps) {
     aiChatRef.current?.switchToBuild();
     aiChatRef.current?.sendMessage(
       `Build ${list}. Implement every screen fully — no placeholders, no TODOs — and wire up the navigation from the plan.`,
+      "build",
     );
   }, []);
 

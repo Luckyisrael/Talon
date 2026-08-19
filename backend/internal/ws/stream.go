@@ -20,6 +20,13 @@ const (
 	jpegQuality  = 80
 	frameFPS     = 30
 	frameQueueSz = 3
+
+	// Screencap failure handling. When the device dies mid-session every attempt
+	// fails; hammering ADB at frame rate turned a dead device into a 30-line-per-
+	// second log flood that only stopped when the tab closed. After this many
+	// consecutive failures the loop backs off to slowRetryInterval instead.
+	failureThreshold  = 10
+	slowRetryInterval = 1 * time.Second
 )
 
 type StreamHandler struct {
@@ -93,13 +100,37 @@ func (h *StreamHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
+		// consecutiveFailures tracks screencap errors so the loop can back off
+		// when the device goes away instead of logging at frame rate forever.
+		var consecutiveFailures int
+		var lastAttempt time.Time
+		var slowed bool
+
 		for range ticker.C {
-			// Raw screencap: no PNG flag = raw RGBA pixels
-			rawRGBA, width, height, err := adbClient.ScreenshotRaw()
-			if err != nil {
-				log.Printf("raw screencap failed: %v", err)
+			// Once throttled, only try every slowRetryInterval — the ticker still
+			// fires at frame rate, so gate on elapsed time rather than the tick.
+			if slowed && time.Since(lastAttempt) < slowRetryInterval {
 				continue
 			}
+
+			// Raw screencap: no PNG flag = raw RGBA pixels
+			rawRGBA, width, height, err := adbClient.ScreenshotRaw()
+			lastAttempt = time.Now()
+			if err != nil {
+				consecutiveFailures++
+				if !slowed && consecutiveFailures >= failureThreshold {
+					slowed = true
+					log.Printf("session %d: device unreachable (%d consecutive failures: %v) — retrying every %s until it returns", sessionID, consecutiveFailures, err, slowRetryInterval)
+				}
+				continue
+			}
+
+			// The device answered again; resume full-rate capture.
+			if slowed {
+				slowed = false
+				log.Printf("session %d: device is back — resuming full-rate capture", sessionID)
+			}
+			consecutiveFailures = 0
 
 			// Frame diffing: skip identical frames
 			if differ.IsSame(rawRGBA) {

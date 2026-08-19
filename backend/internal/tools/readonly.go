@@ -7,3 +7,4 @@ package tools
 func (t *ReadFile) ReadOnly() bool     { return true }
 func (t *ListFiles) ReadOnly() bool    { return true }
 func (t *GrepCodebase) ReadOnly() bool { return true }
+func (t *ReadSkill) ReadOnly() bool    { return true }
