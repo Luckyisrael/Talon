@@ -13,7 +13,7 @@ set -euo pipefail
 CONTAINER_NAME="seeker-dev"
 IMAGE_NAME="seeker-redroid:latest"
 DEVICE_PIN="1234"
-ADB_PORT=5555
+ADB_PORT=6555
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
@@ -35,7 +35,7 @@ echo "--- Launching Redroid container ---"
 docker run -d \
   --name "$CONTAINER_NAME" \
   --privileged \
-  -p "$ADB_PORT:5555" \
+  -p "$ADB_PORT:6555" \
   "$IMAGE_NAME" \
   androidboot.use_memfd=1 \
   androidboot.redroid_width=1080 \

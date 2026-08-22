@@ -4,9 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import PillButton from "@/components/ui/PillButton";
-import Spinner from "@/components/ui/Spinner";
 import { auth } from "@/lib/api";
-import { setToken } from "@/lib/auth";
+import { setToken, setEmail as persistEmail } from "@/lib/auth";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -23,6 +22,7 @@ export default function RegisterPage() {
     try {
       const data = await auth.register(email, password);
       setToken(data.token);
+      persistEmail(email);
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -79,7 +79,7 @@ export default function RegisterPage() {
             {error && <p className="text-small text-fault mb-4">{error}</p>}
 
             <PillButton type="submit" disabled={loading} className="w-full">
-              {loading ? <Spinner size="sm" color="currentColor" /> : "Create account"}
+              {loading ? "Creating account…" : "Create account"}
             </PillButton>
           </form>
         </div>

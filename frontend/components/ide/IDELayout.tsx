@@ -10,18 +10,28 @@ import CheckpointMenu from "./CheckpointMenu";
 import CodeEditor from "./CodeEditor";
 import CommandPalette from "./CommandPalette";
 import FileTree from "./FileTree";
+import MemoryPanel from "./MemoryPanel";
 import PhonePreview from "./PhonePreview";
 import PlanViewer from "./PlanViewer";
 import Terminal from "./Terminal";
 
 interface IDELayoutProps {
   projectId: number;
+  projectName: string;
+  projectStatus?: string;
+  /** Leave the IDE — the identity segment's way back to the project list. */
+  onExit: () => void;
 }
 
-export default function IDELayout({ projectId }: IDELayoutProps) {
+export default function IDELayout({
+  projectId,
+  projectName,
+  projectStatus,
+  onExit,
+}: IDELayoutProps) {
   const store = useIDEStore();
   const aiChatRef = useRef<AIChatHandle>(null);
-  const [leftTab, setLeftTab] = useState<"chat" | "files">("chat");
+  const [leftTab, setLeftTab] = useState<"chat" | "files" | "memory">("chat");
 
   // ── Files ──
 
@@ -187,34 +197,69 @@ export default function IDELayout({ projectId }: IDELayoutProps) {
   const deviceLive = store.previewStatus === "streaming";
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-ink">
-      {/* ── Rail ── The one place that says what the machine is doing. */}
-      <div className="flex h-9 flex-shrink-0 items-center gap-2 border-b border-rail bg-slate px-2">
-        <div className="flex min-w-0 items-center gap-1">
-          {(["chat", "files"] as const).map((tab) => (
+    <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-ink p-2">
+      {/* ── Command bar ── One inset module: whose project this is on the left,
+          the workspace controls in the middle, the device on the right. It used
+          to be two stacked full-width rails; merging them gave the panels their
+          height back. */}
+      <div className="flex h-11 flex-shrink-0 items-center gap-2 rounded-3 border border-rail bg-slate px-2">
+        {/* Identity */}
+        <button
+          type="button"
+          onClick={onExit}
+          className="btn btn-ghost gap-1.5"
+          aria-label="Back to your projects"
+        >
+          <span aria-hidden>←</span>
+          <span className="hidden sm:inline">Projects</span>
+        </button>
+
+        <span className="hairline h-4 w-px flex-shrink-0" />
+
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 truncate text-small text-paper" title={projectName}>
+            {projectName}
+          </span>
+          {projectStatus && (
+            <span className="gauge hidden flex-shrink-0 sm:inline">{projectStatus}</span>
+          )}
+        </div>
+
+        {/* Workspace */}
+        <span className="hairline mx-1 hidden h-4 w-px flex-shrink-0 md:block" />
+
+        <div
+          role="group"
+          aria-label="What the left panel shows"
+          className="hidden overflow-hidden rounded-1 border border-rail md:flex"
+        >
+          {(["chat", "files", "memory"] as const).map((tab) => (
             <button
               key={tab}
               type="button"
               onClick={() => setLeftTab(tab)}
               aria-pressed={leftTab === tab}
-              className="btn btn-ghost capitalize"
+              className={`h-6 px-2.5 text-tiny capitalize transition-colors ${
+                leftTab === tab
+                  ? "bg-riser text-paper"
+                  : "text-dust hover:bg-riser hover:text-graphite"
+              }`}
             >
               {tab}
             </button>
           ))}
         </div>
 
-        <span className="hairline mx-1 h-4 w-px flex-shrink-0" />
-
         <button
           type="button"
           onClick={() => useIDEStore.getState().setCommandPaletteOpen(true)}
-          className="btn btn-ghost hidden gap-2 sm:inline-flex"
+          className="btn btn-ghost hidden gap-2 lg:inline-flex"
         >
           Search files
           <span className="gauge">⌘K</span>
         </button>
 
+        {/* Device */}
         <div className="ml-auto flex flex-shrink-0 items-center gap-1.5">
           {store.adbTarget && (
             <span className="gauge hidden md:inline" title="The adb target this session is attached to">
@@ -237,7 +282,7 @@ export default function IDELayout({ projectId }: IDELayoutProps) {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 gap-2 overflow-hidden">
         {/* ── Left: the agent, or the files ── */}
         <ResizablePanel
           direction="horizontal"
@@ -247,7 +292,7 @@ export default function IDELayout({ projectId }: IDELayoutProps) {
           className="hidden md:block"
           label="agent panel"
         >
-          <div className="flex h-full flex-col overflow-hidden border-r border-rail bg-ink">
+          <div className="flex h-full flex-col overflow-hidden rounded-3 border border-rail bg-ink">
             {/* Both panels stay mounted: switching to the tree mid-build must
                 not tear down the stream that is writing the files. */}
             <div className={leftTab === "chat" ? "flex min-h-0 flex-1" : "hidden"}>
@@ -296,11 +341,15 @@ export default function IDELayout({ projectId }: IDELayoutProps) {
                 )}
               </div>
             </div>
+
+            <div className={leftTab === "memory" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+              <MemoryPanel projectId={projectId} active={leftTab === "memory"} />
+            </div>
           </div>
         </ResizablePanel>
 
         {/* ── Centre: the code, or the plan ── */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3 border border-rail bg-ink">
           <div className="min-h-0 flex-1 overflow-hidden bg-ink">
             {store.currentPlan ? (
               <PlanViewer
@@ -372,7 +421,7 @@ export default function IDELayout({ projectId }: IDELayoutProps) {
           handleSide="start"
           label="device panel"
         >
-          <div className="flex h-full flex-col overflow-hidden border-l border-rail bg-ink">
+          <div className="flex h-full flex-col overflow-hidden rounded-3 border border-rail bg-ink">
             <PhonePreview
               status={store.previewStatus}
               sessionId={store.sessionId}

@@ -81,7 +81,7 @@ func NewSession(id, projectID int64, workspacePath string, emitter *events.Sessi
 		WorkspacePath:   workspacePath,
 		CurrentPhase:    PhaseIntake,
 		HealAttempts:    0,
-		MaxHealAttempts: 3,
+		MaxHealAttempts: 6,
 		StartedAt:       time.Now(),
 		Emitter:         emitter,
 		ReadFiles:       make(map[string]bool),

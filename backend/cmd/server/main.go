@@ -19,6 +19,7 @@ import (
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/api"
 	"github.com/seekersstudio/backend/internal/auth"
+	"github.com/seekersstudio/backend/internal/billing"
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/redroid"
@@ -127,6 +128,24 @@ func main() {
 	streamHandler := ws.NewStreamHandler(authSvc, s)
 	inputHandler := ws.NewInputHandler(authSvc, s)
 
+	// Payment/billing (Phase 9), test-mode only. The mock provider stands in for a
+	// real processor behind the billing.Provider seam; going live is a deliberate
+	// swap here — constructing a real provider — not a runtime toggle (spec 2.5,
+	// 2.8). The webhook secret is a test credential kept out of the repo (spec 2.9).
+	appBaseURL := strings.TrimSpace(os.Getenv("APP_BASE_URL"))
+	if appBaseURL == "" {
+		appBaseURL = "http://localhost:3000"
+	}
+	webhookSecret := strings.TrimSpace(os.Getenv("BILLING_WEBHOOK_SECRET"))
+	if webhookSecret == "" {
+		webhookSecret = "dev-test-webhook-secret"
+		log.Printf("WARNING: BILLING_WEBHOOK_SECRET unset — using a development secret (test-mode billing only)")
+	}
+	billingProvider := billing.NewMock(webhookSecret, appBaseURL+"/checkout")
+	billingHandler := api.NewBillingHandler(s, billingProvider, appBaseURL)
+	meHandler := api.NewMeHandler(s)
+	log.Printf("billing ready (provider %s, test mode)", billingProvider.Name())
+
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -186,8 +205,13 @@ func main() {
 			r.Use(promptLimiter.Middleware)
 			r.Post("/v1/prompts", promptHandler.Create)
 			r.Post("/v1/prompts/stream", promptHandler.Stream)
+			// Resume runs the agent loop again, so it belongs with the metered
+			// routes even though a resumed turn is not charged a second prompt.
+			r.Post("/v1/prompts/{id}/resume", promptHandler.Resume)
 		})
 		r.Get("/v1/prompts/{id}", promptHandler.Get)
+		// Discard only flips a status marker — no loop, no metering.
+		r.Post("/v1/prompts/{id}/discard", promptHandler.Discard)
 
 		// Project knowledge and history.
 		r.Get("/v1/projects/{projectID}/memory", promptHandler.GetMemory)
@@ -205,7 +229,25 @@ func main() {
 		r.Delete("/v1/sessions/{id}", sessionHandler.Destroy)
 
 		r.Get("/v1/usage", usageHandler.Get)
+
+		// Profile + billing (Phase 9). Reading and changing the profile, and
+		// starting/cancelling a subscription, all require the caller's identity, so
+		// they sit inside the auth group. The webhook does not (see below).
+		r.Get("/v1/me", meHandler.Get)
+		r.Put("/v1/me", meHandler.Update)
+		r.Post("/v1/billing/upgrade", billingHandler.StartUpgrade)
+		r.Post("/v1/billing/cancel", billingHandler.Cancel)
+		// Test-mode only: simulates finishing checkout. Under a real provider this
+		// route 404s (the handler feature-detects the simulator), so it cannot be
+		// used to grant a tier in production.
+		r.Post("/v1/billing/test/complete", billingHandler.TestComplete)
 	})
+
+	// Billing webhook: unauthenticated by necessity — the payment provider has no
+	// JWT — and trusted solely by its signature, which the handler verifies before
+	// reading the body. It sits outside the auth group for the same reason the
+	// WebSocket routes do: it cannot use header-based auth.
+	r.Post("/v1/billing/webhook", billingHandler.Webhook)
 
 	// WebSocket endpoints authenticate from the query string, because a browser
 	// cannot set headers on a WebSocket handshake. Each handler validates the

@@ -63,32 +63,13 @@ export default function ProjectPage() {
   }
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-ink">
-      {/* The identity rail: whose project this is and what state it is in. The
-          machine's own status lives one row down, in the IDE. */}
-      <header className="flex h-10 flex-shrink-0 items-center gap-3 border-b border-rail bg-slate px-3">
-        <button
-          type="button"
-          onClick={() => router.push("/dashboard")}
-          className="btn btn-ghost gap-1.5"
-          aria-label="Back to your projects"
-        >
-          <span aria-hidden>←</span>
-          Projects
-        </button>
-
-        <span className="hairline h-4 w-px flex-shrink-0" />
-
-        <h1 className="min-w-0 truncate text-small text-paper" title={project.name}>
-          {project.name}
-        </h1>
-
-        <span className="gauge ml-auto flex-shrink-0">{project.status}</span>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-hidden">
-        <IDELayout projectId={project.id} />
-      </div>
+    <div className="h-screen overflow-hidden bg-ink">
+      <IDELayout
+        projectId={project.id}
+        projectName={project.name}
+        projectStatus={project.status}
+        onExit={() => router.push("/dashboard")}
+      />
     </div>
   );
 }

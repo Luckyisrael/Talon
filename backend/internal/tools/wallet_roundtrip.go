@@ -120,9 +120,13 @@ func (t *TestWalletRoundtrip) Execute(ctx context.Context, args json.RawMessage)
 	}
 	time.Sleep(3 * time.Second)
 
-	// Step 5: Tap "Connect" button (known coordinates from fakedapp layout)
-	// The fakedapp has a "Connect to Wallet" button in the center of the screen
-	t.adb("shell", "input", "tap", "540", "800")
+	// Step 5: Tap "Connect" button using UI Automator to find it dynamically
+	// instead of hardcoding screen coordinates that break across device sizes.
+	tapResult := t.findAndTapConnectButton()
+	if tapResult != "" {
+		// Fallback: try common coordinates if UI Automator failed
+		t.adb("shell", "input", "tap", "540", "800")
+	}
 	time.Sleep(2 * time.Second)
 
 	// Step 6: Wait for fakewallet to appear and auto-approve
@@ -204,6 +208,47 @@ func (t *TestWalletRoundtrip) adb(args ...string) (string, error) {
 	cmd := exec.Command("adb", allArgs...)
 	output, err := cmd.CombinedOutput()
 	return string(output), err
+}
+
+// findAndTapConnectButton uses UI Automator to find and tap the "Connect" button
+// dynamically instead of relying on hardcoded screen coordinates.
+func (t *TestWalletRoundtrip) findAndTapConnectButton() string {
+	// Dump the UI hierarchy
+	dump, err := t.adb("shell", "uiautomator", "dump", "/dev/tty")
+	if err != nil {
+		return ""
+	}
+
+	// Look for nodes with text containing "connect" (case-insensitive)
+	lower := strings.ToLower(dump)
+	idx := strings.Index(lower, "connect")
+	if idx == -1 {
+		return "no connect button found"
+	}
+
+	// Extract bounds from the node containing "connect"
+	// Format: bounds="[x1,y1][x2,y2]"
+	boundsStart := strings.LastIndex(dump[:idx+200], "bounds=\"")
+	if boundsStart == -1 {
+		return "no bounds found"
+	}
+	boundsEnd := strings.Index(dump[boundsStart:], "\"")
+	if boundsEnd == -1 {
+		return "no bounds end found"
+	}
+	boundsStr := dump[boundsStart+8 : boundsStart+8+boundsEnd]
+
+	// Parse [x1,y1][x2,y2]
+	var x1, y1, x2, y2 int
+	fmt.Sscanf(boundsStr, "[%d,%d][%d,%d]", &x1, &y1, &x2, &y2)
+	if x2 <= x1 || y2 <= y1 {
+		return "invalid bounds"
+	}
+
+	// Tap the center
+	cx, cy := (x1+x2)/2, (y1+y2)/2
+	t.adb("shell", "input", "tap", fmt.Sprintf("%d", cx), fmt.Sprintf("%d", cy))
+	return ""
 }
 
 func mustJSON(v interface{}) string {

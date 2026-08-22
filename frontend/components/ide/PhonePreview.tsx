@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createAuthWebSocket } from "@/lib/api";
+import Meter from "./Meter";
 
 /**
  * The device panel.
@@ -11,8 +12,10 @@ import { createAuthWebSocket } from "@/lib/api";
  * Android's navigation bar. All three were lies — the real device has its own
  * clock in the frames being streamed, and the fake nav dots did nothing when
  * clicked. What replaces them is the frame itself, sized to the resolution the
- * device is actually sending, above a readout of what that connection is doing,
- * and navigation keys that send real keyevents.
+ * device is actually sending and filling the panel edge to edge, with the adb
+ * target, frame rate, navigation keys, and connection readout floated over the
+ * letterbox as instruments. The keys send real keyevents; nothing here is drawn
+ * that the device is not really doing.
  */
 
 interface PhonePreviewProps {
@@ -185,49 +188,48 @@ export default function PhonePreview({
           : "idle";
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-ink">
-      <header className="bay-head justify-between">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="lamp" data-state={lampState} />
-          {/* The label names the thing it sits above — the adb target when there
-              is one, rather than the word "PREVIEW". */}
-          <span className="gauge truncate" title={adbTarget ?? undefined}>
-            {adbTarget ?? (status === "streaming" ? "Device" : "No device")}
-          </span>
-        </div>
-        {status === "streaming" && (
-          <span className="gauge tnum flex-shrink-0">{fps} fps</span>
-        )}
-      </header>
+    <section className="relative h-full min-h-0 overflow-hidden bg-ink">
+      {status === "streaming" ? (
+        <>
+          {/* The frame is the panel. It scales to fill while keeping the
+              device's real aspect ratio; the instruments float over the
+              letterbox rather than stealing rows from the frame. */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <canvas
+              ref={canvasRef}
+              onPointerDown={onPointerDown}
+              onPointerUp={onPointerUp}
+              onPointerCancel={() => (touchRef.current = null)}
+              aria-label="The device screen. Click to tap, drag to swipe."
+              className={`max-h-full max-w-full touch-none select-none ${
+                inputReady ? "cursor-pointer" : "cursor-default"
+              }`}
+            />
+          </div>
 
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden p-3">
-        {status === "streaming" ? (
-          <>
-            {/* No bezel. The frame is the object — a thin rail and a shadow are
-                enough to seat it on the bench. */}
-            <div
-              className="relative min-h-0 overflow-hidden rounded-2 border border-edge bg-ink shadow-[0_16px_40px_-12px_rgba(0,0,0,0.8)]"
-              style={{ aspectRatio: frame ? `${frame.w} / ${frame.h}` : "9 / 19.5", maxHeight: "100%" }}
-            >
-              <canvas
-                ref={canvasRef}
-                onPointerDown={onPointerDown}
-                onPointerUp={onPointerUp}
-                onPointerCancel={() => (touchRef.current = null)}
-                aria-label="The device screen. Click to tap, drag to swipe."
-                className={`h-full w-full touch-none select-none ${
-                  inputReady ? "cursor-pointer" : "cursor-default"
-                }`}
-              />
-              {!frame && (
-                <p className="gauge absolute inset-0 flex items-center justify-center">
-                  Waiting for the first frame
-                </p>
-              )}
+          {!frame && (
+            <p className="gauge absolute inset-0 flex items-center justify-center">
+              Waiting for the first frame
+            </p>
+          )}
+
+          {/* Top strip — the target and frame rate, over a scrim so they stay
+              legible against whatever the app is drawing. */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-ink/90 via-ink/45 to-transparent px-3 pb-6 pt-2.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="lamp" data-state={lampState} />
+              <span className="gauge truncate" title={adbTarget ?? undefined}>
+                {adbTarget ?? "Device"}
+              </span>
             </div>
+            <span className="gauge tnum flex-shrink-0">{fps} fps</span>
+          </div>
 
-            {/* Real navigation keys, sending real keyevents. */}
-            <div className="mt-3 flex items-center gap-1">
+          {/* Bottom strip — real navigation keys and the connection readout.
+              Only the keys take pointer events; taps anywhere else fall through
+              to the frame. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink/92 via-ink/50 to-transparent px-3 pb-2.5 pt-8">
+            <div className="pointer-events-auto flex items-center justify-center gap-1">
               {NAV_KEYS.map((key) => (
                 <button
                   key={key.keycode}
@@ -236,7 +238,7 @@ export default function PhonePreview({
                   onClick={() => sendInput({ type: "key", keycode: key.keycode })}
                   title={key.label}
                   aria-label={key.label}
-                  className="btn btn-ghost h-7 w-9 text-graphite"
+                  className="btn btn-ghost h-7 w-10 text-graphite"
                 >
                   <span aria-hidden className="text-body leading-none">
                     {key.glyph}
@@ -245,26 +247,23 @@ export default function PhonePreview({
               ))}
             </div>
 
-            {/* Instrument readout — the numbers the connection is really doing. */}
-            <dl className="mt-3 grid w-full max-w-[240px] grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-micro tabular-nums">
-              <Readout label="RES" value={frame ? `${frame.w}×${frame.h}` : "—"} />
-              <Readout label="SESSION" value={sessionId ? `#${sessionId}` : "—"} />
-              <Readout
-                label="INPUT"
-                value={inputReady ? "attached" : "detached"}
-                tone={inputReady ? "signal" : "filament"}
-              />
-            </dl>
-          </>
-        ) : (
+            <div className="mt-2 flex items-center justify-center gap-2 font-mono text-micro tabular-nums text-dust">
+              <span>{frame ? `${frame.w}×${frame.h}` : "—"}</span>
+              <span className="text-rail">·</span>
+              <span>{sessionId ? `#${sessionId}` : "—"}</span>
+              <span className="text-rail">·</span>
+              <span className={inputReady ? "text-signal-dim" : "text-filament"}>
+                {inputReady ? "input attached" : "input detached"}
+              </span>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center p-6">
           <div className="max-w-[240px] text-center">
             {status === "connecting" ? (
               <>
-                <span
-                  aria-hidden
-                  className="mx-auto mb-3 block h-5 w-5 rounded-full border-2 border-probe border-t-transparent"
-                  style={{ animation: "spin 0.7s linear infinite" }}
-                />
+                <Meter className="meter-lg mx-auto mb-3.5" />
                 <p className="text-small text-graphite">
                   Booting a device and attaching to it. This takes a moment the
                   first time.
@@ -297,35 +296,8 @@ export default function PhonePreview({
               </>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </section>
-  );
-}
-
-function Readout({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "signal" | "filament";
-}) {
-  return (
-    <>
-      <dt className="text-dust tracking-[0.11em]">{label}</dt>
-      <dd
-        className={
-          tone === "signal"
-            ? "text-signal-dim"
-            : tone === "filament"
-              ? "text-filament"
-              : "text-graphite"
-        }
-      >
-        {value}
-      </dd>
-    </>
   );
 }

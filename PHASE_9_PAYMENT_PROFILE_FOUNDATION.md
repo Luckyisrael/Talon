@@ -62,16 +62,40 @@ Subscription creation, payment failure, and cancellation must each leave a real,
 ## 3. Verification Checklist
 
 - [ ] Initiating an upgrade is confirmed to never transmit or store raw card data on the backend — verified by directly inspecting what's actually sent and stored, not assumed from using the provider's SDK
-- [ ] Exactly one customer record exists per user, confirmed directly, even after repeated upgrade attempts or abandoned checkout flows
-- [ ] Pro-tier access is confirmed to activate only after a webhook confirms successful payment — tested by simulating a delayed or failed webhook and confirming access is not granted prematurely
-- [ ] A forged or unsigned webhook call is confirmed to be rejected
-- [ ] A duplicate delivery of the same webhook event is confirmed not to cause double-processing
+- [x] Exactly one customer record exists per user, confirmed directly, even after repeated upgrade attempts or abandoned checkout flows
+- [x] Pro-tier access is confirmed to activate only after a webhook confirms successful payment — tested by simulating a delayed or failed webhook and confirming access is not granted prematurely
+- [x] A forged or unsigned webhook call is confirmed to be rejected
+- [x] A duplicate delivery of the same webhook event is confirmed not to cause double-processing
 - [ ] All payment activity during testing is confirmed to be running in the provider's test mode, checked directly against the provider's dashboard
 - [ ] The profile page is confirmed to display accurate tier, renewal date, payment-method-on-file, and billing history, sourced from the same records that will drive enforcement
 - [ ] A user is confirmed able to cancel or downgrade their own subscription entirely through the product, with the resulting state correctly reflected afterward
-- [ ] A canceled or failed subscription is confirmed to result in correctly downgraded access
+- [x] A canceled or failed subscription is confirmed to result in correctly downgraded access
 - [ ] Provider API keys and webhook secrets are confirmed to follow Phase 1's credential hygiene rules directly
-- [ ] Billing-relevant events (creation, failure, cancellation) are confirmed to be logged in a way that can genuinely be audited later
+- [x] Billing-relevant events (creation, failure, cancellation) are confirmed to be logged in a way that can genuinely be audited later
+
+**Verification Progress (2026-08-22):**
+
+Six of the eleven boxes are now checked, on the strength of an automated integration suite — `backend/internal/api/billing_test.go` (5 tests / 9 cases, all passing) — that exercises the trusted server-side path against a real store and the mock provider, alongside green `go build ./...`, `go vet ./...`, and `go test ./...` gates. The unchecked items each need a browser or a repository-hygiene inspection that a Go test cannot honestly stand in for. Legend: ✅ = runtime-verified by an automated test; 🔨 = implemented in code, not yet exercised; ⬜ = pending a runtime gate.
+
+- 🔨 **#1 (no raw card data):** No card field exists anywhere — backend stores only provider-issued IDs and a last-4 (`internal/store/billing.go` `Customer`/`Subscription`). The mock provider stands in for the hosted checkout; in test mode there is literally nothing that accepts a card number. *Still to verify:* inspect an actual request/DB at runtime — a Go test cannot prove the absence of a field the code never defines.
+- ✅ **#2 (one customer per user):** `TestBillingOneCustomerPerUser` — three `StartUpgrade` calls (repeated attempts / abandoned checkouts) leave exactly one customer row carrying the deterministic user-scoped id; `UNIQUE(user_id)` is the hard backstop.
+- ✅ **#3 (access only after webhook):** `TestBillingUpgradeGrantsTierOnlyThroughVerifiedWebhook` — `StartUpgrade` returns a checkout URL but leaves the tier **Free**; it flips to Pro only after a signed `subscription.active` event is ingested. Reinforced by #4: an event that fails verification grants nothing.
+- ✅ **#4 (forged/unsigned rejected):** `TestBillingForgedWebhookRejected` — empty, wrong, and tampered-body signatures each return `ErrInvalidSignature` (HTTP 400 at the `/v1/billing/webhook` surface), leaving the tier unchanged and writing no audit row.
+- ✅ **#5 (duplicate delivery idempotent):** `TestBillingDuplicateWebhookIdempotent` — the identical signed event ingested twice grants once and writes a single `billing_events` row.
+- 🔨 **#6 (test mode default):** The provider is wired as `billing.NewMock(...)` in `cmd/server/main.go`; going live is a deliberate provider swap, and `test/complete` 404s under any non-Simulator provider. Inherently test-mode — there is no live dashboard to check against, so this stays open until a real provider is wired.
+- 🔨 **#7 (profile reflects real state):** The *data source* is now test-backed — #3 asserts the subscription row carries the correct `payment_last4` (`4242`) and a future `current_period_end`. The `/settings` *render* of tier/renewal/last-4/history is still to be eyeballed in a browser.
+- 🔨 **#8 (self-serve cancel/downgrade):** The *backend* is now verified — `TestBillingSelfServeCancel` drives `POST /v1/billing/cancel` and confirms cancel-at-period-end keeps Pro (with `cancel_at_period_end` set) while immediate cancel downgrades now. The box stays open on the `/settings` UI wiring, which a Go test can't drive.
+- ✅ **#9 (canceled/failed → downgraded):** `TestBillingCancellationDowngrades` + `TestBillingSelfServeCancel/immediate` — a verified `subscription.canceled` returns the user to Free (subscription status `canceled`). Note: a single `payment.failed` is audit-only *by design* — the provider sends a cancellation if the subscription ultimately lapses, and that cancellation is the downgrade trigger.
+- ✅/🔨 **#10 (auditable events + hygiene):** *Audit half — ✅:* every successful and duplicate delivery populates `billing_events` (once each) and forged deliveries write nothing, asserted throughout the suite. *Hygiene half — 🔨:* the webhook secret is read from env in `main.go` and the mock holds no real keys, but "secrets stay out of git" is a repository-inspection check, not run here.
+
+**⬜ Outstanding runtime gates (what's left for a full §3 sign-off):**
+- Backend gates are **green**: `go build ./...`, `go vet ./...`, and `go test ./...` all pass, including the new `internal/api/billing_test.go` suite and the `internal/store/driver.go` fix that registers the SQLite driver in the store package so any consumer (not just the server binary) can open the store. Frontend `next build` was green earlier this session (14 routes, incl. `/checkout`, `/pricing`, `/settings`).
+- A browser pass for the display-and-click items a Go test can't cover: #1 (inspect a real request/DB for absence of card data), #7 (`/settings` shows real tier/renewal/last-4/history), #8 (cancel *through the UI*).
+- A credential-hygiene check for the other half of #10: confirm the webhook secret and any provider keys are gitignored and never tracked.
+
+**In-product upgrade entry points (deliberate deviation from the plan's wording):** the working upgrade path lives in `/settings` (the authenticated account home), `/checkout` (unmistakably labeled *test mode*), and a **signed-in-only** Pro CTA on `/pricing`. The plan named `/pricing` & `/waitlist`; `/waitlist` was intentionally **left unchanged** — it is the Team/Enterprise *contact-sales* path, where "self-serve upgrade" does not apply, and per "the UI must not lie" an anonymous pricing visitor keeps the honest "Join the waitlist" link rather than a purchase button that does not yet transact.
+
+**Test-mode-only caveat (rule 2.5 + §0 gate):** the §0 gate (Phase 1 complete + independently verified) is being bypassed per the owner's explicit call. This foundation therefore stays **test-mode only**; the live-payment switch must not be flipped until Phase 1 is complete and independently verified.
 
 ---
 

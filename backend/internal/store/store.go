@@ -20,6 +20,7 @@ type User struct {
 	Email        string    `json:"email"`
 	PasswordHash string    `json:"-"`
 	Tier         string    `json:"tier"`
+	DisplayName  string    `json:"display_name"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
@@ -38,12 +39,21 @@ type Project struct {
 }
 
 type Prompt struct {
-	ID        int64     `json:"id"`
-	ProjectID int64     `json:"project_id"`
-	Mode      string    `json:"mode"`
-	Prompt    string    `json:"prompt"`
-	Response  string    `json:"response,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        int64  `json:"id"`
+	ProjectID int64  `json:"project_id"`
+	Mode      string `json:"mode"`
+	Prompt    string `json:"prompt"`
+	Response  string `json:"response,omitempty"`
+	// Status is the run state of the turn this prompt drove: running while the
+	// agent loop is live, then a terminal completed | cancelled | failed, or
+	// abandoned when the user discards an interrupted turn. A row left at
+	// running is how a server crash is told apart from a clean finish — the
+	// only state the loop never writes itself.
+	Status string `json:"status"`
+	// Round is how far the agent loop got, for a resumable turn's progress hint.
+	Round     int        `json:"round"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 type Session struct {
@@ -225,6 +235,47 @@ func (s *Store) migrate() error {
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_checkpoints_project ON checkpoints(project_id, id DESC)`,
+		// customers is the link between a user and the payment provider's own
+		// customer record. user_id is UNIQUE so there is exactly one canonical
+		// customer per user (Phase 9 rule 2.2) — a re-visit reuses the row rather
+		// than minting a duplicate provider customer.
+		`CREATE TABLE IF NOT EXISTS customers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL UNIQUE,
+			provider TEXT NOT NULL,
+			provider_customer_id TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		)`,
+		// subscriptions is the single source of truth for a user's paid state
+		// (rule 2.6): tier, renewal date, last-4, and whether a cancel is pending.
+		// One row per user, upserted from verified provider webhooks (rule 2.3) —
+		// never from a client claim.
+		`CREATE TABLE IF NOT EXISTS subscriptions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL UNIQUE,
+			provider_subscription_id TEXT DEFAULT '',
+			status TEXT DEFAULT 'inactive',
+			tier TEXT DEFAULT 'free',
+			current_period_end DATETIME,
+			cancel_at_period_end INTEGER DEFAULT 0,
+			payment_last4 TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		)`,
+		// billing_events is the audit log (rule 2.10). provider_event_id is UNIQUE,
+		// which is also the idempotency key (rule 2.4): a duplicate webhook delivery
+		// fails the INSERT, and the handler reads RowsAffected to skip re-processing.
+		`CREATE TABLE IF NOT EXISTS billing_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER DEFAULT 0,
+			provider_event_id TEXT NOT NULL UNIQUE,
+			type TEXT NOT NULL,
+			payload TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_events_user ON billing_events(user_id, id DESC)`,
 	}
 
 	for _, q := range queries {
@@ -258,9 +309,23 @@ func (s *Store) migrate() error {
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN output_tokens INTEGER DEFAULT 0")
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN cache_read_tokens INTEGER DEFAULT 0")
 
+	// Migration: run-status tracking, so an interrupted turn is distinguishable
+	// from a finished one and can be resumed. Existing rows backfill to
+	// 'completed' — they ran to their end before this column existed, and a
+	// historical prompt must never surface as resumable. New rows are set to
+	// 'running' at CreatePrompt and moved to a terminal status when the turn ends.
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN status TEXT DEFAULT 'completed'")
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN round INTEGER DEFAULT 0")
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN updated_at DATETIME")
+
 	// Migration: aggregate token counters on usage
 	s.db.Exec("ALTER TABLE usage ADD COLUMN input_tokens INTEGER DEFAULT 0")
 	s.db.Exec("ALTER TABLE usage ADD COLUMN output_tokens INTEGER DEFAULT 0")
+
+	// Migration: profile fields on users. display_name is the editable name shown
+	// on the settings page; it defaults to '' so the auth-path SELECTs never scan a
+	// NULL. Billing state (tier, renewal, last-4) lives in subscriptions, not here.
+	s.db.Exec("ALTER TABLE users ADD COLUMN display_name TEXT DEFAULT ''")
 
 	return nil
 }
@@ -282,8 +347,8 @@ func (s *Store) CreateUser(email, passwordHash string) (*User, error) {
 
 func (s *Store) GetUserByEmail(email string) (*User, error) {
 	u := &User{}
-	err := s.db.QueryRow("SELECT id, email, password_hash, tier, created_at FROM users WHERE email = ?", email).
-		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Tier, &u.CreatedAt)
+	err := s.db.QueryRow("SELECT id, email, password_hash, tier, display_name, created_at FROM users WHERE email = ?", email).
+		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Tier, &u.DisplayName, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -292,12 +357,23 @@ func (s *Store) GetUserByEmail(email string) (*User, error) {
 
 func (s *Store) GetUserByID(id int64) (*User, error) {
 	u := &User{}
-	err := s.db.QueryRow("SELECT id, email, password_hash, tier, created_at FROM users WHERE id = ?", id).
-		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Tier, &u.CreatedAt)
+	err := s.db.QueryRow("SELECT id, email, password_hash, tier, display_name, created_at FROM users WHERE id = ?", id).
+		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Tier, &u.DisplayName, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return u, nil
+}
+
+// UpdateUser writes the editable profile fields for a user. Only the display
+// name is user-editable; email is the login identity and tier is provider-driven
+// (never set from a profile edit — see SetTier, called only from a verified
+// webhook). Returns the refreshed row so the caller can echo current state back.
+func (s *Store) UpdateUser(id int64, displayName string) (*User, error) {
+	if _, err := s.db.Exec("UPDATE users SET display_name = ? WHERE id = ?", displayName, id); err != nil {
+		return nil, err
+	}
+	return s.GetUserByID(id)
 }
 
 func (s *Store) CreateProject(userID int64, name, templateVersion, slug, androidPackage, iosBundleID, scheme string) (*Project, error) {
@@ -354,7 +430,11 @@ func (s *Store) DeleteProject(id int64) error {
 }
 
 func (s *Store) CreatePrompt(projectID int64, mode, prompt string) (*Prompt, error) {
-	res, err := s.db.Exec("INSERT INTO prompts (project_id, mode, prompt) VALUES (?, ?, ?)", projectID, mode, prompt)
+	// New prompts start 'running': the turn is about to drive the agent loop, and
+	// the terminal status is written when it ends. This overrides the column's
+	// backfill default of 'completed', which only ever applies to rows that
+	// predate the status column.
+	res, err := s.db.Exec("INSERT INTO prompts (project_id, mode, prompt, status) VALUES (?, ?, ?, 'running')", projectID, mode, prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -362,18 +442,48 @@ func (s *Store) CreatePrompt(projectID int64, mode, prompt string) (*Prompt, err
 	return s.GetPrompt(id)
 }
 
-func (s *Store) GetPrompt(id int64) (*Prompt, error) {
+const promptColumns = "id, project_id, mode, prompt, response, status, round, updated_at, created_at"
+
+// scanPrompt reads one prompt row in promptColumns order, mapping the nullable
+// updated_at (existing rows predate it) onto the optional struct field.
+func scanPrompt(row *sql.Row) (*Prompt, error) {
 	p := &Prompt{}
-	err := s.db.QueryRow("SELECT id, project_id, mode, prompt, response, created_at FROM prompts WHERE id = ?", id).
-		Scan(&p.ID, &p.ProjectID, &p.Mode, &p.Prompt, &p.Response, &p.CreatedAt)
-	if err != nil {
+	var updatedAt sql.NullTime
+	if err := row.Scan(&p.ID, &p.ProjectID, &p.Mode, &p.Prompt, &p.Response, &p.Status, &p.Round, &updatedAt, &p.CreatedAt); err != nil {
 		return nil, err
+	}
+	if updatedAt.Valid {
+		t := updatedAt.Time
+		p.UpdatedAt = &t
 	}
 	return p, nil
 }
 
+func (s *Store) GetPrompt(id int64) (*Prompt, error) {
+	return scanPrompt(s.db.QueryRow("SELECT "+promptColumns+" FROM prompts WHERE id = ?", id))
+}
+
+// GetLatestPrompt returns the most recent prompt for a project, or (nil, nil)
+// when the project has none. The chat uses it on load to tell whether the last
+// turn ended cleanly or was interrupted and can be resumed.
+func (s *Store) GetLatestPrompt(projectID int64) (*Prompt, error) {
+	p, err := scanPrompt(s.db.QueryRow(
+		"SELECT "+promptColumns+" FROM prompts WHERE project_id = ? ORDER BY id DESC LIMIT 1", projectID))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return p, err
+}
+
 func (s *Store) UpdatePromptResponse(id int64, response string) error {
 	_, err := s.db.Exec("UPDATE prompts SET response = ? WHERE id = ?", response, id)
+	return err
+}
+
+// UpdatePromptStatus records the run state of a turn and how far it got. The
+// timestamp lets a later reader see when the turn last made progress.
+func (s *Store) UpdatePromptStatus(id int64, status string, round int) error {
+	_, err := s.db.Exec("UPDATE prompts SET status = ?, round = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", status, round, id)
 	return err
 }
 

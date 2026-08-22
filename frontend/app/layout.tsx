@@ -20,7 +20,10 @@ const plexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SeekerStudio",
+  title: {
+    default: "SeekerStudio",
+    template: "%s · SeekerStudio",
+  },
   description:
     "Describe a Solana Mobile app, watch it get written, and run it on a live Seeker device without leaving the page.",
 };

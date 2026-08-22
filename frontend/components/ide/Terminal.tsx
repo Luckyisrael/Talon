@@ -49,7 +49,9 @@ const THEME = {
   green: "#14f195",
   yellow: "#ffb020",
   blue: "#5b9dff",
-  magenta: "#9945ff",
+  // A rose-magenta, not the Solana violet: #9945ff read as a brand accent
+  // leaking into the shell. ANSI magenta should just be magenta.
+  magenta: "#df6faf",
   cyan: "#3bd6c6",
   white: "#e6ebf2",
   brightBlack: "#5b667a",
@@ -57,7 +59,7 @@ const THEME = {
   brightGreen: "#5ff7bb",
   brightYellow: "#ffc95c",
   brightBlue: "#8fbcff",
-  brightMagenta: "#bb7dff",
+  brightMagenta: "#ef9fca",
   brightCyan: "#6fe4d8",
   brightWhite: "#ffffff",
 } as const;

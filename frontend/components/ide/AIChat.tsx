@@ -11,13 +11,17 @@ import {
 } from "react";
 import {
   conversation,
+  isResumable,
+  prompts,
   streamPrompt,
   type ConversationTurn,
+  type LatestPrompt,
   type StreamEvent,
 } from "@/lib/api";
 import { useIDEStore } from "@/lib/store";
 import type { ChatMessage, PlanData, StreamMessage, TraceRow } from "@/lib/types";
 import AgentTrace, { getToolLabel } from "./AgentTrace";
+import Meter from "./Meter";
 
 interface AIChatProps {
   projectId: number;
@@ -113,6 +117,11 @@ function turnsToEntries(turns: ConversationTurn[]): Entry[] {
     }
 
     const rows: TraceRow[] = [];
+    // A restored plan-mode reply carries its structured plan in a "plan" block
+    // alongside the message text. Rebuild the plan card from it so planning —
+    // often the first thing done on a project — survives a reload the same way
+    // build turns already do.
+    let restoredPlan: PlanData | undefined;
     for (const [j, block] of blocks.entries()) {
       if (block.type === "text" && block.text?.trim()) {
         rows.push({
@@ -120,6 +129,15 @@ function turnsToEntries(turns: ConversationTurn[]): Entry[] {
           kind: "narration",
           text: block.text,
         });
+      }
+      if (block.type === "plan") {
+        const p = block.plan ?? {};
+        restoredPlan = {
+          screens: p.screens ?? [],
+          features: p.features ?? [],
+          navigation: p.navigation ?? "",
+          packages: p.packages ?? [],
+        };
       }
       if (block.type === "tool_use") {
         const input = (block.input ?? {}) as {
@@ -144,14 +162,21 @@ function turnsToEntries(turns: ConversationTurn[]): Entry[] {
       }
     }
 
-    if (rows.length === 0) return;
-    entries.push({
+    if (rows.length === 0 && !restoredPlan) return;
+    const entry: StreamMessage = {
       id: `restored-a${i}`,
       role: "assistant",
       traceRows: rows,
       isStreaming: false,
       restored: true,
-    });
+    };
+    if (restoredPlan) {
+      entry.plan = restoredPlan;
+      // planMessage need only be defined for the card to render — the message
+      // itself is already the narration row above, matching the live plan path.
+      entry.planMessage = rows.find((r) => r.kind === "narration")?.text ?? "";
+    }
+    entries.push(entry);
   });
 
   return entries;
@@ -173,6 +198,14 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     const [restoredFor, setRestoredFor] = useState<number | null>(null);
     const restoring = restoredFor !== projectId;
     const [confirmClear, setConfirmClear] = useState(false);
+    // The last turn, when it ended without finishing cleanly — the chat offers
+    // to resume or discard it. Null once resumed, discarded, or superseded by a
+    // new prompt. Derived from server truth on every load, so it never claims a
+    // turn is resumable that isn't.
+    const [resumable, setResumable] = useState<LatestPrompt | null>(null);
+    // When the current turn began, so the status strip can show a live timer.
+    // Only read while streaming, so it needs no reset when the turn ends.
+    const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
@@ -186,8 +219,11 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       let cancelled = false;
       conversation
         .get(projectId)
-        .then((turns) => {
-          if (!cancelled) setMessages(turnsToEntries(turns));
+        .then(({ turns, latest }) => {
+          if (cancelled) return;
+          setMessages(turnsToEntries(turns));
+          // Offer resume only for a build turn whose last run did not finish.
+          setResumable(isResumable(latest) ? latest : null);
         })
         .catch(() => {
           // An unreachable history is not worth an error banner over an empty
@@ -229,6 +265,18 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       () => messages.find((m): m is StreamMessage => isAssistant(m) && m.isStreaming),
       [messages],
     );
+
+    // The path of the tool the agent is running right now — shown in the live
+    // status strip so you can see what it is touching, not just that it is busy.
+    const liveTarget = useMemo(() => {
+      const rows = liveMessage?.traceRows;
+      if (!rows) return "";
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i];
+        if (r.kind === "tool" && r.status === "running" && r.target) return r.target;
+      }
+      return "";
+    }, [liveMessage]);
 
     // ── Event handling ──
 
@@ -335,9 +383,15 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               });
               break;
 
-            case "phase":
-              patch((prev) => ({ ...prev, phase: d.phase }));
+            case "phase": {
+              const roundMatch = typeof d.status === "string" && d.status.match(/round (\d+)/);
+              patch((prev) => ({
+                ...prev,
+                phase: d.phase,
+                ...(roundMatch ? { round: parseInt(roundMatch[1], 10) } : {}),
+              }));
               break;
+            }
 
             case "tool_call": {
               const tool = d.tool ?? "";
@@ -467,19 +521,18 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 
             case "plan": {
               const plan = (d.plan ?? null) as PlanData | null;
+              const msg = d.message || "Plan ready.";
               patch((prev) => ({
                 ...prev,
                 plan,
-                planMessage: d.message,
+                planMessage: msg,
                 // The parsed plan is the canonical reply. Any narration rows the
                 // raw stream already emitted (thinking/prose/JSON) are stale the
                 // moment this lands — replace them so the chat never shows the
                 // model's private reasoning or the raw JSON envelope.
-                traceRows: d.message
-                  ? [{ id: `${id}-pm`, kind: "narration", text: d.message }]
-                  : prev.traceRows,
+                traceRows: [{ id: `${id}-pm`, kind: "narration", text: msg }],
               }));
-              if (plan) onPlan?.(plan, d.message ?? "");
+              if (plan) onPlan?.(plan, msg);
               break;
             }
 
@@ -524,8 +577,12 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 
         setInput("");
         setConfirmClear(false);
+        // A fresh prompt becomes the latest turn, so the interrupted one is no
+        // longer what a reload would offer to resume. Drop the banner to match.
+        setResumable(null);
         filesReadRef.current = new Set();
         pinnedRef.current = true;
+        setStreamStartedAt(Date.now());
 
         const streamId = crypto.randomUUID();
         setMessages((prev) => [
@@ -554,6 +611,50 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       [handleEvent, isStreaming, mode, projectId],
     );
 
+    // Resume the interrupted turn: no new user message, since this continues the
+    // existing turn rather than starting one. The server replays the persisted
+    // transcript and the agent picks up where it stopped; its new work streams
+    // into a fresh assistant entry below the restored history.
+    const resume = useCallback(() => {
+      if (!resumable || isStreaming) return;
+      const promptId = resumable.id;
+      setResumable(null);
+      filesReadRef.current = new Set();
+      pinnedRef.current = true;
+      setStreamStartedAt(Date.now());
+
+      const streamId = crypto.randomUUID();
+      setMessages((prev) => [
+        ...prev,
+        { id: streamId, role: "assistant", traceRows: [], isStreaming: true },
+      ]);
+
+      const patch = (fn: (prev: StreamMessage) => StreamMessage) =>
+        setMessages((prev) =>
+          prev.map((m) => (m.id === streamId && isAssistant(m) ? fn(m) : m)),
+        );
+
+      abortRef.current = prompts.resume(
+        promptId,
+        handleEvent(streamId, patch),
+        (err) => patch((prev) => ({ ...prev, isStreaming: false, error: err.message })),
+      );
+    }, [handleEvent, isStreaming, resumable]);
+
+    // Discard the interrupted turn so a reload stops offering it. Hide the banner
+    // at once; if the server rejects it (e.g. the turn is somehow still running),
+    // put the banner back rather than pretend the turn was dealt with.
+    const discard = useCallback(async () => {
+      if (!resumable) return;
+      const target = resumable;
+      setResumable(null);
+      try {
+        await prompts.discard(target.id);
+      } catch {
+        setResumable(target);
+      }
+    }, [resumable]);
+
     // Declared after `send` on purpose: reading it from above the declaration is
     // a temporal-dead-zone hazard, and it only worked because the handle body
     // does not run until after the first render.
@@ -564,9 +665,22 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       },
     }));
 
+    // Both the send button and Enter go through here. When a turn is waiting to
+    // be resumed, typing just "resume" or "continue" triggers that rather than a
+    // new prompt — the obvious thing to type when the banner is showing. Gated on
+    // `resumable`, so the same words are an ordinary prompt at any other time.
+    function submitInput() {
+      if (resumable && !isStreaming && /^(resume|continue)$/i.test(input.trim())) {
+        setInput("");
+        resume();
+        return;
+      }
+      void send(input);
+    }
+
     function handleSubmit(e: React.FormEvent) {
       e.preventDefault();
-      void send(input);
+      submitInput();
     }
 
     function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -575,7 +689,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       // written as one unbroken sentence.
       if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
         e.preventDefault();
-        void send(input);
+        submitInput();
       }
     }
 
@@ -630,9 +744,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         <header className="bay-head justify-between">
           <div className="flex items-center gap-2 min-w-0">
             <span className="lamp" data-state={isStreaming ? "working" : "idle"} />
-            <span className="gauge truncate">
-              {isStreaming ? phaseLabel(liveMessage?.phase) || "Working" : "Agent"}
-            </span>
+            <span className="gauge truncate">Agent</span>
           </div>
 
           <div className="flex items-center gap-1">
@@ -740,6 +852,66 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           <div ref={endRef} />
         </div>
 
+        {/* Live status — the one place that says, in the moment, what the agent
+            is doing, what it is touching, and how long it has been at it. The
+            meter is the only moving thing. */}
+        {isStreaming && (
+          <div className="flex items-center gap-2.5 border-t border-rail bg-probe/[0.06] px-3 py-2">
+            <Meter />
+            <span className="flex-shrink-0 text-small text-paper">
+              {phaseLabel(liveMessage?.phase) || "Working"}
+            </span>
+            {liveMessage?.round && liveMessage.round > 1 ? (
+              <span className="gauge flex-shrink-0">round {liveMessage.round}</span>
+            ) : null}
+            {liveTarget ? (
+              <span
+                dir="rtl"
+                title={liveTarget}
+                className="min-w-0 flex-1 truncate text-left font-mono text-tiny text-graphite"
+              >
+                <span dir="ltr">{liveTarget}</span>
+              </span>
+            ) : (
+              <span className="flex-1" />
+            )}
+            <ElapsedClock startedAt={streamStartedAt} className="gauge tnum flex-shrink-0" />
+          </div>
+        )}
+
+        {/* An interrupted turn waits on a human decision: continue it from where
+            it stopped, or set it aside. Filament (needs-you) not fault — the work
+            is not broken, it is paused. Hidden while streaming, when the status
+            strip above owns this row. */}
+        {resumable && !isStreaming && (
+          <div className="flex items-center gap-2.5 border-t border-filament/30 bg-filament/[0.06] px-3 py-2">
+            <span className="lamp flex-shrink-0" data-state="waiting" />
+            <div className="min-w-0 flex-1">
+              <p className="text-small text-paper">
+                This turn was interrupted before it finished.
+              </p>
+              <p className="gauge">
+                {resumable.status === "running"
+                  ? "the server stopped before it finished"
+                  : resumable.status === "cancelled"
+                    ? "it was stopped early"
+                    : "it ended with an error"}
+                {resumable.round > 0 ? ` · reached round ${resumable.round}` : ""}
+              </p>
+            </div>
+            <button type="button" onClick={resume} className="btn btn-go h-7 flex-shrink-0">
+              Resume
+            </button>
+            <button
+              type="button"
+              onClick={() => void discard()}
+              className="btn btn-ghost h-7 flex-shrink-0"
+            >
+              Discard
+            </button>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="border-t border-rail p-3">
           <div className="flex items-end gap-2">
             <textarea
@@ -780,6 +952,34 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 AIChat.displayName = "AIChat";
 export default AIChat;
 
+// ── Elapsed time ──
+// Ticks once a second, and only while mounted — the status strip unmounts it
+// when the turn ends, so the interval stops with the stream.
+function ElapsedClock({
+  startedAt,
+  className = "",
+}: {
+  startedAt: number | null;
+  className?: string;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [startedAt]);
+
+  if (!startedAt) return null;
+  const secs = Math.max(0, Math.floor((now - startedAt) / 1000));
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return (
+    <span className={className}>
+      {m}:{String(s).padStart(2, "0")}
+    </span>
+  );
+}
+
 // ── One assistant turn ──
 
 function AssistantEntry({
@@ -797,7 +997,9 @@ function AssistantEntry({
 
       {waiting && <p className="gauge py-1">Thinking</p>}
 
-      {msg.plan && <PlanCard plan={msg.plan} onApprove={onApprove} />}
+      {msg.planMessage !== undefined && (
+        <PlanCard plan={msg.plan ?? { screens: [], features: [], navigation: "", packages: [] }} onApprove={onApprove} />
+      )}
 
       {msg.error && (
         <p className="rounded-2 border border-fault/35 bg-fault/10 px-3 py-2 text-small text-fault">

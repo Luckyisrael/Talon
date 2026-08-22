@@ -40,6 +40,10 @@ func (t *BuildAPK) InputSchema() json.RawMessage {
 			"install": {
 				"type": "boolean",
 				"description": "Whether to install the APK on the connected device after building (default: true)"
+			},
+			"force": {
+				"type": "boolean",
+				"description": "Force a full native build even if only JS files changed (default: false)"
 			}
 		}
 	}`)
@@ -47,6 +51,7 @@ func (t *BuildAPK) InputSchema() json.RawMessage {
 
 type BuildAPKArgs struct {
 	Install bool `json:"install"`
+	Force   bool `json:"force"`
 }
 
 type ADBRunner struct {
@@ -72,7 +77,7 @@ func (t *BuildAPK) Execute(ctx context.Context, args json.RawMessage) (ToolResul
 	}
 
 	// Check if this is a JS-only change (no native deps changed)
-	if t.Allowlist != nil && t.Allowlist.IsJSOnlyChange(t.WorkspacePath, nil) {
+	if t.Allowlist != nil && !a.Force && t.Allowlist.IsJSOnlyChange(t.WorkspacePath, nil) {
 		return ToolResult{
 			Content: "⚠️ Guardrail: This build appears to be JS-only (no native dependency changes). " +
 				"Consider using hot reload instead of a full native build to save time. " +

@@ -56,17 +56,11 @@ const maxPromptLength = 50_000
 const historyTurns = 60
 
 // promptLimitFor returns the monthly prompt allowance for a tier. -1 is
-// unlimited. Previously every user was checked against a hardcoded 20 and the
-// tier column was ignored entirely.
+// unlimited. It reads the shared quota table (quota.go) so the limit we enforce
+// here is the same one usage.go reports and the pricing page advertises — this
+// used to return Pro=2000 while everything else said 500.
 func promptLimitFor(tier string) int {
-	switch strings.ToLower(strings.TrimSpace(tier)) {
-	case "pro":
-		return 2000
-	case "team", "enterprise", "unlimited":
-		return -1
-	default:
-		return 20
-	}
+	return quotaFor(tier).Prompts
 }
 
 // checkQuota validates ownership-independent limits and returns false having
@@ -159,6 +153,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		planResp, err := h.ai.Plan(ctx, h.planHistory(req.ProjectID, req.Prompt))
 		if err != nil {
 			log.Printf("plan failed (user %d, project %d): %v", userID, req.ProjectID, err)
+			h.store.UpdatePromptStatus(prompt.ID, "failed", 0)
 			writeError(w, http.StatusBadGateway, friendlyAIError(err))
 			return
 		}
@@ -167,6 +162,11 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respBytes, _ := json.Marshal(planResp)
 		h.store.UpdatePromptResponse(prompt.ID, string(respBytes))
 		h.store.IncrementPrompts(userID)
+		h.persistPlanExchange(req.ProjectID, prompt.ID, req.Prompt, planResp.Message, planJSON(planResp.Plan))
+		// A plan turn finishes here — it never reaches the build finalizer, so its
+		// terminal status must be written explicitly or the row stays 'running'
+		// and the next reload would offer to resume a turn that is already done.
+		h.store.UpdatePromptStatus(prompt.ID, "completed", 0)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"id":       prompt.ID,
 			"mode":     "plan",
@@ -175,7 +175,8 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	outcome, buildErr := h.runBuild(ctx, req.ProjectID, prompt.ID, userID, req.Prompt, nil)
+	outcome, buildErr := h.runBuild(ctx, req.ProjectID, prompt.ID, userID, req.Prompt, nil,
+		buildOptions{persistUserTurn: true, meterPrompt: true})
 
 	response := map[string]interface{}{
 		"id":            prompt.ID,
@@ -240,7 +241,121 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.streamBuild(ctx, w, flusher, req, prompt.ID, userID)
+	h.streamBuild(ctx, w, flusher, req.ProjectID, prompt.ID, userID, req.Prompt,
+		buildOptions{persistUserTurn: true, meterPrompt: true})
+}
+
+// resumePrompt is the synthetic instruction a resumed turn injects. It is not
+// stored and not shown — it only points the model back at the restored
+// transcript so it continues the interrupted work instead of restarting it.
+const resumePrompt = "Continue from where you left off. Review what you have already done in this turn, finish the work that remains, and don't repeat steps that already completed."
+
+// Resume continues an interrupted build turn. The turn keeps its original
+// prompt row and transcript; resuming replays the persisted conversation (which
+// already carries every completed round, thanks to incremental persistence) and
+// lets the agent keep going, streaming exactly as a fresh turn does.
+//
+// This is resume-from-persisted-state, not re-attach to a live stream: it is
+// valid only once the previous run has ended (crash, disconnect, or Stop). A
+// turn still streaming elsewhere is rejected rather than run twice.
+func (h *PromptHandler) Resume(w http.ResponseWriter, r *http.Request) {
+	userID := GetUserID(r.Context())
+
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid prompt id")
+		return
+	}
+
+	prompt, err := h.store.GetPrompt(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "prompt not found")
+		return
+	}
+
+	// A prompt is reachable only through the project that owns it.
+	if _, ok := h.ownedProject(w, r, prompt.ProjectID); !ok {
+		return
+	}
+
+	// Only build turns run an agent loop; a plan turn has nothing to resume.
+	if prompt.Mode != "build" {
+		writeError(w, http.StatusBadRequest, "only build turns can be resumed")
+		return
+	}
+
+	// A turn that already finished, or was deliberately discarded, has nothing
+	// to continue. The restored context plus the on-disk files let the agent
+	// take fresh instructions instead — no resume needed.
+	if prompt.Status == "completed" || prompt.Status == "abandoned" {
+		writeError(w, http.StatusConflict, "this turn has already finished")
+		return
+	}
+
+	// A turn still streaming in another request must not be resumed underneath
+	// it: two loops against one prompt row and one workspace would corrupt both.
+	if h.orch.GetSession(id) != nil {
+		writeError(w, http.StatusConflict, "this turn is still running")
+		return
+	}
+
+	if !h.checkQuota(w, userID) {
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "this server cannot stream responses")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// Mark it running again for the duration of the resumed loop; finalizeTurn
+	// writes the terminal status when the loop returns.
+	h.store.UpdatePromptStatus(id, "running", prompt.Round)
+
+	// The synthetic prompt is neither persisted nor metered — resuming an
+	// interrupted turn is a continuation, not a new prompt.
+	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, resumePrompt,
+		buildOptions{persistUserTurn: false, meterPrompt: false})
+}
+
+// Discard marks an interrupted turn as abandoned so a later reload stops
+// offering to resume it. It leaves the transcript and the files exactly as they
+// are; only the run-status marker changes, out of the set that offers Resume.
+func (h *PromptHandler) Discard(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid prompt id")
+		return
+	}
+
+	prompt, err := h.store.GetPrompt(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "prompt not found")
+		return
+	}
+	if _, ok := h.ownedProject(w, r, prompt.ProjectID); !ok {
+		return
+	}
+
+	// Discarding a turn that is still streaming would let the running loop
+	// overwrite the marker when it finishes — refuse rather than race it.
+	if h.orch.GetSession(id) != nil {
+		writeError(w, http.StatusConflict, "this turn is still running")
+		return
+	}
+
+	if err := h.store.UpdatePromptStatus(id, "abandoned", prompt.Round); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not discard the turn")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "abandoned"})
 }
 
 // streamPlan proxies the model's stream to the client, then parses the finished
@@ -277,6 +392,14 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 	}
 
 	if sawError || ctx.Err() != nil {
+		// Give a plan turn that errored or was cut off a terminal status too, so a
+		// later reload does not offer to resume it. Plan turns are not resumable;
+		// the marker just keeps the row from looking interrupted forever.
+		if ctx.Err() != nil {
+			h.store.UpdatePromptStatus(promptID, "cancelled", 0)
+		} else {
+			h.store.UpdatePromptStatus(promptID, "failed", 0)
+		}
 		writeSSE(w, "done", map[string]string{"status": "error"})
 		flusher.Flush()
 		return
@@ -291,20 +414,23 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 		h.savePlan(projectID, &planResp)
 		payload, _ := json.Marshal(planResp)
 		h.store.UpdatePromptResponse(promptID, string(payload))
+		h.persistPlanExchange(projectID, promptID, userPrompt, planResp.Message, planJSON(planResp.Plan))
 		writeSSE(w, "plan", planResp)
 	} else if raw != "" {
 		h.store.UpdatePromptResponse(promptID, raw)
 		// The model did not return a parseable plan. Surface its reply verbatim
 		// rather than leaving the chat staring at a blank turn.
+		h.persistPlanExchange(projectID, promptID, userPrompt, raw, nil)
 		writeSSE(w, "text.delta", ai.StreamTextDelta{Text: raw})
 	}
 
 	writeSSE(w, "done", map[string]string{"status": "success"})
+	h.store.UpdatePromptStatus(promptID, "completed", 0)
 	flusher.Flush()
 }
 
 // streamBuild runs the agent loop while forwarding its events to the client.
-func (h *PromptHandler) streamBuild(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, req promptRequest, promptID, userID int64) {
+func (h *PromptHandler) streamBuild(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, projectID, promptID, userID int64, userPrompt string, bo buildOptions) {
 	type result struct {
 		outcome *orchestrator.BuildOutcome
 		err     error
@@ -313,7 +439,7 @@ func (h *PromptHandler) streamBuild(ctx context.Context, w http.ResponseWriter, 
 	emitterCh := make(chan *events.SessionEmitter, 1)
 
 	go func() {
-		outcome, err := h.runBuild(ctx, req.ProjectID, promptID, userID, req.Prompt, emitterCh)
+		outcome, err := h.runBuild(ctx, projectID, promptID, userID, userPrompt, emitterCh, bo)
 		resultCh <- result{outcome, err}
 	}()
 
@@ -426,6 +552,22 @@ func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event)
 
 // ── The build itself ──────────────────────────────────
 
+// buildOptions varies runBuild between a fresh turn and a resumed one.
+//
+// persistUserTurn stores the user's prompt before the loop starts. A fresh turn
+// sets it so the prompt survives a crash mid-turn; a resume leaves it false
+// because the "keep going" prompt it injects is synthetic and must not appear in
+// the transcript.
+//
+// meterPrompt counts the turn against the monthly prompt quota. A fresh turn
+// sets it; a resume leaves it false so continuing an interrupted turn is not
+// charged as a second prompt. (Token accounting is additive and runs either way,
+// so a resumed turn's tokens are still recorded.)
+type buildOptions struct {
+	persistUserTurn bool
+	meterPrompt     bool
+}
+
 // runBuild executes one agentic turn: replay the stored conversation, run the
 // loop, persist what happened, and checkpoint the files it changed.
 //
@@ -436,6 +578,7 @@ func (h *PromptHandler) runBuild(
 	projectID, promptID, userID int64,
 	userPrompt string,
 	emitterCh chan<- *events.SessionEmitter,
+	bo buildOptions,
 ) (*orchestrator.BuildOutcome, error) {
 	workspacePath, err := h.workspacePath(projectID)
 	if err != nil {
@@ -471,6 +614,16 @@ func (h *PromptHandler) runBuild(
 	userTurn := ai.UserText(userPrompt)
 	history = append(history, userTurn)
 
+	// Store the user's prompt up front (fresh turns only) so a crash mid-turn
+	// still leaves the transcript with the request that started it. The loop's
+	// own turns are persisted round by round through Persist below.
+	if bo.persistUserTurn {
+		if err := h.store.AppendMessage(projectID, promptID, userTurn.Role,
+			ai.MarshalBlocks(userTurn.Blocks), 0, 0); err != nil {
+			log.Printf("project %d: could not store the user turn: %v", projectID, err)
+		}
+	}
+
 	outcome, runErr := h.orch.RunAgentLoop(ctx, sess, orchestrator.RunOptions{
 		SystemPrompt: h.systemPrompt(),
 		History:      history,
@@ -479,12 +632,24 @@ func (h *PromptHandler) runBuild(
 		ReadOnlyTool: bs.reg.IsReadOnly,
 		FilesTouched: bs.fs.Touched,
 		Exists:       bs.fs.Exists,
+		// Flush each round's turns as the loop advances so an interrupted run
+		// keeps the rounds that already finished — the difference between a crash
+		// costing one round and costing the whole turn.
+		Persist: func(msgs []ai.Message) {
+			for _, m := range msgs {
+				if err := h.store.AppendMessage(projectID, promptID, m.Role,
+					ai.MarshalBlocks(m.Blocks), 0, 0); err != nil {
+					log.Printf("project %d: could not persist a round: %v", projectID, err)
+					return
+				}
+			}
+		},
 	})
 
 	// Everything below runs whether or not the loop succeeded: a failed turn
 	// still changed files and still cost tokens, and losing that record is how
 	// the next turn ends up contradicting this one.
-	h.persistTurn(projectID, promptID, userID, userTurn, outcome)
+	h.finalizeTurn(projectID, promptID, userID, outcome, runErr, bo.meterPrompt)
 	h.checkpoint(projectID, promptID, userPrompt, bs.fs.Journal())
 
 	if outcome != nil && len(outcome.FilesTouched) > 0 {
@@ -494,23 +659,26 @@ func (h *PromptHandler) runBuild(
 	return outcome, runErr
 }
 
-// persistTurn records the turn's messages, its final text and its token cost.
-func (h *PromptHandler) persistTurn(projectID, promptID, userID int64, userTurn ai.Message, outcome *orchestrator.BuildOutcome) {
-	if err := h.store.AppendMessage(projectID, promptID, userTurn.Role,
-		ai.MarshalBlocks(userTurn.Blocks), 0, 0); err != nil {
-		log.Printf("project %d: could not store the user turn: %v", projectID, err)
+// finalizeTurn writes the turn's terminal state after the loop returns: its
+// run-status marker, its final text and its token cost. The turn's messages are
+// already stored — the user prompt up front and each round through the loop's
+// Persist callback — so this does not re-append them; doing so would double the
+// transcript.
+func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome *orchestrator.BuildOutcome, runErr error, meterPrompt bool) {
+	round := 0
+	if outcome != nil {
+		round = outcome.Rounds
+	}
+	// The marker is what a later reload reads to decide whether to offer Resume.
+	// It is written from the loop's outcome: nil error is a finished turn, a
+	// cancellation is a deliberate stop or a dropped connection, anything else
+	// failed.
+	if err := h.store.UpdatePromptStatus(promptID, terminalStatus(runErr), round); err != nil {
+		log.Printf("project %d: could not record run status: %v", projectID, err)
 	}
 
 	if outcome == nil {
 		return
-	}
-
-	for _, m := range outcome.Messages {
-		if err := h.store.AppendMessage(projectID, promptID, m.Role,
-			ai.MarshalBlocks(m.Blocks), 0, 0); err != nil {
-			log.Printf("project %d: could not store a turn: %v", projectID, err)
-			break
-		}
 	}
 
 	response := outcome.FinalText
@@ -522,13 +690,77 @@ func (h *PromptHandler) persistTurn(projectID, promptID, userID int64, userTurn 
 		}
 	}
 	h.store.UpdatePromptResponse(promptID, response)
+	// Token accounting is additive, so a resumed turn correctly adds its own
+	// cost onto the interrupted turn's. The prompt count is not: only a fresh
+	// turn increments it, or resuming would charge a second prompt.
 	h.store.RecordPromptTokens(promptID, userID,
 		outcome.Usage.InputTokens, outcome.Usage.OutputTokens, outcome.Usage.CacheReadTokens)
-	h.store.IncrementPrompts(userID)
+	if meterPrompt {
+		h.store.IncrementPrompts(userID)
+	}
 
 	// Keep the stored conversation bounded. The tail is what matters for
 	// continuity; the whole history would eventually dominate the database.
 	h.store.TrimConversation(projectID, 400)
+}
+
+// terminalStatus maps the loop's return into the run-status vocabulary the
+// prompts row records. A cancellation (deliberate Stop or a dropped connection,
+// both surfaced as a wrapped context error) is distinct from a genuine failure
+// so the UI can offer Resume for the former without treating it as an error.
+func terminalStatus(runErr error) string {
+	switch {
+	case runErr == nil:
+		return "completed"
+	case strings.Contains(runErr.Error(), "cancelled"), strings.Contains(runErr.Error(), "context canceled"):
+		return "cancelled"
+	default:
+		return "failed"
+	}
+}
+
+// persistPlanExchange records a plan-mode turn so a reload restores it. Plan
+// mode calls no tools, so the exchange is just the user's prompt and the
+// assistant's reply: a text block with the human-readable message (which is
+// what gets replayed to the model as context and shown as prose) and, when the
+// model returned a structured plan, a plan block the restore path rebuilds into
+// a plan card. It mirrors how the build path persists its turns (the user turn,
+// then each round's messages) — without it, the first interactions on a project
+// (planning) vanished on refresh while build turns survived.
+func (h *PromptHandler) persistPlanExchange(projectID, promptID int64, userPrompt, message string, plan json.RawMessage) {
+	userTurn := ai.UserText(userPrompt)
+	if err := h.store.AppendMessage(projectID, promptID, userTurn.Role,
+		ai.MarshalBlocks(userTurn.Blocks), 0, 0); err != nil {
+		log.Printf("project %d: could not store the plan prompt: %v", projectID, err)
+		return
+	}
+
+	// Guarantee a non-empty message so the assistant turn always has replayable
+	// text — an assistant turn carrying only a plan block would serialise to an
+	// empty content array, which both providers reject.
+	if strings.TrimSpace(message) == "" {
+		message = "Here's the plan."
+	}
+	assistant := ai.AssistantPlan(message, plan)
+	if err := h.store.AppendMessage(projectID, promptID, assistant.Role,
+		ai.MarshalBlocks(assistant.Blocks), 0, 0); err != nil {
+		log.Printf("project %d: could not store the plan reply: %v", projectID, err)
+	}
+
+	h.store.TrimConversation(projectID, 400)
+}
+
+// planJSON marshals a plan for storage, returning nil when there is nothing to
+// store (so persistPlanExchange stores a text-only reply).
+func planJSON(plan *ai.AppPlan) json.RawMessage {
+	if plan == nil {
+		return nil
+	}
+	b, err := json.Marshal(plan)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // checkpoint stores the pre-change content of every file the turn touched, so
@@ -672,9 +904,20 @@ func (h *PromptHandler) GetMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Active architecture decisions are part of "what the agent knows" — the
+	// read-only memory panel shows them next to the curated memory entries.
+	// Failing to load them is not worth failing the whole request over; the
+	// panel just shows memory without decisions.
+	decisions, err := h.store.GetActiveADRs(projectID)
+	if err != nil {
+		log.Printf("project %d: could not load architecture decisions: %v", projectID, err)
+		decisions = nil
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"memories": memories,
-		"summary":  h.memorySummary(projectID),
+		"memories":  memories,
+		"summary":   h.memorySummary(projectID),
+		"decisions": decisions,
 	})
 }
 
@@ -706,7 +949,24 @@ func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) 
 		out = append(out, turn{Role: m.Role, Blocks: ai.UnmarshalBlocks(m.Blocks), At: m.CreatedAt.Format("2006-01-02T15:04:05Z07:00")})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"turns": out})
+	resp := map[string]interface{}{"turns": out}
+
+	// The latest prompt's run status is what the IDE reads to decide whether to
+	// offer "Resume / Discard". A turn left 'running' (server crash), 'cancelled'
+	// (Stop or a dropped connection) or 'failed' is resumable; 'completed' and
+	// 'abandoned' are not. Its absence is not worth failing the whole restore.
+	if latest, err := h.store.GetLatestPrompt(projectID); err != nil {
+		log.Printf("project %d: could not load the latest prompt: %v", projectID, err)
+	} else if latest != nil {
+		resp["latest"] = map[string]interface{}{
+			"id":     latest.ID,
+			"mode":   latest.Mode,
+			"status": latest.Status,
+			"round":  latest.Round,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ClearConversation forgets the stored turns for a project, starting the chat

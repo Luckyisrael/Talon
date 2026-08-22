@@ -3,6 +3,7 @@
 import { memo, useMemo, useState } from "react";
 import Markdown from "@/components/ui/Markdown";
 import type { TraceRow } from "@/lib/types";
+import Meter from "./Meter";
 
 // ── Verb mapping — one place for all tool labels ──
 
@@ -219,13 +220,7 @@ function ThinkingRow({ text, streaming }: { text: string; streaming?: boolean })
 
 function Glyph({ status }: { status?: TraceRow["status"] }) {
   if (status === "running") {
-    return (
-      <span
-        aria-hidden
-        className="h-2.5 w-2.5 rounded-full border-2 border-probe border-t-transparent"
-        style={{ animation: "spin 0.7s linear infinite" }}
-      />
-    );
+    return <Meter />;
   }
   if (status === "fail") {
     return <span className="text-fault leading-none">✕</span>;
@@ -240,19 +235,31 @@ function Glyph({ status }: { status?: TraceRow["status"] }) {
 
 function ToolRow({ row }: { row: TraceRow }) {
   const running = row.status === "running";
+  // Consulting/applying a skill is a decision the agent made, not a file it
+  // touched. It gets a marker of its own and keeps the agent's colour, so it
+  // never reads as just another "done" line in the run.
+  const decision = row.tool === "read_skill";
 
   return (
     <div
       className={`group flex items-baseline gap-2 rounded-1 px-1.5 py-1 ${
-        running ? "sweeping" : "hover:bg-riser"
+        running
+          ? "bg-probe/10 shadow-[inset_2px_0_0_var(--probe)]"
+          : "hover:bg-riser"
       }`}
     >
       <span className="flex h-4 w-3.5 flex-shrink-0 items-center justify-center self-start pt-0.5 text-tiny">
-        <Glyph status={row.status} />
+        {decision && !running && row.status !== "fail" ? (
+          <span aria-hidden className="h-2 w-2 flex-shrink-0 rounded-[2px] bg-probe" />
+        ) : (
+          <Glyph status={row.status} />
+        )}
       </span>
 
       <span
-        className={`flex-shrink-0 text-small ${running ? "text-probe" : "text-paper"}`}
+        className={`flex-shrink-0 text-small ${
+          running || decision ? "text-probe" : "text-paper"
+        }`}
       >
         {row.label}
       </span>
@@ -296,7 +303,9 @@ function GroupRow({ row }: { row: TraceRow }) {
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         className={`flex w-full items-center gap-2 rounded-1 px-1.5 py-1 text-left ${
-          row.status === "running" ? "sweeping" : "hover:bg-riser"
+          row.status === "running"
+            ? "bg-probe/10 shadow-[inset_2px_0_0_var(--probe)]"
+            : "hover:bg-riser"
         }`}
       >
         <span className="flex h-4 w-3.5 flex-shrink-0 items-center justify-center text-tiny">

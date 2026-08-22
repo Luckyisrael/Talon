@@ -8,6 +8,12 @@ package ai
 // structured plan attached once there is enough to commit to. Plan mode does not
 // write code — that is Build mode's job — but it should feel like talking to an
 // engineer, not hitting a wall of refusals.
+//
+// Unlike Build mode, the plan path never runs through enrichPromptWithContext, so
+// it does not receive the generated RulesBlock. The preinstalled-package list
+// below is inlined here on purpose — it is the only copy Plan mode ever sees, and
+// must be kept in step with the project template by hand. (Build mode's inline
+// copy was removed because RulesBlock supersedes it there; see core.md.)
 const SystemPromptPlan = `You are a mobile engineer helping someone design a React Native app for the Solana Seeker device, before any code is written.
 
 ## The device you are targeting
@@ -33,12 +39,19 @@ Wallet work goes through Mobile Wallet Adapter: ` + "`transact()`" + ` from ` + 
 
 ## Already installed — do not list these as packages
 
-expo, react-native, expo-router, expo-constants, expo-linking, expo-status-bar,
+expo, react-native, react-dom, react-native-web,
+expo-router, expo-constants, expo-linking, expo-status-bar, expo-font,
+expo-splash-screen, expo-system-ui, expo-image, expo-blur, expo-haptics,
+expo-linear-gradient, expo-symbols, expo-web-browser, expo-dev-client,
+@expo/vector-icons, @expo/metro-runtime,
 @solana/web3.js, @solana/spl-token,
 @solana-mobile/mobile-wallet-adapter-protocol, @solana-mobile/mobile-wallet-adapter-protocol-web3js,
 react-native-gesture-handler, react-native-reanimated, react-native-safe-area-context, react-native-screens,
-react-native-quick-crypto, js-base64, react-native-svg, react-native-webview,
-@react-native-async-storage/async-storage
+react-native-quick-crypto, react-native-svg, react-native-webview, react-native-worklets,
+js-base64,
+@react-native-async-storage/async-storage, @react-native-clipboard/clipboard,
+@react-navigation/native, @react-navigation/bottom-tabs, @react-navigation/elements,
+@tanstack/react-query
 
 Only list packages in "packages" that are not in this set and that the plan genuinely needs. Fewer is better.
 
@@ -94,17 +107,6 @@ TypeScript throughout. Props get an interface. ` + "`any`" + ` is a bug, not a s
 Wallet work goes through MWA: ` + "`transact()`" + ` from ` + "`@solana-mobile/mobile-wallet-adapter-protocol-web3js`" + `. Never ask for, store, or generate a private key or seed phrase. Every transaction is signed inside the wallet app. Show the user what they are signing before the sheet opens, and handle rejection — users cancel, and a cancelled signature is a normal outcome, not an error state.
 
 Design for the device: a tall dark screen held in one hand. Touch targets at least 44pt. Text legible at 460 PPI. Respect the safe area at both ends. Never leave an async action without a visible pending state, and never leave a failure without something the user can do next.
-
-## Already installed — do not reinstall
-
-expo, react-native, expo-router, expo-constants, expo-linking, expo-status-bar,
-@solana/web3.js, @solana/spl-token,
-@solana-mobile/mobile-wallet-adapter-protocol, @solana-mobile/mobile-wallet-adapter-protocol-web3js,
-react-native-gesture-handler, react-native-reanimated, react-native-safe-area-context, react-native-screens,
-react-native-quick-crypto, js-base64, react-native-svg, react-native-webview,
-@react-native-async-storage/async-storage
-
-Use ` + "`install_package`" + ` for anything else, and only when the feature genuinely needs it.
 
 ## Scope
 

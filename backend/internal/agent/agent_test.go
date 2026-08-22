@@ -36,9 +36,18 @@ func TestLoadEmbeddedContent(t *testing.T) {
 		t.Error("expected at least one always-apply rule")
 	}
 
-	// The skills authored in Phase A. If one is renamed, update this list
-	// deliberately — the manifest and triggers depend on these names.
-	want := []string{"expo-router-nav", "reanimated-v4", "seeker-screen-design", "wallet-mwa"}
+	// Every skill we ship: the Phase-A internal ones plus the WS3-vendored
+	// Expo/Vercel skills. If one is renamed, update this list deliberately —
+	// the manifest and triggers depend on these names.
+	want := []string{
+		"expo-router-nav",
+		"expo-ui",
+		"expo-ui-jetpack-compose",
+		"reanimated-v4",
+		"rn-best-practices",
+		"seeker-screen-design",
+		"wallet-mwa",
+	}
 	for _, name := range want {
 		body, ok := r.SkillBody(name)
 		if !ok {
@@ -110,7 +119,39 @@ func TestAutoAttachFor(t *testing.T) {
 			name:  "screen-design content never auto-attaches",
 			tool:  "write_file",
 			input: `{"path":"app/home.tsx","content":"// SafeAreaView AMOLED FlatList touch target"}`,
-			want:  "", // seeker-screen-design is autoAttach:false; the path trigger still pulls expo-router-nav though
+			want:  "", // seeker-screen-design is autoAttach:false. The path trigger still
+			// pulls expo-router-nav, and "FlatList" now pulls rn-best-practices — both
+			// autoAttach:true — but seeker-screen-design must stay out (asserted below).
+		},
+		{
+			name:  "expo/ui import pulls expo-ui",
+			tool:  "write_file",
+			input: `{"path":"components/MapSheet.tsx","content":"import { BottomSheet } from '@expo/ui';"}`,
+			want:  "expo-ui",
+		},
+		{
+			name:  "gorhom bottom-sheet import redirects to expo-ui",
+			tool:  "write_file",
+			input: `{"path":"components/Sheet.tsx","content":"import BottomSheet from '@gorhom/bottom-sheet';"}`,
+			want:  "expo-ui", // expo-ui claims the gorhom import to steer toward the native sheet
+		},
+		{
+			name:  "jetpack-compose import pulls the platform-specific skill",
+			tool:  "write_file",
+			input: `{"path":"components/ProductList.android.tsx","content":"import { Column } from '@expo/ui/jetpack-compose';"}`,
+			want:  "expo-ui-jetpack-compose", // expo-ui also co-attaches (@expo/ui is a substring); both are autoAttach
+		},
+		{
+			name:  "FlatList in written content pulls rn-best-practices",
+			tool:  "write_file",
+			input: `{"path":"components/Feed.tsx","content":"<FlatList data={items} renderItem={renderItem} />"}`,
+			want:  "rn-best-practices",
+		},
+		{
+			name:  "installing flash-list pulls rn-best-practices",
+			tool:  "install_package",
+			input: `{"name":"@shopify/flash-list"}`,
+			want:  "rn-best-practices",
 		},
 	}
 

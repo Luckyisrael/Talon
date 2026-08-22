@@ -38,17 +38,17 @@ func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One source of truth for tier limits (quota.go). This path only reports
+	// the numbers; promptLimitFor enforces the same ones. They used to be
+	// written out separately here and had drifted (Pro showed 500 here but
+	// enforced 2000).
+	quota := quotaFor(user.Tier)
 	resp := usageResponse{
 		PromptsUsed:   usage.PromptsUsed,
-		PromptsLimit:  20,
+		PromptsLimit:  quota.Prompts,
 		DeviceMinutes: usage.DeviceMinutes,
-		DeviceLimit:   60,
+		DeviceLimit:   quota.DeviceMinutes,
 		Tier:          user.Tier,
-	}
-
-	if user.Tier == "pro" {
-		resp.PromptsLimit = 500
-		resp.DeviceLimit = 1500
 	}
 
 	writeJSON(w, http.StatusOK, resp)

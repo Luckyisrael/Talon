@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CloseSquare } from "iconsax-reactjs";
 import PillButton from "@/components/ui/PillButton";
-import Spinner from "@/components/ui/Spinner";
 import { projects } from "@/lib/api";
 
 interface CreateProjectProps {
@@ -81,7 +80,7 @@ export default function CreateProject({ open, onClose, onCreated }: CreateProjec
                 Cancel
               </PillButton>
               <PillButton type="submit" disabled={loading || !name.trim()} className="flex-1">
-                {loading ? <Spinner size="sm" color="currentColor" /> : "Create project"}
+                {loading ? "Creating…" : "Create project"}
               </PillButton>
             </div>
           </form>

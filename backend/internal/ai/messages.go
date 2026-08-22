@@ -31,6 +31,12 @@ type Block struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
+
+	// plan (SeekerStudio plan-mode reply). Carries the structured app plan as
+	// raw JSON so a reload can rebuild the plan card. Deliberately not sent to
+	// the provider — the accompanying text block carries the replayable message,
+	// and the model does not need its own plan echoed back.
+	Plan json.RawMessage `json:"plan,omitempty"`
 }
 
 // Message is one conversation turn.
@@ -55,6 +61,23 @@ func UserText(text string) Message {
 
 func AssistantText(text string) Message {
 	return Message{Role: "assistant", Blocks: []Block{{Type: "text", Text: text}}}
+}
+
+// AssistantPlan builds the assistant turn for a plan-mode reply. The text block
+// carries the human-readable message — replayed to the model as context and
+// shown as prose on reload. The plan block carries the structured plan as raw
+// JSON purely so the UI can rebuild its plan card; it is dropped from provider
+// replay (see toAnthropic / toOpenAI), since the model does not need its own
+// plan echoed back.
+func AssistantPlan(message string, planJSON json.RawMessage) Message {
+	blocks := make([]Block, 0, 2)
+	if message != "" {
+		blocks = append(blocks, Block{Type: "text", Text: message})
+	}
+	if len(planJSON) > 0 {
+		blocks = append(blocks, Block{Type: "plan", Plan: planJSON})
+	}
+	return Message{Role: "assistant", Blocks: blocks}
 }
 
 // ToolResults wraps a batch of results as the single user turn that answers an

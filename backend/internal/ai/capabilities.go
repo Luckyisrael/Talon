@@ -111,7 +111,7 @@ func (caps Capabilities) WorkingDiscipline() string {
 
 const weakDiscipline = "## Working discipline\n\n" +
 	"Work in small, checkable steps — one change at a time, not a dozen at once.\n\n" +
-	"Before you act, say in a sentence what you are about to change. If it touches an area a skill covers — wallet, navigation, animation, storage — call " + "`read_skill`" + " and follow it before writing, because the stack here is newer than your training data and a guessed API will not compile. Read a file with " + "`read_file`" + " before you edit it; never edit a file you have not read.\n\n" +
+	"Before you act, say in a sentence what you are about to change. If it touches an area a skill covers — wallet, navigation, animation, screen design, native UI, performance — call " + "`read_skill`" + " and follow it before writing, because the stack here is newer than your training data and a guessed API will not compile. Read a file with " + "`read_file`" + " before you edit it; never edit a file you have not read.\n\n" +
 	"After you act, call " + "`run_typecheck`" + " — after each change, not only at the very end, so an error is caught while the code that caused it is still fresh. When it reports an error, read the file it names, fix that one error, and check again; do not pile new changes on top of broken code.\n\n" +
 	"Do not stop while the project does not compile, and do not say something works that you have not verified."
 

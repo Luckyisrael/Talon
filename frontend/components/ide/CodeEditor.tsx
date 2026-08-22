@@ -238,7 +238,7 @@ export default function CodeEditor({ projectId, filePath, content }: CodeEditorP
           onChange={(next) => setDraft(filePath, next ?? "")}
           options={{
             minimap: { enabled: false },
-            fontSize: 13,
+            fontSize: 10,
             lineHeight: 20,
             fontFamily: "var(--font-plex-mono), ui-monospace, monospace",
             fontLigatures: false,

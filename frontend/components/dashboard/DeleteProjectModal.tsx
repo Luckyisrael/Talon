@@ -124,14 +124,7 @@ function Confirm({
               disabled={!isValid || loading}
               className="flex-1 inline-flex items-center justify-center gap-2 h-9 rounded-1 text-small font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-fault text-ink hover:brightness-110"
             >
-              {loading ? (
-                <>
-                  <span className="w-4 h-4 border-2 border-ink border-t-transparent rounded-full animate-spin" />
-                  Deleting...
-                </>
-              ) : (
-                "Delete project"
-              )}
+              {loading ? "Deleting…" : "Delete project"}
             </button>
           </div>
         </div>

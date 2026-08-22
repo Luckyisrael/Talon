@@ -4,9 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import PillButton from "@/components/ui/PillButton";
-import Spinner from "@/components/ui/Spinner";
 import { auth } from "@/lib/api";
-import { setToken } from "@/lib/auth";
+import { setToken, setEmail as persistEmail } from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -40,6 +39,7 @@ export default function LoginPage() {
     try {
       const data = await auth.login(email, password);
       setToken(data.token);
+      persistEmail(email);
       router.push(destination());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -93,7 +93,7 @@ export default function LoginPage() {
             {error && <p className="text-small text-fault mb-4">{error}</p>}
 
             <PillButton type="submit" disabled={loading} className="w-full">
-              {loading ? <Spinner size="sm" color="currentColor" /> : "Sign in"}
+              {loading ? "Signing in…" : "Sign in"}
             </PillButton>
           </form>
         </div>

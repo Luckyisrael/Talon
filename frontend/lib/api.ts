@@ -1,8 +1,12 @@
 import { clearToken, getToken } from "./auth";
 import type {
+  ArchitectureDecision,
   AuthResponse,
+  Checkout,
   FileEntry,
+  MeProfile,
   Project,
+  ProjectMemory,
   PromptResponse,
   Session,
   Usage,
@@ -130,7 +134,7 @@ export const projects = {
 
 /** One stored turn, in the provider-neutral block shape the backend persists. */
 export interface ConversationBlock {
-  type: "text" | "thinking" | "tool_use" | "tool_result";
+  type: "text" | "thinking" | "tool_use" | "tool_result" | "plan";
   text?: string;
   id?: string;
   name?: string;
@@ -138,6 +142,14 @@ export interface ConversationBlock {
   tool_use_id?: string;
   content?: string;
   is_error?: boolean;
+  // Plan-mode turns carry the structured plan here so the chat can rebuild its
+  // plan card on reload. Present only on assistant "plan" blocks.
+  plan?: {
+    screens?: { name: string; description: string }[];
+    features?: string[];
+    navigation?: string;
+    packages?: string[];
+  } | null;
 }
 
 export interface ConversationTurn {
@@ -146,12 +158,39 @@ export interface ConversationTurn {
   at: string;
 }
 
+/**
+ * The most recent prompt's run state, returned alongside the transcript so the
+ * chat can tell a clean finish from an interrupted turn on load. A turn left
+ * `running` (the server went down mid-turn), `cancelled` (Stop, or a dropped
+ * connection) or `failed` can be resumed; `completed` and `abandoned` cannot.
+ */
+export interface LatestPrompt {
+  id: number;
+  mode: "plan" | "build";
+  status: "running" | "completed" | "cancelled" | "failed" | "abandoned";
+  round: number;
+}
+
+/** A resumable turn is a build turn whose last run did not finish cleanly. */
+export function isResumable(latest: LatestPrompt | null): boolean {
+  return (
+    latest !== null &&
+    latest.mode === "build" &&
+    (latest.status === "running" ||
+      latest.status === "cancelled" ||
+      latest.status === "failed")
+  );
+}
+
 export const conversation = {
-  async get(projectId: number) {
-    const res = await request<{ turns: ConversationTurn[] | null }>(
-      `/v1/projects/${projectId}/conversation`,
-    );
-    return res?.turns ?? [];
+  async get(
+    projectId: number,
+  ): Promise<{ turns: ConversationTurn[]; latest: LatestPrompt | null }> {
+    const res = await request<{
+      turns: ConversationTurn[] | null;
+      latest?: LatestPrompt;
+    }>(`/v1/projects/${projectId}/conversation`);
+    return { turns: res?.turns ?? [], latest: res?.latest ?? null };
   },
 
   clear(projectId: number) {
@@ -195,6 +234,25 @@ export const prompts = {
     return request<PromptResponse>("/v1/prompts", {
       method: "POST",
       body: JSON.stringify({ project_id: projectId, prompt, mode }),
+    });
+  },
+
+  // Continue an interrupted build turn from its persisted state. The server
+  // reconstructs the context, so there is no body; it streams the same events a
+  // fresh build turn does.
+  resume(
+    promptId: number,
+    onEvent: (event: StreamEvent) => void,
+    onError?: (error: Error) => void,
+  ): AbortController {
+    return openEventStream(`/v1/prompts/${promptId}/resume`, undefined, onEvent, onError);
+  },
+
+  // Mark an interrupted turn as abandoned so a reload stops offering to resume
+  // it. Leaves the transcript and files untouched.
+  discard(promptId: number) {
+    return request<{ status: string }>(`/v1/prompts/${promptId}/discard`, {
+      method: "POST",
     });
   },
 };
@@ -275,25 +333,45 @@ export function streamPrompt(
   onEvent: (event: StreamEvent) => void,
   onError?: (error: Error) => void,
 ): AbortController {
+  return openEventStream(
+    "/v1/prompts/stream",
+    { project_id: projectId, prompt, mode },
+    onEvent,
+    onError,
+  );
+}
+
+// openEventStream POSTs to a server-sent-events endpoint and dispatches each
+// parsed frame to onEvent, returning the AbortController that stops it. A fresh
+// prompt and a resumed turn stream the identical event vocabulary, so they share
+// this reader; only the path and request body differ. Pass `body: undefined` for
+// an endpoint that takes no body (resume reconstructs its own context server
+// side).
+function openEventStream(
+  path: string,
+  body: unknown,
+  onEvent: (event: StreamEvent) => void,
+  onError?: (error: Error) => void,
+): AbortController {
   const controller = new AbortController();
   const token = getToken();
 
   (async () => {
     try {
-      const res = await fetch(`${BASE}/v1/prompts/stream`, {
+      const res = await fetch(`${BASE}${path}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ project_id: projectId, prompt, mode }),
+        body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       });
 
       if (!res.ok) {
         if (res.status === 401 && token) handleExpiredSession();
-        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        throw new APIError(res.status, body.error || `Request failed (${res.status})`);
+        const errBody = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new APIError(res.status, errBody.error || `Request failed (${res.status})`);
       }
 
       const reader = res.body?.getReader();
@@ -380,6 +458,80 @@ export const sessions = {
 export const usage = {
   get() {
     return request<Usage>("/v1/usage");
+  },
+};
+
+// ── Profile & billing (Phase 9) ───────────────────────
+
+/**
+ * The user's own profile and billing state. `me.get` is the single source of
+ * truth the settings page reads real identity, tier, and history from — it
+ * replaces the old localStorage-email guess. `me.update` changes only the
+ * display name; email is the login identity and tier is provider-driven, so
+ * neither is settable from here (the server ignores anything else in the body).
+ */
+export const me = {
+  get() {
+    return request<MeProfile>("/v1/me");
+  },
+
+  update(displayName: string) {
+    return request<MeProfile>("/v1/me", {
+      method: "PUT",
+      body: JSON.stringify({ display_name: displayName }),
+    });
+  },
+};
+
+/**
+ * Payment flows, all test-mode in this build. `upgrade` starts a hosted checkout
+ * and returns where to send the user — the card is entered on that page, never
+ * here (rule 2.1). `testComplete` exists only while the server runs the mock
+ * provider: it simulates finishing checkout so the whole verified-webhook path
+ * can be exercised without a real processor, and 404s under a real provider.
+ * `cancel` ends the subscription — at period end by default (a downgrade that
+ * keeps access until the term runs out), immediately when asked (rule 2.7).
+ */
+export const billing = {
+  upgrade(tier: string = "pro") {
+    return request<Checkout>("/v1/billing/upgrade", {
+      method: "POST",
+      body: JSON.stringify({ tier }),
+    });
+  },
+
+  testComplete(tier: string = "pro") {
+    return request<{ ok: boolean }>("/v1/billing/test/complete", {
+      method: "POST",
+      body: JSON.stringify({ tier }),
+    });
+  },
+
+  cancel(immediate = false) {
+    return request<{ ok: boolean }>("/v1/billing/cancel", {
+      method: "POST",
+      body: JSON.stringify({ immediate }),
+    });
+  },
+};
+
+// ── Memory ────────────────────────────────────────────
+
+/** "What the agent knows" about a project: curated memory + accepted ADRs. */
+export const memory = {
+  async get(projectId: number) {
+    const res = await request<{
+      memories: ProjectMemory[] | null;
+      summary: string | null;
+      decisions: ArchitectureDecision[] | null;
+    }>(`/v1/projects/${projectId}/memory`);
+    // The server sends `null` for an empty list; normalise so callers can map
+    // without a guard.
+    return {
+      memories: res?.memories ?? [],
+      summary: res?.summary ?? "",
+      decisions: res?.decisions ?? [],
+    };
   },
 };
 

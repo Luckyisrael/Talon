@@ -252,6 +252,27 @@ func (h *SessionHandler) Destroy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Meter the device time this session consumed before we tear it down.
+	// Device-minutes were reported to users but never accumulated —
+	// IncrementDeviceMinutes had no callers, so the settings meter always read
+	// zero while the UI presented it as a real number. Charge the wall-clock
+	// life of the session to the owning user's current cycle. This is coarse on
+	// purpose: paused time still counts, and a session the server never sees
+	// destroyed (crash, forced kill) is never metered. Precise, *enforced*
+	// metering is Phase 10; coarse-but-real beats always-zero and stops the
+	// meter from lying. The state guard keeps a repeated Destroy idempotent.
+	if session.State != "destroyed" && !session.StartedAt.IsZero() {
+		if minutes := time.Since(session.StartedAt).Minutes(); minutes > 0 {
+			if project, perr := h.store.GetProject(session.ProjectID); perr == nil {
+				if err := h.store.IncrementDeviceMinutes(project.UserID, minutes); err != nil {
+					log.Printf("WARN: could not meter device minutes for session %d: %v", id, err)
+				}
+			} else {
+				log.Printf("WARN: could not resolve project %d to meter device minutes for session %d: %v", session.ProjectID, id, perr)
+			}
+		}
+	}
+
 	// Stop Metro bundler
 	metro.Stop(id)
 

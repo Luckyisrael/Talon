@@ -17,7 +17,6 @@ var protectedFiles = map[string]bool{
 	"package.json":     true,
 	"tsconfig.json":    true,
 	"app.json":         true,
-	"babel.config.js":  true,
 	"metro.config.js":  true,
 	"index.js":         true,
 	"eslint.config.js": true,

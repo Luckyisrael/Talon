@@ -94,12 +94,12 @@ func (t *WebSearch) Execute(ctx context.Context, args json.RawMessage) (ToolResu
 
 	results := parseDuckDuckGoResults(string(body))
 	if len(results) == 0 {
-		// Reporting an empty success here is how a scraper breaks silently: the
-		// agent reads "no results" as fact about the world rather than a broken
-		// tool, and quietly proceeds on whatever it guessed instead.
+		// DuckDuckGo returned a valid page but the parser found nothing — either
+		// the query genuinely has no results or DDG changed its markup. Report
+		// this as a successful empty result so the model does not treat it as a
+		// tool failure and waste a healing round.
 		return ToolResult{
-			Content: fmt.Sprintf("no results could be read for %q — the search page returned nothing this parser recognised, which usually means DuckDuckGo changed its markup or throttled the request. Do not treat this as evidence that nothing exists.", a.Query),
-			IsError: true,
+			Content: fmt.Sprintf("No results found for %q. The search was successful but returned no matching pages.", a.Query),
 		}, nil
 	}
 

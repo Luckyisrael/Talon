@@ -135,6 +135,13 @@ type RunOptions struct {
 	// fine) from overwriting one the model has not read. Nil treats every path
 	// as new.
 	Exists func(path string) bool
+	// Persist, if set, is handed each round's turns as the loop advances rather
+	// than only at the end, so an interrupted run keeps the rounds that already
+	// finished. It is called at every round boundary (and once more on return)
+	// with just the messages produced since the previous call — never a message
+	// twice. A slow or failing Persist must not wedge the loop; keep it cheap and
+	// swallow its own errors.
+	Persist func(msgs []ai.Message)
 }
 
 // RunAgentLoop drives the agent until it stops calling tools and the code
@@ -159,11 +166,32 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	verifyAttempts := 0
 	const maxVerifyAttempts = 6
 
+	// Hand finished turns to the caller as the loop advances so an interrupted
+	// run keeps them. `flushed` is the count already handed over; flush() sends
+	// only the tail past it, so no message is persisted twice however the loop
+	// exits. The deferred call catches the final round (and any early return,
+	// including cancellation); the per-round call inside the loop is what makes
+	// persistence incremental rather than all-at-the-end.
+	flushed := 0
+	flush := func() {
+		if opts.Persist == nil || flushed >= len(outcome.Messages) {
+			return
+		}
+		opts.Persist(outcome.Messages[flushed:])
+		flushed = len(outcome.Messages)
+	}
+	defer flush()
+
 	for round := 1; round <= o.maxRounds; round++ {
 		if err := ctx.Err(); err != nil {
 			return outcome, fmt.Errorf("cancelled: %w", err)
 		}
 		outcome.Rounds = round
+		flush() // persist what the previous round produced before starting this one
+
+		// Re-enrich each round so ADRs and memory written mid-conversation
+		// (e.g. via write_adr or save_memory) are visible to the model.
+		systemPrompt = o.enrichPromptWithContext(sess, opts.SystemPrompt)
 
 		if ai.EstimateTokens(conversation) > maxContextTokens {
 			before := len(conversation)

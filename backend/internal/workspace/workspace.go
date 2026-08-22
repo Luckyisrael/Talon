@@ -36,7 +36,16 @@ type Manager struct {
 // the gradle build resolves that file before anything else compiles. Leaving it
 // out of this list made every generated workspace build-fail with
 // `Cannot convert '' to File` in build.gradle, because the entry never existed.
-var configFiles = []string{"package.json", "tsconfig.json", "app.json", "babel.config.js", "metro.config.js", "index.js"}
+var configFiles = []string{
+	"package.json", "tsconfig.json", "app.json",
+	"babel.config.js", "metro.config.js", "index.js",
+	"polyfill.js", "eslint.config.js",
+}
+
+// templateDirs are directories copied recursively from the template into the
+// workspace. The app/ directory carries the expo-router scaffolding (_layout.tsx,
+// tabs, etc.) that the agent builds on instead of starting from scratch.
+var templateDirs = []string{"app", "constants"}
 
 func New(templateDir, workspacesDir string) (*Manager, error) {
 	nmDir := filepath.Join(templateDir, "node_modules")
@@ -113,13 +122,41 @@ func (m *Manager) provision(dir string) error {
 		}
 	}
 
-	// An expo-router app needs an app/ directory to exist before anything can be
-	// routed into it.
-	if err := os.MkdirAll(filepath.Join(dir, "app"), 0o755); err != nil {
-		return fmt.Errorf("could not create app/: %w", err)
+	// Copy template directories (app/, constants/) so the agent starts with
+	// working scaffolding instead of an empty app/ directory.
+	for _, dirname := range templateDirs {
+		srcDir := filepath.Join(m.templateDir, dirname)
+		if _, err := os.Stat(srcDir); err != nil {
+			continue // optional
+		}
+		if err := copyDir(srcDir, filepath.Join(dir, dirname)); err != nil {
+			return fmt.Errorf("could not copy %s/: %w", dirname, err)
+		}
 	}
 
 	return nil
+}
+
+// copyDir recursively copies src into dst, creating directories as needed.
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
 }
 
 // Destroy removes a project's workspace.
