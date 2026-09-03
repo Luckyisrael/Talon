@@ -73,7 +73,7 @@ export default function FileContextMenu({
       ref={ref}
       role="menu"
       style={{ left: pos.left, top: pos.top }}
-      className="rise fixed z-50 w-60 overflow-hidden rounded-2 border border-edge bg-slate shadow-[0_18px_44px_-14px_rgba(0,0,0,0.85)]"
+      className="rise fixed z-50 w-60 overflow-hidden rounded-xl border border-smoke bg-carbon shadow-xl"
     >
       <div className="bay-head">
         <span className="gauge truncate" title={path || "project root"}>
@@ -87,7 +87,7 @@ export default function FileContextMenu({
 
         {path && (
           <>
-            <span aria-hidden className="my-1 block h-px bg-rail" />
+            <span aria-hidden className="my-1 block h-px bg-graphite" />
             <Item onClick={onRename}>Rename</Item>
             <Item
               danger
@@ -135,10 +135,10 @@ function Item({
         e.stopPropagation();
         onClick();
       }}
-      className={`block w-full px-3 py-1.5 text-left text-small transition-colors ${
+      className={`block w-full px-3 py-1.5 text-left text-sm transition-colors ${
         danger
-          ? "text-fault hover:bg-fault/12"
-          : "text-graphite hover:bg-riser hover:text-paper"
+          ? "text-coral-red hover:bg-coral-red/10"
+          : "text-fog hover:bg-white/5 hover:text-paper"
       }`}
     >
       {children}

@@ -67,48 +67,44 @@ const faqs = [
 
 export default function PricingPage() {
   return (
-    <div className="min-h-screen flex flex-col bg-ink">
+    <div className="min-h-screen flex flex-col bg-void">
       <MarketingNav />
 
       <main className="flex-1 px-6 pt-20 pb-16">
         <div className="text-center mb-14">
-          <h1 className="text-4xl md:text-5xl font-semibold text-paper mb-4 tracking-tight">
+          <h1 className="t-heading-sm mb-4">
             Simple, honest pricing
           </h1>
-          <p className="text-body md:text-lead text-graphite max-w-xl mx-auto leading-relaxed">
+          <p className="t-body-sm text-fog max-w-xl mx-auto">
             Start free with a real allowance — not a trial. Upgrade when your builds outgrow it.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 max-w-3xl mx-auto">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-w-3xl mx-auto">
           {tiers.map((tier) => (
             <div
               key={tier.name}
-              className={`bay rounded-3 p-7 flex flex-col ${
-                tier.primary ? "border-edge" : ""
-              }`}
+              className="card flex flex-col"
             >
               <div className="flex items-center justify-between mb-1">
-                <h2 className="text-lead font-semibold text-paper">{tier.name}</h2>
-                <span className="gauge">{tier.available ? "available now" : "coming soon"}</span>
+                <h2 className="text-[17px] font-medium tracking-tight text-paper">{tier.name}</h2>
+                <span className="badge">{tier.available ? "available now" : "coming soon"}</span>
               </div>
 
               <div className="mt-4 mb-1">
-                <span className="text-title font-semibold text-paper">{tier.price}</span>
+                <span className="text-[32px] font-normal leading-none tracking-tight text-paper">{tier.price}</span>
               </div>
-              <p className="text-tiny text-dust font-mono mb-5">{tier.priceNote}</p>
+              <p className="font-mono text-xs text-ash mb-5">{tier.priceNote}</p>
 
-              <p className="text-small text-graphite mb-6">{tier.tagline}</p>
+              <p className="text-sm text-fog mb-6">{tier.tagline}</p>
 
               <ul className="space-y-3 mb-8">
                 {tier.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2.5 text-small text-paper">
-                    {/* Neutral, not signal-green: a green tick would read as
-                        "device live" in this palette, which it isn't. */}
+                  <li key={f} className="flex items-start gap-2.5 text-sm text-mist">
                     <TickCircle
                       size="16"
                       variant="Linear"
-                      className="text-graphite mt-0.5 flex-shrink-0"
+                      className="text-fog mt-0.5 flex-shrink-0"
                     />
                     <span>{f}</span>
                   </li>
@@ -122,11 +118,7 @@ export default function PricingPage() {
               ) : (
                 <Link
                   href={tier.cta.href}
-                  className={`mt-auto h-10 px-5 rounded-1 text-small font-medium inline-flex items-center justify-center transition-colors ${
-                    tier.primary
-                      ? "bg-paper text-ink hover:bg-white"
-                      : "border border-rail text-paper hover:border-edge hover:bg-riser"
-                  }`}
+                  className="btn-go mt-auto h-10 px-5 rounded-md text-sm inline-flex items-center justify-center"
                 >
                   {tier.cta.label}
                 </Link>
@@ -137,14 +129,14 @@ export default function PricingPage() {
 
         {/* FAQ */}
         <div className="max-w-2xl mx-auto mt-24">
-          <h2 className="text-title font-semibold text-paper text-center mb-10">
+          <h2 className="t-heading-sm text-center mb-10">
             Questions
           </h2>
-          <div className="space-y-4">
+          <div className="space-y-2">
             {faqs.map((faq) => (
-              <div key={faq.q} className="bay p-5">
-                <h3 className="text-small font-semibold text-paper mb-1.5">{faq.q}</h3>
-                <p className="text-small text-graphite leading-relaxed">{faq.a}</p>
+              <div key={faq.q} className="card-subtle p-5!">
+                <h3 className="text-sm font-medium text-paper mb-1.5">{faq.q}</h3>
+                <p className="text-sm text-fog leading-relaxed">{faq.a}</p>
               </div>
             ))}
           </div>

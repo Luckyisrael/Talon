@@ -13,6 +13,7 @@ import {
   conversation,
   isResumable,
   prompts,
+  rowStatus,
   streamPrompt,
   type ConversationTurn,
   type LatestPrompt,
@@ -21,7 +22,7 @@ import {
 import { useIDEStore } from "@/lib/store";
 import type { ChatMessage, PlanData, StreamMessage, TraceRow } from "@/lib/types";
 import AgentTrace, { getToolLabel } from "./AgentTrace";
-import Meter from "./Meter";
+import LoadingState from "@/components/ui/LoadingState";
 
 interface AIChatProps {
   projectId: number;
@@ -74,8 +75,16 @@ function compactTokens(n: number): string {
  * Reloading the page used to empty the panel even though every turn was on
  * disk, which made the agent look like it had forgotten the project it was
  * still perfectly able to continue.
+ *
+ * `latest` is the most recent prompt's run state. It is what tells a restored
+ * ask_user apart: a still-`waiting` latest on the final turn means that turn's
+ * unanswered ask_user is live — the card must let the user answer it (keyed by
+ * latest.id). Any other ask_user is history, shown as a locked card.
  */
-function turnsToEntries(turns: ConversationTurn[]): Entry[] {
+function turnsToEntries(
+  turns: ConversationTurn[],
+  latest: LatestPrompt | null,
+): Entry[] {
   const entries: Entry[] = [];
 
   // A tool_result arrives in the turn *after* the call, so collect them all up
@@ -122,6 +131,11 @@ function turnsToEntries(turns: ConversationTurn[]): Entry[] {
     // often the first thing done on a project — survives a reload the same way
     // build turns already do.
     let restoredPlan: PlanData | undefined;
+    // A restored ask_user is the pause card, not a tool row. Its stored
+    // tool_result (the reply) locks it; an unanswered one on a still-waiting
+    // final turn is the live question this reload must let the user answer.
+    let restoredQuestion: StreamMessage["question"] | undefined;
+    const isLastTurn = i === turns.length - 1;
     for (const [j, block] of blocks.entries()) {
       if (block.type === "text" && block.text?.trim()) {
         rows.push({
@@ -145,7 +159,60 @@ function turnsToEntries(turns: ConversationTurn[]): Entry[] {
           name?: string;
           command?: string;
           pattern?: string;
+          question?: string;
+          choices?: string[];
+          // write_adr / write_memory, for the decision-card reconstruction below
+          decision?: string;
+          outcome?: string;
+          type?: string;
+          content?: string;
+          metadata?: string;
         };
+
+        if (block.name === "ask_user") {
+          const outcome = block.id ? results.get(block.id) : undefined;
+          const answered = outcome?.content?.trim();
+          // Live only when unanswered AND the server still reports this final
+          // turn as waiting — otherwise a truncated old ask_user would render a
+          // dead answer box keyed to a prompt that has moved on.
+          const liveWaiting = !answered && isLastTurn && latest?.status === "waiting";
+          if (answered || liveWaiting) {
+            restoredQuestion = {
+              promptId: liveWaiting && latest ? latest.id : 0,
+              text: input.question ?? "The agent asked a question.",
+              choices: Array.isArray(input.choices) ? input.choices : [],
+              ...(answered ? { answered } : {}),
+            };
+            continue;
+          }
+          // Neither answered nor live (a truncated tail): fall through so the
+          // turn still shows the call happened rather than vanishing.
+        }
+
+        if (block.name === "write_adr" || block.name === "write_memory") {
+          // A recorded decision restores as its card, exactly as it streamed
+          // live — but only if the write succeeded. A cut-off or errored call
+          // recorded nothing, and live suppressed its row too, so it leaves no
+          // trace on reload either (parity with the live path).
+          const outcome = block.id ? results.get(block.id) : undefined;
+          if (outcome && !outcome.isError) {
+            rows.push({
+              id: `restored-a${i}-${j}`,
+              kind: "decision",
+              decision:
+                block.name === "write_adr"
+                  ? { variant: "adr", decision: input.decision, outcome: input.outcome }
+                  : {
+                      variant: "memory",
+                      category: input.type || "fact",
+                      content: input.content,
+                      metadata: input.metadata,
+                    },
+            });
+          }
+          continue;
+        }
+
         const { label, target } = getToolLabel(block.name ?? "", input, filesRead);
         if (block.name === "read_file" && input.path) filesRead.add(input.path);
         const outcome = block.id ? results.get(block.id) : undefined;
@@ -162,7 +229,7 @@ function turnsToEntries(turns: ConversationTurn[]): Entry[] {
       }
     }
 
-    if (rows.length === 0 && !restoredPlan) return;
+    if (rows.length === 0 && !restoredPlan && !restoredQuestion) return;
     const entry: StreamMessage = {
       id: `restored-a${i}`,
       role: "assistant",
@@ -176,6 +243,7 @@ function turnsToEntries(turns: ConversationTurn[]): Entry[] {
       // itself is already the narration row above, matching the live plan path.
       entry.planMessage = rows.find((r) => r.kind === "narration")?.text ?? "";
     }
+    if (restoredQuestion) entry.question = restoredQuestion;
     entries.push(entry);
   });
 
@@ -203,9 +271,6 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     // new prompt. Derived from server truth on every load, so it never claims a
     // turn is resumable that isn't.
     const [resumable, setResumable] = useState<LatestPrompt | null>(null);
-    // When the current turn began, so the status strip can show a live timer.
-    // Only read while streaming, so it needs no reset when the turn ends.
-    const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
@@ -221,8 +286,9 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         .get(projectId)
         .then(({ turns, latest }) => {
           if (cancelled) return;
-          setMessages(turnsToEntries(turns));
+          setMessages(turnsToEntries(turns, latest));
           // Offer resume only for a build turn whose last run did not finish.
+          // A waiting turn is not resumable this way — its question card owns it.
           setResumable(isResumable(latest) ? latest : null);
         })
         .catch(() => {
@@ -265,6 +331,32 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       () => messages.find((m): m is StreamMessage => isAssistant(m) && m.isStreaming),
       [messages],
     );
+
+    // A turn paused on ask_user and still unanswered. While one is open the main
+    // composer defers to the question card, so typing a fresh prompt cannot
+    // orphan the paused turn on the server.
+    const pendingQuestion = useMemo(
+      () =>
+        messages.some(
+          (m) => isAssistant(m) && m.question !== undefined && m.question.answered === undefined,
+        ),
+      [messages],
+    );
+
+    // Past user prompts for the history block: most recent first, deduped,
+    // capped. Real transcript data — nothing invented.
+    const pastPrompts = useMemo(() => {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (let i = messages.length - 1; i >= 0 && out.length < 10; i--) {
+        const m = messages[i];
+        if (!isAssistant(m) && m.content.trim() && !seen.has(m.content)) {
+          seen.add(m.content);
+          out.push(m.content);
+        }
+      }
+      return out;
+    }, [messages]);
 
     // The path of the tool the agent is running right now — shown in the live
     // status strip so you can see what it is touching, not just that it is busy.
@@ -395,38 +487,62 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 
             case "tool_call": {
               const tool = d.tool ?? "";
-              const { label, target } = getToolLabel(
+              // write_adr / write_memory surface as their own decision cards, fed
+              // by the `decision` event that carries the recorded content. Skip
+              // the generic row here so the same action never shows twice.
+              if (tool === "write_adr" || tool === "write_memory") break;
+              // The backend sends the raw target (file path, command, pattern)
+              // in `path` and a human verb phrase in `name`. getToolLabel turns
+              // tool + target into a label; the phrase is its fallback for the
+              // tools it doesn't model (a context compaction, an applied skill).
+              const { label } = getToolLabel(
                 tool,
                 { path: d.path, name: d.name },
                 filesReadRef.current,
               );
+              const target = d.path ?? "";
               if (tool === "read_file" && d.path) filesReadRef.current.add(d.path);
 
-              const status =
-                d.status === "done"
-                  ? "done"
-                  : d.status === "failed" || d.status === "error"
-                    ? "fail"
-                    : "running";
+              const status = rowStatus(d.status);
 
-              // A call arrives twice — once running, once resolved. Update the
-              // open row instead of stacking a second one under it.
+              // One call streams as two events — running, then resolved —
+              // sharing a stable id. Reconcile the row by that id so the resolve
+              // updates in place (never a duplicate) and a second edit to the
+              // same file opens its own row. One-shot events without an id (a
+              // compaction, an applied skill) just append; a resolve that
+              // somehow lacks an id falls back to the newest open row of its
+              // tool.
               patch((prev) => {
                 const rows = [...prev.traceRows];
-                for (let i = rows.length - 1; i >= 0; i--) {
-                  const r = rows[i];
-                  if (r.kind === "tool" && r.tool === tool && r.status === "running") {
-                    if (status === "running") break;
-                    rows[i] = { ...r, status, target: target || r.target };
-                    return { ...prev, traceRows: rows };
+                const rowID = d.id ? `tool-${d.id}` : "";
+                let idx = -1;
+                if (rowID) {
+                  idx = rows.findIndex((r) => r.kind === "tool" && r.id === rowID);
+                } else if (status !== "running") {
+                  for (let i = rows.length - 1; i >= 0; i--) {
+                    const r = rows[i];
+                    if (r.kind === "tool" && r.tool === tool && r.status === "running") {
+                      idx = i;
+                      break;
+                    }
                   }
                 }
+                if (idx >= 0) {
+                  const r = rows[idx];
+                  rows[idx] = {
+                    ...r,
+                    status,
+                    label: label || r.label,
+                    target: target || r.target,
+                  };
+                  return { ...prev, traceRows: rows };
+                }
                 rows.push({
-                  id: `${id}-t${rows.length}`,
+                  id: rowID || `${id}-t${rows.length}`,
                   kind: "tool",
                   tool,
                   label,
-                  target: target || d.path || "",
+                  target,
                   status,
                 });
                 return { ...prev, traceRows: rows };
@@ -448,12 +564,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                 tool: "verify",
                 label: d.stage ? `Checked ${d.stage}` : "Checked",
                 target: "",
-                status:
-                  d.status === "done" || d.status === "pass"
-                    ? "done"
-                    : d.status === "failed" || d.status === "fail"
-                      ? "fail"
-                      : "running",
+                status: rowStatus(d.status),
                 summary: d.error ? firstLine(d.error) : undefined,
               });
               break;
@@ -474,7 +585,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                 tool: "task",
                 label: d.description ?? "Task",
                 target: "",
-                status: d.status === "done" ? "done" : d.status === "failed" ? "fail" : "running",
+                status: rowStatus(d.status),
                 summary: d.result ? firstLine(d.result) : undefined,
               });
               break;
@@ -491,7 +602,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                 // rebuilt, which takes minutes. Saying so beats silence.
                 label: "Rebuilding the dev client",
                 target: d.detail ?? "",
-                status: d.status === "done" ? "done" : d.status === "failed" ? "fail" : "running",
+                status: rowStatus(d.status),
               });
               break;
 
@@ -536,6 +647,42 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               break;
             }
 
+            case "question":
+              // The agent called ask_user: the turn pauses here. Attach the
+              // question to this entry so it renders a card the user answers in
+              // place. prompt_id addresses POST /answer; the `done` frame that
+              // follows carries status "waiting", which ends the stream without
+              // ending the turn. `...prev` keeps this through that done frame.
+              patch((prev) => ({
+                ...prev,
+                question: {
+                  promptId: d.prompt_id ?? 0,
+                  text: d.question ?? "The agent has a question.",
+                  choices: Array.isArray(d.choices) ? d.choices : [],
+                },
+              }));
+              break;
+
+            case "decision": {
+              // The agent recorded an architecture decision or a durable memory.
+              // Drop it into the trace as a card at the point it happened; the
+              // generic tool row for the same call is suppressed above.
+              const variant = d.variant === "adr" ? "adr" : "memory";
+              appendRow({
+                id: `${id}-d${Math.random().toString(36).slice(2, 8)}`,
+                kind: "decision",
+                decision: {
+                  variant,
+                  decision: d.decision,
+                  outcome: d.outcome,
+                  category: d.category,
+                  content: d.content,
+                  metadata: d.metadata,
+                },
+              });
+              break;
+            }
+
             case "error":
               patch((prev) => ({
                 ...prev,
@@ -549,7 +696,12 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               patch((prev) => ({
                 ...prev,
                 isStreaming: false,
-                phase: d.status === "failed" ? "FAILED_NEEDS_USER" : "DONE",
+                phase:
+                  d.status === "failed"
+                    ? "FAILED_NEEDS_USER"
+                    : d.status === "waiting" || d.status === "paused"
+                      ? "WAITING_FOR_USER"
+                      : "DONE",
                 filesTouched: touched,
                 verified: d.verified,
                 rounds: d.rounds,
@@ -561,11 +713,23 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               // each path with empty content, so opening a file the agent had
               // just written showed a blank editor.
               if (touched.length > 0) onFilesTouched?.(touched);
+              // A turn that reached its round budget ended cleanly but is not
+              // done. Pull the server's now-'paused' latest status so the resume
+              // banner appears at once — the same affordance a reload offers —
+              // without rebuilding (and flickering) the just-streamed transcript.
+              if (d.status === "paused") {
+                conversation
+                  .get(projectId)
+                  .then(({ latest }) =>
+                    setResumable(isResumable(latest) ? latest : null),
+                  )
+                  .catch(() => {});
+              }
               break;
             }
           }
         },
-      [onFilesTouched, onPlan],
+      [onFilesTouched, onPlan, projectId],
     );
 
     // ── Sending ──
@@ -582,7 +746,6 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         setResumable(null);
         filesReadRef.current = new Set();
         pinnedRef.current = true;
-        setStreamStartedAt(Date.now());
 
         const streamId = crypto.randomUUID();
         setMessages((prev) => [
@@ -619,11 +782,10 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       if (!resumable || isStreaming) return;
       const promptId = resumable.id;
       setResumable(null);
-      filesReadRef.current = new Set();
-      pinnedRef.current = true;
-      setStreamStartedAt(Date.now());
+        filesReadRef.current = new Set();
+        pinnedRef.current = true;
 
-      const streamId = crypto.randomUUID();
+        const streamId = crypto.randomUUID();
       setMessages((prev) => [
         ...prev,
         { id: streamId, role: "assistant", traceRows: [], isStreaming: true },
@@ -655,6 +817,51 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       }
     }, [resumable]);
 
+    // Answer a paused ask_user question. The reply resolves the pending call and
+    // resumes the same turn: the asking entry's card locks to show what was
+    // answered, and the agent's continuation streams into a fresh entry below —
+    // exactly the shape a reload rebuilds (locked card, then the next assistant
+    // turn). No user bubble: the answer lives in the card, live and on reload
+    // alike, so the two never disagree.
+    const answerQuestion = useCallback(
+      (promptId: number, reply: string) => {
+        const answer = reply.trim();
+        if (!answer || isStreaming || promptId <= 0) return;
+
+        // Lock the asking card. The prompt id names the paused turn uniquely, so
+        // it is enough to find the one card to close.
+        setMessages((prev) =>
+          prev.map((m) =>
+            isAssistant(m) && m.question && m.question.promptId === promptId
+              ? { ...m, question: { ...m.question, answered: answer } }
+              : m,
+          ),
+        );
+
+        filesReadRef.current = new Set();
+        pinnedRef.current = true;
+
+        const streamId = crypto.randomUUID();
+        setMessages((prev) => [
+          ...prev,
+          { id: streamId, role: "assistant", traceRows: [], isStreaming: true },
+        ]);
+
+        const patch = (fn: (prev: StreamMessage) => StreamMessage) =>
+          setMessages((prev) =>
+            prev.map((m) => (m.id === streamId && isAssistant(m) ? fn(m) : m)),
+          );
+
+        abortRef.current = prompts.answer(
+          promptId,
+          answer,
+          handleEvent(streamId, patch),
+          (err) => patch((prev) => ({ ...prev, isStreaming: false, error: err.message })),
+        );
+      },
+      [handleEvent, isStreaming],
+    );
+
     // Declared after `send` on purpose: reading it from above the declaration is
     // a temporal-dead-zone hazard, and it only worked because the handle body
     // does not run until after the first render.
@@ -670,6 +877,9 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     // new prompt — the obvious thing to type when the banner is showing. Gated on
     // `resumable`, so the same words are an ordinary prompt at any other time.
     function submitInput() {
+      // A pending question owns the conversation: it is answered in its card, not
+      // here, so the paused turn is never left behind by a fresh prompt.
+      if (pendingQuestion) return;
       if (resumable && !isStreaming && /^(resume|continue)$/i.test(input.trim())) {
         setInput("");
         resume();
@@ -740,28 +950,28 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     };
 
     return (
-      <section className="flex h-full min-h-0 flex-col bg-ink">
+      <section className="flex h-full min-h-0 min-w-[280px] flex-col overflow-x-auto bg-void">
         <header className="bay-head justify-between">
           <div className="flex items-center gap-2 min-w-0">
             <span className="lamp" data-state={isStreaming ? "working" : "idle"} />
             <span className="gauge truncate">Agent</span>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex min-w-0 flex-shrink-0 items-center gap-1">
             {messages.length > 0 && !isStreaming && (
               <button
                 type="button"
                 onClick={clearHistory}
                 onBlur={() => setConfirmClear(false)}
-                className="btn btn-ghost text-tiny"
+                className="btn btn-ghost h-7 px-2 font-mono text-xs"
               >
-                {confirmClear ? "Clear it?" : "Clear history"}
+                {confirmClear ? "Clear it?" : "Clear"}
               </button>
             )}
             <div
               role="group"
               aria-label="What the agent should do with your next message"
-              className="flex overflow-hidden rounded-1 border border-rail"
+              className="flex overflow-hidden rounded-md border border-graphite"
             >
               {(["plan", "build"] as const).map((m) => (
                 <button
@@ -774,10 +984,10 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                       ? "Talk through the app first. Nothing gets written."
                       : "Write the code and run the checks."
                   }
-                  className={`h-6 px-2.5 text-tiny capitalize transition-colors ${
+                  className={`h-6 px-2.5 font-mono text-xs capitalize transition-colors ${
                     mode === m
-                      ? "bg-riser text-paper"
-                      : "text-dust hover:bg-riser hover:text-graphite"
+                      ? "bg-white/10 text-paper"
+                      : "text-ash hover:bg-white/5 hover:text-fog"
                   }`}
                 >
                   {m}
@@ -790,20 +1000,29 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         <div
           ref={scrollRef}
           onScroll={onScroll}
-          className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
+          className="min-h-0 flex-1 overflow-y-auto px-2.5 py-3 sm:px-3"
         >
+          <ChatHistory
+            prompts={pastPrompts}
+            onPick={(text) => {
+              setInput(text);
+              textareaRef.current?.focus();
+            }}
+            onNewChat={() => void clearHistory()}
+            newChatConfirming={confirmClear}
+          />
           {restoring && messages.length === 0 && (
             <p className="gauge py-4 text-center">Loading this project&rsquo;s history</p>
           )}
 
           {!restoring && messages.length === 0 && (
-            <div className="flex h-full flex-col justify-center px-2">
-              <p className="text-body text-paper">
+            <div className="flex h-full flex-col justify-center px-1 sm:px-2">
+              <p className="text-[13px] font-medium tracking-tight text-paper">
                 {mode === "plan"
                   ? "Describe the app you want."
                   : "Say what to build next."}
               </p>
-              <p className="mt-1.5 text-small text-graphite">
+              <p className="mt-1.5 text-xs text-fog">
                 {mode === "plan"
                   ? "Plan mode talks it through — screens, navigation, which packages are needed — and writes nothing until you approve it."
                   : "Build mode writes files into the project, type-checks them, and installs the result on the device."}
@@ -826,7 +1045,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                       setInput(example);
                       textareaRef.current?.focus();
                     }}
-                    className="rounded-1 border border-rail bg-slate px-2.5 py-2 text-left text-small text-graphite transition-colors hover:border-edge hover:text-paper"
+                    className="rounded-md border border-graphite bg-carbon px-2.5 py-2 text-left text-xs leading-snug text-fog transition-colors hover:border-smoke hover:text-paper"
                   >
                     {example}
                   </button>
@@ -835,13 +1054,19 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             </div>
           )}
 
-          <div className="flex flex-col gap-4">
+          <div className="flex min-w-0 flex-col gap-4">
             {messages.map((msg) =>
               isAssistant(msg) ? (
-                <AssistantEntry key={msg.id} msg={msg} onApprove={approvePlan} />
+                <AssistantEntry
+                  key={msg.id}
+                  msg={msg}
+                  onApprove={approvePlan}
+                  onAnswer={answerQuestion}
+                  busy={isStreaming}
+                />
               ) : (
-                <div key={msg.id} className="flex justify-end">
-                  <div className="max-w-[88%] whitespace-pre-wrap rounded-2 border border-edge bg-riser px-3 py-2 text-body text-paper">
+                <div key={msg.id} className="flex min-w-0 justify-end">
+                  <div className="max-w-[88%] whitespace-pre-wrap break-words rounded-xl bg-white/5 px-3 py-1.5 text-xs leading-relaxed text-mist">
                     {msg.content}
                   </div>
                 </div>
@@ -854,13 +1079,10 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 
         {/* Live status — the one place that says, in the moment, what the agent
             is doing, what it is touching, and how long it has been at it. The
-            meter is the only moving thing. */}
+            pixel grid is the only moving thing. */}
         {isStreaming && (
-          <div className="flex items-center gap-2.5 border-t border-rail bg-probe/[0.06] px-3 py-2">
-            <Meter />
-            <span className="flex-shrink-0 text-small text-paper">
-              {phaseLabel(liveMessage?.phase) || "Working"}
-            </span>
+          <div className="flex items-center gap-2.5 border-t border-graphite bg-acid-lime/[0.04] px-3 py-2">
+            <LoadingState label={phaseLabel(liveMessage?.phase) || "Working"} />
             {liveMessage?.round && liveMessage.round > 1 ? (
               <span className="gauge flex-shrink-0">round {liveMessage.round}</span>
             ) : null}
@@ -868,26 +1090,25 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               <span
                 dir="rtl"
                 title={liveTarget}
-                className="min-w-0 flex-1 truncate text-left font-mono text-tiny text-graphite"
+                className="min-w-0 flex-1 truncate text-left font-mono text-xs text-fog"
               >
                 <span dir="ltr">{liveTarget}</span>
               </span>
             ) : (
               <span className="flex-1" />
             )}
-            <ElapsedClock startedAt={streamStartedAt} className="gauge tnum flex-shrink-0" />
           </div>
         )}
 
         {/* An interrupted turn waits on a human decision: continue it from where
-            it stopped, or set it aside. Filament (needs-you) not fault — the work
+            it stopped, or set it aside. Neutral, not fault — the work
             is not broken, it is paused. Hidden while streaming, when the status
             strip above owns this row. */}
         {resumable && !isStreaming && (
-          <div className="flex items-center gap-2.5 border-t border-filament/30 bg-filament/[0.06] px-3 py-2">
+          <div className="flex items-center gap-2.5 border-t border-graphite bg-white/[0.03] px-3 py-2">
             <span className="lamp flex-shrink-0" data-state="waiting" />
             <div className="min-w-0 flex-1">
-              <p className="text-small text-paper">
+              <p className="text-xs text-paper">
                 This turn was interrupted before it finished.
               </p>
               <p className="gauge">
@@ -895,7 +1116,9 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                   ? "the server stopped before it finished"
                   : resumable.status === "cancelled"
                     ? "it was stopped early"
-                    : "it ended with an error"}
+                    : resumable.status === "paused"
+                      ? "it hit its round budget"
+                      : "it ended with an error"}
                 {resumable.round > 0 ? ` · reached round ${resumable.round}` : ""}
               </p>
             </div>
@@ -912,8 +1135,12 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="border-t border-rail p-3">
-          <div className="flex items-end gap-2">
+        <form onSubmit={handleSubmit} className="border-t border-graphite p-2.5 sm:p-3">
+          <div
+            role="presentation"
+            onClick={() => textareaRef.current?.focus()}
+            className="flex cursor-text flex-col gap-2 rounded-md border border-graphite bg-white/[0.02] p-2.5 transition-colors duration-150 focus-within:border-smoke"
+          >
             <textarea
               ref={textareaRef}
               rows={1}
@@ -921,24 +1148,43 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={
-                mode === "plan" ? "Describe the app…" : "What should I build?"
+                pendingQuestion
+                  ? "Answer the question above to continue…"
+                  : mode === "plan"
+                    ? "Describe the app…"
+                    : "What should I build?"
               }
-              className="field resize-none leading-snug"
-              disabled={isStreaming}
+              className="min-h-4 bg-transparent text-xs leading-[1.4] text-mist outline-none placeholder:text-ash resize-none"
+              disabled={isStreaming || pendingQuestion}
+              aria-label="Chat prompt"
             />
-            {isStreaming ? (
-              <button type="button" onClick={stop} className="btn btn-stop h-8 flex-shrink-0">
-                Stop
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!input.trim()}
-                className="btn btn-go h-8 flex-shrink-0"
-              >
-                {mode === "plan" ? "Ask" : "Build"}
-              </button>
-            )}
+            <div className="flex items-center justify-end">
+              {isStreaming ? (
+                <button
+                  type="button"
+                  onClick={stop}
+                  className="btn btn-stop h-7 flex-shrink-0"
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  title={mode === "plan" ? "Ask" : "Build"}
+                  aria-label={mode === "plan" ? "Ask" : "Build"}
+                  disabled={!input.trim() || pendingQuestion}
+                  className="flex size-7 flex-shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 enabled:active:scale-[0.96]"
+                  style={{
+                    background: input.trim() && !pendingQuestion ? "var(--color-acid-lime)" : "var(--color-graphite)",
+                    color: input.trim() && !pendingQuestion ? "var(--color-void)" : "var(--color-fog)",
+                  }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 19V5M5 12l7-7 7 7" />
+                  </svg>
+                </button>
+              )}
+            </div>
           </div>
           <p className="gauge mt-1.5 select-none">
             Enter sends · Shift+Enter adds a line
@@ -952,31 +1198,149 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 AIChat.displayName = "AIChat";
 export default AIChat;
 
-// ── Elapsed time ──
-// Ticks once a second, and only while mounted — the status strip unmounts it
-// when the turn ends, so the interval stops with the stream.
-function ElapsedClock({
-  startedAt,
-  className = "",
+// ── Chat history ──
+// Searchable past prompts for this project, adapted from the sidebar pattern:
+// the expanding search field, the recent list, the New chat action. Everything
+// is real transcript data — past user prompts, most recent first. Picking one
+// fills the composer; New chat reuses the existing two-step clear.
+function ChatHistory({
+  prompts,
+  onPick,
+  onNewChat,
+  newChatConfirming,
 }: {
-  startedAt: number | null;
-  className?: string;
+  prompts: string[];
+  onPick: (text: string) => void;
+  onNewChat: () => void;
+  newChatConfirming: boolean;
 }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    setNow(Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [startedAt]);
+  const [open, setOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  if (!startedAt) return null;
-  const secs = Math.max(0, Math.floor((now - startedAt) / 1000));
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
+  useEffect(() => {
+    if (searchOpen) searchRef.current?.focus();
+  }, [searchOpen]);
+
+  if (prompts.length === 0) return null;
+  const visible = prompts.filter((p) =>
+    p.toLowerCase().includes(query.trim().toLowerCase()),
+  );
+
   return (
-    <span className={className}>
-      {m}:{String(s).padStart(2, "0")}
-    </span>
+    <div className="mb-2">
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 text-left transition-colors hover:bg-white/5"
+        >
+          <span className="gauge">History</span>
+          <span className="gauge tnum">{prompts.length}</span>
+          <svg
+            width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--color-ash)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+            className="ml-auto shrink-0 transition-transform duration-300"
+            style={{ transform: open ? "rotate(180deg)" : "rotate(0)" }}
+            aria-hidden
+          >
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          title="New chat (clears this project's history)"
+          onClick={onNewChat}
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-ash transition-colors hover:bg-white/5 hover:text-mist"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          aria-label="Search history"
+          aria-expanded={searchOpen}
+          onClick={() => setSearchOpen((v) => !v)}
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-ash transition-colors hover:bg-white/5 hover:text-mist"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3" />
+          </svg>
+        </button>
+      </div>
+
+      {searchOpen && (
+        <div className="mt-1 flex h-8 items-center gap-1.5 rounded-md border border-graphite bg-white/[0.02] px-2 transition-colors focus-within:border-smoke">
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setSearchOpen(false);
+                setQuery("");
+              }
+            }}
+            placeholder="Search prompts"
+            aria-label="Search prompt history"
+            className="min-w-0 flex-1 bg-transparent text-xs text-mist outline-none placeholder:text-ash"
+          />
+          {(visible.length > 0 || query) && (
+            <button
+              type="button"
+              aria-label="Close history search"
+              onClick={() => {
+                setSearchOpen(false);
+                setQuery("");
+              }}
+              className="flex size-6 shrink-0 items-center justify-center rounded-md text-ash transition-colors hover:text-mist"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
+      {newChatConfirming && (
+        <p className="mt-1 px-1.5 font-mono text-xs text-fog">
+          Press New chat again to clear this history for good.
+        </p>
+      )}
+
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-300"
+        style={{
+          gridTemplateRows: open ? "1fr" : "0fr",
+          opacity: open ? 1 : 0,
+          transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)",
+        }}
+      >
+        <div className="overflow-hidden">
+          <div className="flex flex-col gap-px py-1">
+            {visible.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                title={prompt}
+                onClick={() => onPick(prompt)}
+                className="flex h-8 min-w-0 items-center rounded-md px-2 text-left transition-colors hover:bg-white/5"
+              >
+                <span className="min-w-0 flex-1 truncate text-xs text-fog transition-colors hover:text-mist">
+                  {prompt}
+                </span>
+              </button>
+            ))}
+            {visible.length === 0 && (
+              <p className="px-2 py-1.5 text-xs text-ash">No prompts match.</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -985,24 +1349,36 @@ function ElapsedClock({
 function AssistantEntry({
   msg,
   onApprove,
+  onAnswer,
+  busy,
 }: {
   msg: StreamMessage;
   onApprove: (plan: PlanData) => void;
+  onAnswer: (promptId: number, reply: string) => void;
+  busy: boolean;
 }) {
   const waiting = msg.isStreaming && msg.traceRows.length === 0 && !msg.error;
+  // A const, not msg.question inline, so the closure below keeps the narrowing.
+  const question = msg.question;
 
   return (
-    <div className="rise flex flex-col gap-2">
+    <div className="rise flex min-w-0 flex-col gap-2">
       <AgentTrace rows={msg.traceRows} />
 
       {waiting && <p className="gauge py-1">Thinking</p>}
 
-      {msg.planMessage !== undefined && (
-        <PlanCard plan={msg.plan ?? { screens: [], features: [], navigation: "", packages: [] }} onApprove={onApprove} />
+      {msg.plan && <PlanCard plan={msg.plan} onApprove={onApprove} />}
+
+      {question && (
+        <QuestionCard
+          question={question}
+          busy={busy}
+          onAnswer={(reply) => onAnswer(question.promptId, reply)}
+        />
       )}
 
       {msg.error && (
-        <p className="rounded-2 border border-fault/35 bg-fault/10 px-3 py-2 text-small text-fault">
+        <p className="rounded-xl border border-coral-red/30 bg-coral-red/10 px-3 py-2 text-xs text-coral-red">
           {msg.error}
         </p>
       )}
@@ -1029,7 +1405,7 @@ function TurnFooter({ msg }: { msg: StreamMessage }) {
 
   return (
     <p className="gauge tnum flex items-center gap-2">
-      {msg.verified === false && <span className="text-filament">checks did not pass</span>}
+      {msg.verified === false && <span className="text-coral-red">checks did not pass</span>}
       {parts.join("  ·  ")}
     </p>
   );
@@ -1047,9 +1423,9 @@ function PlanCard({
   const packages = plan.packages ?? [];
 
   return (
-    <div className="bay overflow-hidden">
+    <div className="card !p-0 overflow-hidden">
       {screens.length > 0 && (
-        <div className="border-b border-rail p-3">
+        <div className="border-b border-graphite p-3">
           <p className="gauge mb-2">
             {screens.length} {screens.length === 1 ? "screen" : "screens"}
           </p>
@@ -1060,9 +1436,9 @@ function PlanCard({
                   {String(i + 1).padStart(2, "0")}
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-small text-paper">{screen.name}</span>
+                  <span className="block text-[13px] font-medium text-mist">{screen.name}</span>
                   {screen.description && (
-                    <span className="block text-tiny text-graphite">{screen.description}</span>
+                    <span className="block font-mono text-xs text-fog">{screen.description}</span>
                   )}
                 </span>
               </li>
@@ -1072,13 +1448,13 @@ function PlanCard({
       )}
 
       {features.length > 0 && (
-        <div className="border-b border-rail p-3">
+        <div className="border-b border-graphite p-3">
           <p className="gauge mb-2">Features</p>
           <div className="flex flex-wrap gap-1">
             {features.map((f, i) => (
               <span
                 key={`${f}-${i}`}
-                className="rounded-1 border border-rail bg-riser px-1.5 py-0.5 text-tiny text-graphite"
+                className="rounded-[4px] border border-graphite bg-white/5 px-1.5 py-0.5 font-mono text-xs text-fog"
               >
                 {f}
               </span>
@@ -1088,16 +1464,16 @@ function PlanCard({
       )}
 
       {plan.navigation && (
-        <div className="border-b border-rail p-3">
+        <div className="border-b border-graphite p-3">
           <p className="gauge mb-1">Navigation</p>
-          <p className="text-small text-paper">{plan.navigation}</p>
+          <p className="text-[13px] text-mist">{plan.navigation}</p>
         </div>
       )}
 
       {packages.length > 0 && (
-        <div className="border-b border-rail p-3">
+        <div className="border-b border-graphite p-3">
           <p className="gauge mb-2">Packages to install</p>
-          <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-tiny text-graphite">
+          <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-fog">
             {packages.map((p, i) => (
               <span key={`${p}-${i}`}>{p}</span>
             ))}
@@ -1105,12 +1481,134 @@ function PlanCard({
         </div>
       )}
 
-      <div className="flex items-center gap-2 p-3">
-        <button type="button" onClick={() => onApprove(plan)} className="btn btn-go">
-          Build this
-        </button>
-        <span className="gauge">or keep refining it above</span>
+      <div className="flex items-center justify-between gap-3 p-3">
+        <span className="font-mono text-xs tabular-nums text-ash">plan · ready to build</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-ash">or keep refining above</span>
+          <button type="button" onClick={() => onApprove(plan)} className="btn btn-go">
+            Build this ⏎
+          </button>
+        </div>
       </div>
+    </div>
+  );
+}
+
+// ── ask_user question ──
+// The agent paused to ask something. Unanswered, this is the one interactive
+// thing in the turn: pick a suggested choice or type a reply, and the turn
+// resumes. Answered, it locks to a plain record of what was asked and said —
+// the same shape a reload rebuilds, so the card never contradicts itself.
+function QuestionCard({
+  question,
+  onAnswer,
+  busy,
+}: {
+  question: NonNullable<StreamMessage["question"]>;
+  onAnswer: (reply: string) => void;
+  busy: boolean;
+}) {
+  const [draft, setDraft] = useState("");
+
+  if (question.answered !== undefined) {
+    return (
+      <div className="flex w-fit items-center gap-3" style={{ animation: "pop-in 260ms cubic-bezier(0.23,1,0.32,1) both" }}>
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-pulse-green/10 py-1 pr-2.5 pl-1 text-[13px] font-medium text-[#4cc069]">
+          <span className="flex size-4 items-center justify-center rounded-full bg-pulse-green text-white">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+          </span>
+          Answer sent
+        </span>
+      </div>
+    );
+  }
+
+  const submit = (reply: string) => {
+    if (busy) return;
+    const r = reply.trim();
+    if (!r) return;
+    onAnswer(r);
+  };
+
+  return (
+    <div className="card !p-0 overflow-hidden" style={{ animation: "fade-up 380ms cubic-bezier(0.23,1,0.32,1) both" }}>
+      <div className="flex items-start gap-2 border-b border-graphite p-3">
+        <span className="lamp mt-0.5 flex-shrink-0" data-state="waiting" />
+        <div className="min-w-0">
+          <p className="gauge mb-1">The agent needs an answer</p>
+          <p className="text-[13px] text-paper">{question.text}</p>
+        </div>
+      </div>
+
+      {question.choices.length > 0 && (
+        <div className="flex flex-col gap-1 border-b border-graphite p-3">
+          {question.choices.map((choice, i) => (
+            <button
+              key={`${choice}-${i}`}
+              type="button"
+              disabled={busy}
+              aria-pressed="false"
+              onClick={() => submit(choice)}
+              className="group relative flex items-center gap-2 rounded-md px-1 py-1 text-left transition-colors duration-100 hover:bg-white/5 disabled:opacity-50"
+            >
+              <span className="flex size-4 shrink-0 items-center justify-center rounded-full text-transparent shadow-[inset_0_0_0_1.5px_var(--color-smoke)] transition-colors duration-200 group-hover:shadow-[inset_0_0_0_1.5px_var(--color-fog)]">
+                <span className="size-1.5 rounded-full bg-acid-lime transition-transform duration-200 scale-0 group-hover:scale-50" />
+              </span>
+              <span className="text-xs leading-none text-fog transition-colors duration-200 group-hover:text-mist">
+                {choice}
+              </span>
+            </button>
+          ))}
+          <label className="relative flex items-center gap-2 rounded-md px-1 py-1 transition-colors duration-100">
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && draft.trim()) {
+                  e.preventDefault();
+                  submit(draft);
+                }
+              }}
+              placeholder="Something else…"
+              aria-label="Custom answer"
+              className="min-w-0 flex-1 bg-transparent pl-1.5 text-xs text-mist outline-none placeholder:text-ash"
+              disabled={busy}
+            />
+          </label>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-3 p-3">
+        <span className="font-mono text-xs tabular-nums text-ash">1 / 1</span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={busy || !draft.trim()}
+            onClick={() => submit(draft)}
+            className="btn btn-go h-8 flex-shrink-0"
+          >
+            Send ⏎
+          </button>
+        </div>
+      </div>
+      {question.choices.length === 0 && (
+        <div className="px-3 pb-3">
+          <textarea
+            rows={1}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                submit(draft);
+              }
+            }}
+            placeholder="Type your answer"
+            className="field resize-none leading-snug"
+            disabled={busy}
+          />
+        </div>
+      )}
     </div>
   );
 }

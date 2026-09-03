@@ -6,18 +6,17 @@ interface TonalCardProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 /**
- * A panel on the bench: flat, bordered, machined radius. Separation comes from
- * the rail hairline and a step in surface tone, not from a blur shadow — the
- * surface is metal, not paper stacked on paper.
+ * A Linear card: carbon surface, 12px radius, hairline inset edge. Separation
+ * comes from the border, never an outer shadow.
  */
 const TonalCard = forwardRef<HTMLDivElement, TonalCardProps>(
   ({ className = "", variant = "default", padding = "md", children, ...props }, ref) => {
-    const base = "rounded-2 border transition-colors";
+    const base = "rounded-xl transition-colors shadow-subtle";
 
     const variants = {
-      default: "bg-slate border-rail",
-      elevated: "bg-riser border-rail",
-      outlined: "bg-transparent border-rail",
+      default: "bg-carbon",
+      elevated: "bg-obsidian",
+      outlined: "bg-transparent border border-graphite",
     };
 
     const paddings = {

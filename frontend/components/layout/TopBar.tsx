@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { StatusBadge } from "@/components/ui";
 import { getEmail, signOut } from "@/lib/auth";
@@ -14,8 +14,13 @@ export default function TopBar({ tier = "free" }: TopBarProps) {
   const router = useRouter();
   // Read on the client only. The email lives in localStorage, so rendering it
   // during SSR would hydrate a mismatch (null on the server, a string here).
-  const [email, setEmail] = useState<string | null>(null);
-  useEffect(() => setEmail(getEmail()), []);
+  // useSyncExternalStore carries the server snapshot (null) through hydration
+  // instead of a setState-in-effect.
+  const email = useSyncExternalStore(
+    () => () => {},
+    () => getEmail(),
+    () => null,
+  );
 
   function handleSignOut() {
     signOut();
@@ -23,14 +28,15 @@ export default function TopBar({ tier = "free" }: TopBarProps) {
   }
 
   return (
-    <header className="flex h-12 flex-shrink-0 items-center justify-between border-b border-rail bg-ink px-4">
+    <header className="flex h-12 flex-shrink-0 items-center justify-between border-b border-graphite bg-void px-4">
       {/* The brand goes to the app home — the dashboard — not the marketing
           landing, because everyone who sees this bar is already signed in. */}
-      <Link href="/dashboard" className="flex items-center gap-2.5">
-        {/* A square, not a dot: the only round mark in the product is the signal
-            lamp, and a brand dot beside it would read as device state. */}
-        <span className="inline-block h-2 w-2 rounded-[1px] bg-paper" />
-        <span className="hidden text-small font-semibold text-paper sm:inline">
+      <Link href="/dashboard" className="flex items-center gap-2">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
+          <rect x="1" y="1" width="16" height="16" rx="4" stroke="#ffffff" strokeWidth="1.5" />
+          <circle cx="9" cy="9" r="2.5" fill="#e4f222" />
+        </svg>
+        <span className="text-base font-medium tracking-tight text-paper">
           SeekerStudio
         </span>
       </Link>
@@ -41,7 +47,7 @@ export default function TopBar({ tier = "free" }: TopBarProps) {
         <Link href="/settings" className="group flex items-center gap-3">
           {email && (
             <span
-              className="hidden font-mono text-tiny text-graphite transition-colors group-hover:text-paper sm:inline"
+              className="hidden font-mono text-xs text-fog transition-colors group-hover:text-mist sm:inline"
               title={email}
             >
               {email}

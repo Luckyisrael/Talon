@@ -256,7 +256,7 @@ function CodeBlock({ lang, body }: { lang: string; body: string }) {
       <button
         type="button"
         onClick={copy}
-        className="gauge absolute right-2 top-2 rounded-1 border border-rail bg-slate px-1.5 py-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:text-paper"
+        className="gauge absolute right-2 top-2 rounded-sm border border-graphite bg-carbon px-1.5 py-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:text-mist"
       >
         {copied ? "Copied" : "Copy"}
       </button>
@@ -282,7 +282,7 @@ function Markdown({ children, className }: { children: string; className?: strin
             return <Tag key={key}>{renderInline(block.text, key)}</Tag>;
           }
           case "hr":
-            return <hr key={key} className="border-0 border-t border-rail" />;
+            return <hr key={key} className="border-0 border-t border-graphite" />;
           case "quote":
             return <blockquote key={key}>{renderInline(block.text, key)}</blockquote>;
           case "ul":

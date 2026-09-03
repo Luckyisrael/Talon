@@ -9,7 +9,7 @@ interface AppShellProps {
 
 export default function AppShell({ children, tier = "free" }: AppShellProps) {
   return (
-    <div className="flex flex-col h-full bg-ink">
+    <div className="flex flex-col h-full bg-void">
       <TopBar tier={tier} />
       <main className="flex-1 overflow-auto">{children}</main>
     </div>

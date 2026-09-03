@@ -29,15 +29,14 @@ export default function PlanViewer({
   const packages = plan.packages ?? [];
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-ink">
+    <div className="flex h-full min-h-0 flex-col bg-void">
       <header className="bay-head justify-between">
         <div className="flex items-center gap-2">
           <span className="lamp" data-state="waiting" />
-          {/* Filament means the same thing everywhere: this is waiting on you. */}
           <span className="gauge">Plan · needs your go-ahead</span>
         </div>
         {onDismiss && (
-          <button type="button" onClick={onDismiss} className="btn btn-ghost text-tiny">
+          <button type="button" onClick={onDismiss} className="btn btn-ghost font-mono text-xs">
             Back to the code
           </button>
         )}
@@ -47,9 +46,9 @@ export default function PlanViewer({
         <div className="mx-auto max-w-2xl px-6 py-6 pb-16">
           {message && <Markdown>{message}</Markdown>}
 
-          <div className="mt-7 flex flex-col gap-3">
+          <div className="mt-7 flex flex-col gap-2">
             {screens.length > 0 && (
-              <section className="bay p-4">
+              <section className="card !p-5">
                 <div className="mb-3 flex items-baseline justify-between">
                   <h2 className="gauge">Screens</h2>
                   <span className="gauge tnum">{screens.length}</span>
@@ -61,9 +60,9 @@ export default function PlanViewer({
                         {String(i + 1).padStart(2, "0")}
                       </span>
                       <div className="min-w-0">
-                        <p className="text-body text-paper">{screen.name}</p>
+                        <p className="text-[15px] font-medium tracking-tight text-paper">{screen.name}</p>
                         {screen.description && (
-                          <p className="mt-0.5 text-small leading-relaxed text-graphite">
+                          <p className="mt-0.5 text-sm leading-relaxed text-fog">
                             {screen.description}
                           </p>
                         )}
@@ -75,20 +74,20 @@ export default function PlanViewer({
             )}
 
             {plan.navigation && (
-              <section className="bay p-4">
+              <section className="card !p-5">
                 <h2 className="gauge mb-2">Navigation</h2>
-                <p className="text-body leading-relaxed text-paper">{plan.navigation}</p>
+                <p className="text-[15px] leading-relaxed text-mist">{plan.navigation}</p>
               </section>
             )}
 
             {features.length > 0 && (
-              <section className="bay p-4">
+              <section className="card !p-5">
                 <h2 className="gauge mb-2.5">Features</h2>
                 <ul className="flex flex-wrap gap-1.5">
                   {features.map((feature, i) => (
                     <li
                       key={`${feature}-${i}`}
-                      className="rounded-1 border border-rail bg-riser px-2 py-1 text-small text-graphite"
+                      className="pill"
                     >
                       {feature}
                     </li>
@@ -98,14 +97,14 @@ export default function PlanViewer({
             )}
 
             {packages.length > 0 && (
-              <section className="bay p-4">
+              <section className="card !p-5">
                 <h2 className="gauge mb-2.5">Packages to install</h2>
-                <ul className="flex flex-col gap-1 font-mono text-tiny text-graphite">
+                <ul className="flex flex-col gap-1 font-mono text-xs text-fog">
                   {packages.map((pkg, i) => (
                     <li key={`${pkg}-${i}`}>{pkg}</li>
                   ))}
                 </ul>
-                <p className="mt-2.5 text-tiny text-dust">
+                <p className="mt-2.5 font-mono text-xs text-ash">
                   A package with native code means the dev client gets rebuilt,
                   which takes a few minutes the first time.
                 </p>
@@ -117,7 +116,7 @@ export default function PlanViewer({
             <button type="button" onClick={onApprove} className="btn btn-go h-9 px-4">
               Build this
             </button>
-            <p className="text-small text-graphite">
+            <p className="text-sm text-fog">
               Or keep talking in the chat to change it first.
             </p>
           </div>

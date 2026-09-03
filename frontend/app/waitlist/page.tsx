@@ -54,30 +54,30 @@ const pillars = [
 
 export default function WaitlistPage() {
   return (
-    <div className="min-h-screen flex flex-col bg-ink">
+    <div className="min-h-screen flex flex-col bg-void">
       <MarketingNav />
 
       <main className="flex-1 px-6 pt-20 pb-16">
         {/* Hero — the thesis: the waitlist is only for Pro, and you don't need
             it to start, because Free is open today. */}
         <div className="text-center max-w-2xl mx-auto mb-14">
-          <span className="gauge">early access</span>
-          <h1 className="text-4xl md:text-5xl font-semibold text-paper mt-4 mb-4 tracking-tight text-balance">
+          <span className="badge">EARLY ACCESS</span>
+          <h1 className="t-heading-sm mt-4 mb-4 text-balance">
             The waitlist is for Pro. Building is open now.
           </h1>
-          <p className="text-body md:text-lead text-graphite leading-relaxed">
+          <p className="t-body-sm text-fog">
             SeekerStudio is in early access. The Free tier is live today — a real allowance, no
             card, no queue. Pro raises the limits, and we&apos;re opening it gradually.
           </p>
           <div className="mt-8">
             <Link
               href="/register"
-              className="h-11 px-6 rounded-1 bg-paper text-ink text-body font-medium inline-flex items-center gap-2 hover:bg-white transition-colors"
+              className="btn-go h-11 px-6 rounded-md text-sm inline-flex items-center gap-2"
             >
               Start building free
               <ArrowRight size="16" variant="Linear" />
             </Link>
-            <p className="mt-3 text-tiny text-dust font-mono">
+            <p className="mt-3 font-mono text-xs text-ash">
               20 prompts · 60 minutes device time · free
             </p>
           </div>
@@ -85,19 +85,19 @@ export default function WaitlistPage() {
 
         {/* Two ways in: start now on Free, or follow to catch Pro when it
             opens. Both are real — no dead form in sight. */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 max-w-3xl mx-auto">
-          <div className="bay rounded-3 p-7 flex flex-col">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-w-3xl mx-auto">
+          <div className="card flex flex-col">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lead font-semibold text-paper">Start now</h2>
-              <span className="gauge">free · open</span>
+              <h2 className="text-[17px] font-medium tracking-tight text-paper">Start now</h2>
+              <span className="badge">FREE · OPEN</span>
             </div>
             <ul className="space-y-3 mb-8">
               {freePoints.map((p) => (
-                <li key={p} className="flex items-start gap-2.5 text-small text-paper">
+                <li key={p} className="flex items-start gap-2.5 text-sm text-mist">
                   <TickCircle
                     size="16"
                     variant="Linear"
-                    className="text-graphite mt-0.5 flex-shrink-0"
+                    className="text-fog mt-0.5 flex-shrink-0"
                   />
                   <span>{p}</span>
                 </li>
@@ -105,23 +105,23 @@ export default function WaitlistPage() {
             </ul>
             <Link
               href="/register"
-              className="mt-auto h-10 px-5 rounded-1 bg-paper text-ink text-small font-medium inline-flex items-center justify-center gap-2 hover:bg-white transition-colors"
+              className="btn-go mt-auto h-10 px-5 rounded-md text-sm inline-flex items-center justify-center gap-2"
             >
               Create your account
               <ArrowRight size="14" variant="Linear" />
             </Link>
           </div>
 
-          <div className="bay rounded-3 p-7 flex flex-col">
+          <div className="card flex flex-col">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lead font-semibold text-paper">Get Pro early</h2>
-              <span className="gauge">coming soon</span>
+              <h2 className="text-[17px] font-medium tracking-tight text-paper">Get Pro early</h2>
+              <span className="badge">COMING SOON</span>
             </div>
-            <p className="text-small text-graphite leading-relaxed mb-2">
+            <p className="text-sm text-fog leading-relaxed mb-2">
               Pro lifts the limits to 500 prompts and 25 hours of device time. It isn&apos;t
               self-serve yet — there&apos;s no form to fill in.
             </p>
-            <p className="text-small text-graphite leading-relaxed mb-6">
+            <p className="text-sm text-fog leading-relaxed mb-6">
               We&apos;re building in public and announce openings on X and in Discord first.
               Follow along and you&apos;ll be first to know.
             </p>
@@ -132,7 +132,7 @@ export default function WaitlistPage() {
                   href={c.href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="h-10 px-4 rounded-1 border border-rail text-paper text-small font-medium flex items-center justify-between hover:border-edge hover:bg-riser transition-colors"
+                  className="btn h-10 px-4 rounded-md text-sm flex items-center justify-between"
                 >
                   <span className="flex items-center gap-2.5">
                     <svg
@@ -145,7 +145,7 @@ export default function WaitlistPage() {
                     </svg>
                     {c.cta}
                   </span>
-                  <ArrowRight size="14" variant="Linear" className="text-dust" />
+                  <ArrowRight size="14" variant="Linear" className="text-ash" />
                 </Link>
               ))}
             </div>
@@ -154,14 +154,14 @@ export default function WaitlistPage() {
 
         {/* What early builders are actually getting — the honest pillars. */}
         <div className="max-w-3xl mx-auto mt-24">
-          <h2 className="text-title font-semibold text-paper text-center mb-10">
+          <h2 className="t-heading-sm text-center mb-10">
             What you&apos;re building with
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {pillars.map((p) => (
-              <div key={p.title} className="bay p-6">
-                <h3 className="text-body font-semibold text-paper mb-2">{p.title}</h3>
-                <p className="text-small text-graphite leading-relaxed">{p.body}</p>
+              <div key={p.title} className="card-subtle p-6!">
+                <h3 className="text-[15px] font-medium text-paper mb-2">{p.title}</h3>
+                <p className="text-sm text-fog leading-relaxed">{p.body}</p>
               </div>
             ))}
           </div>

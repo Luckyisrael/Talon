@@ -6,20 +6,23 @@ import { socials } from "./links";
 // reason to ship it to the client.
 export default function MarketingNav() {
   return (
-    <nav className="h-16 flex items-center justify-between px-6 md:px-12 max-w-[1500px] mx-auto w-full border-b border-rail">
-      <Link href="/" className="flex items-center gap-2.5">
-        <span className="inline-block w-2.5 h-2.5 rounded-[1px] bg-paper" />
-        <span className="text-lead font-semibold text-paper">SeekerStudio</span>
+    <nav className="h-16 flex items-center justify-between px-4 md:px-6 max-w-[1200px] mx-auto w-full">
+      <Link href="/" className="flex items-center gap-2">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
+          <rect x="1" y="1" width="16" height="16" rx="4" stroke="#ffffff" strokeWidth="1.5" />
+          <circle cx="9" cy="9" r="2.5" fill="#e4f222" />
+        </svg>
+        <span className="text-base font-medium tracking-tight text-paper">SeekerStudio</span>
       </Link>
 
-      <div className="hidden md:flex items-center gap-8">
-        <Link href="/docs" className="text-small text-graphite hover:text-paper transition-colors">
+      <div className="hidden md:flex items-center gap-2">
+        <Link href="/docs" className="text-[13px] text-mist hover:text-paper transition-colors px-3 py-2">
           Docs
         </Link>
-        <Link href="/pricing" className="text-small text-graphite hover:text-paper transition-colors">
+        <Link href="/pricing" className="text-[13px] text-mist hover:text-paper transition-colors px-3 py-2">
           Pricing
         </Link>
-        <Link href="/dashboard" className="text-small text-graphite hover:text-paper transition-colors">
+        <Link href="/dashboard" className="text-[13px] text-mist hover:text-paper transition-colors px-3 py-2">
           App
         </Link>
       </div>
@@ -31,7 +34,7 @@ export default function MarketingNav() {
               key={s.label}
               href={s.href}
               aria-label={s.label}
-              className="text-dust hover:text-paper transition-colors"
+              className="text-ash hover:text-mist transition-colors"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -42,10 +45,7 @@ export default function MarketingNav() {
           ))}
         </div>
 
-        <Link
-          href="/login"
-          className="h-9 px-4 rounded-1 bg-paper text-ink text-small font-medium inline-flex items-center hover:bg-white transition-colors"
-        >
+        <Link href="/login" className="btn-pill">
           Sign in
         </Link>
       </div>

@@ -24,12 +24,11 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
       <TonalCard
         variant="elevated"
         padding="lg"
-        className="flex h-full flex-col transition-colors hover:border-edge hover:bg-rail"
+        className="flex h-full flex-col transition-colors hover:border-smoke"
       >
         <div className="flex items-start justify-between">
-          {/* The initial is machine-set identity, so it wears the machine face. */}
-          <div className="flex h-9 w-9 items-center justify-center rounded-1 border border-rail bg-riser">
-            <span className="font-mono text-small font-semibold text-paper">
+          <div className="flex h-9 w-9 items-center justify-center rounded-md border border-graphite bg-white/5">
+            <span className="font-mono text-sm font-medium text-paper">
               {project.name.charAt(0).toUpperCase()}
             </span>
           </div>
@@ -42,7 +41,7 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
                   e.stopPropagation();
                   onDelete(project);
                 }}
-                className="p-1.5 rounded-1 text-dust hover:text-fault hover:bg-fault/10 transition-colors opacity-0 group-hover:opacity-100"
+                className="p-1.5 rounded-md text-ash hover:text-coral-red hover:bg-coral-red/10 transition-colors opacity-0 group-hover:opacity-100"
                 title="Delete project"
               >
                 <Trash size="14" variant="Linear" />
@@ -51,15 +50,15 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
           </div>
         </div>
 
-        <h3 className="mt-4 text-body font-semibold text-paper transition-colors group-hover:text-white">
+        <h3 className="mt-4 mb-2 text-[15px] font-medium tracking-tight text-paper transition-colors group-hover:text-white">
           {project.name}
         </h3>
 
         {/* Footer readout: creation telemetry on the left, the open affordance on
             the right, parted by a hairline so the card reads as one module. */}
-        <div className="mt-auto flex items-center justify-between border-t border-rail pt-3 mt-4">
+        <div className="mt-auto flex items-center justify-between border-t border-graphite pt-3 mt-4">
           <span className="gauge">Created {created}</span>
-          <span className="inline-flex items-center gap-1 text-tiny text-dust transition-colors group-hover:text-paper">
+          <span className="inline-flex items-center gap-1 font-mono text-xs text-ash transition-colors group-hover:text-mist">
             Open
             <ArrowRight
               size="14"

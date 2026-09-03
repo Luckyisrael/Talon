@@ -12,14 +12,14 @@ export const metadata: Metadata = {
 // routes that actually go somewhere — home, and the app.
 export default function NotFound() {
   return (
-    <main className="flex-1 flex flex-col items-center justify-center px-6 py-24 text-center">
+    <main className="flex-1 flex flex-col items-center justify-center px-6 py-24 text-center bg-void">
       {/* The machine reporting a fact, so it speaks in mono. */}
-      <span className="gauge">404 · route not found</span>
+      <span className="t-label">404 · ROUTE NOT FOUND</span>
 
-      <h1 className="text-4xl md:text-5xl font-semibold text-paper mt-4 mb-4 tracking-tight text-balance">
+      <h1 className="t-heading-sm mt-4 mb-4 text-balance">
         We can&apos;t find that page
       </h1>
-      <p className="text-body text-graphite max-w-md leading-relaxed mb-8">
+      <p className="t-body-sm text-fog max-w-md mb-8">
         The link may be broken, or the page may have moved. Nothing&apos;s wrong with your
         build — this URL just doesn&apos;t point anywhere.
       </p>
@@ -27,14 +27,14 @@ export default function NotFound() {
       <div className="flex flex-wrap items-center justify-center gap-3">
         <Link
           href="/"
-          className="h-10 px-5 rounded-1 bg-paper text-ink text-small font-medium inline-flex items-center gap-2 hover:bg-white transition-colors"
+          className="btn-go h-10 px-5 rounded-md text-sm inline-flex items-center gap-2"
         >
           Go home
           <ArrowRight size="14" variant="Linear" />
         </Link>
         <Link
           href="/dashboard"
-          className="h-10 px-5 rounded-1 border border-rail text-paper text-small font-medium inline-flex items-center hover:border-edge hover:bg-riser transition-colors"
+          className="btn h-10 px-5 rounded-md text-sm inline-flex items-center"
         >
           Open the app
         </Link>

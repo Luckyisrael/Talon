@@ -20,20 +20,19 @@ import type { ArchitectureDecision, ProjectMemory } from "@/lib/types";
  */
 
 // The five categories the write_memory tool allows. Everything is the agent's
-// knowledge, so probe (the agent's colour) is the panel accent — except
-// warnings, which are hazards the agent flagged, shown in the product's warning
-// colour (filament). Unknown types fall back to neutral rather than inventing a
-// meaning.
+// knowledge, so entries wear neutral mist — except warnings, which the agent
+// flagged and keep fog emphasis. Unknown types fall back to ash rather than
+// inventing a meaning.
 const TYPE_TONE: Record<string, string> = {
-  convention: "text-probe",
-  decision: "text-probe",
-  architecture: "text-probe",
-  fact: "text-probe",
-  warning: "text-filament",
+  convention: "text-mist",
+  decision: "text-mist",
+  architecture: "text-mist",
+  fact: "text-mist",
+  warning: "text-fog",
 };
 
 function toneFor(entryType: string): string {
-  return TYPE_TONE[entryType.toLowerCase()] ?? "text-dust";
+  return TYPE_TONE[entryType.toLowerCase()] ?? "text-ash";
 }
 
 export default function MemoryPanel({
@@ -70,8 +69,12 @@ export default function MemoryPanel({
   }, [projectId]);
 
   // Refetch whenever the tab opens or the project changes; ignore while hidden.
+  // Deferred a macrotask so the fetch (which setStates synchronously) doesn't
+  // cascade-render inside the effect commit.
   useEffect(() => {
-    if (active) void load();
+    if (!active) return;
+    const t = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(t);
   }, [active, load]);
 
   const total = memories.length + decisions.length;
@@ -86,7 +89,7 @@ export default function MemoryPanel({
             type="button"
             onClick={() => void load()}
             disabled={status === "loading"}
-            className="gauge text-dust transition-colors hover:text-graphite disabled:opacity-50"
+            className="gauge text-ash transition-colors hover:text-fog disabled:opacity-50"
             aria-label="Refresh what the agent knows"
           >
             {status === "loading" ? "…" : "↻"}
@@ -97,7 +100,7 @@ export default function MemoryPanel({
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {status === "error" ? (
           <div className="px-1 py-4">
-            <p className="text-small text-fault">Couldn&apos;t load the agent&apos;s memory.</p>
+            <p className="text-sm text-coral-red">Couldn&apos;t load the agent&apos;s memory.</p>
             <button type="button" onClick={() => void load()} className="btn mt-3">
               Try again
             </button>
@@ -106,8 +109,8 @@ export default function MemoryPanel({
           <p className="gauge px-1">loading…</p>
         ) : total === 0 && summary === "" ? (
           <div className="px-1 py-4">
-            <p className="text-small text-paper">The agent hasn&apos;t noted anything yet.</p>
-            <p className="mt-1 text-tiny leading-relaxed text-graphite">
+            <p className="text-sm text-mist">The agent hasn&apos;t noted anything yet.</p>
+            <p className="mt-1 font-mono text-xs leading-relaxed text-fog">
               As it builds, the conventions it sets, the decisions it makes, and
               the hazards it spots get written here — and carried into every later
               turn.
@@ -119,8 +122,8 @@ export default function MemoryPanel({
                 left rule marks it as the agent's own summary of itself. */}
             {summary !== "" && (
               <div className="border-l-2 border-probe pl-3">
-                <p className="gauge mb-1 text-probe">In one line</p>
-                <p className="text-small leading-relaxed text-graphite">{summary}</p>
+                <p className="gauge mb-1 text-acid-lime">In one line</p>
+                <p className="text-sm leading-relaxed text-fog">{summary}</p>
               </div>
             )}
 
@@ -130,19 +133,19 @@ export default function MemoryPanel({
                 {memories.map((m) => (
                   <article
                     key={m.id}
-                    className="rounded-2 border border-rail bg-slate p-3"
+                    className="rounded-xl border border-graphite bg-carbon p-3"
                   >
                     <div className="mb-1.5 flex items-center gap-2">
                       <span className={`gauge ${toneFor(m.entry_type)}`}>
                         {m.entry_type}
                       </span>
                       {m.metadata && (
-                        <span className="gauge truncate text-dust" title={m.metadata}>
+                        <span className="gauge truncate text-ash" title={m.metadata}>
                           {m.metadata}
                         </span>
                       )}
                     </div>
-                    <p className="text-small leading-relaxed text-paper">{m.content}</p>
+                    <p className="text-sm leading-relaxed text-mist">{m.content}</p>
                   </article>
                 ))}
               </section>
@@ -154,13 +157,13 @@ export default function MemoryPanel({
                 {decisions.map((d) => (
                   <article
                     key={d.id}
-                    className="rounded-2 border border-rail bg-slate p-3"
+                    className="rounded-xl border border-graphite bg-carbon p-3"
                   >
-                    <p className="text-small font-medium leading-relaxed text-paper">
+                    <p className="text-sm font-medium leading-relaxed text-mist">
                       {d.decision}
                     </p>
                     {d.outcome && (
-                      <p className="mt-1 text-tiny leading-relaxed text-graphite">
+                      <p className="mt-1 font-mono text-xs leading-relaxed text-fog">
                         {d.outcome}
                       </p>
                     )}

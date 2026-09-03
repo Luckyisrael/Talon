@@ -6,28 +6,26 @@ interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
 }
 
 /**
- * Mono, uppercase, tracked — the same register as an instrument label, because
- * a badge names a real condition. Colour appears only where it states one:
- * "active" borrows signal because the project is actually running, "error" is a
- * fault. A tier is a plan, not a live state, so free/pro stay neutral and
- * differ only in emphasis.
+ * System badge: 4px radius, Inter 12px/400, fog on subtle fill. Colour appears
+ * only where it states a condition — pulse-green for actually-running, coral
+ * for error. Tiers stay neutral and differ only in emphasis.
  */
 const StatusBadge = forwardRef<HTMLSpanElement, StatusBadgeProps>(
   ({ className = "", variant = "free", size = "sm", children, ...props }, ref) => {
     const base =
-      "inline-flex items-center rounded-1 border font-mono uppercase tracking-wider";
+      "inline-flex items-center rounded-[4px] border border-transparent font-sans";
 
     const variants = {
-      free: "bg-riser border-rail text-dust",
-      pro: "bg-riser border-edge text-paper",
-      active: "bg-signal/10 border-signal/30 text-signal",
-      paused: "bg-riser border-rail text-graphite",
-      error: "bg-fault/10 border-fault/30 text-fault",
+      free: "bg-white/5 text-fog",
+      pro: "bg-white/5 text-mist border-white/10",
+      active: "bg-pulse-green/10 border-pulse-green/30 text-[#4cc069]",
+      paused: "bg-white/5 text-ash",
+      error: "bg-coral-red/10 border-coral-red/30 text-[#f08080]",
     };
 
     const sizes = {
-      sm: "h-5 px-2 text-micro",
-      md: "h-6 px-2.5 text-tiny",
+      sm: "h-5 px-1.5 text-xs",
+      md: "h-6 px-2.5 text-xs",
     };
 
     return (

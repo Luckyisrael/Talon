@@ -108,7 +108,7 @@ export default function CheckpointMenu({
       {open && (
         <div
           role="menu"
-          className="rise absolute right-0 top-full z-30 mt-1 w-80 overflow-hidden rounded-2 border border-edge bg-slate shadow-[0_18px_44px_-14px_rgba(0,0,0,0.85)]"
+          className="rise absolute right-0 top-full z-30 mt-1 w-80 overflow-hidden rounded-xl border border-smoke bg-carbon shadow-xl"
         >
           <div className="bay-head">
             <span className="gauge">Restore point</span>
@@ -117,7 +117,7 @@ export default function CheckpointMenu({
           {items === null && <p className="gauge px-3 py-4">Loading</p>}
 
           {items?.length === 0 && (
-            <p className="px-3 py-4 text-small text-graphite">
+            <p className="px-3 py-4 text-sm text-fog">
               Nothing to roll back yet. Each build turn saves the files it is
               about to change, and they show up here.
             </p>
@@ -128,10 +128,10 @@ export default function CheckpointMenu({
               {items.map((cp) => {
                 const count = cp.files?.length ?? 0;
                 return (
-                  <li key={cp.id} className="border-b border-rail last:border-0">
+                  <li key={cp.id} className="border-b border-graphite last:border-0">
                     <div className="flex items-start gap-2 px-3 py-2">
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-small text-paper" title={cp.label}>
+                        <p className="truncate text-sm text-mist" title={cp.label}>
                           {cp.label || `Checkpoint ${cp.id}`}
                         </p>
                         <p className="gauge tnum mt-0.5">
@@ -143,7 +143,7 @@ export default function CheckpointMenu({
                         onClick={() => void restore(cp)}
                         onBlur={() => setConfirming((c) => (c === cp.id ? null : c))}
                         disabled={busy !== null}
-                        className={`btn flex-shrink-0 text-tiny ${
+                        className={`btn flex-shrink-0 font-mono text-xs ${
                           confirming === cp.id ? "btn-stop" : "btn-ghost"
                         }`}
                       >
@@ -161,7 +161,7 @@ export default function CheckpointMenu({
           )}
 
           {error && (
-            <p className="border-t border-rail px-3 py-2 text-tiny text-fault">{error}</p>
+            <p className="border-t border-graphite px-3 py-2 font-mono text-xs text-coral-red">{error}</p>
           )}
         </div>
       )}

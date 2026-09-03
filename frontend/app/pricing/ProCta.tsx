@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { isAuthenticated } from "@/lib/auth";
 
@@ -15,14 +15,17 @@ import { isAuthenticated } from "@/lib/auth";
  * crawler sees the honest waitlist copy.
  */
 export default function ProCta() {
-  const [authed, setAuthed] = useState(false);
-
-  useEffect(() => {
-    setAuthed(isAuthenticated());
-  }, []);
+  // Client-only auth read with a server snapshot of false, so the signed-out
+  // path renders on the server and at hydration with no mismatch — and no
+  // setState-in-effect.
+  const authed = useSyncExternalStore(
+    () => () => {},
+    () => isAuthenticated(),
+    () => false,
+  );
 
   const linkClass =
-    "mt-auto h-10 px-5 rounded-1 text-small font-medium inline-flex items-center justify-center transition-colors border border-rail text-paper hover:border-edge hover:bg-riser";
+    "btn-go mt-auto h-10 px-5 rounded-md text-sm inline-flex items-center justify-center";
 
   if (authed) {
     return (
@@ -30,7 +33,7 @@ export default function ProCta() {
         <Link href="/checkout?tier=pro" className={linkClass}>
           Upgrade to Pro
         </Link>
-        <p className="mt-3 text-tiny text-dust text-center">
+        <p className="mt-3 font-mono text-xs text-ash text-center">
           Test mode — no card is charged yet.
         </p>
       </>
@@ -42,7 +45,7 @@ export default function ProCta() {
       <Link href="/waitlist" className={linkClass}>
         Join the waitlist
       </Link>
-      <p className="mt-3 text-tiny text-dust text-center">
+      <p className="mt-3 font-mono text-xs text-ash text-center">
         Pro isn&apos;t a self-serve purchase yet — join the waitlist and we&apos;ll reach out
         when it opens.
       </p>

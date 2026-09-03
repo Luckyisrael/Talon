@@ -44,7 +44,7 @@ export default function ProjectPage() {
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-ink">
+      <div className="flex h-screen items-center justify-center bg-void">
         <p className="gauge">Opening the project</p>
       </div>
     );
@@ -52,9 +52,9 @@ export default function ProjectPage() {
 
   if (error || !project) {
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-3 bg-ink px-6 text-center">
-        <p className="text-lead text-paper">That project would not open.</p>
-        <p className="max-w-sm text-small text-graphite">{error}</p>
+      <div className="flex h-screen flex-col items-center justify-center gap-3 bg-void px-6 text-center">
+        <p className="text-[17px] font-medium tracking-tight text-paper">That project would not open.</p>
+        <p className="max-w-sm text-sm text-fog">{error}</p>
         <button type="button" onClick={() => router.push("/dashboard")} className="btn mt-1">
           Back to your projects
         </button>
@@ -63,7 +63,7 @@ export default function ProjectPage() {
   }
 
   return (
-    <div className="h-screen overflow-hidden bg-ink">
+    <div className="h-screen overflow-hidden bg-void">
       <IDELayout
         projectId={project.id}
         projectName={project.name}

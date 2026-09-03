@@ -45,7 +45,10 @@ function CheckoutInner() {
       router.replace(`/login?next=${encodeURIComponent(here)}`);
       return;
     }
-    setReady(true);
+    // Deferred past the commit so the ready flag doesn't cascade-render
+    // inside the effect (react-hooks/set-state-in-effect).
+    const t = window.setTimeout(() => setReady(true), 0);
+    return () => window.clearTimeout(t);
   }, [router]);
 
   async function handleComplete() {
@@ -72,18 +75,18 @@ function CheckoutInner() {
   }
 
   return (
-    <div className="bay p-6">
+    <div className="card">
       <div className="flex items-center justify-between mb-1">
-        <h1 className="text-lead font-semibold text-paper">Checkout</h1>
-        <span className="gauge">test mode</span>
+        <h1 className="text-[17px] font-medium tracking-tight text-paper">Checkout</h1>
+        <span className="badge">TEST MODE</span>
       </div>
-      <p className="text-small text-graphite mb-6">
-        Upgrading to <span className="text-paper">{plan.name}</span>.
+      <p className="text-sm text-fog mb-6">
+        Upgrading to <span className="text-mist">{plan.name}</span>.
       </p>
 
       <ul className="space-y-2.5 mb-6">
         {plan.points.map((p) => (
-          <li key={p} className="text-small text-paper">
+          <li key={p} className="text-sm text-mist">
             · {p}
           </li>
         ))}
@@ -92,16 +95,16 @@ function CheckoutInner() {
       {/* The honest core of this page: payments are not live yet, so there is no
           card field and nothing is charged. This simulates the provider's hosted
           checkout so the upgrade path works end-to-end in test mode. */}
-      <div className="rounded-1 border border-rail bg-riser p-4 mb-6">
-        <p className="text-small text-paper mb-1">This is a simulated checkout.</p>
-        <p className="text-tiny text-dust leading-relaxed">
+      <div className="rounded-md border border-graphite bg-white/5 p-4 mb-6">
+        <p className="text-sm text-mist mb-1">This is a simulated checkout.</p>
+        <p className="font-mono text-xs text-ash leading-relaxed">
           No card is entered and no real payment is taken. Completing it grants the {plan.name}{" "}
           tier through the same verified path a real payment would use, so the flow can be
           tested before live payments are switched on.
         </p>
       </div>
 
-      {error && <p className="text-small text-fault mb-4">{error}</p>}
+      {error && <p className="text-sm text-coral-red mb-4">{error}</p>}
 
       <PillButton
         variant="primary"
@@ -114,7 +117,7 @@ function CheckoutInner() {
 
       <Link
         href="/settings"
-        className="mt-4 block text-center text-small text-graphite underline underline-offset-2 hover:text-paper transition-colors"
+        className="mt-4 block text-center text-sm text-fog underline underline-offset-2 hover:text-mist transition-colors"
       >
         Cancel and go back
       </Link>
@@ -124,7 +127,7 @@ function CheckoutInner() {
 
 export default function CheckoutPage() {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-ink px-6 py-16">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-void px-6 py-16">
       <div className="w-full max-w-md">
         <Suspense
           fallback={

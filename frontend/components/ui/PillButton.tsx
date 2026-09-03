@@ -6,28 +6,29 @@ interface PillButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 /**
- * The name is kept for its call sites, but the shape is no longer a pill — on
- * the bench nothing is fully round except the signal lamp. This is a machined
- * control: tight radius, neutral fills. `primary` reads as high-contrast paper
- * rather than a semantic hue, because signal/probe/filament/fault each mean one
- * real thing and "this is the button you want" is not one of them.
+ * The shared action button. Despite the legacy name, the shape follows the
+ * system: 6px radius, Inter 13–14px at weight 500. `primary` is the single
+ * chromatic action per view (acid lime on void); everything else stays
+ * neutral. For true pills (tags, chips) use the `.pill` class; for the white
+ * nav CTA use `.btn-pill`.
  */
 const PillButton = forwardRef<HTMLButtonElement, PillButtonProps>(
   ({ className = "", variant = "primary", size = "md", children, ...props }, ref) => {
     const base =
-      "inline-flex items-center justify-center gap-2 rounded-1 font-medium whitespace-nowrap transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
+      "inline-flex items-center justify-center gap-2 rounded-md font-medium whitespace-nowrap transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
 
     const variants = {
-      primary: "bg-paper text-ink hover:bg-white",
-      secondary: "bg-riser text-paper border border-rail hover:bg-rail hover:border-edge",
+      primary: "bg-acid-lime text-void hover:bg-[#eef75c] border border-acid-lime hover:border-[#eef75c]",
+      secondary:
+        "bg-transparent text-mist border border-graphite hover:border-smoke hover:text-paper",
       ghost:
-        "bg-transparent text-graphite border border-transparent hover:bg-riser hover:border-rail hover:text-paper",
+        "bg-transparent text-fog border border-transparent hover:text-mist",
     };
 
     const sizes = {
-      sm: "h-8 px-3 text-small",
-      md: "h-9 px-4 text-small",
-      lg: "h-11 px-6 text-body",
+      sm: "h-8 px-3 text-[13px]",
+      md: "h-9 px-4 text-sm",
+      lg: "h-11 px-6 text-sm",
     };
 
     return (

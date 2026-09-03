@@ -125,10 +125,10 @@ function Row({
           onContextMenu(e, node.type, fullPath);
         }}
         title={fullPath}
-        className={`flex h-6 w-full items-center gap-1 pr-2 text-left font-mono text-tiny outline-none transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-edge ${
+        className={`flex h-6 w-full items-center gap-1 pr-2 text-left font-mono text-xs outline-none transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-acid-lime ${
           selected
-            ? "bg-riser text-paper"
-            : "text-graphite hover:bg-riser/60 hover:text-paper"
+            ? "bg-white/10 text-paper"
+            : "text-fog hover:bg-white/5 hover:text-paper"
         }`}
         style={{ paddingLeft: 6 + depth * 12 }}
       >
@@ -139,7 +139,7 @@ function Row({
             fill="none"
             stroke="currentColor"
             strokeWidth={2.5}
-            className={`h-2.5 w-2.5 flex-shrink-0 text-dust transition-transform ${
+            className={`h-2.5 w-2.5 flex-shrink-0 text-ash transition-transform ${
               open ? "rotate-90" : ""
             }`}
           >
@@ -151,10 +151,10 @@ function Row({
 
         <span className="truncate">{node.name}</span>
 
-        {node.type === "folder" && <span aria-hidden className="text-dust">/</span>}
+        {node.type === "folder" && <span aria-hidden className="text-ash">/</span>}
 
         {dirty && (
-          <span className="ml-auto flex-shrink-0 text-filament" title="Unsaved changes">
+          <span className="ml-auto flex-shrink-0 text-mist" title="Unsaved changes">
             ●
           </span>
         )}
@@ -166,7 +166,7 @@ function Row({
               doing all the work. */}
           <span
             aria-hidden
-            className="absolute top-0 bottom-0 w-px bg-rail"
+            className="absolute top-0 bottom-0 w-px bg-graphite"
             style={{ left: 10 + depth * 12 }}
           />
           {node.children.map((child) => (
@@ -462,7 +462,7 @@ function RenameInput({
         if (v && v !== defaultValue) onSubmit(v);
         else onCancel();
       }}
-      className="field h-6 !py-0 font-mono !text-tiny"
+      className="field h-6 py-0! font-mono text-xs"
     />
   );
 }

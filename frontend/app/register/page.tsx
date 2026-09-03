@@ -32,18 +32,21 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 bg-ink">
+    <div className="min-h-screen flex items-center justify-center px-4 bg-void">
       <div className="w-full max-w-sm">
         <div className="flex justify-center mb-8">
-          <Link href="/" className="flex items-center gap-2.5">
-            <span className="inline-block w-2.5 h-2.5 rounded-[1px] bg-paper" />
-            <span className="text-lead font-semibold text-paper">SeekerStudio</span>
+          <Link href="/" className="flex items-center gap-2">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
+              <rect x="1" y="1" width="16" height="16" rx="4" stroke="#ffffff" strokeWidth="1.5" />
+              <circle cx="9" cy="9" r="2.5" fill="#e4f222" />
+            </svg>
+            <span className="text-base font-medium tracking-tight text-paper">SeekerStudio</span>
           </Link>
         </div>
 
-        <div className="bay p-6">
-          <h1 className="text-lead font-semibold text-paper text-center mb-1">Create account</h1>
-          <p className="text-small text-graphite text-center mb-6">Start building Solana Mobile apps</p>
+        <div className="card">
+          <h1 className="text-[17px] font-medium tracking-tight text-paper text-center mb-1">Create account</h1>
+          <p className="text-sm text-fog text-center mb-6">Start building Solana Mobile apps</p>
 
           <form onSubmit={handleSubmit}>
             <label className="block mb-4">
@@ -73,10 +76,10 @@ export default function RegisterPage() {
                 className="field mt-2"
               />
               {/* The API enforces this. Saying so up front beats a rejected form. */}
-              <span className="mt-2 block text-tiny text-dust">At least 10 characters.</span>
+              <span className="mt-2 block font-mono text-xs text-ash">At least 10 characters.</span>
             </label>
 
-            {error && <p className="text-small text-fault mb-4">{error}</p>}
+            {error && <p className="text-sm text-coral-red mb-4">{error}</p>}
 
             <PillButton type="submit" disabled={loading} className="w-full">
               {loading ? "Creating account…" : "Create account"}
@@ -84,9 +87,9 @@ export default function RegisterPage() {
           </form>
         </div>
 
-        <p className="text-small text-graphite text-center mt-6">
+        <p className="text-sm text-fog text-center mt-6">
           Already have an account?{" "}
-          <Link href="/login" className="text-paper underline underline-offset-2 hover:text-white transition-colors">
+          <Link href="/login" className="text-mist underline underline-offset-2 hover:text-paper transition-colors">
             Sign in
           </Link>
         </p>

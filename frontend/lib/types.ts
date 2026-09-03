@@ -151,6 +151,54 @@ export interface Checkout {
   url: string;
 }
 
+// ── Premium git integration (W4) ──────────────────────
+
+/**
+ * The server's honest answer to "what can this user do with GitHub right now",
+ * from GET /v1/git/status. `configured` is whether the OAuth app exists on the
+ * server at all — false means the integration is dark and no button should
+ * pretend otherwise. `paid` is the server-enforced tier gate. `connected` and
+ * `login` describe the user's linked account. The three flags together decide
+ * which surface the settings card shows; the UI never infers a capability the
+ * server did not grant.
+ */
+export interface GitStatus {
+  configured: boolean;
+  paid: boolean;
+  connected: boolean;
+  login?: string;
+  connected_at?: string;
+}
+
+/**
+ * The repository a project pushes to, from GET /v1/projects/{id}/git/remote.
+ * Null until the project has been pushed at least once.
+ */
+export interface GitRemote {
+  id: number;
+  project_id: number;
+  provider: string;
+  owner: string;
+  repo: string;
+  clone_url: string;
+  html_url: string;
+  default_branch: string;
+  private: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The outcome of a push, from POST /v1/projects/{id}/git/push. `commit_made` is
+    false when the tree was already clean; `nothing_todo` is true when there was
+    also nothing new to push. */
+export interface GitPushResult {
+  repo: string;
+  html_url: string;
+  branch: string;
+  commit_made: boolean;
+  nothing_todo: boolean;
+}
+
 // ── Agent memory ──────────────────────────────────────
 
 /**
@@ -190,9 +238,28 @@ export interface MemorySnapshot {
 
 // ── Agent Trace (§11) ─────────────────────────────────
 
+/**
+ * A decision the agent recorded mid-build — an architecture decision (write_adr)
+ * or a durable memory (write_memory) — rendered inline in the trace as a card, so
+ * the user sees the choice the agent committed to rather than a bare "wrote
+ * memory" row. The fields mirror what the "What the agent knows" panel shows, so
+ * the same record reads the same way in both places. `variant` selects which
+ * fields are meaningful: an ADR uses `decision`/`outcome`; a memory uses
+ * `category` (convention|decision|architecture|fact|warning), `content`, and the
+ * optional `metadata` naming the file or area it applies to.
+ */
+export interface DecisionCard {
+  variant: "adr" | "memory";
+  decision?: string;
+  outcome?: string;
+  category?: string;
+  content?: string;
+  metadata?: string;
+}
+
 export interface TraceRow {
   id: string;
-  kind: "narration" | "thinking" | "tool" | "group";
+  kind: "narration" | "thinking" | "tool" | "group" | "decision";
   // Narration / thinking
   text?: string;
   streaming?: boolean;
@@ -202,8 +269,10 @@ export interface TraceRow {
   tool?: string;
   label?: string;
   target?: string;
-  status?: "running" | "done" | "fail";
+  status?: "running" | "done" | "fail" | "warning";
   summary?: string;
+  // Decision (write_adr / write_memory rendered as a card)
+  decision?: DecisionCard;
   // Group
   children?: TraceRow[];
   collapsed?: boolean;
@@ -216,10 +285,24 @@ export interface TurnUsage {
   cache_read_tokens?: number;
 }
 
+/** One item in the build plan (a screen or feature), tracked live from the
+    `task_update` stream. Only tasks whose id starts with `plan:` are plan items;
+    other task_updates are ephemeral tool activity, not part of this checklist. */
+export interface PlanTask {
+  id: string;
+  label: string;
+  status: "pending" | "in_progress" | "completed" | "failed";
+  note?: string;
+}
+
 export interface StreamMessage {
   id: string;
   role: "assistant";
   traceRows: TraceRow[];
+  /** Live build-plan progress, keyed and upserted from `task_update` events whose
+      id starts with `plan:`. Rendered as a compact checklist so the developer sees
+      screens and features get checked off as the agent builds them. */
+  planTasks?: PlanTask[];
   text?: string;
   error?: string;
   isStreaming: boolean;
@@ -238,4 +321,16 @@ export interface StreamMessage {
   rounds?: number;
   /** True for turns restored from the stored conversation rather than streamed. */
   restored?: boolean;
+  /**
+   * Set by the `question` event when the agent paused on ask_user: the turn is
+   * waiting for the user. The chat renders a question card from it. `promptId`
+   * addresses POST /answer; `choices` are the suggested replies, if any;
+   * `answered` holds the user's reply once sent, which locks the card.
+   */
+  question?: {
+    promptId: number;
+    text: string;
+    choices: string[];
+    answered?: string;
+  };
 }

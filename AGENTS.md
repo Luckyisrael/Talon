@@ -22,7 +22,7 @@ surfaces, spacing scales, corner nesting rule).
 - Layout: `cmd/server/` (entrypoint), `internal/` (packages). See spec §4 for package map.
 
 ## Frontend (Next.js)
-- Lives in `frontend/`. App Router + TypeScript + Tailwind. Run `npm run build` (and lint) after changes.
+- Lives in `frontend/`. App Router + TypeScript + Tailwind. After changes, `npm run build` AND `npm run lint` must both exit 0 — lint is a hard gate, not optional. Never use `setState` synchronously inside `useEffect` (react-hooks/set-state-in-effect); use `useSyncExternalStore` for client-only reads or defer past the commit.
 
 ## Android / Redroid
 - Redroid boots with `androidboot.use_memfd=1` (no ashmem in kernel).

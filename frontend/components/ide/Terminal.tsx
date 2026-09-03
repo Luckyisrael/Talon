@@ -31,7 +31,7 @@ function monoStack(): string {
   const fallback = 'ui-monospace, "SF Mono", "Cascadia Code", monospace';
   if (typeof window === "undefined") return fallback;
   const v = getComputedStyle(document.documentElement)
-    .getPropertyValue("--font-plex-mono")
+    .getPropertyValue("--font-berkeley-mono")
     .trim();
   return v ? `${v}, ${fallback}` : fallback;
 }
@@ -197,18 +197,18 @@ export default function Terminal({ sessionId }: TerminalProps) {
   }, [socket, sessionId, authed]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate">
-      <div className="flex h-7 flex-shrink-0 items-center gap-1 border-b border-rail px-1.5">
+    <div className="flex h-full min-h-0 flex-col bg-carbon">
+      <div className="flex h-7 flex-shrink-0 items-center gap-1 border-b border-graphite px-1.5">
         {(["shell", "output"] as const).map((id) => (
           <button
             key={id}
             type="button"
             onClick={() => setTab(id)}
             aria-pressed={tab === id}
-            className={`h-full px-2 text-micro uppercase tracking-[0.12em] transition-colors ${
+            className={`h-full px-2 font-mono text-xs uppercase tracking-[0.12em] transition-colors ${
               tab === id
-                ? "text-paper shadow-[inset_0_-2px_0_0_var(--signal)]"
-                : "text-dust hover:text-graphite"
+                ? "text-paper shadow-[inset_0_-2px_0_0_var(--color-acid-lime)]"
+                : "text-ash hover:text-fog"
             }`}
           >
             {id}
@@ -219,7 +219,7 @@ export default function Terminal({ sessionId }: TerminalProps) {
           {tab === "shell" ? status : buildOutput ? `${buildOutput.split("\n").length} lines` : "empty"}
         </span>
         {tab === "output" && buildOutput && (
-          <button type="button" onClick={clearBuildOutput} className="btn btn-ghost text-tiny">
+          <button type="button" onClick={clearBuildOutput} className="btn btn-ghost font-mono text-xs">
             Clear
           </button>
         )}
@@ -231,9 +231,9 @@ export default function Terminal({ sessionId }: TerminalProps) {
         <div className={tab === "shell" ? "h-full w-full" : "hidden"}>
           <div ref={hostRef} className="h-full w-full px-2 py-1" />
           {!sessionId && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-slate/90 px-6 text-center">
-              <p className="text-small text-paper">No device running.</p>
-              <p className="text-tiny text-graphite">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-carbon/90 px-6 text-center">
+              <p className="text-sm text-mist">No device running.</p>
+              <p className="font-mono text-xs text-fog">
                 Start one from the top rail and this becomes a shell on it.
               </p>
             </div>
@@ -243,10 +243,10 @@ export default function Terminal({ sessionId }: TerminalProps) {
         <div className={tab === "output" ? "h-full" : "hidden"}>
           <div
             ref={outputRef}
-            className="h-full overflow-y-auto whitespace-pre-wrap px-3 py-2 font-mono text-tiny leading-relaxed text-graphite"
+            className="h-full overflow-y-auto whitespace-pre-wrap px-3 py-2 font-mono text-xs leading-relaxed text-fog"
           >
             {buildOutput || (
-              <span className="text-dust">
+              <span className="text-ash">
                 Type checks and dev-client rebuilds print here as they run.
               </span>
             )}

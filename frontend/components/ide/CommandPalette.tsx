@@ -190,19 +190,19 @@ function Palette({
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 cursor-default bg-ink/70 backdrop-blur-[2px]"
+        className="absolute inset-0 cursor-default bg-void/70 backdrop-blur-[2px]"
       />
 
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Jump to a file or an action"
-        className="rise relative mx-4 w-full max-w-lg overflow-hidden rounded-3 border border-edge bg-slate shadow-[0_28px_70px_-20px_rgba(0,0,0,0.9)]"
+        className="rise relative mx-4 w-full max-w-lg overflow-hidden rounded-xl border border-smoke bg-carbon shadow-xl"
       >
-        <div className="flex h-11 items-center gap-2.5 border-b border-rail px-3.5">
+        <div className="flex h-11 items-center gap-2.5 border-b border-graphite px-3.5">
           <svg
             aria-hidden
-            className="h-3.5 w-3.5 flex-shrink-0 text-dust"
+            className="h-3.5 w-3.5 flex-shrink-0 text-ash"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -219,7 +219,7 @@ function Palette({
               setRawCursor(0);
             }}
             placeholder="Jump to a file, or run something"
-            className="min-w-0 flex-1 bg-transparent font-mono text-small text-paper placeholder:font-sans placeholder:text-dust focus:outline-none"
+            className="min-w-0 flex-1 bg-transparent font-mono text-sm text-mist placeholder:font-sans placeholder:text-ash focus:outline-none"
           />
           <span className="gauge flex-shrink-0">esc</span>
         </div>
@@ -227,7 +227,7 @@ function Palette({
         <div ref={listRef} className="max-h-[46vh] overflow-y-auto py-1">
           {results.length === 0 ? (
             <div className="px-4 py-7 text-center">
-              <p className="text-small text-graphite">Nothing matches that.</p>
+              <p className="text-sm text-fog">Nothing matches that.</p>
             </div>
           ) : (
             results.map((entry, i) => {
@@ -242,20 +242,20 @@ function Palette({
                   }}
                   onMouseMove={() => setRawCursor(i)}
                   className={`flex w-full items-baseline gap-2.5 px-3.5 py-1.5 text-left transition-colors ${
-                    active ? "bg-riser text-paper" : "text-graphite"
+                    active ? "bg-white/10 text-paper" : "text-fog"
                   }`}
                 >
                   <span
                     className={`min-w-0 truncate ${
-                      entry.kind === "file" ? "font-mono text-tiny" : "text-small"
+                      entry.kind === "file" ? "font-mono text-xs" : "text-sm"
                     }`}
                   >
                     {entry.label}
                   </span>
                   {entry.hint && (
                     <span
-                      className={`ml-auto flex-shrink-0 truncate pl-3 text-tiny ${
-                        entry.kind === "file" ? "font-mono text-dust" : "text-dust"
+                      className={`ml-auto flex-shrink-0 truncate pl-3 font-mono text-xs ${
+                        entry.kind === "file" ? "font-mono text-ash" : "text-ash"
                       }`}
                     >
                       {entry.hint}
@@ -267,7 +267,7 @@ function Palette({
           )}
         </div>
 
-        <div className="flex items-center gap-3 border-t border-rail px-3.5 py-1.5">
+        <div className="flex items-center gap-3 border-t border-graphite px-3.5 py-1.5">
           <span className="gauge">↑↓ move</span>
           <span className="gauge">↵ open</span>
           {results.length >= LIMIT && (

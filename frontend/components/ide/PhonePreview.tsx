@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createAuthWebSocket } from "@/lib/api";
-import Meter from "./Meter";
+import LoadingState from "@/components/ui/LoadingState";
 
 /**
  * The device panel.
@@ -188,7 +188,7 @@ export default function PhonePreview({
           : "idle";
 
   return (
-    <section className="relative h-full min-h-0 overflow-hidden bg-ink">
+    <section className="relative h-full min-h-0 overflow-hidden bg-void">
       {status === "streaming" ? (
         <>
           {/* The frame is the panel. It scales to fill while keeping the
@@ -215,7 +215,7 @@ export default function PhonePreview({
 
           {/* Top strip — the target and frame rate, over a scrim so they stay
               legible against whatever the app is drawing. */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-ink/90 via-ink/45 to-transparent px-3 pb-6 pt-2.5">
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-void/90 via-void/45 to-transparent px-3 pb-6 pt-2.5">
             <div className="flex min-w-0 items-center gap-2">
               <span className="lamp" data-state={lampState} />
               <span className="gauge truncate" title={adbTarget ?? undefined}>
@@ -228,7 +228,7 @@ export default function PhonePreview({
           {/* Bottom strip — real navigation keys and the connection readout.
               Only the keys take pointer events; taps anywhere else fall through
               to the frame. */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink/92 via-ink/50 to-transparent px-3 pb-2.5 pt-8">
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-void/90 via-void/50 to-transparent px-3 pb-2.5 pt-8">
             <div className="pointer-events-auto flex items-center justify-center gap-1">
               {NAV_KEYS.map((key) => (
                 <button
@@ -238,21 +238,21 @@ export default function PhonePreview({
                   onClick={() => sendInput({ type: "key", keycode: key.keycode })}
                   title={key.label}
                   aria-label={key.label}
-                  className="btn btn-ghost h-7 w-10 text-graphite"
+                  className="btn btn-ghost h-7 w-10 text-fog"
                 >
-                  <span aria-hidden className="text-body leading-none">
+                  <span aria-hidden className="text-sm leading-none">
                     {key.glyph}
                   </span>
                 </button>
               ))}
             </div>
 
-            <div className="mt-2 flex items-center justify-center gap-2 font-mono text-micro tabular-nums text-dust">
+            <div className="mt-2 flex items-center justify-center gap-2 font-mono text-xs tabular-nums text-ash">
               <span>{frame ? `${frame.w}×${frame.h}` : "—"}</span>
-              <span className="text-rail">·</span>
+              <span className="text-smoke">·</span>
               <span>{sessionId ? `#${sessionId}` : "—"}</span>
-              <span className="text-rail">·</span>
-              <span className={inputReady ? "text-signal-dim" : "text-filament"}>
+              <span className="text-smoke">·</span>
+              <span className={inputReady ? "text-[#4cc069]" : "text-fog"}>
                 {inputReady ? "input attached" : "input detached"}
               </span>
             </div>
@@ -262,17 +262,16 @@ export default function PhonePreview({
         <div className="absolute inset-0 flex items-center justify-center p-6">
           <div className="max-w-[240px] text-center">
             {status === "connecting" ? (
-              <>
-                <Meter className="meter-lg mx-auto mb-3.5" />
-                <p className="text-small text-graphite">
-                  Booting a device and attaching to it. This takes a moment the
-                  first time.
+              <div className="flex flex-col items-center">
+                <LoadingState label="Booting a device" />
+                <p className="text-sm text-fog mt-3">
+                  Attaching takes a moment the first time.
                 </p>
-              </>
+              </div>
             ) : status === "error" ? (
               <>
-                <p className="text-small text-fault">Could not reach a device.</p>
-                <p className="mt-1 text-tiny text-graphite">
+                <p className="text-sm text-coral-red">Could not reach a device.</p>
+                <p className="mt-1 font-mono text-xs text-fog">
                   The container may still be starting, or adb lost the target.
                 </p>
                 {onStartSession && (
@@ -283,8 +282,8 @@ export default function PhonePreview({
               </>
             ) : (
               <>
-                <p className="text-small text-paper">No device attached.</p>
-                <p className="mt-1 text-tiny text-graphite">
+                <p className="text-sm text-mist">No device attached.</p>
+                <p className="mt-1 font-mono text-xs text-fog">
                   Start one to run the app, tap through it, and let the agent see
                   what it looks like.
                 </p>

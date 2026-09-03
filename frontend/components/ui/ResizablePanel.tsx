@@ -129,7 +129,7 @@ export default function ResizablePanel({
         >
           <span
             aria-hidden
-            className={`absolute bg-transparent transition-colors group-hover:bg-signal/60 group-focus-visible:bg-signal ${
+            className={`absolute bg-transparent transition-colors group-hover:bg-acid-lime/60 group-focus-visible:bg-acid-lime ${
               horizontal
                 ? "top-0 bottom-0 left-1/2 w-[2px] -translate-x-1/2"
                 : "left-0 right-0 top-1/2 h-[2px] -translate-y-1/2"

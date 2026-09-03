@@ -43,12 +43,12 @@ export default function CreateProject({ open, onClose, onCreated }: CreateProjec
       <div className="fixed inset-0 bg-black/60 z-50" onClick={onClose} />
 
       <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-        <div className="w-full max-w-md bay p-5 rise">
+        <div className="w-full max-w-md card rise">
           <div className="flex items-center justify-between mb-5">
-            <h2 className="text-lead font-semibold text-paper">New project</h2>
+            <h2 className="text-[17px] font-medium tracking-tight text-paper">New project</h2>
             <button
               onClick={onClose}
-              className="p-1.5 rounded-1 text-dust hover:text-paper hover:bg-rail transition-colors"
+              className="p-1.5 rounded-md text-ash hover:text-mist hover:bg-white/5 transition-colors"
             >
               <CloseSquare size="20" variant="Linear" />
             </button>
@@ -67,7 +67,7 @@ export default function CreateProject({ open, onClose, onCreated }: CreateProjec
               />
             </label>
 
-            {error && <p className="text-small text-fault mt-2">{error}</p>}
+            {error && <p className="text-sm text-coral-red mt-2">{error}</p>}
 
             <div className="flex gap-3 mt-6">
               <PillButton

@@ -4,6 +4,9 @@ import type {
   AuthResponse,
   Checkout,
   FileEntry,
+  GitPushResult,
+  GitRemote,
+  GitStatus,
   MeProfile,
   Project,
   ProjectMemory,
@@ -162,12 +165,22 @@ export interface ConversationTurn {
  * The most recent prompt's run state, returned alongside the transcript so the
  * chat can tell a clean finish from an interrupted turn on load. A turn left
  * `running` (the server went down mid-turn), `cancelled` (Stop, or a dropped
- * connection) or `failed` can be resumed; `completed` and `abandoned` cannot.
+ * connection), `failed`, or `paused` (it reached its round budget while still
+ * working) can be resumed; `completed` and `abandoned` cannot. `waiting` is a
+ * turn paused on an ask_user question — it resumes by answering the question
+ * (POST /answer), not by the resume button, so isResumable omits it.
  */
 export interface LatestPrompt {
   id: number;
   mode: "plan" | "build";
-  status: "running" | "completed" | "cancelled" | "failed" | "abandoned";
+  status:
+    | "running"
+    | "waiting"
+    | "paused"
+    | "completed"
+    | "cancelled"
+    | "failed"
+    | "abandoned";
   round: number;
 }
 
@@ -178,7 +191,8 @@ export function isResumable(latest: LatestPrompt | null): boolean {
     latest.mode === "build" &&
     (latest.status === "running" ||
       latest.status === "cancelled" ||
-      latest.status === "failed")
+      latest.status === "failed" ||
+      latest.status === "paused")
   );
 }
 
@@ -248,6 +262,20 @@ export const prompts = {
     return openEventStream(`/v1/prompts/${promptId}/resume`, undefined, onEvent, onError);
   },
 
+  // Resume a turn paused on ask_user by feeding the user's reply back as the
+  // tool_result for the pending call. The server threads it into the loop and
+  // streams the same events a fresh build turn does. Keyed by prompt id (the
+  // question event carried it), not the ask_user tool_use id — that rides in the
+  // body server-side. Question + answer bill as a single prompt.
+  answer(
+    promptId: number,
+    answer: string,
+    onEvent: (event: StreamEvent) => void,
+    onError?: (error: Error) => void,
+  ): AbortController {
+    return openEventStream(`/v1/prompts/${promptId}/answer`, { answer }, onEvent, onError);
+  },
+
   // Mark an interrupted turn as abandoned so a reload stops offering to resume
   // it. Leaves the transcript and files untouched.
   discard(promptId: number) {
@@ -283,6 +311,8 @@ export type StreamEventType =
   | "rebuild"
   | "command_output"
   | "plan"
+  | "question"
+  | "decision"
   | "guardrail_reject"
   | "error"
   | "done";
@@ -304,6 +334,23 @@ export interface StreamEventData {
   description?: string;
   result?: string;
   message?: string;
+  // question — the agent paused on ask_user. prompt_id addresses POST /answer
+  // (a fresh build turn learns its prompt id no other way); id is the pending
+  // ask_user tool_use the reply resolves; choices are the suggested answers.
+  question?: string;
+  choices?: string[];
+  prompt_id?: number;
+  // decision — the agent recorded an architecture decision (write_adr) or a
+  // durable memory (write_memory). `variant` selects the shape; the field set
+  // mirrors the "What the agent knows" panel — decision+outcome for an ADR;
+  // category (convention|decision|architecture|fact|warning), content, and the
+  // area it applies to for a memory.
+  variant?: "adr" | "memory";
+  decision?: string;
+  outcome?: string;
+  category?: string;
+  content?: string;
+  metadata?: string;
   // usage
   input_tokens?: number;
   output_tokens?: number;
@@ -324,6 +371,42 @@ export interface StreamEventData {
 export interface StreamEvent {
   type: StreamEventType;
   data?: StreamEventData;
+}
+
+/**
+ * The one place the whole app agrees on what a tool row's status word means.
+ *
+ * The live build stream speaks the Go emitter's vocabulary — "running",
+ * "completed", "error" — while the stored transcript and the verify event speak
+ * "done"/"pass"/"fail". The chat renders exactly three states, so a "completed"
+ * read literally fell through to "running": every action rendered twice and its
+ * spinner never resolved until the terminal sweep. Normalising once here (and
+ * calling it from every handler) is what keeps that gap from reopening.
+ */
+export type RowStatus = "running" | "done" | "fail" | "warning";
+
+export function rowStatus(status: string | undefined): RowStatus {
+  switch (status) {
+    case "done":
+    case "completed":
+    case "pass":
+    case "success":
+      return "done";
+    case "fail":
+    case "failed":
+    case "error":
+    case "rejected":
+      return "fail";
+    case "warning":
+    case "unavailable":
+      // A batch-conflict warning or a checker that could not run is neither
+      // success nor failure — it is something the developer should see and the
+      // agent already saw. Give it its own row tone instead of collapsing it
+      // into the spinner bucket (the old default) or into failure.
+      return "warning";
+    default:
+      return "running";
+  }
 }
 
 export function streamPrompt(
@@ -515,8 +598,47 @@ export const billing = {
   },
 };
 
-// ── Memory ────────────────────────────────────────────
+// ── Premium git integration (W4) ──────────────────────
 
+/**
+ * The GitHub integration. `status` is the one call the UI trusts to decide what
+ * to show — it reports whether the server has the OAuth app configured at all,
+ * whether the user's tier unlocks the feature, and whether they've connected an
+ * account. `connect` mirrors billing.upgrade: it returns a URL for the client to
+ * navigate to (the Bearer token can't ride a top-level navigation), and the
+ * server finishes the flow on its public callback. `push` commits and pushes a
+ * project's workspace, creating the repo on first push. All gating is enforced
+ * server-side; these methods just surface it.
+ */
+export const git = {
+  status() {
+    return request<GitStatus>("/v1/git/status");
+  },
+
+  connect() {
+    return request<{ url: string }>("/v1/git/github/connect", { method: "POST" });
+  },
+
+  disconnect() {
+    return request<{ disconnected: boolean }>("/v1/git/github", { method: "DELETE" });
+  },
+
+  async getRemote(projectId: number) {
+    const res = await request<{ remote: GitRemote | null }>(
+      `/v1/projects/${projectId}/git/remote`,
+    );
+    return res?.remote ?? null;
+  },
+
+  push(projectId: number, opts: { message?: string; private?: boolean } = {}) {
+    return request<GitPushResult>(`/v1/projects/${projectId}/git/push`, {
+      method: "POST",
+      body: JSON.stringify(opts),
+    });
+  },
+};
+
+// ── Memory ────────────────────────────────────────────
 /** "What the agent knows" about a project: curated memory + accepted ADRs. */
 export const memory = {
   async get(projectId: number) {

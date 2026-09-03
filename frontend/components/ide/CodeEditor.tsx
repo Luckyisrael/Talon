@@ -175,15 +175,15 @@ export default function CodeEditor({ projectId, filePath, content }: CodeEditorP
   const base = filePath.slice(dir.length);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-ink">
+    <div className="flex h-full min-h-0 flex-col bg-void">
       <header className="bay-head justify-between gap-3">
         {/* The path is the machine's name for this thing, so it is set in mono,
             with the filename carrying the weight. */}
-        <p className="min-w-0 truncate font-mono text-tiny" title={filePath}>
-          <span className="text-dust">{dir}</span>
+        <p className="min-w-0 truncate font-mono text-xs" title={filePath}>
+          <span className="text-ash">{dir}</span>
           <span className="text-paper">{base}</span>
           {dirty && (
-            <span className="ml-1.5 text-filament" title="Unsaved changes">
+            <span className="ml-1.5 text-mist" title="Unsaved changes">
               ●
             </span>
           )}
@@ -191,7 +191,7 @@ export default function CodeEditor({ projectId, filePath, content }: CodeEditorP
 
         <div className="flex flex-shrink-0 items-center gap-1.5">
           {error && (
-            <span className="max-w-[16rem] truncate text-tiny text-fault" title={error}>
+            <span className="max-w-[16rem] truncate font-mono text-xs text-coral-red" title={error}>
               {error}
             </span>
           )}
@@ -204,7 +204,7 @@ export default function CodeEditor({ projectId, filePath, content }: CodeEditorP
                 type="button"
                 onClick={() => discardDraft(filePath)}
                 disabled={saving}
-                className="btn btn-ghost text-tiny"
+                className="btn btn-ghost font-mono text-xs"
               >
                 Revert
               </button>
@@ -212,7 +212,7 @@ export default function CodeEditor({ projectId, filePath, content }: CodeEditorP
                 type="button"
                 onClick={() => void save()}
                 disabled={saving}
-                className="btn btn-go text-tiny"
+                className="btn btn-go font-mono text-xs"
               >
                 {saving ? "Saving" : "Save"}
               </button>
@@ -240,7 +240,7 @@ export default function CodeEditor({ projectId, filePath, content }: CodeEditorP
             minimap: { enabled: false },
             fontSize: 10,
             lineHeight: 20,
-            fontFamily: "var(--font-plex-mono), ui-monospace, monospace",
+            fontFamily: "var(--font-berkeley-mono), ui-monospace, monospace",
             fontLigatures: false,
             lineNumbers: "on",
             scrollBeyondLastLine: false,

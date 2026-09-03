@@ -13,6 +13,7 @@ import FileTree from "./FileTree";
 import MemoryPanel from "./MemoryPanel";
 import PhonePreview from "./PhonePreview";
 import PlanViewer from "./PlanViewer";
+import PushToGitHub from "./PushToGitHub";
 import Terminal from "./Terminal";
 
 interface IDELayoutProps {
@@ -32,6 +33,19 @@ export default function IDELayout({
   const store = useIDEStore();
   const aiChatRef = useRef<AIChatHandle>(null);
   const [leftTab, setLeftTab] = useState<"chat" | "files" | "memory">("chat");
+
+  // Below md the agent panel is a slide-over drawer rather than a fixed column.
+  // isDesktop gates which one mounts, so there is only ever one AIChat instance
+  // and a build stream is never duplicated or torn down by the switch.
+  const isDesktop = useIsDesktop();
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+
+  // On a phone, picking a file should reveal the editor behind the drawer.
+  // Harmless on desktop, where the drawer state is never shown.
+  const selectFile = useCallback((path: string) => {
+    useIDEStore.getState().selectFile(path);
+    setMobilePanelOpen(false);
+  }, []);
 
   // ── Files ──
 
@@ -196,13 +210,115 @@ export default function IDELayout({
     : undefined;
   const deviceLive = store.previewStatus === "streaming";
 
+  // The chat/files/memory switch. It lives in the command bar at md+ and in the
+  // drawer's own header below md, so it is defined once here.
+  const tabSwitcher = (
+    <div
+      role="group"
+      aria-label="What the panel shows"
+      className="flex overflow-hidden rounded-md border border-graphite"
+    >
+      {(["chat", "files", "memory"] as const).map((tab) => (
+        <button
+          key={tab}
+          type="button"
+          onClick={() => setLeftTab(tab)}
+          aria-pressed={leftTab === tab}
+          className={`h-6 px-2.5 font-mono text-xs capitalize transition-colors ${
+            leftTab === tab
+              ? "bg-white/10 text-paper"
+              : "text-ash hover:bg-white/5 hover:text-fog"
+          }`}
+        >
+          {tab}
+        </button>
+      ))}
+    </div>
+  );
+
+  // The panel body — one instance, rendered either inside the resizable column
+  // (md+) or inside the slide-over drawer (below md). Keeping it a single
+  // element means the AIChat inside it, and its build stream, is never
+  // duplicated across the two mounts.
+  const leftPanelContent = (
+    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-graphite bg-void">
+      {/* On a phone the panel is a drawer with no command-bar tabs above it, so
+          it carries its own switcher and a way out. Hidden at md+, where the
+          tabs live in the command bar. */}
+      <div className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-graphite p-2 md:hidden">
+        {tabSwitcher}
+        <button
+          type="button"
+          onClick={() => setMobilePanelOpen(false)}
+          className="btn btn-ghost"
+          aria-label="Close the panel"
+        >
+          Close
+        </button>
+      </div>
+
+      {/* Both panels stay mounted: switching to the tree mid-build must
+          not tear down the stream that is writing the files. */}
+      <div className={leftTab === "chat" ? "flex min-h-0 flex-1" : "hidden"}>
+        <div className="min-h-0 flex-1">
+          <AIChat
+            ref={aiChatRef}
+            projectId={projectId}
+            onFilesTouched={handleFilesTouched}
+            onPlan={handlePlan}
+            onApprovePlan={approvePlan}
+          />
+        </div>
+      </div>
+
+      <div className={leftTab === "files" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+        <div className="bay-head justify-between">
+          <span className="gauge">Workspace</span>
+          <span className="gauge tnum">{countFiles(store.files)}</span>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto py-1">
+          {store.files.length === 0 ? (
+            <div className="px-4 py-6">
+              <p className="text-sm text-mist">Nothing here yet.</p>
+              <p className="mt-1 font-mono text-xs text-fog">
+                Describe what you want in the chat and the files will appear
+                as they are written.
+              </p>
+              <button
+                type="button"
+                onClick={() => setLeftTab("chat")}
+                className="btn mt-3"
+              >
+                Open the chat
+              </button>
+            </div>
+          ) : (
+            <FileTree
+              files={store.files}
+              selectedFile={store.selectedFile}
+              onSelectFile={selectFile}
+              onNewFile={handleNewFile}
+              onNewFolder={handleNewFolder}
+              onRename={handleRename}
+              onDelete={handleDelete}
+            />
+          )}
+        </div>
+      </div>
+
+      <div className={leftTab === "memory" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+        <MemoryPanel projectId={projectId} active={leftTab === "memory"} />
+      </div>
+    </div>
+  );
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-ink p-2">
+    <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-void p-2">
       {/* ── Command bar ── One inset module: whose project this is on the left,
           the workspace controls in the middle, the device on the right. It used
           to be two stacked full-width rails; merging them gave the panels their
           height back. */}
-      <div className="flex h-11 flex-shrink-0 items-center gap-2 rounded-3 border border-rail bg-slate px-2">
+      <div className="flex h-11 flex-shrink-0 items-center gap-2 rounded-xl border border-graphite bg-carbon px-2">
         {/* Identity */}
         <button
           type="button"
@@ -217,7 +333,7 @@ export default function IDELayout({
         <span className="hairline h-4 w-px flex-shrink-0" />
 
         <div className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate text-small text-paper" title={projectName}>
+          <span className="min-w-0 truncate text-sm text-mist" title={projectName}>
             {projectName}
           </span>
           {projectStatus && (
@@ -228,27 +344,27 @@ export default function IDELayout({
         {/* Workspace */}
         <span className="hairline mx-1 hidden h-4 w-px flex-shrink-0 md:block" />
 
-        <div
-          role="group"
-          aria-label="What the left panel shows"
-          className="hidden overflow-hidden rounded-1 border border-rail md:flex"
+        {/* Below md the panel is a slide-over drawer; this opens it. At md+ the
+            same chat/files/memory switch sits here inline instead. */}
+        <button
+          type="button"
+          onClick={() => setMobilePanelOpen(true)}
+          className="btn btn-ghost md:hidden"
+          aria-label="Open the agent panel"
         >
-          {(["chat", "files", "memory"] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setLeftTab(tab)}
-              aria-pressed={leftTab === tab}
-              className={`h-6 px-2.5 text-tiny capitalize transition-colors ${
-                leftTab === tab
-                  ? "bg-riser text-paper"
-                  : "text-dust hover:bg-riser hover:text-graphite"
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
+          <svg
+            aria-hidden
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.75}
+            className="h-4 w-4"
+          >
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M9 4v16" />
+          </svg>
+        </button>
+        <div className="hidden md:block">{tabSwitcher}</div>
 
         <button
           type="button"
@@ -267,6 +383,7 @@ export default function IDELayout({
             </span>
           )}
           <CheckpointMenu projectId={projectId} onRestored={handleFilesTouched} />
+          <PushToGitHub projectId={projectId} />
           <button
             type="button"
             onClick={() => (deviceLive ? void stopSession() : void startSession())}
@@ -283,74 +400,47 @@ export default function IDELayout({
       </div>
 
       <div className="flex min-h-0 flex-1 gap-2 overflow-hidden">
-        {/* ── Left: the agent, or the files ── */}
-        <ResizablePanel
-          direction="horizontal"
-          defaultSize={340}
-          minSize={280}
-          maxSize={560}
-          className="hidden md:block"
-          label="agent panel"
-        >
-          <div className="flex h-full flex-col overflow-hidden rounded-3 border border-rail bg-ink">
-            {/* Both panels stay mounted: switching to the tree mid-build must
-                not tear down the stream that is writing the files. */}
-            <div className={leftTab === "chat" ? "flex min-h-0 flex-1" : "hidden"}>
-              <div className="min-h-0 flex-1">
-                <AIChat
-                  ref={aiChatRef}
-                  projectId={projectId}
-                  onFilesTouched={handleFilesTouched}
-                  onPlan={handlePlan}
-                  onApprovePlan={approvePlan}
-                />
-              </div>
+        {/* ── Left: the agent, or the files ── On a wide screen it is a
+            resizable column; on a phone it slides in over the centre. One
+            AIChat instance either way (the ternary renders exactly one branch),
+            so a build stream is never duplicated or torn down by the switch.
+            Below md the drawer stays mounted while closed — just translated
+            off-screen — so a build keeps streaming behind it. */}
+        {isDesktop ? (
+          <ResizablePanel
+            direction="horizontal"
+            defaultSize={340}
+            minSize={280}
+            maxSize={560}
+            label="agent panel"
+          >
+            {leftPanelContent}
+          </ResizablePanel>
+        ) : (
+          <>
+            <div
+              aria-hidden
+              onClick={() => setMobilePanelOpen(false)}
+              className={`fixed inset-0 z-30 bg-void/80 transition-opacity duration-200 ${
+                mobilePanelOpen ? "opacity-100" : "pointer-events-none opacity-0"
+              }`}
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Agent panel"
+              className={`fixed inset-y-0 left-0 z-40 flex w-[88%] max-w-sm flex-col p-2 transition-transform duration-200 ${
+                mobilePanelOpen ? "translate-x-0" : "-translate-x-full"
+              }`}
+            >
+              {leftPanelContent}
             </div>
-
-            <div className={leftTab === "files" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-              <div className="bay-head justify-between">
-                <span className="gauge">Workspace</span>
-                <span className="gauge tnum">{countFiles(store.files)}</span>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto py-1">
-                {store.files.length === 0 ? (
-                  <div className="px-4 py-6">
-                    <p className="text-small text-paper">Nothing here yet.</p>
-                    <p className="mt-1 text-tiny text-graphite">
-                      Describe what you want in the chat and the files will appear
-                      as they are written.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setLeftTab("chat")}
-                      className="btn mt-3"
-                    >
-                      Open the chat
-                    </button>
-                  </div>
-                ) : (
-                  <FileTree
-                    files={store.files}
-                    selectedFile={store.selectedFile}
-                    onSelectFile={store.selectFile}
-                    onNewFile={handleNewFile}
-                    onNewFolder={handleNewFolder}
-                    onRename={handleRename}
-                    onDelete={handleDelete}
-                  />
-                )}
-              </div>
-            </div>
-
-            <div className={leftTab === "memory" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-              <MemoryPanel projectId={projectId} active={leftTab === "memory"} />
-            </div>
-          </div>
-        </ResizablePanel>
+          </>
+        )}
 
         {/* ── Centre: the code, or the plan ── */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3 border border-rail bg-ink">
-          <div className="min-h-0 flex-1 overflow-hidden bg-ink">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-graphite bg-void">
+          <div className="min-h-0 flex-1 overflow-hidden bg-void">
             {store.currentPlan ? (
               <PlanViewer
                 message={store.currentPlan.message}
@@ -366,8 +456,8 @@ export default function IDELayout({
               />
             ) : (
               <div className="flex h-full flex-col items-center justify-center px-8 text-center">
-                <p className="text-lead text-paper">Nothing open.</p>
-                <p className="mt-1.5 max-w-sm text-small text-graphite">
+                <p className="text-[15px] font-medium tracking-tight text-paper">Nothing open.</p>
+                <p className="mt-1.5 max-w-sm text-sm text-fog">
                   Pick a file from the workspace, or tell the agent what to build
                   and watch it get written here.
                 </p>
@@ -387,12 +477,12 @@ export default function IDELayout({
             collapsedSize={32}
             label="terminal"
           >
-            <div className="flex h-full flex-col overflow-hidden border-t border-rail bg-slate">
+            <div className="flex h-full flex-col overflow-hidden border-t border-graphite bg-carbon">
               <button
                 type="button"
                 onClick={() => store.setTerminalOpen(!store.terminalOpen)}
                 aria-expanded={store.terminalOpen}
-                className="flex h-8 flex-shrink-0 items-center gap-2 px-3 text-left transition-colors hover:bg-riser"
+                className="flex h-8 flex-shrink-0 items-center gap-2 px-3 text-left transition-colors hover:bg-white/5"
               >
                 <span className="lamp" data-state={deviceLive ? "live" : "idle"} />
                 {/* The label names what the shell is attached to, not the word
@@ -421,7 +511,7 @@ export default function IDELayout({
           handleSide="start"
           label="device panel"
         >
-          <div className="flex h-full flex-col overflow-hidden rounded-3 border border-rail bg-ink">
+          <div className="flex h-full flex-col overflow-hidden rounded-xl border border-graphite bg-void">
             <PhonePreview
               status={store.previewStatus}
               sessionId={store.sessionId}
@@ -453,4 +543,23 @@ function countFiles(nodes: { type: "file" | "folder"; children?: { type: "file" 
     else if (node.children) n += countFiles(node.children as typeof nodes);
   }
   return n;
+}
+
+// Tracks the md breakpoint (768px, Tailwind's md) so the layout can *mount* the
+// agent panel two different ways — a resizable column above it, a slide-over
+// drawer below it — rather than restyle one element. ResizablePanel forces its
+// width with an inline style, so CSS alone can't turn it into a drawer.
+// Defaults to true so the server render and first client paint agree on the
+// desktop markup (no hydration mismatch); the effect corrects it on a phone
+// before anything interactive happens.
+function useIsDesktop(): boolean {
+  const [isDesktop, setIsDesktop] = useState(true);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const sync = () => setIsDesktop(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  return isDesktop;
 }

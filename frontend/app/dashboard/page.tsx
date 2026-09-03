@@ -77,8 +77,8 @@ export default function DashboardPage() {
       <div className="max-w-5xl mx-auto px-4 py-8">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-title font-semibold text-paper mb-1">Projects</h1>
-            <p className="text-small text-graphite">Build and manage your Solana Mobile apps</p>
+            <h1 className="text-[22px] font-medium tracking-tight text-paper mb-1">Projects</h1>
+            <p className="text-sm text-fog">Build and manage your Solana Mobile apps</p>
           </div>
 
           <PillButton onClick={() => setCreateOpen(true)}>
@@ -99,10 +99,10 @@ export default function DashboardPage() {
         {/* Error state */}
         {!loading && error && (
           <div className="flex flex-col items-center justify-center py-20">
-            <div className="w-14 h-14 rounded-2 bg-fault/10 border border-fault/20 flex items-center justify-center mb-4">
-              <Warning2 size="28" className="text-fault" variant="Linear" />
+            <div className="w-14 h-14 rounded-xl bg-coral-red/10 border border-coral-red/20 flex items-center justify-center mb-4">
+              <Warning2 size="28" className="text-coral-red" variant="Linear" />
             </div>
-            <p className="text-small text-graphite mb-3">{error}</p>
+            <p className="text-sm text-fog mb-3">{error}</p>
             <PillButton variant="secondary" onClick={refresh}>
               Try again
             </PillButton>
@@ -112,11 +112,11 @@ export default function DashboardPage() {
         {/* Empty state */}
         {!loading && !error && projectList.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20">
-            <div className="w-14 h-14 rounded-2 bg-riser border border-rail flex items-center justify-center mb-4">
-              <Folder size="28" className="text-dust" variant="Linear" />
+            <div className="w-14 h-14 rounded-xl bg-white/5 border border-graphite flex items-center justify-center mb-4">
+              <Folder size="28" className="text-ash" variant="Linear" />
             </div>
-            <h3 className="text-body font-semibold text-paper mb-1">No projects yet</h3>
-            <p className="text-small text-graphite mb-4">Create your first Solana Mobile app</p>
+            <h3 className="text-[15px] font-medium text-paper mb-1">No projects yet</h3>
+            <p className="text-sm text-fog mb-4">Create your first Solana Mobile app</p>
             <PillButton onClick={() => setCreateOpen(true)}>
               <Add size="16" variant="Linear" />
               Create project

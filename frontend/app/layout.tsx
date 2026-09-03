@@ -1,22 +1,21 @@
 import type { Metadata, Viewport } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-// Two roles, one family. Sans is anything a person says or presses; mono is
-// anything the machine reports — paths, traces, telemetry, code. Plex was drawn
-// for exactly that pairing, so the two stay related at a glance without the
-// interface looking like two different products stitched together.
-const plexSans = IBM_Plex_Sans({
-  variable: "--font-plex-sans",
+// Inter Variable carries all UI and headings (weights 300–590, tight tracking
+// at display sizes, cv01/ss03/zero features). Berkeley Mono is not licensed
+// for web embedding, so JetBrains Mono stands in per the system's own
+// substitute list — reserved strictly for issue IDs, shortcuts, and metadata.
+const inter = Inter({
+  variable: "--font-inter-variable",
   subsets: ["latin"],
+  weight: ["300", "400", "500", "600"],
 });
 
-// Plex Mono has no variable axis on Google Fonts, so the weights the interface
-// actually uses are listed explicitly rather than silently falling back to 400.
-const plexMono = IBM_Plex_Mono({
-  variable: "--font-plex-mono",
+const mono = JetBrains_Mono({
+  variable: "--font-berkeley-mono",
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight: ["400"],
 });
 
 export const metadata: Metadata = {
@@ -31,14 +30,14 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#0b0e13",
+  themeColor: "#08090a",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${plexSans.variable} ${plexMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${mono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

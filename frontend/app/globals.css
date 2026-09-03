@@ -1,219 +1,294 @@
 @import "tailwindcss";
 
 /*
- * SeekerStudio — the bench
+ * SeekerStudio — Linear midnight precision instrument
  *
- * The subject is hardware: you are building an app for a physical Solana phone,
- * and a real device is running two feet away behind a WebSocket. So the surface
- * is a lab bench, not a "workspace" — cool graphite with visible structure,
- * instruments arranged around a device.
+ * Near-black void canvas, paper-white type at low weights with tight tracking,
+ * hairline borders instead of shadows, and one electric acid-lime accent that
+ * fires only on the single primary action per view. Inter Variable carries all
+ * UI and headings; the mono substitute is reserved for IDs, shortcuts, and
+ * technical metadata.
  *
- * The palette carries meaning, and each hue has exactly one referent:
- *   signal   → the device. Live frames, an attached target, a running app.
- *   probe    → the agent. Its voice, its tools, its turn in progress.
- *   filament → you. Something is waiting on a decision.
- *   fault    → it broke.
- * Nothing is coloured for decoration. If something is green, the device is alive.
- *
- * Typeface carries the speaker: mono is the machine (paths, traces, telemetry,
- * code, timings), sans is a person (prose, controls, headings).
+ * Migration note: the previous bench theme's class names (bg-ink, text-paper,
+ * rounded-1 …) are frozen below at their old values so unmigrated screens keep
+ * rendering while they move over one component at a time. New code must use
+ * the Linear tokens (bg-void, text-mist, rounded-md …). The frozen aliases are
+ * deleted at the end of the migration.
  */
 
 :root {
-  /* Bench. Cool undertone, so it reads as metal rather than void. */
-  --ink: #0b0e13;
-  --slate: #12171f;
-  --riser: #181f29;
-  --rail: #232c39;
-  --edge: #303c4d;
+  /* ── Linear surfaces ─────────────────────────────────────────── */
+  --color-void: #08090a;
+  --color-carbon: #0f1011;
+  --color-obsidian: #161718;
+  --color-graphite: #23252a;
+  --color-smoke: #383b3f;
 
-  /* Semantic hues — one meaning each. */
-  --signal: #14f195;
-  --signal-dim: #0d9d63;
-  /* The agent reads as an instrument, not a brand. Deliberately NOT Solana
-     purple — that hue belongs to the chain, and colouring the agent with it
-     would say something untrue about what the agent is. */
-  --probe: #4c9bef;
-  --probe-dim: #2d6aa8;
-  --filament: #ffb020;
-  --fault: #ff5f56;
+  /* ── Linear text ─────────────────────────────────────────────── */
+  --color-ash: #62666d;
+  --color-fog: #8a8f98;
+  --color-mist: #d0d6e0;
+  --color-bone: #e5e5e6;
+  --color-paper: #ffffff;
 
-  /* Text ladder. */
-  --paper: #e6ebf2;
-  --graphite: #8794a6;
-  --dust: #5b667a;
+  /* ── Linear accents ────────────────────────────────────────────
+     Acid lime is the ONLY chromatic action colour. The supporting hues are
+     for tags, outlines, and status — never for buttons or CTAs. */
+  --color-acid-lime: #e4f222;
+  --color-pulse-green: #27a644;
+  --color-coral-red: #eb5757;
+  --color-signal-teal: #02b8cc;
+  --color-iris-violet: #6366f1;
+  --color-lavender: #8b5cf6;
 
-  /* Radii. Deliberately tight — this is machined, not soft. The only
-     fully-round thing in the product is the signal indicator. */
-  --r-1: 3px;
-  --r-2: 6px;
-  --r-3: 10px;
+  /* ── Type ────────────────────────────────────────────────────── */
+  --font-inter-variable: var(--font-inter-variable), ui-sans-serif, system-ui, sans-serif;
+  --font-berkeley-mono: var(--font-berkeley-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  /* Type. */
-  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", monospace;
+  /* ── Radii: 12 cards · 9999 pills · 2 small · 4 badges · 6 inputs/buttons */
+  --radius-sm: 2px;
+  --radius-md: 6px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
 
-  --t-micro: 0.625rem; /* 10px — instrument labels, mono, tracked out */
-  --t-tiny: 0.6875rem; /* 11px — metadata */
-  --t-small: 0.78125rem; /* 12.5px — interface default */
-  --t-body: 0.875rem; /* 14px — prose */
-  --t-lead: 1.0625rem; /* 17px — panel headings */
-  --t-title: 1.375rem; /* 22px */
-
-  /* Motion. Fast enough to feel mechanical rather than animated. */
+  /* ── Motion ──────────────────────────────────────────────────── */
   --tick: 90ms;
   --sweep: 180ms;
   --ease: cubic-bezier(0.2, 0, 0.3, 1);
 }
 
 @theme inline {
-  --color-background: var(--ink);
-  --color-foreground: var(--paper);
+  --color-background: var(--color-void);
+  --color-foreground: var(--color-paper);
 
-  --color-ink: var(--ink);
-  --color-slate: var(--slate);
-  --color-riser: var(--riser);
-  --color-rail: var(--rail);
-  --color-edge: var(--edge);
+  --color-void: var(--color-void);
+  --color-carbon: var(--color-carbon);
+  --color-obsidian: var(--color-obsidian);
+  --color-graphite: var(--color-graphite);
+  --color-smoke: var(--color-smoke);
 
-  --color-signal: var(--signal);
-  --color-signal-dim: var(--signal-dim);
-  --color-probe: var(--probe);
-  --color-probe-dim: var(--probe-dim);
-  --color-filament: var(--filament);
-  --color-fault: var(--fault);
+  --color-ash: var(--color-ash);
+  --color-fog: var(--color-fog);
+  --color-mist: var(--color-mist);
+  --color-bone: var(--color-bone);
+  --color-paper: var(--color-paper);
 
-  --color-paper: var(--paper);
-  --color-graphite: var(--graphite);
-  --color-dust: var(--dust);
+  --color-acid-lime: var(--color-acid-lime);
+  --color-pulse-green: var(--color-pulse-green);
+  --color-coral-red: var(--color-coral-red);
+  --color-signal-teal: var(--color-signal-teal);
+  --color-iris-violet: var(--color-iris-violet);
+  --color-lavender: var(--color-lavender);
 
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
+  --font-sans: var(--font-inter-variable);
+  --font-mono: var(--font-berkeley-mono);
 
-  --text-micro: var(--t-micro);
-  --text-tiny: var(--t-tiny);
-  --text-small: var(--t-small);
-  --text-body: var(--t-body);
-  --text-lead: var(--t-lead);
-  --text-title: var(--t-title);
+  /* Linear type scale */
+  --text-caption: 13px;
+  --text-body-sm: 15px;
+  --text-body-lg: 20px;
+  --text-subheading: 24px;
+  --text-heading-sm: 32px;
+  --text-heading: 48px;
+  --text-heading-lg: 64px;
+  --text-display: 72px;
+  --text-label: 12px;
+  --text-micro: 10px;
 
-  --radius-1: var(--r-1);
-  --radius-2: var(--r-2);
-  --radius-3: var(--r-3);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-xl: var(--radius-xl);
+  --radius-full: var(--radius-full);
 
-  /* ── Legacy names ───────────────────────────────────────────────
-     The old palette was six near-identical near-blacks plus one amber, spread
-     across ~440 class names. These aliases point the old names at the new
-     values so nothing renders unstyled while screens migrate one at a time.
-     New code should use the semantic names above; `accent` in particular is a
-     poor name here, because whether something is signal, probe, or filament is
-     the whole point. */
-  --color-surface-1: var(--ink);
-  --color-surface-2: var(--slate);
-  --color-surface-3: var(--riser);
-  --color-surface-4: var(--rail);
-  --color-surface-5: var(--edge);
-  --color-border: var(--rail);
-  --color-text-primary: var(--paper);
-  --color-text-secondary: var(--graphite);
-  --color-text-muted: var(--dust);
-  --color-accent: var(--signal);
-  --color-accent-hover: color-mix(in srgb, var(--signal) 85%, white);
-  --color-success: var(--signal);
-  --color-warning: var(--filament);
-  --color-error: var(--fault);
-  --color-solana-purple: var(--probe);
-  --color-solana-green: var(--signal);
+  --shadow-sm: rgba(0, 0, 0, 0.4) 0px 2px 4px 0px;
+  --shadow-subtle: rgb(35, 37, 42) 0px 0px 0px 1px inset;
+  --shadow-xl: rgba(8, 9, 10, 0.6) 0px 4px 32px 0px;
+
+  /* ── Frozen bench aliases — DO NOT USE in new code ─────────────
+     Exact old values so unmigrated screens render unchanged until their
+     component is migrated. Deleted at the end of the migration. */
+  --color-ink: #0b0e13;
+  --color-slate: #12171f;
+  --color-riser: #181f29;
+  --color-rail: #232c39;
+  --color-edge: #303c4d;
+  --color-signal: #14f195;
+  --color-signal-dim: #0d9d63;
+  --color-probe: #4c9bef;
+  --color-probe-dim: #2d6aa8;
+  --color-filament: #ffb020;
+  --color-fault: #ff5f56;
+  --color-text-primary: #e6ebf2;
+  --color-text-secondary: #8794a6;
+  --color-text-muted: #5b667a;
+  --color-accent: #14f195;
+  --color-success: #14f195;
+  --color-warning: #ffb020;
+  --color-error: #ff5f56;
+  --color-solana-purple: #4c9bef;
+  --color-solana-green: #14f195;
+  --color-border: #232c39;
+  --color-surface-1: #0b0e13;
+  --color-surface-2: #12171f;
+  --color-surface-3: #181f29;
+  --color-surface-4: #232c39;
+  --color-surface-5: #303c4d;
+  --text-tiny: 0.6875rem;
+  --text-small: 0.78125rem;
+  --text-micro: 0.625rem;
+  --text-body: 0.875rem;
+  --text-lead: 1.0625rem;
+  --text-title: 1.375rem;
+  --radius-1: 3px;
+  --radius-2: 6px;
+  --radius-3: 10px;
 }
 
 * {
-  border-color: var(--rail);
+  border-color: var(--color-graphite);
 }
 
 body {
-  background: var(--ink);
-  color: var(--paper);
-  font-family: var(--font-sans);
-  font-size: var(--t-small);
+  background: var(--color-void);
+  color: var(--color-mist);
+  font-family: var(--font-inter-variable);
+  font-size: 14px;
+  font-weight: 400;
+  font-feature-settings: "cv01" on, "ss03" on, "zero" on;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* ── Instrument label ──────────────────────────────────────────────
-   Every panel header uses this, and it must always name the real thing it
-   sits above — the adb target, the file path, the model. A label that reads
-   "PREVIEW" tells you nothing you could not see. */
-.gauge {
-  font-family: var(--font-mono);
-  font-size: var(--t-micro);
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  color: var(--dust);
+/* ── Linear type utilities ───────────────────────────────────────
+   Tight tracking is non-negotiable at display sizes; weights never exceed 590. */
+.t-display {
+  font-size: 72px; font-weight: 510; line-height: 1; letter-spacing: -0.022em; color: var(--color-paper);
+}
+.t-heading-lg {
+  font-size: 64px; font-weight: 510; line-height: 1; letter-spacing: -0.022em; color: var(--color-paper);
+}
+.t-heading {
+  font-size: 48px; font-weight: 510; line-height: 1; letter-spacing: -0.022em; color: var(--color-paper);
+}
+.t-heading-sm {
+  font-size: 32px; font-weight: 400; line-height: 1.13; letter-spacing: -0.022em; color: var(--color-paper);
+}
+.t-subheading {
+  font-size: 24px; font-weight: 400; line-height: 1.33; letter-spacing: -0.012em; color: var(--color-paper);
+}
+.t-body-lg {
+  font-size: 20px; font-weight: 590; line-height: 1.33; letter-spacing: -0.012em; color: var(--color-mist);
+}
+.t-body {
+  font-size: 16px; font-weight: 400; line-height: 1.5; color: var(--color-mist);
+}
+.t-body-sm {
+  font-size: 15px; font-weight: 400; line-height: 1.6; letter-spacing: -0.011em; color: var(--color-mist);
+}
+.t-caption {
+  font-size: 13px; font-weight: 400; line-height: 1.2; color: var(--color-fog);
+}
+.t-label {
+  font-family: var(--font-berkeley-mono);
+  font-size: 12px; font-weight: 400; line-height: 1.4; letter-spacing: -0.013em; color: var(--color-fog);
+}
+.t-micro {
+  font-family: var(--font-berkeley-mono);
+  font-size: 10px; font-weight: 510; line-height: 1.5; color: var(--color-ash);
 }
 
-/* ── Panel ──────────────────────────────────────────────────────── */
+/* ── Instrument label ────────────────────────────────────────────
+   Panel headers name the real thing underneath — the adb target, the file
+   path, the model. Mono metadata, fog grey, uppercase. */
+.gauge {
+  font-family: var(--font-berkeley-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-fog);
+}
+
+/* ── Card: product screenshot frame ──────────────────────────────
+   Carbon surface, 12px radius, hairline inset edge. No outer shadow. */
+.card {
+  background: var(--color-carbon);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-subtle);
+  padding: 24px;
+}
+
+.card-subtle {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 8px;
+}
+
+/* ── Panel (IDE surfaces keep the .bay API) ────────────────────── */
 .bay {
-  background: var(--slate);
-  border: 1px solid var(--rail);
-  border-radius: var(--r-2);
+  background: var(--color-carbon);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-subtle);
 }
 
 .bay-head {
   display: flex;
   align-items: center;
   gap: 0.625rem;
-  height: 2.25rem;
-  padding: 0 0.75rem;
-  border-bottom: 1px solid var(--rail);
+  height: 2.5rem;
+  padding: 0 0.875rem;
+  border-bottom: 1px solid var(--color-graphite);
   flex-shrink: 0;
 }
 
-/* ── Signal indicator ─────────────────────────────────────────────
-   The one round element in the product. Its colour is the honest state of
-   the connection, never a decoration. */
+/* ── Status lamp ─────────────────────────────────────────────────
+   Round status dots: pulse-green live, acid-lime working, fog waiting,
+   coral fault. The dot is honest state, never decoration. */
 .lamp {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: var(--dust);
+  background: var(--color-ash);
   flex-shrink: 0;
 }
 
 .lamp[data-state="live"] {
-  background: var(--signal);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal) 18%, transparent);
+  background: var(--color-pulse-green);
+  box-shadow: 0 0 0 3px rgba(39, 166, 68, 0.18);
   animation: breathe 2.4s var(--ease) infinite;
 }
 
 .lamp[data-state="working"] {
-  background: var(--probe);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--probe) 20%, transparent);
+  background: var(--color-acid-lime);
+  box-shadow: 0 0 0 3px rgba(228, 242, 34, 0.16);
 }
 
 .lamp[data-state="waiting"] {
-  background: var(--filament);
+  background: var(--color-fog);
 }
 
 .lamp[data-state="fault"] {
-  background: var(--fault);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fault) 18%, transparent);
+  background: var(--color-coral-red);
+  box-shadow: 0 0 0 3px rgba(235, 87, 87, 0.18);
 }
 
-/* ── Controls ───────────────────────────────────────────────────── */
+/* ── Buttons ─────────────────────────────────────────────────────
+   One chromatic button per view (acid lime). Everything else is neutral. */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.375rem;
-  height: 1.75rem;
-  padding: 0 0.6875rem;
-  border: 1px solid var(--rail);
-  border-radius: var(--r-1);
-  background: var(--riser);
-  color: var(--paper);
-  font-family: var(--font-sans);
-  font-size: var(--t-small);
-  font-weight: 450;
+  gap: 0.5rem;
+  height: 2rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--color-graphite);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-mist);
+  font-family: var(--font-inter-variable);
+  font-size: 13px;
+  font-weight: 500;
   white-space: nowrap;
   transition:
     background var(--tick) var(--ease),
@@ -222,8 +297,8 @@ body {
 }
 
 .btn:hover:not(:disabled) {
-  background: var(--rail);
-  border-color: var(--edge);
+  border-color: var(--color-smoke);
+  color: var(--color-paper);
 }
 
 .btn:disabled {
@@ -231,81 +306,164 @@ body {
   cursor: not-allowed;
 }
 
+/* The single chromatic action: acid lime, void text, 510. */
 .btn-go {
-  background: var(--signal);
-  border-color: var(--signal);
-  color: #04160e;
-  font-weight: 550;
+  background: var(--color-acid-lime);
+  border-color: var(--color-acid-lime);
+  color: #08090a;
+  font-weight: 510;
+  box-shadow:
+    rgba(0, 0, 0, 0.01) 0px 5px 2px 0px,
+    rgba(0, 0, 0, 0.04) 0px 3px 2px 0px,
+    rgba(0, 0, 0, 0.07) 0px 1px 1px 0px;
 }
 
 .btn-go:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--signal) 88%, white);
-  border-color: color-mix(in srgb, var(--signal) 88%, white);
+  background: #eef75c;
+  border-color: #eef75c;
+  color: #08090a;
 }
 
 .btn-stop {
   background: transparent;
-  border-color: color-mix(in srgb, var(--fault) 45%, transparent);
-  color: var(--fault);
+  border-color: rgba(235, 87, 87, 0.45);
+  color: var(--color-coral-red);
 }
 
 .btn-stop:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--fault) 12%, transparent);
-  border-color: var(--fault);
+  background: rgba(235, 87, 87, 0.1);
+  border-color: var(--color-coral-red);
+  color: var(--color-coral-red);
 }
 
 .btn-ghost {
   background: transparent;
   border-color: transparent;
-  color: var(--graphite);
+  color: var(--color-fog);
 }
 
 .btn-ghost:hover:not(:disabled) {
-  background: var(--riser);
-  border-color: var(--rail);
-  color: var(--paper);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: transparent;
+  color: var(--color-mist);
 }
 
 .btn-ghost[aria-pressed="true"],
 .btn-ghost[data-active="true"] {
-  background: var(--riser);
-  border-color: var(--edge);
-  color: var(--paper);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--color-graphite);
+  color: var(--color-paper);
 }
 
+/* White pill: nav-level CTA, second-highest contrast after acid lime. */
+.btn-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 2rem;
+  padding: 0 1rem;
+  border-radius: var(--radius-full);
+  background: #ffffff;
+  border-color: #ffffff;
+  color: #08090a;
+  font-family: var(--font-inter-variable);
+  font-size: 13px;
+  font-weight: 510;
+  white-space: nowrap;
+}
+
+.btn-pill:hover:not(:disabled) {
+  background: var(--color-bone);
+  border-color: var(--color-bone);
+  color: #08090a;
+}
+
+/* ── Pill / badge ──────────────────────────────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-mist);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-fog);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.badge-green {
+  background: rgba(39, 166, 68, 0.12);
+  color: #4cc069;
+}
+
+.badge-red {
+  background: rgba(235, 87, 87, 0.12);
+  color: #f08080;
+}
+
+.badge-violet {
+  background: rgba(99, 102, 241, 0.14);
+  color: #a5b4fc;
+}
+
+.badge-lavender {
+  background: rgba(139, 92, 246, 0.14);
+  color: #c4b5fd;
+}
+
+/* ── Text input ────────────────────────────────────────────────── */
 .field {
   width: 100%;
-  background: var(--ink);
-  border: 1px solid var(--rail);
-  border-radius: var(--r-1);
-  color: var(--paper);
-  font-family: var(--font-sans);
-  font-size: var(--t-body);
-  padding: 0.5rem 0.6875rem;
-  transition:
-    border-color var(--tick) var(--ease),
-    background var(--tick) var(--ease);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  color: var(--color-mist);
+  font-family: var(--font-inter-variable);
+  font-size: 14px;
+  font-weight: 400;
+  padding: 0.5rem 0.75rem;
+  transition: border-color var(--tick) var(--ease);
 }
 
 .field::placeholder {
-  color: var(--dust);
+  color: var(--color-fog);
 }
 
 .field:focus {
   outline: none;
-  border-color: var(--edge);
-  background: var(--slate);
+  border-color: var(--color-mist);
 }
 
-/* ── Keyboard focus ───────────────────────────────────────────────
-   One ring, everywhere, always visible. */
+/* ── Keyboard focus: one visible ring ──────────────────────────── */
 :focus-visible {
-  outline: 2px solid var(--signal);
+  outline: 2px solid rgba(228, 242, 34, 0.7);
   outline-offset: 1px;
-  border-radius: var(--r-1);
+  border-radius: var(--radius-sm);
 }
 
-/* ── Scrollbars ─────────────────────────────────────────────────── */
+/* ── Hero gradient floor ─────────────────────────────────────────
+   The only decorative gradient in the system: atmospheric base under the
+   product screenshot, dark wash grounding floating UI against the void. */
+.hero-floor {
+  background: linear-gradient(to bottom, rgb(8, 9, 10) 10%, rgb(20, 22, 26) 100%);
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 9px;
   height: 9px;
@@ -316,14 +474,14 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--rail);
+  background: var(--color-graphite);
   border: 2px solid transparent;
   background-clip: content-box;
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--edge);
+  background: var(--color-smoke);
   background-clip: content-box;
 }
 
@@ -331,7 +489,7 @@ body {
   background: transparent;
 }
 
-/* ── Motion ─────────────────────────────────────────────────────── */
+/* ── Motion ────────────────────────────────────────────────────── */
 @keyframes breathe {
   0%,
   100% {
@@ -339,6 +497,91 @@ body {
   }
   50% {
     opacity: 0.45;
+  }
+}
+
+/* Pixel-grid loader: a cell rests dim, then flashes the working colour as
+   the wavefront passes. The per-cell delay comes inline from the pattern. */
+@keyframes pixel-on {
+  0%,
+  100% {
+    opacity: 0.15;
+    background-color: var(--color-fog);
+  }
+  50% {
+    opacity: 1;
+    background-color: var(--color-acid-lime);
+  }
+}
+
+/* Shimmer text: a light band sweeping across fog-to-paper type while work
+   is in flight. Settles to solid copy when done. */
+@keyframes shimmer-text {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Streaming prose: the AI's narration shimmers while deltas arrive and
+   settles to solid type when the turn completes. Code blocks keep their
+   surfaces; only the glyphs take the wash. */
+.prose-streaming {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-fog) 35%,
+    var(--color-paper) 50%,
+    var(--color-fog) 65%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shimmer-text 1.4s linear infinite;
+}
+
+.prose-streaming * {
+  color: transparent !important;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -357,12 +600,7 @@ body {
   animation: rise var(--sweep) var(--ease) both;
 }
 
-/* ── The meter ──────────────────────────────────────────────────────
-   The one loader in the product. Three bars stepping like a signal meter
-   on a piece of test equipment — it means "the agent is working on this,
-   right now", and it is the only place ambient animation carries that
-   meaning. No ring, no spinner, no sweep across the row. Sized to sit on a
-   text baseline; add .meter-lg where it stands on its own. */
+/* ── The meter: agent-working loader ───────────────────────────── */
 .meter {
   display: inline-flex;
   align-items: flex-end;
@@ -373,7 +611,7 @@ body {
 .meter i {
   width: 2px;
   height: 100%;
-  background: var(--probe);
+  background: var(--color-acid-lime);
   border-radius: 1px;
   transform-origin: bottom;
   transform: scaleY(0.4);
@@ -421,22 +659,20 @@ body {
     opacity: 1;
   }
 
-  /* The meter still has to say "working", so hold it mid-height rather than
-     collapsing the bars to a flat line. */
   .meter i {
     animation: none !important;
     transform: scaleY(0.7);
   }
 }
 
-/* ── Agent prose ──────────────────────────────────────────────────
-   The agent writes in sentences and in code. Both need to be readable in a
-   320px column, which is why the code blocks scroll on their own axis
-   instead of stretching the panel. */
+/* ── Agent prose ───────────────────────────────────────────────── */
 .prose-agent {
-  font-size: var(--t-body);
-  line-height: 1.6;
-  color: var(--paper);
+  font-size: 13px;
+  line-height: 1.65;
+  letter-spacing: -0.006em;
+  color: var(--color-mist);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .prose-agent > * + * {
@@ -446,24 +682,24 @@ body {
 .prose-agent h1,
 .prose-agent h2,
 .prose-agent h3 {
-  font-size: var(--t-small);
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 590;
   letter-spacing: 0.01em;
-  color: var(--paper);
+  color: var(--color-paper);
 }
 
 .prose-agent strong {
-  font-weight: 600;
-  color: var(--paper);
+  font-weight: 590;
+  color: var(--color-paper);
 }
 
 .prose-agent em {
   font-style: italic;
-  color: var(--graphite);
+  color: var(--color-fog);
 }
 
 .prose-agent a {
-  color: var(--signal);
+  color: var(--color-mist);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -488,10 +724,10 @@ body {
   content: "";
   position: absolute;
   left: -0.8125rem;
-  top: 0.5rem;
+  top: 0.55rem;
   width: 3px;
   height: 3px;
-  background: var(--dust);
+  background: var(--color-ash);
 }
 
 .prose-agent ol {
@@ -500,26 +736,26 @@ body {
 
 .prose-agent ol::marker,
 .prose-agent li::marker {
-  color: var(--dust);
-  font-family: var(--font-mono);
-  font-size: var(--t-tiny);
+  color: var(--color-ash);
+  font-family: var(--font-berkeley-mono);
+  font-size: 11px;
 }
 
 .prose-agent code {
-  font-family: var(--font-mono);
+  font-family: var(--font-berkeley-mono);
   font-size: 0.8125em;
-  background: var(--ink);
-  border: 1px solid var(--rail);
-  border-radius: var(--r-1);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-graphite);
+  border-radius: var(--radius-sm);
   padding: 0.0625rem 0.25rem;
-  color: var(--signal);
+  color: var(--color-bone);
   word-break: break-word;
 }
 
 .prose-agent pre {
-  background: var(--ink);
-  border: 1px solid var(--rail);
-  border-radius: var(--r-2);
+  background: var(--color-obsidian);
+  border: 1px solid var(--color-graphite);
+  border-radius: var(--radius-md);
   overflow-x: auto;
   padding: 0.625rem 0.75rem;
 }
@@ -528,23 +764,23 @@ body {
   background: none;
   border: none;
   padding: 0;
-  color: var(--paper);
-  font-size: var(--t-tiny);
-  line-height: 1.55;
+  color: var(--color-mist);
+  font-size: 12px;
+  line-height: 1.6;
   white-space: pre;
 }
 
 .prose-agent blockquote {
-  border-left: 2px solid var(--rail);
+  border-left: 2px solid var(--color-graphite);
   padding-left: 0.6875rem;
-  color: var(--graphite);
+  color: var(--color-fog);
 }
 
-/* ── Utilities ──────────────────────────────────────────────────── */
+/* ── Utilities ─────────────────────────────────────────────────── */
 .tnum {
   font-variant-numeric: tabular-nums;
 }
 
 .hairline {
-  background: var(--rail);
+  background: var(--color-graphite);
 }
