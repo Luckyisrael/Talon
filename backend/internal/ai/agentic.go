@@ -9,7 +9,9 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -144,6 +146,70 @@ func (c *Client) doWithRetry(ctx context.Context, url string, body []byte, setHe
 	return nil, fmt.Errorf("%s failed after %d attempts: %w", label, maxRetries, lastErr)
 }
 
+// transientEnvelopeRe matches provider error text that clears on its own:
+// upstream overloads, timeouts, and OpenRouter's "Provider returned error"
+// envelope, which arrives as HTTP 200 with an error body instead of a 5xx.
+var transientEnvelopeRe = regexp.MustCompile(`(?i)(provider.{0,20}error|overloaded|temporar\w+|try again|rate.?limit|time\w*\s*out|capacity|upstream.{0,20}error|no endpoints? found)`)
+
+// envelopeError extracts an in-body error envelope of the form
+// {"error": {"message": "...", "code": 529}}. It returns the message, the
+// numeric code (0 when absent or non-numeric), and whether an envelope was
+// present at all.
+func envelopeError(body []byte) (string, int, bool) {
+	var env struct {
+		Error *struct {
+			Message string          `json:"message"`
+			Code    json.RawMessage `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil || env.Error == nil {
+		return "", 0, false
+	}
+	code := 0
+	if len(env.Error.Code) > 0 {
+		if n, err := strconv.Atoi(strings.Trim(string(env.Error.Code), `"`)); err == nil {
+			code = n
+		}
+	}
+	return env.Error.Message, code, true
+}
+
+// doWithEnvelopeRetry is doWithRetry plus one more layer: some gateways
+// (notably OpenRouter) report an upstream failure as HTTP 200 carrying an
+// error envelope, which the status-code retry above waves through. A transient
+// envelope is retried with backoff; a permanent one (bad key, bad model,
+// rejected request) fails fast with the code attached so the message names the
+// real problem instead of "Provider returned error".
+func (c *Client) doWithEnvelopeRetry(ctx context.Context, url string, body []byte, setHeaders func(*http.Request), label string) ([]byte, error) {
+	const maxEnvelopeRetries = 3
+	for attempt := 0; ; attempt++ {
+		respBody, err := c.doWithRetry(ctx, url, body, setHeaders, label)
+		if err != nil {
+			return nil, err
+		}
+		msg, code, ok := envelopeError(respBody)
+		if !ok {
+			return respBody, nil
+		}
+		transient := (code == 429 || (code >= 500 && code < 600)) || transientEnvelopeRe.MatchString(msg)
+		if !transient {
+			return nil, fmt.Errorf("%s: provider refused the request (code %d): %s", label, code, truncate(msg, 500))
+		}
+		if attempt+1 >= maxEnvelopeRetries {
+			return nil, fmt.Errorf("%s: provider errored %d times, last: %s", label, maxEnvelopeRetries, truncate(msg, 300))
+		}
+		delay := time.Duration(1<<uint(attempt)) * 2 * time.Second
+		delay += time.Duration(rand.Int63n(int64(time.Second)))
+		log.Printf("%s: transient provider envelope, retry %d/%d in %v: %s",
+			label, attempt+1, maxEnvelopeRetries, delay, truncate(msg, 200))
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+}
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -183,7 +249,7 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	respBody, err := c.doWithRetry(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
+	respBody, err := c.doWithEnvelopeRetry(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		req.Header.Set("HTTP-Referer", "https://seekerstudio.app")
 		req.Header.Set("X-Title", "SeekerStudio")
@@ -344,7 +410,7 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	respBody, err := c.doWithRetry(ctx, c.baseURL+"/v1/messages", body, func(req *http.Request) {
+	respBody, err := c.doWithEnvelopeRetry(ctx, c.baseURL+"/v1/messages", body, func(req *http.Request) {
 		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Set("User-Agent", "SeekerStudio/1.0")

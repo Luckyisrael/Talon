@@ -230,6 +230,20 @@ func (r *Registry) PreinstalledSet() map[string]bool {
 	return set
 }
 
+// PreinstalledList returns the preinstalled package names in the same stable,
+// sorted order RulesBlock renders them in — the display list, not the lowercased
+// lookup set. Plan mode injects it into its system prompt so it names the same
+// packages Build mode treats as already installed. Returns nil when nothing is
+// preinstalled. The returned slice is a copy; callers must not mutate the registry.
+func (r *Registry) PreinstalledList() []string {
+	if r == nil || len(r.preinstalled) == 0 {
+		return nil
+	}
+	out := make([]string, len(r.preinstalled))
+	copy(out, r.preinstalled)
+	return out
+}
+
 // Manifest renders the one-line description of every skill: what exists and when to
 // reach for it. Only descriptions live here — never bodies — so it stays cheap in
 // the cached prefix.

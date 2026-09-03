@@ -2,6 +2,7 @@ package ai
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -221,5 +222,186 @@ func TestOpenAIReplayKeepsParallelSignaturePositional(t *testing.T) {
 	}
 	if assistantMsg.ToolCalls[1].ExtraContent != nil {
 		t.Errorf("second call must stay bare, got extra_content: %#v", assistantMsg.ToolCalls[1].ExtraContent)
+	}
+}
+
+// The system prompt is the largest block that repeats verbatim on every round of
+// a build, so the OpenAI/OpenRouter path must send it with a cache_control marker
+// — without one, each round re-bills the whole system prompt at the uncached
+// rate. This pins the exact wire shape OpenRouter reads to place the breakpoint:
+// a content-parts array whose text part carries cache_control:{type:"ephemeral"}.
+// It marshals the message the way the request actually goes out and reads the
+// shape back, so it fails if the content silently reverts to a bare string.
+func TestOpenAISystemPromptIsCacheable(t *testing.T) {
+	out := toOpenAI("you are a build agent", []Message{
+		msg("user", text("build me a login screen")),
+	})
+	if len(out) == 0 || out[0].Role != "system" {
+		t.Fatalf("expected a leading system message, got %#v", out)
+	}
+
+	raw, err := json.Marshal(out[0])
+	if err != nil {
+		t.Fatalf("marshal system message: %v", err)
+	}
+	var decoded struct {
+		Role    string `json:"role"`
+		Content []struct {
+			Type         string `json:"type"`
+			Text         string `json:"text"`
+			CacheControl struct {
+				Type string `json:"type"`
+			} `json:"cache_control"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("system content is not the content-parts array OpenRouter reads for caching: %v\n%s", err, raw)
+	}
+	if len(decoded.Content) != 1 {
+		t.Fatalf("want exactly one text part, got %d: %s", len(decoded.Content), raw)
+	}
+	part := decoded.Content[0]
+	if part.Type != "text" || part.Text != "you are a build agent" {
+		t.Errorf("system text part = %+v, want the system prompt carried as a text part", part)
+	}
+	if part.CacheControl.Type != "ephemeral" {
+		t.Errorf("system part cache_control.type = %q, want \"ephemeral\" — no marker means no prompt caching on OpenRouter", part.CacheControl.Type)
+	}
+}
+
+// An empty system prompt must emit no system message at all — not an empty
+// cacheable part — so a toolless or system-less call stays byte-for-byte what it
+// was before caching was wired in.
+func TestOpenAIEmptySystemEmitsNoSystemMessage(t *testing.T) {
+	out := toOpenAI("", []Message{msg("user", text("hi"))})
+	for _, m := range out {
+		if m.Role == "system" {
+			t.Errorf("emitted a system message for an empty system prompt: %#v", m)
+		}
+	}
+}
+
+func findResult(t *testing.T, msgs []Message, id string) Block {
+	t.Helper()
+	for _, m := range msgs {
+		for _, b := range m.Blocks {
+			if b.Type == "tool_result" && b.ToolUseID == id {
+				return b
+			}
+		}
+	}
+	t.Fatalf("no tool_result for %q", id)
+	return Block{}
+}
+
+func readCall(id, path string) Block {
+	return Block{Type: "tool_use", ID: id, Name: "read_file", Input: json.RawMessage(`{"path":"` + path + `"}`)}
+}
+
+// When the same file is read twice in a turn, the older result is dead weight —
+// the newer read has the current bytes — yet it is replayed in full every round.
+// Trimming collapses the stale copy to a pointer while keeping the newest read
+// whole, and must never orphan a tool_use (both providers 400 on that) or touch
+// the caller's stored transcript.
+func TestTrimSupersededCollapsesEarlierReadOfSamePath(t *testing.T) {
+	big := strings.Repeat("A", minTrimmableResult+50)
+	newer := strings.Repeat("B", minTrimmableResult+50)
+	history := []Message{
+		msg("user", text("open the config")),
+		msg("assistant", readCall("r1", "app/config.ts")),
+		msg("user", Block{Type: "tool_result", ToolUseID: "r1", Content: big}),
+		msg("assistant", text("editing"), readCall("r2", "app/config.ts")),
+		msg("user", Block{Type: "tool_result", ToolUseID: "r2", Content: newer}),
+	}
+
+	out := TrimSupersededToolOutput(history)
+
+	if first := findResult(t, out, "r1"); first.Content == big {
+		t.Fatal("the superseded read_file result was not collapsed")
+	} else if !strings.Contains(first.Content, "app/config.ts") {
+		t.Errorf("the pointer should name the re-read file, got: %q", first.Content)
+	}
+	if last := findResult(t, out, "r2"); last.Content != newer {
+		t.Error("the newest read_file result must keep its full content")
+	}
+	if hasUnansweredToolUse(out) {
+		t.Error("trimming orphaned a tool_use — the provider would 400 on this replay")
+	}
+	// Full fidelity: the caller's history is what gets persisted and shown, so it
+	// must be untouched.
+	if got := findResult(t, history, "r1").Content; got != big {
+		t.Errorf("TrimSupersededToolOutput mutated the caller's history (r1 content changed, len now %d)", len(got))
+	}
+}
+
+// A small stale result is left alone: collapsing it saves almost nothing and, on
+// a caching provider, a change deep in the prefix can cost a re-cache of
+// everything after it.
+func TestTrimSupersededLeavesSmallResults(t *testing.T) {
+	small := "line one\nline two\n"
+	history := []Message{
+		msg("user", text("peek")),
+		msg("assistant", readCall("r1", "a.ts")),
+		msg("user", Block{Type: "tool_result", ToolUseID: "r1", Content: small}),
+		msg("assistant", readCall("r2", "a.ts")),
+		msg("user", Block{Type: "tool_result", ToolUseID: "r2", Content: small}),
+	}
+	out := TrimSupersededToolOutput(history)
+	if got := findResult(t, out, "r1").Content; got != small {
+		t.Errorf("a small superseded result was collapsed; content = %q", got)
+	}
+}
+
+// An error result carries information the newer read does not, and is small, so
+// it is never collapsed even when the same path is read again afterwards.
+func TestTrimSupersededKeepsErrorResults(t *testing.T) {
+	errBody := strings.Repeat("permission denied ", 60) // large, but an error
+	newer := strings.Repeat("B", minTrimmableResult+50)
+	history := []Message{
+		msg("user", text("open it")),
+		msg("assistant", readCall("r1", "secret.ts")),
+		msg("user", Block{Type: "tool_result", ToolUseID: "r1", Content: errBody, IsError: true}),
+		msg("assistant", readCall("r2", "secret.ts")),
+		msg("user", Block{Type: "tool_result", ToolUseID: "r2", Content: newer}),
+	}
+	out := TrimSupersededToolOutput(history)
+	if got := findResult(t, out, "r1").Content; got != errBody {
+		t.Errorf("an error result was collapsed; content = %q", got)
+	}
+}
+
+// Reads of different files never supersede one another, and a file read only once
+// is always kept whole.
+func TestTrimSupersededKeepsDistinctAndSingleReads(t *testing.T) {
+	a := strings.Repeat("A", minTrimmableResult+50)
+	b := strings.Repeat("B", minTrimmableResult+50)
+	history := []Message{
+		msg("user", text("read both")),
+		msg("assistant", readCall("r1", "a.ts"), readCall("r2", "b.ts")),
+		msg("user",
+			Block{Type: "tool_result", ToolUseID: "r1", Content: a},
+			Block{Type: "tool_result", ToolUseID: "r2", Content: b}),
+	}
+	out := TrimSupersededToolOutput(history)
+	if findResult(t, out, "r1").Content != a || findResult(t, out, "r2").Content != b {
+		t.Error("distinct single reads must both keep their full content")
+	}
+}
+
+// A large result from a tool that is not read-only (a write, a build) is never
+// collapsed — those results are not interchangeable, so "latest wins" does not
+// hold for them.
+func TestTrimSupersededOnlyTouchesReadOnlyTools(t *testing.T) {
+	body := strings.Repeat("diff ", 400)
+	history := []Message{
+		msg("user", text("apply it twice")),
+		msg("assistant", Block{Type: "tool_use", ID: "w1", Name: "write_file", Input: json.RawMessage(`{"path":"a.ts"}`)}),
+		msg("user", Block{Type: "tool_result", ToolUseID: "w1", Content: body}),
+		msg("assistant", Block{Type: "tool_use", ID: "w2", Name: "write_file", Input: json.RawMessage(`{"path":"a.ts"}`)}),
+		msg("user", Block{Type: "tool_result", ToolUseID: "w2", Content: body}),
+	}
+	out := TrimSupersededToolOutput(history)
+	if findResult(t, out, "w1").Content != body {
+		t.Error("a write_file result was collapsed; only read_file/list_files are supersedable")
 	}
 }

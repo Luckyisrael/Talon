@@ -212,6 +212,92 @@ func TestExecuteToolsReadBeforeWrite(t *testing.T) {
 	}
 }
 
+// A tool that panics mid-execution must not take the build down with it. The
+// crash is contained at the run() body both the parallel and sequential paths
+// share: it comes back as an is_error tool_result carrying the crashing call's
+// ID, every other call in the same turn still completes, and executeTools returns
+// normally rather than letting the panic escape and kill the process.
+func TestExecuteToolsRecoversFromPanic(t *testing.T) {
+	o := New(nil, nil, loadKnowledge(t))
+	sess := newTestSession(t)
+
+	// Panic on one call, succeed on the other, so the test proves both that the
+	// crash is contained and that it does not poison its healthy neighbour.
+	opts := RunOptions{
+		Exists: func(string) bool { return false },
+		Execute: func(_ context.Context, _ string, input json.RawMessage) (string, bool) {
+			if strings.Contains(string(input), "boom") {
+				panic("simulated tool crash")
+			}
+			return "ok", false
+		},
+	}
+
+	// Distinct IDs so the assertions can prove each result carries its own call's.
+	// No ReadOnlyTool → sequential, so results keep the calls' order.
+	calls := []ai.ToolUseBlock{
+		{ID: "call-boom", Name: "write_file", Input: []byte(`{"path":"app/boom.tsx","content":"x"}`)},
+		{ID: "call-ok", Name: "write_file", Input: []byte(`{"path":"app/fine.tsx","content":"y"}`)},
+	}
+
+	// Reaching the next line at all is the first assertion: the panic did not escape.
+	results := o.executeTools(context.Background(), sess, calls, opts)
+
+	if len(results) != len(calls) {
+		t.Fatalf("want %d results, got %d", len(calls), len(results))
+	}
+
+	// The crashing call: a tool_result, flagged as an error, carrying its own ID,
+	// with language that tells the model the tool faulted (not its request) so it
+	// tries a smaller step rather than retrying the same call.
+	boom := results[0]
+	if boom.Type != "tool_result" || !boom.IsError {
+		t.Errorf("a panicking tool must yield an is_error tool_result, got %+v", boom)
+	}
+	if boom.ToolUseID != "call-boom" {
+		t.Errorf("the error result must carry the crashing call's ID, got %q", boom.ToolUseID)
+	}
+	if !strings.Contains(boom.Content, "crashed") {
+		t.Errorf("the result should tell the model the tool crashed, got %q", boom.Content)
+	}
+
+	// The neighbour ran to completion, untouched by the crash beside it.
+	if ok := results[1]; ok.IsError || ok.ToolUseID != "call-ok" {
+		t.Errorf("a healthy call next to a crashing one must still succeed, got %+v", ok)
+	}
+}
+
+// The last line of defence for the "every tool_use needs a matching tool_result"
+// rule: if some future path ever leaves a gap in the pre-sized results slice, the
+// backfill turns that zero-value Block (empty Type — silently dropped by both
+// serializers, orphaning its tool_use into a 400) into an error result carrying
+// the call's ID, and never clobbers a result a run already set.
+func TestBackfillMissingResults(t *testing.T) {
+	calls := []ai.ToolUseBlock{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	results := make([]ai.Block, len(calls))
+	// Simulate a run that set only the middle result and left the two ends as gaps.
+	results[1] = ai.Block{Type: "tool_result", ToolUseID: "b", Content: "ok"}
+
+	backfillMissingResults(results, calls)
+
+	for i, r := range results {
+		if r.Type != "tool_result" {
+			t.Errorf("result %d has type %q; an empty Type is dropped by both serializers and orphans the tool_use", i, r.Type)
+		}
+		if r.ToolUseID != calls[i].ID {
+			t.Errorf("result %d must carry its call's ID %q, got %q", i, calls[i].ID, r.ToolUseID)
+		}
+	}
+	if !results[0].IsError || !results[2].IsError {
+		t.Error("a backfilled gap must be flagged is_error so the model treats it as a failed call")
+	}
+	// The result the run already produced is left exactly as it was.
+	if results[1].Content != "ok" || results[1].IsError {
+		t.Errorf("backfill must not overwrite a result a run already set, got %+v", results[1])
+	}
+}
+
+
 // ── the verification ladder ───────────────────────────
 
 // gateResponse is one scripted answer from a verification tool.
@@ -349,9 +435,11 @@ func TestVerifyLadder(t *testing.T) {
 		}
 	})
 
-	// A checker that cannot run is a platform problem, not the agent's code: skip
-	// the gate and keep going rather than trapping clean code in a repair loop.
-	t.Run("a broken checker is skipped, not failed", func(t *testing.T) {
+	// A checker that cannot run is a platform problem, not the agent's code: keep
+	// going rather than trapping clean code in a repair loop — but surface it as a
+	// distinct "unavailable" event (with a log line) instead of a quiet skip, so a
+	// real infra break is visible rather than reading as a pass.
+	t.Run("a broken checker is surfaced as unavailable, not failed", func(t *testing.T) {
 		o := New(nil, nil, nil)
 		sess := newTestSession(t)
 		var calls []string
@@ -365,17 +453,18 @@ func TestVerifyLadder(t *testing.T) {
 			t.Fatalf("a broken checker must not fail the build, got feedback: %q", v.feedback)
 		}
 		stages := verifyStages(sess.Emitter)
-		if !hasStage(stages, "typecheck", "skip") {
-			t.Errorf("the broken gate should be reported as skipped, got %v", stages)
+		if !hasStage(stages, "typecheck", "unavailable") {
+			t.Errorf("the broken gate should be reported as unavailable, got %v", stages)
 		}
 		if !equalStrings(calls, []string{"run_typecheck", "run_lint"}) {
-			t.Errorf("a skipped gate must not stop the ladder, got %v", calls)
+			t.Errorf("an unavailable gate must not stop the ladder, got %v", calls)
 		}
 	})
 
 	// Output that does not parse means the tool's contract drifted; fail open so a
-	// format change never blocks every build.
-	t.Run("unparseable output is skipped", func(t *testing.T) {
+	// format change never blocks every build — and surface the drift, don't swallow
+	// it.
+	t.Run("unparseable output is surfaced as unavailable", func(t *testing.T) {
 		o := New(nil, nil, nil)
 		sess := newTestSession(t)
 		opts := RunOptions{Execute: ladderExec(map[string]gateResponse{
@@ -387,8 +476,8 @@ func TestVerifyLadder(t *testing.T) {
 		if !v.ok {
 			t.Fatalf("unparseable output must fail open, got feedback: %q", v.feedback)
 		}
-		if stages := verifyStages(sess.Emitter); !hasStage(stages, "typecheck", "skip") {
-			t.Errorf("unparseable output should be reported as skipped, got %v", stages)
+		if stages := verifyStages(sess.Emitter); !hasStage(stages, "typecheck", "unavailable") {
+			t.Errorf("unparseable output should be reported as unavailable, got %v", stages)
 		}
 	})
 }

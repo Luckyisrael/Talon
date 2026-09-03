@@ -52,6 +52,11 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	reg.Register(&tools.ListFiles{FS: fs})
 	reg.Register(&tools.ReadFile{FS: fs})
 	reg.Register(&tools.GrepCodebase{FS: fs})
+	// Grounding: survey the whole project at once, and read an installed package's
+	// real type surface — so the model orients and checks APIs instead of guessing
+	// on a stack newer than its training data. Both are read-only (run concurrently).
+	reg.Register(&tools.ProjectMap{FS: fs})
+	reg.Register(&tools.InspectPackage{WorkspacePath: workspacePath})
 
 	// Writing. edit_file and multi_edit are what make incremental work possible;
 	// without them the only way to change one line was to rewrite the file.
@@ -63,8 +68,10 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	// Running and verifying. The output sink makes each one's subprocess output
 	// visible in the terminal pane instead of arriving only at tool result time.
 	reg.Register(&tools.RunCommand{WorkspacePath: workspacePath, Output: output})
+	reg.Register(&tools.RunShell{WorkspacePath: workspacePath, Output: output})
 	reg.Register(&tools.RunTypecheck{WorkspacePath: workspacePath, Output: output})
 	reg.Register(&tools.RunLint{WorkspacePath: workspacePath, Output: output})
+	reg.Register(&tools.RunChecks{WorkspacePath: workspacePath, Output: output})
 
 	var allowlist *devclient.Allowlist
 	if h.devClient != nil {
@@ -72,6 +79,16 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	}
 	reg.Register(&tools.InstallPackage{WorkspacePath: workspacePath, Allowlist: allowlist, Output: output})
 	reg.Register(&tools.BuildAPK{WorkspacePath: workspacePath, Allowlist: allowlist, Output: output})
+
+	// Asking the user. ask_user pauses the turn rather than executing; the
+	// orchestrator intercepts it. Registered so the model sees its schema and
+	// knows it can ask instead of guessing.
+	reg.Register(&tools.AskUser{})
+
+	// Marking plan progress. Like ask_user, mark_task_done is orchestrator-owned:
+	// it flips a seeded plan task's status rather than executing. Registered so a
+	// capable model can check off screens and features as it finishes them.
+	reg.Register(&tools.MarkTaskDone{})
 
 	// Project knowledge.
 	adapter := h.storeAdapter()

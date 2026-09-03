@@ -15,12 +15,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/joho/godotenv"
 	"github.com/seekersstudio/backend/internal/agent"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/api"
 	"github.com/seekersstudio/backend/internal/auth"
 	"github.com/seekersstudio/backend/internal/billing"
 	"github.com/seekersstudio/backend/internal/devclient"
+	"github.com/seekersstudio/backend/internal/gitremote"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/store"
@@ -31,6 +33,8 @@ import (
 )
 
 func main() {
+	godotenv.Load()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -146,6 +150,18 @@ func main() {
 	meHandler := api.NewMeHandler(s)
 	log.Printf("billing ready (provider %s, test mode)", billingProvider.Name())
 
+	// Premium GitHub integration (W4). gitremote.Load reads the OAuth app config
+	// and the token-encryption key from the environment; when the OAuth app is
+	// unset the integration reports itself unconfigured and every credential-bound
+	// route degrades to a clear "not configured" state rather than failing oddly.
+	gitCfg := gitremote.Load()
+	gitHandler := api.NewGitHandler(s, gitCfg, wsMgr, workspaceDir)
+	if gitCfg.Configured() {
+		log.Printf("github integration ready (oauth configured)")
+	} else {
+		log.Printf("github integration dark (set GITHUB_OAUTH_CLIENT_ID/SECRET and GIT_TOKEN_ENCRYPTION_KEY to enable)")
+	}
+
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -208,6 +224,9 @@ func main() {
 			// Resume runs the agent loop again, so it belongs with the metered
 			// routes even though a resumed turn is not charged a second prompt.
 			r.Post("/v1/prompts/{id}/resume", promptHandler.Resume)
+			// Answer resumes a turn paused on ask_user — same loop, same "one prompt
+			// covers the question and its answer" accounting as Resume.
+			r.Post("/v1/prompts/{id}/answer", promptHandler.Answer)
 		})
 		r.Get("/v1/prompts/{id}", promptHandler.Get)
 		// Discard only flips a status marker — no loop, no metering.
@@ -241,6 +260,17 @@ func main() {
 		// route 404s (the handler feature-detects the simulator), so it cannot be
 		// used to grant a tier in production.
 		r.Post("/v1/billing/test/complete", billingHandler.TestComplete)
+
+		// Premium GitHub integration (W4). Status is readable by any signed-in user
+		// (it reports paid/configured so the UI knows which surface to show);
+		// Connect and Push enforce the paid gate server-side. The OAuth callback is
+		// NOT here — a browser navigation carries no Bearer token — it sits in the
+		// public group below.
+		r.Get("/v1/git/status", gitHandler.Status)
+		r.Post("/v1/git/github/connect", gitHandler.Connect)
+		r.Delete("/v1/git/github", gitHandler.Disconnect)
+		r.Get("/v1/projects/{id}/git/remote", gitHandler.GetProjectRemote)
+		r.Post("/v1/projects/{id}/git/push", gitHandler.Push)
 	})
 
 	// Billing webhook: unauthenticated by necessity — the payment provider has no
@@ -248,6 +278,13 @@ func main() {
 	// reading the body. It sits outside the auth group for the same reason the
 	// WebSocket routes do: it cannot use header-based auth.
 	r.Post("/v1/billing/webhook", billingHandler.Webhook)
+
+	// GitHub OAuth callback: unauthenticated by necessity — GitHub redirects the
+	// user's browser here as a top-level navigation, which carries no JWT. The
+	// handler recovers the user from the single-use state token it minted at
+	// Connect, then redirects back to the settings page. It sits outside the auth
+	// group for the same reason the billing webhook and WebSocket routes do.
+	r.Get("/v1/git/github/callback", gitHandler.Callback)
 
 	// WebSocket endpoints authenticate from the query string, because a browser
 	// cannot set headers on a WebSocket handshake. Each handler validates the

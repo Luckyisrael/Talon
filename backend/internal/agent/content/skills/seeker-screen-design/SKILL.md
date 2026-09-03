@@ -2,7 +2,8 @@
 name: seeker-screen-design
 description: Design screens that fit the Seeker device and feel finished. Load when building UI, laying out a screen, or deciding on visual and interaction details.
 version: "react-native@0.83, react-native-safe-area-context@5.6.x"
-autoAttach: false
+autoAttach: true
+triggers: [path:app/**, path:components/**]
 ---
 
 # Designing for the Seeker

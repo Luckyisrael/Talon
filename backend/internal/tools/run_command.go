@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -155,6 +156,15 @@ func (t *RunCommand) Execute(ctx context.Context, args json.RawMessage) (ToolRes
 	cmd := exec.CommandContext(ctx, name, parts[1:]...)
 	cmd.Dir = t.WorkspacePath
 	cmd.Env = sanitizedEnv()
+	// Kill the whole process group on timeout so orphaned children cannot hold
+	// Wait open past the deadline (same guarantee as run_shell).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 
 	raw, runErr := runCaptured(cmd, t.Output)
 	output := clipCommandOutput(string(raw))

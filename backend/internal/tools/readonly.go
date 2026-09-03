@@ -4,7 +4,9 @@ package tools
 // free to run them concurrently inside a single turn. Everything that mutates
 // files or shells out runs one at a time.
 
-func (t *ReadFile) ReadOnly() bool     { return true }
-func (t *ListFiles) ReadOnly() bool    { return true }
-func (t *GrepCodebase) ReadOnly() bool { return true }
-func (t *ReadSkill) ReadOnly() bool    { return true }
+func (t *ReadFile) ReadOnly() bool       { return true }
+func (t *ListFiles) ReadOnly() bool      { return true }
+func (t *GrepCodebase) ReadOnly() bool   { return true }
+func (t *ReadSkill) ReadOnly() bool      { return true }
+func (t *ProjectMap) ReadOnly() bool     { return true }
+func (t *InspectPackage) ReadOnly() bool { return true }

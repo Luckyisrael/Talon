@@ -175,8 +175,8 @@ type openaiResponse struct {
 // Plan runs one Plan-mode turn and parses the structured plan out of the reply.
 // The model is asked for JSON; if the first attempt is not parseable it gets one
 // chance to correct itself, because a malformed reply loses the plan entirely.
-func (c *Client) Plan(ctx context.Context, history []PromptMessage) (*PlanResponse, error) {
-	resp, err := c.chat(ctx, SystemPromptPlan, history)
+func (c *Client) Plan(ctx context.Context, systemPrompt string, history []PromptMessage) (*PlanResponse, error) {
+	resp, err := c.chat(ctx, systemPrompt, history)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +194,7 @@ func (c *Client) Plan(ctx context.Context, history []PromptMessage) (*PlanRespon
 			"with \"message\" and \"plan\" keys, and nothing outside the object.",
 	})
 
-	resp2, err := c.chat(ctx, SystemPromptPlan, retry)
+	resp2, err := c.chat(ctx, systemPrompt, retry)
 	if err != nil {
 		// The first reply is still worth showing even though the plan is lost.
 		return &PlanResponse{Message: StripCodeBlocks(resp)}, nil

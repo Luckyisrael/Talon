@@ -226,14 +226,37 @@ type openaiChatMessage struct {
 	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
+// cacheableText wraps a string as an OpenAI content-parts array carrying an
+// ephemeral cache_control marker. This is the OpenAI-side equivalent of the
+// cache_control set on the Anthropic system block: OpenRouter reads it to place
+// a prompt-cache breakpoint for the providers that support caching, and the
+// providers that cache automatically ignore the extra field, so it degrades
+// safely to a plain text part.
+func cacheableText(text string) []map[string]any {
+	return []map[string]any{
+		{
+			"type":          "text",
+			"text":          text,
+			"cache_control": map[string]any{"type": "ephemeral"},
+		},
+	}
+}
+
 // toOpenAI converts messages to Chat Completions form. The shape differs
 // structurally from Anthropic's: tool results are separate messages with
 // role:"tool" rather than blocks inside a user turn, so one Message can expand
 // into several openaiChatMessages.
+//
+// The system prompt is sent as a content-parts array carrying an ephemeral
+// cache_control marker, mirroring the Anthropic path. It is the largest block
+// that repeats verbatim every round, so caching it is where the round-over-round
+// token savings live. OpenRouter reads the marker for the providers that support
+// prompt caching (Anthropic, Gemini) and ignores it for the ones that cache
+// automatically (OpenAI, DeepSeek), so it is safe to send unconditionally.
 func toOpenAI(system string, msgs []Message) []openaiChatMessage {
 	out := make([]openaiChatMessage, 0, len(msgs)+1)
 	if system != "" {
-		out = append(out, openaiChatMessage{Role: "system", Content: system})
+		out = append(out, openaiChatMessage{Role: "system", Content: cacheableText(system)})
 	}
 
 	for _, m := range msgs {
@@ -437,6 +460,140 @@ func hasUnansweredToolUse(msgs []Message) bool {
 		}
 	}
 	return len(pending) > 0
+}
+
+// ── Superseded-output trimming ─────────────────────────
+
+// supersedableTools are the read-only, latest-wins calls whose older results
+// turn into dead weight the moment the same target is fetched again in the same
+// turn: only the newest fetch has the current bytes, yet every stale copy is
+// replayed in full to the provider on every subsequent round. Writes and
+// one-shot actions are never touched — their results are not interchangeable.
+var supersedableTools = map[string]bool{
+	"read_file":  true,
+	"list_files": true,
+}
+
+// minTrimmableResult is the result size, in bytes, below which a superseded
+// result is left alone. Trimming a small result saves almost nothing, and on a
+// caching provider a change deep in the replayed prefix can cost a re-cache of
+// everything after it — so a result has to be genuinely large to be worth
+// collapsing.
+const minTrimmableResult = 800
+
+// TrimSupersededToolOutput returns a view of msgs in which a large read_file or
+// list_files result is collapsed to a one-line pointer when the SAME target is
+// fetched again later in the conversation. Only the newest fetch of each target
+// keeps its full body; the earlier ones — otherwise re-sent verbatim every round
+// for the life of the turn — shrink to a line that names the target and points
+// at the newer result.
+//
+// Validity is preserved exactly: the tool_result stays in place with its
+// ToolUseID intact — dropping it would orphan the tool_use and both providers
+// reject that with a 400 — and only its Content changes. The result shares the
+// caller's Message and Block values everywhere except the handful of blocks it
+// rewrites, and it rewrites those on fresh copies, so the caller's stored,
+// full-fidelity transcript is never mutated. When nothing repeats, msgs is
+// returned unchanged with no allocation.
+func TrimSupersededToolOutput(msgs []Message) []Message {
+	// id → what that call fetched, for the supersedable tools only.
+	type target struct{ tool, path string }
+	fetchedBy := make(map[string]target)
+	for _, m := range msgs {
+		for _, b := range m.Blocks {
+			if b.Type == "tool_use" && supersedableTools[b.Name] {
+				fetchedBy[b.ID] = target{tool: b.Name, path: toolPath(b.Input)}
+			}
+		}
+	}
+	if len(fetchedBy) == 0 {
+		return msgs
+	}
+
+	// The survivor for each target is the last call that actually has a result;
+	// results are appended in order, so the last one seen wins.
+	survivor := make(map[target]string)
+	for _, m := range msgs {
+		for _, b := range m.Blocks {
+			if b.Type == "tool_result" {
+				if t, ok := fetchedBy[b.ToolUseID]; ok {
+					survivor[t] = b.ToolUseID
+				}
+			}
+		}
+	}
+
+	// A tool_result is superseded when its call fetched a target that a later call
+	// fetched too, and it is worth collapsing only when it is a large, non-error
+	// body — an error is small and carries information the newer read does not.
+	superseded := func(b Block) bool {
+		if b.Type != "tool_result" || b.IsError || len(b.Content) < minTrimmableResult {
+			return false
+		}
+		t, ok := fetchedBy[b.ToolUseID]
+		return ok && survivor[t] != b.ToolUseID
+	}
+
+	any := false
+	for _, m := range msgs {
+		for _, b := range m.Blocks {
+			if superseded(b) {
+				any = true
+				break
+			}
+		}
+		if any {
+			break
+		}
+	}
+	if !any {
+		return msgs
+	}
+
+	out := make([]Message, len(msgs))
+	copy(out, msgs)
+	for mi := range out {
+		var blocks []Block // copied lazily, only if this message has something to trim
+		for bi, b := range out[mi].Blocks {
+			if !superseded(b) {
+				continue
+			}
+			if blocks == nil {
+				blocks = make([]Block, len(out[mi].Blocks))
+				copy(blocks, out[mi].Blocks)
+			}
+			t := fetchedBy[b.ToolUseID]
+			blocks[bi].Content = supersededPointer(t.tool, t.path)
+		}
+		if blocks != nil {
+			out[mi].Blocks = blocks
+		}
+	}
+	return out
+}
+
+// toolPath pulls the fetch target out of a tool_use input. Two calls count as the
+// same fetch only when their path matches; an unparseable or path-less input
+// yields "" and so simply never matches another call under a different tool.
+func toolPath(input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+	var a struct {
+		Path string `json:"path"`
+	}
+	_ = json.Unmarshal(input, &a)
+	return a.Path
+}
+
+// supersededPointer is the one-line stand-in left where a stale result used to
+// be. It names the tool and target so the model can see what was dropped and, if
+// it genuinely needs the bytes, that a newer copy is present further down.
+func supersededPointer(tool, path string) string {
+	if path != "" {
+		return fmt.Sprintf("(%s output for %q omitted here — it was fetched again later in this turn; the current contents are in that newer result below.)", tool, path)
+	}
+	return fmt.Sprintf("(%s output omitted here — superseded by a later call in this turn.)", tool)
 }
 
 // ── Legacy bridge ─────────────────────────────────────

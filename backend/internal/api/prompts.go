@@ -29,9 +29,18 @@ type PromptHandler struct {
 	orch         *orchestrator.Orchestrator
 	devClient    *devclient.Manager
 	knowledge    *agent.Registry
+	// planPrompt is the Plan-mode system prompt, assembled once at startup with the
+	// template's preinstalled-package list folded in. Building it here — the one
+	// place that holds both the AI client and the knowledge registry — is what keeps
+	// the plan and build modes from drifting on which packages already ship.
+	planPrompt string
 }
 
 func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *agent.Registry) *PromptHandler {
+	var preinstalled []string
+	if knowledge != nil {
+		preinstalled = knowledge.PreinstalledList()
+	}
 	return &PromptHandler{
 		store:        s,
 		ai:           a,
@@ -39,6 +48,7 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *o
 		orch:         orch,
 		devClient:    dc,
 		knowledge:    knowledge,
+		planPrompt:   ai.PlanSystemPrompt(preinstalled),
 	}
 }
 
@@ -150,7 +160,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if req.Mode == "plan" {
-		planResp, err := h.ai.Plan(ctx, h.planHistory(req.ProjectID, req.Prompt))
+		planResp, err := h.ai.Plan(ctx, h.planPrompt, h.planHistory(req.ProjectID, req.Prompt))
 		if err != nil {
 			log.Printf("plan failed (user %d, project %d): %v", userID, req.ProjectID, err)
 			h.store.UpdatePromptStatus(prompt.ID, "failed", 0)
@@ -179,12 +189,13 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		buildOptions{persistUserTurn: true, meterPrompt: true})
 
 	response := map[string]interface{}{
-		"id":            prompt.ID,
-		"mode":          "build",
-		"message":       "",
-		"files_touched": []string{},
-		"verified":      false,
-		"rounds":        0,
+		"id":              prompt.ID,
+		"mode":            "build",
+		"message":         "",
+		"files_touched":   []string{},
+		"verified":        false,
+		"rounds":          0,
+		"remaining_tasks": []string{},
 	}
 	if outcome != nil {
 		response["message"] = outcome.FinalText
@@ -192,6 +203,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response["verified"] = outcome.Verified
 		response["rounds"] = outcome.Rounds
 		response["usage"] = outcome.Usage
+		response["remaining_tasks"] = outcome.RemainingTasks
 	}
 
 	if buildErr != nil {
@@ -325,6 +337,103 @@ func (h *PromptHandler) Resume(w http.ResponseWriter, r *http.Request) {
 		buildOptions{persistUserTurn: false, meterPrompt: false})
 }
 
+// answerRequest is the body of POST /v1/prompts/{id}/answer: the user's reply
+// to the question a paused ask_user turn asked.
+type answerRequest struct {
+	Answer string `json:"answer"`
+}
+
+// Answer resumes a turn paused on ask_user by supplying the user's reply. The
+// reply becomes the tool_result for the pending ask_user call and the loop
+// continues from there, streaming exactly as a fresh turn does.
+//
+// Like Resume this is resume-from-persisted-state, not re-attach to a live
+// stream: it is valid only once the paused run has ended and the turn is
+// genuinely waiting. A turn in any other status, or one still streaming
+// elsewhere, is rejected rather than run twice.
+func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
+	userID := GetUserID(r.Context())
+
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid prompt id")
+		return
+	}
+
+	var body answerRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "could not read the request body")
+		return
+	}
+	body.Answer = strings.TrimSpace(body.Answer)
+	if body.Answer == "" {
+		writeError(w, http.StatusBadRequest, "answer is required")
+		return
+	}
+	if len(body.Answer) > maxPromptLength {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("that answer is %d characters; the limit is %d", len(body.Answer), maxPromptLength))
+		return
+	}
+
+	prompt, err := h.store.GetPrompt(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "prompt not found")
+		return
+	}
+
+	// A prompt is reachable only through the project that owns it.
+	if _, ok := h.ownedProject(w, r, prompt.ProjectID); !ok {
+		return
+	}
+
+	// Only a build turn paused on ask_user is answerable. A turn in any other
+	// status is not waiting for a reply, and injecting a tool_result into a
+	// transcript with no pending question would corrupt it.
+	if prompt.Mode != "build" {
+		writeError(w, http.StatusBadRequest, "only build turns can be answered")
+		return
+	}
+	if prompt.Status != "waiting" {
+		writeError(w, http.StatusConflict, "this turn is not waiting for an answer")
+		return
+	}
+
+	// A turn still streaming in another request must not be resumed underneath
+	// it: two loops against one prompt row and one workspace would corrupt both.
+	if h.orch.GetSession(id) != nil {
+		writeError(w, http.StatusConflict, "this turn is still running")
+		return
+	}
+
+	if !h.checkQuota(w, userID) {
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "this server cannot stream responses")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// Mark it running again for the duration of the resumed loop; finalizeTurn
+	// writes the terminal status when the loop returns.
+	h.store.UpdatePromptStatus(id, "running", prompt.Round)
+
+	// The answer is injected as the tool_result for the pending ask_user call, not
+	// appended as a fresh user prompt. It is real user input, so it is persisted;
+	// it is not metered, because the question and its answer are one prompt,
+	// already charged when the turn first ran.
+	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, body.Answer,
+		buildOptions{persistUserTurn: false, meterPrompt: false, answer: true})
+}
+
 // Discard marks an interrupted turn as abandoned so a later reload stops
 // offering to resume it. It leaves the transcript and the files exactly as they
 // are; only the run-status marker changes, out of the set that offers Resume.
@@ -363,7 +472,7 @@ func (h *PromptHandler) Discard(w http.ResponseWriter, r *http.Request) {
 func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID int64, userPrompt string) {
 	// The system prompt was previously omitted here while the output was still
 	// parsed as a plan, so plan mode had no instructions at all.
-	stream := h.ai.ChatStream(ctx, ai.SystemPromptPlan, h.planHistory(projectID, userPrompt))
+	stream := h.ai.ChatStream(ctx, h.planPrompt, h.planHistory(projectID, userPrompt))
 
 	var full strings.Builder
 	sawError := false
@@ -501,6 +610,18 @@ func (h *PromptHandler) finishBuildStream(w http.ResponseWriter, flusher http.Fl
 		payload["files_touched"] = outcome.FilesTouched
 		payload["verified"] = outcome.Verified
 		payload["rounds"] = outcome.Rounds
+		payload["remaining_tasks"] = outcome.RemainingTasks
+		// A turn paused on ask_user ended cleanly but is not done: it is waiting for
+		// the user's answer to resume. Say so rather than "success", so the client
+		// keeps the turn open and shows the question instead of a finished turn.
+		if outcome.Paused {
+			payload["status"] = "waiting"
+		} else if outcome.Exhausted {
+			// Reached the round budget: the live turn ended cleanly (nil error, so no
+			// error event above) but is not done. 'paused' tells the client to show it
+			// as resumable — Resume continues it — rather than as a success or a fault.
+			payload["status"] = "paused"
+		}
 	}
 	writeSSE(w, "done", payload)
 	flusher.Flush()
@@ -513,7 +634,7 @@ func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event)
 		writeSSE(w, "phase", map[string]interface{}{"phase": evt.Phase, "status": evt.Status})
 	case events.ToolCallEvent:
 		writeSSE(w, "tool_call", map[string]interface{}{
-			"tool": evt.Tool, "path": evt.Path, "name": evt.Name, "status": evt.Status,
+			"id": evt.ID, "tool": evt.Tool, "path": evt.Path, "name": evt.Name, "status": evt.Status,
 		})
 	case events.VerifyEvent:
 		writeSSE(w, "verify", map[string]interface{}{
@@ -528,8 +649,22 @@ func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event)
 		// Live subprocess output from run_command / typecheck / lint / build_apk,
 		// so the terminal pane shows what the agent's commands are printing.
 		writeSSE(w, "command_output", map[string]string{"text": evt.Text})
+	case events.QuestionEvent:
+		// The agent called ask_user: the turn is pausing. prompt_id is the turn
+		// the answer resumes (POST /answer is keyed by it); id is the pending
+		// ask_user tool_use the answer resolves; the frontend echoes id back so
+		// the reply lands on the right call. choices, when present, are the
+		// suggested answers to offer.
+		writeSSE(w, "question", map[string]interface{}{
+			"prompt_id": evt.PromptID, "id": evt.ID, "question": evt.Text, "choices": evt.Data,
+		})
 	case events.ThinkingEvent:
 		writeSSE(w, "thinking.delta", ai.StreamTextDelta{Text: evt.Text})
+	case events.DecisionEvent:
+		// The agent recorded an architecture decision or a durable memory. The
+		// whole payload (an events.Decision) rides in Data; the client renders it
+		// inline as a card matching the "What the agent knows" panel.
+		writeSSE(w, "decision", evt.Data)
 	case events.UsageEvent:
 		writeSSE(w, "usage", evt.Data)
 	case events.TaskUpdateEvent:
@@ -563,9 +698,14 @@ func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event)
 // sets it; a resume leaves it false so continuing an interrupted turn is not
 // charged as a second prompt. (Token accounting is additive and runs either way,
 // so a resumed turn's tokens are still recorded.)
+//
+// answer marks the resume of a turn paused on ask_user. Instead of appending the
+// prompt as a new user text turn, runBuild injects it as the tool_result for the
+// pending ask_user call, so the model reads it as the answer to its question.
 type buildOptions struct {
 	persistUserTurn bool
 	meterPrompt     bool
+	answer          bool
 }
 
 // runBuild executes one agentic turn: replay the stored conversation, run the
@@ -610,19 +750,22 @@ func (h *PromptHandler) runBuild(
 	// tool's subprocess output appears in the terminal pane as it happens.
 	bs := h.newBuildSession(workspacePath, projectID, h.adbTargetFor(projectID), commandOutputWriter{emitter: sess.Emitter})
 
-	history := h.conversation(projectID)
-	userTurn := ai.UserText(userPrompt)
-	history = append(history, userTurn)
-
-	// Store the user's prompt up front (fresh turns only) so a crash mid-turn
-	// still leaves the transcript with the request that started it. The loop's
-	// own turns are persisted round by round through Persist below.
-	if bo.persistUserTurn {
-		if err := h.store.AppendMessage(projectID, promptID, userTurn.Role,
-			ai.MarshalBlocks(userTurn.Blocks), 0, 0); err != nil {
-			log.Printf("project %d: could not store the user turn: %v", projectID, err)
-		}
+	// Ground the model in what already exists before the first round: capture a
+	// one-time map of the project's files, their exports, and their imports, and
+	// hand it to the session so the enriched system prompt carries it in the cached
+	// prefix. On a fresh project the map is empty and nothing is injected. This is
+	// what stops an iterative build from re-discovering the layout file by file.
+	if projectMap := tools.ProjectMapText(workspacePath); projectMap != "" {
+		sess.SetProjectMapFP(projectMap, tools.ProjectFingerprint(workspacePath))
+		sess.Emitter.EmitToolCall("", "context_build", "", "Scanned the project", "completed")
 	}
+
+	// Push the settled plan to the client as a checklist before the first round,
+	// so the developer sees every screen and feature the build will work through —
+	// checked off live as the agent finishes them — not just the ones that change.
+	sess.EmitPlanSeed()
+
+	history := h.turnHistory(projectID, promptID, userPrompt, bo)
 
 	outcome, runErr := h.orch.RunAgentLoop(ctx, sess, orchestrator.RunOptions{
 		SystemPrompt: h.systemPrompt(),
@@ -659,6 +802,73 @@ func (h *PromptHandler) runBuild(
 	return outcome, runErr
 }
 
+// turnHistory assembles the conversation the loop replays for this turn and
+// persists the turn that starts it. It has three shapes:
+//
+//   - a fresh turn (persistUserTurn) appends the user's prompt as a text turn
+//     and stores it up front, so a crash mid-turn still leaves the request that
+//     began it;
+//   - an answer to a paused ask_user (answer) injects the prompt as the
+//     tool_result for the pending call and stores that answer turn — it is real
+//     user input, part of the transcript;
+//   - a plain resume (neither) replays the stored turns as they are and adds the
+//     synthetic "keep going" prompt, which is deliberately not persisted.
+//
+// The loop's own rounds are persisted separately through the Persist callback,
+// so nothing here is stored twice.
+func (h *PromptHandler) turnHistory(projectID, promptID int64, userPrompt string, bo buildOptions) []ai.Message {
+	if bo.answer {
+		// Resuming a turn paused on ask_user. The raw tail ends with the
+		// unanswered tool_use; answer it in place rather than letting the trim
+		// drop it as an orphan and losing the question the user is replying to.
+		stored := h.storedConversation(projectID)
+		if askID, allIDs, ok := ai.PendingToolUse(stored, "ask_user"); ok {
+			answerTurn := ai.AnswerTurn(askID, allIDs, userPrompt)
+			h.persistTurn(projectID, promptID, answerTurn, "answer")
+			// AnsweredHistory keeps the tail — the answered tool_use and the answer
+			// itself. TrimToValidHistory must NOT be used here: it back-trims until
+			// the history ends on an assistant turn, which would throw away the very
+			// answer we are resuming with (a user tool_result turn).
+			return ai.AnsweredHistory(stored, answerTurn)
+		}
+		// The pending question is gone — already trimmed away, or the turn was not
+		// actually waiting. Fall through and take the answer as a fresh instruction
+		// so the turn still moves rather than dead-ending.
+	}
+
+	history := h.conversation(projectID)
+	userTurn := ai.UserText(userPrompt)
+	// A fresh prompt sent while an earlier turn is still waiting on ask_user:
+	// the replay trim drops the trailing orphan tool_use, so without this the
+	// model never sees the question the user may be replying to ("go with your
+	// fallback" is meaningless without it). Carry the pending question forward
+	// inside the fresh prompt it may answer.
+	if q, ok := ai.PendingQuestion(h.storedConversation(projectID)); ok {
+		userTurn = ai.UserText(userPrompt + "\n\n[Context: an earlier turn is still waiting on this " +
+			"question from you: \"" + q + "\" If this message answers or relates to it, act on that " +
+			"connection; otherwise proceed with the message as a new request.]")
+	}
+	history = append(history, userTurn)
+
+	// A fresh turn stores its prompt up front so a crash mid-turn still leaves the
+	// request that began it; an answer that fell through stores its text too (it
+	// is real user input). Only a plain resume's synthetic prompt stays
+	// unpersisted. The loop's own turns are persisted round by round through
+	// Persist, so nothing here is stored twice.
+	if bo.persistUserTurn || bo.answer {
+		h.persistTurn(projectID, promptID, userTurn, "user turn")
+	}
+	return history
+}
+
+// persistTurn stores one turn of the transcript, logging rather than failing the
+// build if the write does not land.
+func (h *PromptHandler) persistTurn(projectID, promptID int64, m ai.Message, label string) {
+	if err := h.store.AppendMessage(projectID, promptID, m.Role, ai.MarshalBlocks(m.Blocks), 0, 0); err != nil {
+		log.Printf("project %d: could not store the %s: %v", projectID, label, err)
+	}
+}
+
 // finalizeTurn writes the turn's terminal state after the loop returns: its
 // run-status marker, its final text and its token cost. The turn's messages are
 // already stored — the user prompt up front and each round through the loop's
@@ -672,8 +882,20 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 	// The marker is what a later reload reads to decide whether to offer Resume.
 	// It is written from the loop's outcome: nil error is a finished turn, a
 	// cancellation is a deliberate stop or a dropped connection, anything else
-	// failed.
-	if err := h.store.UpdatePromptStatus(promptID, terminalStatus(runErr), round); err != nil {
+	// failed. Two states return a nil error but are not done: a turn paused on
+	// ask_user records 'waiting' (the answer endpoint resumes it), and a turn that
+	// reached its round budget while still working records 'paused' (the Resume
+	// endpoint continues it). Both are resumable; neither is an error.
+	status := terminalStatus(runErr)
+	if outcome != nil {
+		switch {
+		case outcome.Paused:
+			status = "waiting"
+		case outcome.Exhausted:
+			status = "paused"
+		}
+	}
+	if err := h.store.UpdatePromptStatus(promptID, status, round); err != nil {
 		log.Printf("project %d: could not record run status: %v", projectID, err)
 	}
 
@@ -683,9 +905,21 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 
 	response := outcome.FinalText
 	if response == "" {
-		if len(outcome.FilesTouched) > 0 {
+		switch {
+		case outcome.Paused:
+			// A paused turn is waiting on the user, not finished — the question is
+			// carried in the transcript and the question event, so this stands in
+			// only where the model asked without any preceding prose. "No changes
+			// were made." would be a lie: the turn is mid-flight.
+			response = "Waiting for your answer to continue."
+		case outcome.Exhausted:
+			// Reached the round budget mid-work. The turn is neither done nor
+			// broken; its files are saved and it can be resumed. Say that rather
+			// than listing changed files as if the work were finished.
+			response = "Paused after reaching the build's round budget — your work so far is saved. Press Resume to continue."
+		case len(outcome.FilesTouched) > 0:
 			response = "Changed: " + strings.Join(outcome.FilesTouched, ", ")
-		} else {
+		default:
 			response = "No changes were made."
 		}
 	}
@@ -788,8 +1022,11 @@ func truncateLabel(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// conversation replays the project's stored turns.
-func (h *PromptHandler) conversation(projectID int64) []ai.Message {
+// storedConversation replays the project's stored turns verbatim, without the
+// validity trim. The answer path needs the raw tail — a turn paused on ask_user
+// ends with an unanswered tool_use that TrimToValidHistory would drop as an
+// orphan, which is the one turn resume must keep so it can answer it.
+func (h *PromptHandler) storedConversation(projectID int64) []ai.Message {
 	stored, err := h.store.GetConversation(projectID, historyTurns)
 	if err != nil {
 		log.Printf("project %d: could not load the conversation: %v", projectID, err)
@@ -804,10 +1041,14 @@ func (h *PromptHandler) conversation(projectID int64) []ai.Message {
 		}
 		msgs = append(msgs, ai.Message{Role: m.Role, Blocks: blocks})
 	}
+	return msgs
+}
 
-	// A replayed conversation must not begin with tool results or end mid tool
-	// call — both providers reject an orphaned tool_use or tool_result.
-	return ai.TrimToValidHistory(msgs)
+// conversation replays the project's stored turns, trimmed to a shape both
+// providers accept: a replayed conversation must not begin with tool results or
+// end mid tool call — an orphaned tool_use or tool_result is a 400.
+func (h *PromptHandler) conversation(projectID int64) []ai.Message {
+	return ai.TrimToValidHistory(h.storedConversation(projectID))
 }
 
 // planHistory builds the flat history Plan mode uses. Plan mode calls no tools,
@@ -953,8 +1194,10 @@ func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) 
 
 	// The latest prompt's run status is what the IDE reads to decide whether to
 	// offer "Resume / Discard". A turn left 'running' (server crash), 'cancelled'
-	// (Stop or a dropped connection) or 'failed' is resumable; 'completed' and
-	// 'abandoned' are not. Its absence is not worth failing the whole restore.
+	// (Stop or a dropped connection), 'failed', or 'paused' (reached its round
+	// budget while still working) is resumable; 'completed' and 'abandoned' are
+	// not. 'waiting' resumes by answering the question, not this way. Its absence
+	// is not worth failing the whole restore.
 	if latest, err := h.store.GetLatestPrompt(projectID); err != nil {
 		log.Printf("project %d: could not load the latest prompt: %v", projectID, err)
 	} else if latest != nil {

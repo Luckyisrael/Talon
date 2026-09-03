@@ -72,24 +72,19 @@ func TestClassifyTier(t *testing.T) {
 }
 
 func TestWorkingDiscipline(t *testing.T) {
-	// A strong model is trusted with the base prompt — no scaffolding.
-	if got := (Capabilities{Tier: TierStrong}).WorkingDiscipline(); got != "" {
-		t.Errorf("strong tier should add no discipline block, got %q", got)
-	}
-	// The zero value (no client) must also add nothing.
-	if got := (Capabilities{}).WorkingDiscipline(); got != "" {
-		t.Errorf("zero-value capabilities should add nothing, got %q", got)
-	}
-
 	weak := (Capabilities{Tier: TierWeak}).WorkingDiscipline()
 	medium := (Capabilities{Tier: TierMedium}).WorkingDiscipline()
+	strong := (Capabilities{Tier: TierStrong}).WorkingDiscipline()
 
-	// Both non-strong tiers steer the model toward the behaviors the deterministic
-	// layers depend on: consult the skill, and typecheck.
-	for name, block := range map[string]string{"weak": weak, "medium": medium} {
+	// Every tier now gets a block, strong included: even a capable model cannot
+	// know from training that this stack is newer than that training. The block is
+	// terse, but it is there.
+	for name, block := range map[string]string{"weak": weak, "medium": medium, "strong": strong} {
 		if block == "" {
 			t.Errorf("%s tier should add a discipline block", name)
 		}
+		// All three steer toward the behaviors the deterministic layers depend on:
+		// consult the skill, and typecheck.
 		for _, want := range []string{"read_skill", "run_typecheck"} {
 			if !strings.Contains(block, want) {
 				t.Errorf("%s discipline block should mention %q, got %q", name, want, block)
@@ -97,13 +92,29 @@ func TestWorkingDiscipline(t *testing.T) {
 		}
 	}
 
-	// The weak block is the fuller scaffold: it says more than the medium one.
+	// The zero value (no explicit tier) degrades to the cautious middle block, the
+	// same way an unknown model id and a nil client both resolve to medium — never
+	// to nothing, and never to the terse strong block.
+	if got := (Capabilities{}).WorkingDiscipline(); got != medium {
+		t.Errorf("zero-value capabilities should fall back to the medium block, got %q", got)
+	}
+
+	// The weak block is the fuller scaffold: it says more than either lighter block.
 	if len(weak) <= len(medium) {
 		t.Errorf("weak discipline (%d chars) should be more explicit than medium (%d chars)", len(weak), len(medium))
 	}
-	// Read-before-write is the weak-only reinforcement.
-	if !strings.Contains(weak, "read_file") {
-		t.Errorf("weak discipline should reinforce read-before-write, got %q", weak)
+	if len(weak) <= len(strong) {
+		t.Errorf("weak discipline (%d chars) should be more explicit than strong (%d chars)", len(weak), len(strong))
+	}
+	// Every tier keeps the same core workflow — the strong block just states it more
+	// tersely, it does not drop it. Read-before-edit, planning and small steps are
+	// part of that workflow, so the strong block must carry them too: the
+	// deterministic layers depend on the model reading a file before it edits it
+	// whatever tier drives the build.
+	for _, want := range []string{"read_file", "Plan", "small"} {
+		if !strings.Contains(strong, want) {
+			t.Errorf("strong discipline should keep the core workflow and mention %q, got %q", want, strong)
+		}
 	}
 }
 

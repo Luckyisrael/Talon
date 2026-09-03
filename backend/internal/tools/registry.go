@@ -130,6 +130,15 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		args = json.RawMessage(`{}`)
 	}
 
+	// Reject arguments that do not fit the tool's schema before running anything.
+	// A model can send fields keyed for a different tool; without this the tool
+	// silently drops them and "succeeds" doing nothing, and the model retries the
+	// same mistake for rounds. Failing here with a message that names the right
+	// fields lets it self-correct in one.
+	if msg, ok := validateArgs(name, t.InputSchema(), args); !ok {
+		return ToolResult{Content: msg, IsError: true}, nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, toolTimeout)
 	defer cancel()
 

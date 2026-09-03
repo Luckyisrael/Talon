@@ -276,6 +276,40 @@ func (s *Store) migrate() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_events_user ON billing_events(user_id, id DESC)`,
+		// user_git_credentials holds one connected git provider account per user.
+		// access_token is stored ENCRYPTED (see internal/secrets) and never in the
+		// clear — the struct tags it json:"-" so it cannot leak through an API
+		// response. One row per (user, provider); reconnecting upserts in place.
+		`CREATE TABLE IF NOT EXISTS user_git_credentials (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			provider TEXT NOT NULL DEFAULT 'github',
+			provider_login TEXT DEFAULT '',
+			provider_user_id INTEGER DEFAULT 0,
+			access_token TEXT NOT NULL,
+			scopes TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(user_id, provider),
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		)`,
+		// project_git_remotes maps a project to the repository it pushes to. One
+		// row per project (project_id UNIQUE), so a project targets exactly one
+		// remote and re-pushing reuses it.
+		`CREATE TABLE IF NOT EXISTS project_git_remotes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL UNIQUE,
+			provider TEXT NOT NULL DEFAULT 'github',
+			owner TEXT NOT NULL,
+			repo TEXT NOT NULL,
+			clone_url TEXT DEFAULT '',
+			html_url TEXT DEFAULT '',
+			default_branch TEXT DEFAULT 'main',
+			private INTEGER DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
 	}
 
 	for _, q := range queries {

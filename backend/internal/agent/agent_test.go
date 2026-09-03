@@ -86,22 +86,25 @@ func TestAutoAttachFor(t *testing.T) {
 	r := testRegistry(t)
 
 	cases := []struct {
-		name  string
-		tool  string
-		input string
-		want  string // skill expected in the result, or "" for none
+		name       string
+		tool       string
+		input      string
+		want       string // skill expected in the result, or "" for none
+		wantDesign bool   // seeker-screen-design auto-attaches on app/** and components/** writes
 	}{
 		{
-			name:  "reanimated import in written file",
-			tool:  "write_file",
-			input: `{"path":"components/Card.tsx","content":"import Animated from 'react-native-reanimated';"}`,
-			want:  "reanimated-v4",
+			name:       "reanimated import in written file",
+			tool:       "write_file",
+			input:      `{"path":"components/Card.tsx","content":"import Animated from 'react-native-reanimated';"}`,
+			want:       "reanimated-v4",
+			wantDesign: true, // components/** path
 		},
 		{
-			name:  "route file by path",
-			tool:  "write_file",
-			input: `{"path":"app/token/[id].tsx","content":"export default function T(){}"}`,
-			want:  "expo-router-nav",
+			name:       "route file by path",
+			tool:       "write_file",
+			input:      `{"path":"app/token/[id].tsx","content":"export default function T(){}"}`,
+			want:       "expo-router-nav",
+			wantDesign: true, // app/** path
 		},
 		{
 			name:  "install mobile wallet adapter",
@@ -113,39 +116,42 @@ func TestAutoAttachFor(t *testing.T) {
 			name:  "plain view, no trigger",
 			tool:  "write_file",
 			input: `{"path":"lib/format.ts","content":"export const f = () => 1;"}`,
-			want:  "",
+			want:  "", // lib/ is neither app/ nor components/ — no design skill either
 		},
 		{
-			name:  "screen-design content never auto-attaches",
-			tool:  "write_file",
-			input: `{"path":"app/home.tsx","content":"// SafeAreaView AMOLED FlatList touch target"}`,
-			want:  "", // seeker-screen-design is autoAttach:false. The path trigger still
-			// pulls expo-router-nav, and "FlatList" now pulls rn-best-practices — both
-			// autoAttach:true — but seeker-screen-design must stay out (asserted below).
+			name:       "screen file pulls the design skill",
+			tool:       "write_file",
+			input:      `{"path":"app/home.tsx","content":"// SafeAreaView AMOLED FlatList touch target"}`,
+			want:       "seeker-screen-design", // now autoAttach:true on app/**; expo-router-nav co-attaches
+			wantDesign: true,
 		},
 		{
-			name:  "expo/ui import pulls expo-ui",
-			tool:  "write_file",
-			input: `{"path":"components/MapSheet.tsx","content":"import { BottomSheet } from '@expo/ui';"}`,
-			want:  "expo-ui",
+			name:       "expo/ui import pulls expo-ui",
+			tool:       "write_file",
+			input:      `{"path":"components/MapSheet.tsx","content":"import { BottomSheet } from '@expo/ui';"}`,
+			want:       "expo-ui",
+			wantDesign: true, // components/** path
 		},
 		{
-			name:  "gorhom bottom-sheet import redirects to expo-ui",
-			tool:  "write_file",
-			input: `{"path":"components/Sheet.tsx","content":"import BottomSheet from '@gorhom/bottom-sheet';"}`,
-			want:  "expo-ui", // expo-ui claims the gorhom import to steer toward the native sheet
+			name:       "gorhom bottom-sheet import redirects to expo-ui",
+			tool:       "write_file",
+			input:      `{"path":"components/Sheet.tsx","content":"import BottomSheet from '@gorhom/bottom-sheet';"}`,
+			want:       "expo-ui", // expo-ui claims the gorhom import to steer toward the native sheet
+			wantDesign: true,
 		},
 		{
-			name:  "jetpack-compose import pulls the platform-specific skill",
-			tool:  "write_file",
-			input: `{"path":"components/ProductList.android.tsx","content":"import { Column } from '@expo/ui/jetpack-compose';"}`,
-			want:  "expo-ui-jetpack-compose", // expo-ui also co-attaches (@expo/ui is a substring); both are autoAttach
+			name:       "jetpack-compose import pulls the platform-specific skill",
+			tool:       "write_file",
+			input:      `{"path":"components/ProductList.android.tsx","content":"import { Column } from '@expo/ui/jetpack-compose';"}`,
+			want:       "expo-ui-jetpack-compose", // expo-ui also co-attaches (@expo/ui is a substring); both are autoAttach
+			wantDesign: true,
 		},
 		{
-			name:  "FlatList in written content pulls rn-best-practices",
-			tool:  "write_file",
-			input: `{"path":"components/Feed.tsx","content":"<FlatList data={items} renderItem={renderItem} />"}`,
-			want:  "rn-best-practices",
+			name:       "FlatList in written content pulls rn-best-practices",
+			tool:       "write_file",
+			input:      `{"path":"components/Feed.tsx","content":"<FlatList data={items} renderItem={renderItem} />"}`,
+			want:       "rn-best-practices",
+			wantDesign: true,
 		},
 		{
 			name:  "installing flash-list pulls rn-best-practices",
@@ -168,9 +174,11 @@ func TestAutoAttachFor(t *testing.T) {
 			if tc.want != "" && !names[tc.want] {
 				t.Errorf("expected skill %q, got %v", tc.want, keys(names))
 			}
-			// seeker-screen-design must never come through auto-attach.
-			if names["seeker-screen-design"] {
-				t.Error("seeker-screen-design should never auto-attach")
+			// seeker-screen-design auto-attaches on app/** and components/** writes
+			// and must stay out everywhere else (lib/ files, package installs).
+			if names["seeker-screen-design"] != tc.wantDesign {
+				t.Errorf("seeker-screen-design auto-attach = %v, want %v (got %v)",
+					names["seeker-screen-design"], tc.wantDesign, keys(names))
 			}
 		})
 	}

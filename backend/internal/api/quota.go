@@ -30,3 +30,19 @@ func quotaFor(tier string) Quota {
 		return Quota{Prompts: 20, DeviceMinutes: 60}
 	}
 }
+
+// isPaidTier reports whether a tier is a paid one. It is derived from the same
+// source as the quotas: a paid tier is exactly one whose allowance exceeds the
+// free allowance (either a higher prompt count or unlimited). Defining it this
+// way rather than as a second hand-written list means a new tier added to
+// quotaFor is classified correctly here without a separate edit — the two
+// cannot drift apart the way the limits once did.
+//
+// This gates premium-only features (the GitHub integration in W4). The check is
+// always server-side against the user's stored tier; a client claim never
+// decides it.
+func isPaidTier(tier string) bool {
+	q := quotaFor(tier)
+	free := quotaFor("free")
+	return q.Prompts < 0 || q.Prompts > free.Prompts
+}

@@ -20,6 +20,8 @@ const (
 	TaskUpdateEvent     EventType = "task_update"
 	UsageEvent          EventType = "usage"
 	CommandOutputEvent  EventType = "command_output"
+	QuestionEvent       EventType = "question"
+	DecisionEvent       EventType = "decision"
 )
 
 type Phase string
@@ -36,6 +38,7 @@ const (
 	PhasePromote       Phase = "PROMOTE"
 	PhaseVerifyRuntime Phase = "VERIFY_RUNTIME"
 	PhaseHeal          Phase = "HEAL"
+	PhaseWaiting       Phase = "WAITING_FOR_USER"
 	PhaseDone          Phase = "DONE"
 	PhaseFailed        Phase = "FAILED_NEEDS_USER"
 )
@@ -43,6 +46,10 @@ const (
 type Event struct {
 	Type    EventType   `json:"type"`
 	Phase   Phase       `json:"phase,omitempty"`
+	// ID correlates the two tool_call events of one call — start and resolve —
+	// so a watcher updates the row it opened instead of matching by (tool,path)
+	// and stacking a duplicate when the same file is touched twice in a turn.
+	ID      string      `json:"id,omitempty"`
 	Tool    string      `json:"tool,omitempty"`
 	Path    string      `json:"path,omitempty"`
 	Name    string      `json:"name,omitempty"`
@@ -50,6 +57,11 @@ type Event struct {
 	Error   string      `json:"error,omitempty"`
 	Text    string      `json:"text,omitempty"`
 	Attempt int         `json:"attempt,omitempty"`
+	// PromptID names the prompt turn this event belongs to. It is set only on the
+	// question event, where the client needs it to address POST /answer: a fresh
+	// build turn learns its prompt id no other way, since the stream is the
+	// response to a request the server assigned the id inside.
+	PromptID int64       `json:"prompt_id,omitempty"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
@@ -113,9 +125,13 @@ func (e *SessionEmitter) EmitPhase(phase Phase, status string) {
 	e.Emit(Event{Type: PhaseEvent, Phase: phase, Status: status})
 }
 
-// EmitToolCall reports a tool starting, finishing or failing.
-func (e *SessionEmitter) EmitToolCall(tool, path, name, status string) {
-	e.Emit(Event{Type: ToolCallEvent, Tool: tool, Path: path, Name: name, Status: status})
+// EmitToolCall reports a tool starting, finishing or failing. id ties the
+// start and resolve of one call together; path is the raw target (a file path,
+// command or search pattern) the UI shows beside the verb; name is the
+// human-readable verb phrase ("Editing app/index.tsx") used as the label for
+// tools the UI does not model itself.
+func (e *SessionEmitter) EmitToolCall(id, tool, path, name, status string) {
+	e.Emit(Event{Type: ToolCallEvent, ID: id, Tool: tool, Path: path, Name: name, Status: status})
 }
 
 // EmitVerify reports the outcome of a static check.
@@ -183,6 +199,42 @@ func (e *SessionEmitter) EmitCommandOutput(text string) {
 		return
 	}
 	e.Emit(Event{Type: CommandOutputEvent, Text: text})
+}
+
+// EmitQuestion surfaces an ask_user pause: the question the agent needs answered
+// and any suggested choices. id is the pending ask_user tool_use the user's
+// answer resolves on resume — the frontend echoes it back so the answer lands on
+// the right call. The emitter's session id is the prompt id (CreateSession is
+// keyed by it), so it is carried too: POST /answer is addressed by prompt id,
+// and a fresh build turn has no other way to learn it.
+func (e *SessionEmitter) EmitQuestion(id, question string, choices []string) {
+	e.Emit(Event{Type: QuestionEvent, ID: id, Text: question, Data: choices, PromptID: e.sessionID})
+}
+
+// Decision is the payload of a DecisionEvent: an architecture decision the agent
+// recorded (write_adr) or a durable memory it wrote (write_memory). The build
+// stream carries it so the chat can render the same record the "What the agent
+// knows" panel shows, inline at the point the agent made it. Variant selects
+// which fields are meaningful — the two tools store different shapes — and the
+// field set mirrors what that panel displays (decision+outcome for an ADR; the
+// category, the fact, and the area it applies to for a memory), so a plain
+// tool_call row (which carries no content) never had to.
+type Decision struct {
+	Variant  string `json:"variant"` // "adr" | "memory"
+	// adr
+	Decision string `json:"decision,omitempty"`
+	Outcome  string `json:"outcome,omitempty"`
+	// memory
+	Category string `json:"category,omitempty"`
+	Content  string `json:"content,omitempty"`
+	Metadata string `json:"metadata,omitempty"`
+}
+
+// EmitDecision surfaces a recorded decision so the chat shows it as a card. The
+// orchestrator emits this only after the underlying write succeeded — a card
+// stands for a decision actually on record, never an attempt that failed.
+func (e *SessionEmitter) EmitDecision(d Decision) {
+	e.Emit(Event{Type: DecisionEvent, Data: d})
 }
 
 // ToJSON serialises an event.

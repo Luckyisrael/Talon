@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -42,6 +43,15 @@ func runVerifyCmd(ctx context.Context, dir string, output io.Writer, name string
 
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	// Kill the whole process group on timeout: tsc/eslint spawn children that
+	// would otherwise outlive the deadline and hold Wait open.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	// Keep the toolchain from prompting or writing colour codes into output the
 	// agent has to read.
 	cmd.Env = append(os.Environ(), "CI=1", "FORCE_COLOR=0", "NO_COLOR=1", "npm_config_yes=true")
@@ -195,4 +205,58 @@ func marshalVerify(r VerifyResult) ToolResult {
 	// the verdict is its output. Setting IsError would tell the model the tool
 	// itself is broken.
 	return ToolResult{Content: string(data)}
+}
+
+// ── run_checks ──────────────────────────────────────────
+
+// RunChecks runs the full static ladder — typecheck, then lint — in one call
+// and returns one combined verdict. It exists so the agent verifies a finished
+// unit once instead of alternating typecheck and lint calls across rounds;
+// the orchestrator's own ladder still runs the gates individually for staged
+// feedback.
+type RunChecks struct {
+	WorkspacePath string
+	// Output, when set, receives the checkers' stdout/stderr as they run.
+	Output io.Writer
+}
+
+func (t *RunChecks) Name() string { return "run_checks" }
+
+func (t *RunChecks) Description() string {
+	return "Verify a finished unit of work in one call: runs the TypeScript compiler " +
+		"and then ESLint, and returns one combined verdict. Prefer this over calling " +
+		"run_typecheck and run_lint separately. Returns passed=true when both are clean."
+}
+
+func (t *RunChecks) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{},"required":[]}`)
+}
+
+func (t *RunChecks) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	tc := &RunTypecheck{WorkspacePath: t.WorkspacePath, Output: t.Output}
+	tcRes, err := tc.Execute(ctx, args)
+	if err != nil {
+		return tcRes, err
+	}
+	var tcVerdict VerifyResult
+	if err := json.Unmarshal([]byte(tcRes.Content), &tcVerdict); err != nil || !tcVerdict.Passed {
+		// No point linting code that does not compile — same order as the
+		// orchestrator ladder. Pass the typecheck verdict straight through.
+		return tcRes, nil
+	}
+
+	li := &RunLint{WorkspacePath: t.WorkspacePath, Output: t.Output}
+	liRes, err := li.Execute(ctx, args)
+	if err != nil {
+		return liRes, err
+	}
+	var liVerdict VerifyResult
+	if err := json.Unmarshal([]byte(liRes.Content), &liVerdict); err != nil {
+		return liRes, nil
+	}
+	if liVerdict.Passed {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "no type errors; no lint errors"}), nil
+	}
+	liVerdict.Summary = "typecheck clean; " + liVerdict.Summary
+	return marshalVerify(liVerdict), nil
 }
