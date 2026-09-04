@@ -22,6 +22,7 @@ export interface Usage {
   // this type used to declare — which resolved to `undefined` at runtime.
   device_minutes: number;
   device_limit: number;
+  cost_usd?: number;
   tier: "free" | "pro";
 }
 
@@ -333,4 +334,22 @@ export interface StreamMessage {
     choices: string[];
     answered?: string;
   };
+}
+
+export interface ExportJob {
+  id: number;
+  project_id: number;
+  status: "queued" | "running" | "done" | "failed";
+  artifact_path?: string;
+  manifest_path?: string;
+  error?: string;
+}
+
+export interface ProjectAsset {
+  id: number;
+  project_id: number;
+  kind: "screenshot" | "icon" | "banner";
+  path: string;
+  width: number;
+  height: number;
 }

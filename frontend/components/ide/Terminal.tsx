@@ -36,27 +36,25 @@ function monoStack(): string {
   return v ? `${v}, ${fallback}` : fallback;
 }
 
-// The bench palette, so the shell is the same surface as everything around it
-// rather than a black rectangle with an amber cursor.
+// Linear surfaces in concrete hex — xterm renders through canvas, and
+// `ctx.font`/`ctx.fillStyle` do not resolve `var()`.
 const THEME = {
-  background: "#12171f",
-  foreground: "#e6ebf2",
-  cursor: "#14f195",
-  cursorAccent: "#12171f",
-  selectionBackground: "#303c4d",
-  black: "#12171f",
-  red: "#ff5f56",
-  green: "#14f195",
+  background: "#0f1011",
+  foreground: "#d0d6e0",
+  cursor: "#e4f222",
+  cursorAccent: "#08090a",
+  selectionBackground: "#23252a",
+  black: "#0f1011",
+  red: "#eb5757",
+  green: "#27a644",
   yellow: "#ffb020",
-  blue: "#5b9dff",
-  // A rose-magenta, not the Solana violet: #9945ff read as a brand accent
-  // leaking into the shell. ANSI magenta should just be magenta.
+  blue: "#4c9bef",
   magenta: "#df6faf",
-  cyan: "#3bd6c6",
-  white: "#e6ebf2",
-  brightBlack: "#5b667a",
-  brightRed: "#ff8a84",
-  brightGreen: "#5ff7bb",
+  cyan: "#02b8cc",
+  white: "#d0d6e0",
+  brightBlack: "#62666d",
+  brightRed: "#f08080",
+  brightGreen: "#4cc069",
   brightYellow: "#ffc95c",
   brightBlue: "#8fbcff",
   brightMagenta: "#ef9fca",
@@ -71,7 +69,7 @@ export default function Terminal({ sessionId }: TerminalProps) {
   // socket's "open" outlives the socket itself.
   const [socket, setSocket] = useState<{
     id: number;
-    state: "open" | "closed" | "error";
+    state: "open" | "closed" | "error" | "reconnecting";
   } | null>(null);
   // Whether we hold credentials at all. Read once on mount because a socket
   // cannot be opened without them, and that is knowable here rather than
@@ -82,6 +80,11 @@ export default function Terminal({ sessionId }: TerminalProps) {
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const outputRef = useRef<HTMLDivElement>(null);
+  // Reconnect bookkeeping lives in refs: retry count and timer are not render
+  // state, and resetting them needs no extra render pass.
+  const retryRef = useRef(0);
+  const retryTimer = useRef(0);
+  const [epoch, setEpoch] = useState(0);
 
   const buildOutput = useIDEStore((s) => s.buildOutput);
   const clearBuildOutput = useIDEStore((s) => s.clearBuildOutput);
@@ -139,11 +142,16 @@ export default function Terminal({ sessionId }: TerminalProps) {
   }, [fit]);
 
   // One socket per session, torn down when the session changes or goes away.
+  // An unexpected close schedules a reconnect with backoff (1s, 2s, 4s, 8s,
+  // 15s cap, five attempts) and reports "reconnecting" meanwhile — the socket
+  // never silently freezes while looking attached. Cleanup clears the timer so
+  // an unmount never resurrects a dead socket.
   useEffect(() => {
     // No `setSocket` on this branch: with no session the status reads "no
     // device" from `sessionId` alone, so syncing a state here would only cost a
     // second render pass to reach the same screen.
     if (!sessionId) return;
+    retryRef.current = 0;
 
     const ws = createAuthWebSocket(`/v1/sessions/${sessionId}/terminal`);
     // A null socket means there is no token to open one with. That is read off
@@ -152,7 +160,18 @@ export default function Terminal({ sessionId }: TerminalProps) {
     if (!ws) return;
     wsRef.current = ws;
 
-    ws.onopen = () => setSocket({ id: sessionId, state: "open" });
+    const scheduleRetry = () => {
+      retryRef.current += 1;
+      if (retryRef.current > 5) return;
+      setSocket({ id: sessionId, state: "reconnecting" });
+      const delay = Math.min(1000 * 2 ** (retryRef.current - 1), 15000);
+      retryTimer.current = window.setTimeout(() => setEpoch((e) => e + 1), delay);
+    };
+
+    ws.onopen = () => {
+      retryRef.current = 0;
+      setSocket({ id: sessionId, state: "open" });
+    };
     ws.onmessage = (event) => {
       const data: unknown = event.data;
       if (data instanceof Blob) {
@@ -166,17 +185,19 @@ export default function Terminal({ sessionId }: TerminalProps) {
       }
     };
     ws.onclose = () => {
-      setSocket({ id: sessionId, state: "closed" });
       if (wsRef.current === ws) wsRef.current = null;
+      setSocket({ id: sessionId, state: "closed" });
+      scheduleRetry();
     };
     ws.onerror = () => setSocket({ id: sessionId, state: "error" });
 
     return () => {
+      window.clearTimeout(retryTimer.current);
       ws.onclose = null;
       ws.close();
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, [sessionId]);
+  }, [sessionId, epoch]);
 
   useEffect(() => {
     if (tab === "shell") fit();
@@ -193,6 +214,7 @@ export default function Terminal({ sessionId }: TerminalProps) {
     if (socket?.id !== sessionId) return "attaching";
     if (socket.state === "open") return "attached";
     if (socket.state === "error") return "could not attach";
+    if (socket.state === "reconnecting") return "reconnecting";
     return "detached";
   }, [socket, sessionId, authed]);
 

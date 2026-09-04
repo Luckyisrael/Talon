@@ -14,6 +14,7 @@ import MemoryPanel from "./MemoryPanel";
 import PhonePreview from "./PhonePreview";
 import PlanViewer from "./PlanViewer";
 import PushToGitHub from "./PushToGitHub";
+import ExportPanel from "./ExportPanel";
 import Terminal from "./Terminal";
 
 interface IDELayoutProps {
@@ -384,6 +385,7 @@ export default function IDELayout({
           )}
           <CheckpointMenu projectId={projectId} onRestored={handleFilesTouched} />
           <PushToGitHub projectId={projectId} />
+          <ExportPanel projectId={projectId} />
           <button
             type="button"
             onClick={() => (deviceLive ? void stopSession() : void startSession())}
@@ -515,6 +517,7 @@ export default function IDELayout({
             <PhonePreview
               status={store.previewStatus}
               sessionId={store.sessionId}
+              projectId={projectId}
               adbTarget={store.adbTarget}
               onStartSession={startSession}
             />

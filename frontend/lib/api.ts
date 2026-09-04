@@ -3,6 +3,7 @@ import type {
   ArchitectureDecision,
   AuthResponse,
   Checkout,
+  ExportJob,
   FileEntry,
   GitPushResult,
   GitRemote,
@@ -534,6 +535,17 @@ export const sessions = {
   destroy(id: number) {
     return request<void>(`/v1/sessions/${id}`, { method: "DELETE" });
   },
+
+  // One PNG frame for download or store-asset use. Fetched as a blob because
+  // the endpoint needs the Bearer token and a plain link cannot send one.
+  async screenshotBlob(id: number) {
+    const token = getToken();
+    const res = await fetch(`${BASE}/v1/sessions/${id}/screenshot`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`screenshot failed (${res.status})`);
+    return res.blob();
+  },
 };
 
 // ── Usage ─────────────────────────────────────────────
@@ -654,6 +666,40 @@ export const memory = {
       summary: res?.summary ?? "",
       decisions: res?.decisions ?? [],
     };
+  },
+};
+
+// ── Release export ─────────────────────────────────────
+// Signed release APKs + dApp Store submission bundles. Pro-gated
+// server-side; the UI mirrors the gate but never enforces it.
+export const exportApi = {
+  async start(projectId: number, whatsNew: string) {
+    return request<{ job_id: number; project_id: number; status: string }>(
+      `/v1/projects/${projectId}/export`,
+      { method: "POST", body: JSON.stringify({ whats_new: whatsNew }) },
+    );
+  },
+  async get(jobId: number) {
+    return request<ExportJob>(`/v1/exports/${jobId}`);
+  },
+  downloadUrl(jobId: number) {
+    return `${BASE}/v1/exports/${jobId}/download`;
+  },
+  async uploadAsset(projectId: number, kind: "screenshot" | "icon" | "banner", file: File) {
+    const token = getToken();
+    const form = new FormData();
+    form.append("kind", kind);
+    form.append("file", file);
+    const res = await fetch(`${BASE}/v1/projects/${projectId}/assets`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `upload failed (${res.status})`);
+    }
+    return res.json();
   },
 };
 

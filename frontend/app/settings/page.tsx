@@ -525,6 +525,12 @@ export default function SettingsPage() {
                     limit={usageData.device_limit}
                     unit="min"
                   />
+                  <div className="flex items-baseline justify-between border-t border-graphite pt-4">
+                    <span className="text-sm text-mist">Model spend this cycle</span>
+                    <span className="font-mono text-sm tabular-nums text-mist">
+                      ${(usageData.cost_usd ?? 0).toFixed(4)}
+                    </span>
+                  </div>
                 </div>
               ) : (
                 <p className="text-sm text-fog">

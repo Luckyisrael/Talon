@@ -81,16 +81,36 @@ Per `AGENT_ENGINE_SPEC_ADDENDUM.md` §11:
 ### 3.3 The center panel treats the editor as primary, the terminal as summonable
 Monaco is the default, dominant view. The terminal behaves like a bottom drawer the user explicitly opens and closes (matching the familiar VS Code pattern), rather than a fixed panel permanently consuming space when the user isn't using it.
 
-### 3.4 The phone preview visibly communicates its own state
-The preview should read as an actual device, not a bare video feed — deliberate phone-frame chrome, a clear connection-status indicator, and a visible signal when a promoted change is about to land versus already applied. Given the staging/promote architecture already established, the user should be able to tell, just by glancing at the preview, whether they're looking at the current live state or watching an update land.
+### 3.4 The phone preview must render as a real device, not an HTML rectangle with a video in it
+This is a specific, fixable problem, not vague polish: the current preview reads as HTML because it's almost certainly a bare video/canvas element with no real device chrome around it. In the absence of exact Seeker CAD measurements, use a modern Pixel-family aesthetic as the concrete reference — it pairs well visually with the emulator's own 1080×2400 resolution and reads as contemporary and premium. Fix this concretely:
+- **Large, uniform corner radius** on the frame itself — Pixel-generation phones use a generously rounded, almost pill-like corner treatment, applied uniformly to all four corners. This is a distinct, larger radius from the app's own `--radius` design tokens; device bezels read as "rounded hardware," not "rounded card."
+- **Thin, uniform bezel thickness on all sides** — no oversized chin at the bottom, no asymmetry. Modern flagship phones (Pixel 8/9 generation) have essentially even bezel width around the entire screen; this is what reads as "recent" rather than dated.
+- **A centered punch-hole camera cutout** at the top of the screen area, rendered as part of the frame/overlay layer — small, circular, subtly darker than the surrounding screen content.
+- **Physical side details** (volume rocker, power button) rendered as part of the frame graphic itself, positioned on the frame edge, not as floating UI controls.
+- A subtle drop shadow grounding the device against the surrounding surface, and a soft highlight/gradient along the frame edge — the goal is "looks like a product photo of a phone," not a flat-color HTML div with a border-radius.
+- The device's own status bar and system UI are already part of the mirrored stream (it's real Android) — don't duplicate or redraw it; the chrome you're adding is the physical frame around that stream, not the screen content itself.
+- Avoid anything that reads as a default browser control anywhere near the frame — no unstyled native buttons, no visible scrollbars over the device area.
+- This should visually hold up next to a real product photo of a Pixel-generation phone — that's the actual bar, not "better than before." If exact Seeker device photos or measurements become available later, this frame should be revisited to match them precisely; until then, this is the deliberate, stated reference point.
 
-### 3.5 The empty file tree state is deliberately designed, not a blank void
+### 3.5 The emulator has a dedicated device toolbar, positioned outside the frame
+Add a real device-control toolbar, sitting below or beside the phone frame — never overlapping the screen content itself:
+- **Rotate** (portrait/landscape)
+- **Volume up/down**
+- **Power/lock**
+- **Home / Back / Recent-apps** software navigation buttons, matching standard Android 3-button navigation conventions so it feels familiar rather than invented
+- **A dedicated "Capture Screenshot" button** — this is not the same as a generic screenshot utility; per `PHASE_11_APK_EXPORT_DAPP_STORE.md`, captures taken here must be validated against real Solana dApp Store requirements before being offered for use as a store asset, and the toolbar should clearly indicate when a capture has been saved to the project's store-asset collection versus a quick throwaway screenshot.
+- Keep this toolbar visually restrained — icon-only controls with tooltips, consistent with the rest of the IDE's professional, uncluttered tone, not a busy row competing with the device frame for attention.
+
+### 3.6 The phone preview visibly communicates its own state
+Beyond looking real, the preview must communicate connection and update state clearly: a connection-status indicator, and a visible signal when a promoted change is about to land versus already applied. Given the staging/promote architecture already established, the user should be able to tell, just by glancing at the preview, whether they're looking at the current live state or watching an update land.
+
+### 3.7 The empty file tree state is deliberately designed, not a blank void
 Per Phase 2's rule, a fresh project's file tree is empty until the AI generates something. That empty state must be an intentional, inviting design — pointing the user toward the chat panel to get started — not an unstyled empty list that reads as broken.
 
-### 3.6 A command palette is table stakes for a serious IDE
+### 3.8 A command palette is table stakes for a serious IDE
 Add a Cmd+K/Cmd+P-style command palette for file search and common actions. This is expected baseline behavior for any tool positioning itself as a real development environment in 2026 — its absence reads as unfinished regardless of how polished everything else is.
 
-### 3.7 Real-time connection states are never silently broken
+### 3.9 Real-time connection states are never silently broken
 The chat stream, the phone preview socket, and the terminal socket must each show a genuine reconnecting/disconnected state when the underlying connection drops — never fail silently while the UI continues to look normal. A developer should always be able to tell, at a glance, whether what they're looking at is live.
 
 ---
@@ -108,6 +128,9 @@ The chat stream, the phone preview socket, and the terminal socket must each sho
 - [ ] A freshly created project's empty file tree is confirmed to show a deliberate, inviting empty state, not a blank area
 - [ ] `Sidebar.tsx` and the unused landing components are confirmed either fully implemented and in use, or removed from the codebase entirely
 - [ ] Cmd+K/Cmd+P command palette is confirmed working for file search from within the IDE
+- [ ] The phone preview, viewed side by side with a real product photo of a Pixel-generation phone, is judged to look like an actual device rather than a bare video in an HTML box
+- [ ] The device toolbar (rotate, volume, power, home/back/recent, capture screenshot) is confirmed present, positioned outside the frame, and functional — each control tested directly
+- [ ] The "Capture Screenshot" control is confirmed to visibly distinguish a store-asset capture from a throwaway screenshot
 
 ---
 
