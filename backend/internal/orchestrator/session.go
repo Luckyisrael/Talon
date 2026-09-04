@@ -90,6 +90,11 @@ type SessionState struct {
 	// can find the original result in its transcript instead of re-fetching.
 	CurrentRound int
 
+	// BuildRequested records whether the user's prompt asked for a device
+	// build. build_apk (a 10-minute gradle run) is refused without it — the
+	// E2E caught the agent spending a full build unprompted on a code task.
+	BuildRequested bool
+
 	// WritesSinceVerify counts successful file writes since the last passing
 	// verification this turn. The loop enforces periodic verification off this
 	// counter — prompt guidance alone demonstrably fails (a 60-round turn with
@@ -330,6 +335,20 @@ func (s *SessionState) NoteProbe(target string) int {
 	defer s.mu.Unlock()
 	s.ProbeCounts[target]++
 	return s.ProbeCounts[target]
+}
+
+// SetBuildRequested records whether this turn may run device builds.
+func (s *SessionState) SetBuildRequested(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.BuildRequested = v
+}
+
+// WantsBuild reports whether the user asked for a device build this turn.
+func (s *SessionState) WantsBuild() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.BuildRequested
 }
 
 // SetRound records the loop's current round number for result notes.

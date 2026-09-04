@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -159,6 +160,28 @@ func (o *Orchestrator) seedPlanTasks(sess *SessionState, projectID int64) {
 // run of non-alphanumeric characters collapsed to a single dash. It only has to be
 // stable within one session (task ids are matched against it when marking done),
 // not globally unique.
+// deviceBuildRe matches user words that ask for a device build: apk, device,
+// preview, emulator, install, release, deploy. A bare "build" deliberately
+// does not match — in prompts it almost always means "build the screen".
+var deviceBuildRe = regexp.MustCompile(`(?i)\b(apk|device|preview|emulator|install|release|deploy|on[ -]?device|physical)\b`)
+
+// wantsDeviceBuild reports whether the user's prompt asks for a device build.
+// Only the user's words count — model plans never unlock gradle.
+func wantsDeviceBuild(prompt string) bool {
+	return deviceBuildRe.MatchString(prompt)
+}
+
+// lastUserText returns the most recent user turn's text, or "" when the
+// history opens otherwise (defensive; callers pass real conversations).
+func lastUserText(conversation []ai.Message) string {
+	for i := len(conversation) - 1; i >= 0; i-- {
+		if conversation[i].Role == "user" {
+			return conversation[i].Text()
+		}
+	}
+	return ""
+}
+
 // screenBaseName strips a trailing parenthetical qualifier from a plan screen
 // name: "Portfolio (tab)" → "Portfolio". Qualifiers describe navigation role,
 // not identity, and route files never contain them.
@@ -415,6 +438,12 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		flushed = len(outcome.Messages)
 	}
 	defer flush()
+
+	// Whether this turn may run device builds comes from the user's own
+	// words, once, up front — never from the model's plans. A bare "build"
+	// does not count (it usually means "build the screen"); only device words
+	// unlock the 10-minute gradle run.
+	sess.SetBuildRequested(wantsDeviceBuild(lastUserText(conversation)))
 
 	// Routing resolves once per round, not once per turn: a turn that enters
 	// repair escalates tier mid-flight. The policy loads once — it is process
@@ -1202,6 +1231,17 @@ func (g guardState) FileExists(path string) bool {
 // tell the model what not to do, and this makes the security-critical ones hold
 // even when the model does not comply.
 func (o *Orchestrator) guardrail(sess *SessionState, name string, input json.RawMessage, opts RunOptions) guardrails.Decision {
+	// build_apk is a 10-minute gradle run: refuse it unless the user's own
+	// prompt asked for a device build. The E2E caught it firing unprompted on
+	// a pure code task.
+	if name == "build_apk" && !sess.WantsBuild() {
+		return guardrails.Decision{
+			Allowed: false,
+			Rule:    "scope",
+			Message: "The user did not ask for a device build this turn — verify with run_checks instead. " +
+				"If they actually want an APK on a device, ask them with ask_user first.",
+		}
+	}
 	st := guardState{sess: sess, exists: opts.Exists}
 	return guardrails.Check(name, input, st, o.preinstalled)
 }

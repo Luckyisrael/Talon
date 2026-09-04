@@ -99,8 +99,7 @@ func TestScreenBaseNameStripsQualifier(t *testing.T) {
 	}
 }
 
-func TestMarkScreenMatchesQualifiedNames(t *testing.T) {
-	o := &Orchestrator{}
+func TestMarkScreenMatchesQualifiedNames(t *testing.T) {	o := &Orchestrator{}
 	sess := newTestSession(t)
 	// Seeded the way seedPlanTasks seeds them: qualifier stripped for the ID.
 	sess.AddTask("plan:screen:"+planSlug(screenBaseName("Portfolio (tab)")), "Screen: Portfolio (tab)")
@@ -193,5 +192,47 @@ func TestAuditUnmarksPhantomScreens(t *testing.T) {
 	remaining := pendingPlanTasks(sess)
 	if len(remaining) != 1 {
 		t.Errorf("expected the phantom in remaining_tasks, got %v", remaining)
+	}
+}
+
+func TestWantsDeviceBuild(t *testing.T) {
+	yes := []string{
+		"build the APK and install it",
+		"run it on the device for me",
+		"show me a preview",
+		"deploy a release build",
+		"test it on the emulator",
+	}
+	for _, prompt := range yes {
+		if !wantsDeviceBuild(prompt) {
+			t.Errorf("expected device build for %q", prompt)
+		}
+	}
+	no := []string{
+		"build the wallet screen",
+		"add a comment noting the module purpose",
+		"rebuild the checklist",
+		"fix the type error",
+		"",
+	}
+	for _, prompt := range no {
+		if wantsDeviceBuild(prompt) {
+			t.Errorf("expected no device build for %q", prompt)
+		}
+	}
+}
+
+func TestBuildApkGuardrail(t *testing.T) {
+	o := &Orchestrator{}
+	sess := newTestSession(t)
+	sess.SetBuildRequested(false)
+	d := o.guardrail(sess, "build_apk", json.RawMessage(`{}`), RunOptions{})
+	if d.Allowed || d.Rule != "scope" {
+		t.Errorf("unprompted build_apk must be refused, got %+v", d)
+	}
+	sess.SetBuildRequested(true)
+	d = o.guardrail(sess, "build_apk", json.RawMessage(`{}`), RunOptions{})
+	if !d.Allowed {
+		t.Errorf("requested build_apk must pass the gate, got %+v", d)
 	}
 }
