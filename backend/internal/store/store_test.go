@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 
 	// The sqlite driver registers itself on import; the store package relies on
@@ -19,6 +20,73 @@ func newTestStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+// Concurrent turns record metering from many goroutines at once. The rollups
+// must sum exactly — a lost UPDATE here silently under-bills. Run with -race:
+// modernc/sqlite serializes internally, but our read-modify-write would not
+// survive shared state, so this also guards future caching layers.
+func TestMeteringRaceSafe(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateUser("race@example.com", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.CreateProject(u.ID, "proj", "1.0.0", "proj", "com.x.proj", "com.x.proj", "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := s.CreatePrompt(p.ID, "build", "make a button")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetUsage(u.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.RecordPromptTokens(prompt.ID, u.ID, 100, 40, 10); err != nil {
+				errs <- err
+				return
+			}
+			if err := s.RecordPromptRouting(prompt.ID, u.ID, 0.01, "m", "test"); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	var in, out, cache int
+	var cost float64
+	var model, reason string
+	err = s.db.QueryRow("SELECT input_tokens, output_tokens, cache_read_tokens, cost_usd, routed_model, route_reason FROM prompts WHERE id = ?",
+		prompt.ID).Scan(&in, &out, &cache, &cost, &model, &reason)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in != 1600 || out != 640 || cache != 160 {
+		t.Errorf("prompt tokens lost updates: in=%d out=%d cache=%d", in, out, cache)
+	}
+	if cost < 0.159 || cost > 0.161 {
+		t.Errorf("prompt cost wrong: %v", cost)
+	}
+	usage, err := s.GetUsage(u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.CostUSD < 0.159 || usage.CostUSD > 0.161 {
+		t.Errorf("usage cost lost updates: %v", usage.CostUSD)
+	}
 }
 
 // seedProject creates the user+project a conversation hangs off of. Foreign keys

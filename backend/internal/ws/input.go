@@ -6,7 +6,9 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -132,6 +134,10 @@ func (h *InputHandler) Handle(w http.ResponseWriter, r *http.Request) {
 				} else {
 					inputErr = adbKey(adbTarget, input.Keycode)
 				}
+			case "rotate":
+				// Rotation is device settings, not a keyevent, so it bypasses
+				// the control socket and always goes over adb shell.
+				inputErr = adbRotate(adbTarget)
 			}
 
 			latency = time.Since(start)
@@ -179,6 +185,43 @@ func adbKey(target string, keycode string) error {
 	args := []string{"-s", target, "shell", "input", "keyevent", keycode}
 	_, err := exec.Command("adb", args...).CombinedOutput()
 	return err
+}
+
+// adbRotate toggles the device between portrait and landscape. Redroid
+// ignores user_rotation at runtime (fixed framebuffer), so rotation goes
+// through `wm size` override — the only rotation this device honors. The
+// stream already re-sizes frames from what arrives, so the preview follows.
+func adbRotate(target string) error {
+	out, err := exec.Command("adb", "-s", target, "shell", "wm", "size").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("could not read display size: %w", err)
+	}
+	size := decideRotation(string(out))
+	args := []string{"-s", target, "shell", "wm", "size", size}
+	if out, err := exec.Command("adb", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("could not rotate: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+var wmSizeRe = regexp.MustCompile(`(\d+)x(\d+)`)
+
+// decideRotation picks the toggled size from `wm size` output, which reports
+// the physical size and, when overridden, the override size. The effective
+// (override if present, else physical) landscape flips to portrait 1080x2400
+// and anything else flips to landscape 2400x1080.
+func decideRotation(wmSizeOutput string) string {
+	matches := wmSizeRe.FindAllStringSubmatch(wmSizeOutput, -1)
+	if len(matches) == 0 {
+		return "1080x2400"
+	}
+	last := matches[len(matches)-1]
+	var w, h int
+	fmt.Sscanf(last[1]+"x"+last[2], "%dx%d", &w, &h)
+	if w > h {
+		return "1080x2400"
+	}
+	return "2400x1080"
 }
 
 func parseKeycode(keycode string) int {

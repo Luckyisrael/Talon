@@ -103,6 +103,7 @@ func (c *Client) VisionCheck(ctx context.Context, screenshot []byte, intendedScr
 		}
 	}, "vision_check")
 	if err != nil {
+		c.noteFailure(err)
 		return nil, err
 	}
 

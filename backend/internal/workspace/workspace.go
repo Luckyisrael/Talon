@@ -45,7 +45,7 @@ var configFiles = []string{
 // templateDirs are directories copied recursively from the template into the
 // workspace. The app/ directory carries the expo-router scaffolding (_layout.tsx,
 // tabs, etc.) that the agent builds on instead of starting from scratch.
-var templateDirs = []string{"app", "constants"}
+var templateDirs = []string{"app", "assets", "constants"}
 
 func New(templateDir, workspacesDir string) (*Manager, error) {
 	nmDir := filepath.Join(templateDir, "node_modules")
@@ -122,8 +122,10 @@ func (m *Manager) provision(dir string) error {
 		}
 	}
 
-	// Copy template directories (app/, constants/) so the agent starts with
-	// working scaffolding instead of an empty app/ directory.
+	// Copy template directories (app/, assets/, constants/) so the agent starts
+	// with working scaffolding instead of an empty app/ directory. assets/ is
+	// load-bearing: app.json references its icons and a prebuild fails without
+	// them.
 	for _, dirname := range templateDirs {
 		srcDir := filepath.Join(m.templateDir, dirname)
 		if _, err := os.Stat(srcDir); err != nil {

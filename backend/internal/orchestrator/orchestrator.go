@@ -18,6 +18,7 @@ import (
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/guardrails"
+	"github.com/seekersstudio/backend/internal/metrics"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/tools"
 )
@@ -186,6 +187,47 @@ func planSlug(name string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// auditScreenTasks is markScreenTasksFromFiles in reverse: for every screen
+// task marked completed (by the model or the heuristic), confirm a route file
+// with a matching slug actually exists in the workspace. A completed screen
+// with no route file was checked off without being built — the false
+// completion the E2E caught — so it flips back to pending with the reason
+// recorded, and lands in remaining_tasks instead of vanishing. Runs only on
+// the verified-success path, so existence means exists-and-compiles.
+// Slugs that cannot map to a file (home, index) are skipped: the audit
+// under-claims before it lies, same as the marking heuristic.
+func (o *Orchestrator) auditScreenTasks(sess *SessionState, opts RunOptions) {
+	if opts.Exists == nil {
+		return
+	}
+	for _, t := range sess.GetTasks() {
+		if t.Status != "completed" {
+			continue
+		}
+		slug := strings.TrimPrefix(t.ID, "plan:screen:")
+		if slug == t.ID || slug == "" || slug == "home" || slug == "index" {
+			continue // not a screen task, or unmappable — leave it alone
+		}
+		candidates := []string{
+			"app/" + slug + ".tsx",
+			"app/(tabs)/" + slug + ".tsx",
+			"app/" + slug + "/index.tsx",
+			"app/(tabs)/" + slug + "/index.tsx",
+		}
+		found := false
+		for _, c := range candidates {
+			if opts.Exists(c) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			sess.MarkPlanTask(t.ID, t.Description, "pending",
+				"route file missing — checked off without being built")
+		}
+	}
+}
+
 // markScreenTasksFromFiles checks off screen tasks whose route file was written
 // this run. It is called only after the verify gate passes, so a match means the
 // screen's file exists AND the project compiles — an honest completion, not a
@@ -260,6 +302,11 @@ type BuildOutcome struct {
 	// mistaken for "everything is built". Empty means the plan is complete —
 	// or there was no plan.
 	RemainingTasks []string
+	// RoutedModel is the model string that served the most recent round, and
+	// RouteReason is why it was chosen. Recorded so cost attribution prices
+	// the tokens actually spent, not the configured default.
+	RoutedModel string
+	RouteReason string
 	// Paused is set when the turn stopped to ask the user a question through
 	// ask_user rather than finishing. A paused turn returns a nil error — it is a
 	// deliberate stop, not a failure — so a caller must check Paused before
@@ -281,6 +328,8 @@ type BuildOutcome struct {
 // RunOptions configures one agentic turn.
 type RunOptions struct {
 	SystemPrompt string
+	// Mode is "plan" or "build": routing classifies the turn from it.
+	Mode string
 	// History is the conversation so far, ending with the user's new prompt.
 	History []ai.Message
 	Tools   []ai.ToolDefinition
@@ -367,6 +416,26 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	}
 	defer flush()
 
+	// Routing resolves once per round, not once per turn: a turn that enters
+	// repair escalates tier mid-flight. The policy loads once — it is process
+	// configuration, and re-reading env every round would let a mid-build env
+	// change split one turn across two policies.
+	routingPolicy := ai.LoadRoutingPolicy()
+	promptLen := 0
+	for i := len(conversation) - 1; i >= 0; i-- {
+		if conversation[i].Role == "user" {
+			promptLen = len(conversation[i].Text())
+			break
+		}
+	}
+	routedModel := ""
+	fellBack := false
+	// latchedModel pins the turn to the fallback model after a successful
+	// failover. Without it the next round would re-resolve the same broken
+	// primary and die again — one retry that hands the turn back to a dead
+	// model is theater, not reliability.
+	latchedModel := ""
+
 	for round := 1; round <= o.maxRounds; round++ {
 		if err := ctx.Err(); err != nil {
 			logTurn("cancelled")
@@ -407,7 +476,44 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		// outcome.Messages, which is what gets persisted) keeps its full fidelity.
 		sendConversation := ai.TrimSupersededToolOutput(conversation)
 
-		result, err := o.ai.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
+		// Route this round: classify from mode, prompt size, and repair state,
+		// then point a client copy at the tier's model. A model change mid-turn
+		// is logged with its reason — that log is the tuning data.
+		_, tier, reason := ai.ClassifyTurn(opts.Mode, promptLen, sess.GetVerifyAttempts(), routingPolicy)
+		model := routingPolicy.ModelFor(tier)
+		client := o.ai
+		if latchedModel != "" {
+			model = latchedModel
+			reason = "latched to fallback after primary failed"
+		}
+		if model != "" && model != o.ai.Model() {
+			client = o.ai.WithModel(model)
+		}
+		if client.Model() != routedModel {
+			log.Printf("orchestrator: round %d routed to %s (%s)", round, client.Model(), reason)
+			routedModel = client.Model()
+			outcome.RoutedModel = routedModel
+			outcome.RouteReason = reason
+		}
+
+		result, err := client.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
+		if err != nil && !fellBack && routingPolicy.FallbackModel != "" && routingPolicy.FallbackModel != client.Model() {
+			// One retry on the fallback model, same endpoint: a flaky cheap
+			// tier must not kill a turn the heavy tier would have finished.
+			log.Printf("orchestrator: round %d model %s failed (%v); falling back to %s once",
+				round, client.Model(), err, routingPolicy.FallbackModel)
+			fellBack = true
+			routedModel = routingPolicy.FallbackModel
+			outcome.RoutedModel = routedModel
+			outcome.RouteReason = "fallback after " + client.Model() + " failed"
+			result, err = o.ai.WithModel(routingPolicy.FallbackModel).ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
+			if err == nil {
+				// The fallback answered: stay on it for the rest of the turn.
+				latchedModel = routingPolicy.FallbackModel
+				log.Printf("orchestrator: round %d latched to fallback model %s for the rest of the turn",
+					round, latchedModel)
+			}
+		}
 		if err != nil {
 			sess.TransitionTo(PhaseFailed)
 			sess.Emitter.EmitError(err.Error())
@@ -522,6 +628,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			sess.TransitionTo(PhaseFailed)
 			outcome.FilesTouched = touched
 			sess.Emitter.EmitError(fmt.Sprintf("code did not pass verification after %d repair attempts", maxVerifyAttempts))
+			metrics.Default.ObserveVerifyFailure()
 			logTurn("verify-failed")
 			return outcome, fmt.Errorf("code did not pass verification after %d repair attempts", maxVerifyAttempts)
 		}
@@ -531,11 +638,13 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		if verdict.ok {
 			// The project compiles and these files were written this run, so any
 			// screen whose route file now exists is honestly done — mark it before
-			// finishing. Features and unmatched screens stay remaining rather than
-			// claim a completion we cannot see.
-		o.markScreenTasksFromFiles(sess, touched)
-		sess.TransitionTo(PhaseDone)
-		sess.Emitter.EmitDone("success")
+			// finishing. Then audit the other direction: any completed screen with
+			// no route file on disk was checked off without being built, so flip
+			// it back rather than letting a false completion through.
+			o.markScreenTasksFromFiles(sess, touched)
+			o.auditScreenTasks(sess, opts)
+			sess.TransitionTo(PhaseDone)
+			sess.Emitter.EmitDone("success")
 			outcome.FilesTouched = touched
 			outcome.Verified = true
 			outcome.RemainingTasks = pendingPlanTasks(sess)
@@ -1657,9 +1766,10 @@ func (o *Orchestrator) WriteADR(projectID int64, decision, context, options, out
 // the agent's own summary — so the next turn starts with real project context
 // instead of reconstructing it from the file tree. It writes directly rather
 // than spending a model round on write_memory, and it never fails the turn:
-// a memory write is bookkeeping, not the build.
+// a memory write is bookkeeping, not the build. A nil store (unit tests that
+// drive the loop without persistence) skips silently for the same reason.
 func (o *Orchestrator) recordTurnMemory(sess *SessionState, touched []string, outcome *BuildOutcome) {
-	if len(touched) == 0 {
+	if o.store == nil || len(touched) == 0 {
 		return
 	}
 	summary := strings.TrimSpace(outcome.FinalText)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/seekersstudio/backend/internal/adb"
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/metro"
 	"github.com/seekersstudio/backend/internal/redroid"
@@ -177,6 +178,35 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+// Screenshot captures one PNG frame from the session's device for download
+// or store-asset use. Same ownership posture as Get: session ids route here,
+// and the adb target comes from the session row, never the request.
+func (h *SessionHandler) Screenshot(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid session id")
+		return
+	}
+	session, err := h.store.GetSession(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if session.ADBPort == 0 {
+		writeError(w, http.StatusConflict, "no device attached to this session")
+		return
+	}
+	png, err := adb.New(fmt.Sprintf("localhost:%d", session.ADBPort)).Screenshot()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "screenshot failed: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Length", strconv.Itoa(len(png)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(png)
 }
 
 func (h *SessionHandler) Pause(w http.ResponseWriter, r *http.Request) {

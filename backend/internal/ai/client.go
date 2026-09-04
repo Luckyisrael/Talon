@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,6 +29,44 @@ type Client struct {
 	model        string
 	httpClient   *http.Client
 	workspaceDir string
+
+	// lastErr records the most recent provider failure for health checks.
+	// A healthy provider never writes here; readyz degrades only on fresh
+	// failures, never on ancient history.
+	mu         sync.Mutex
+	lastErr    string
+	lastErrAt  time.Time
+}
+
+// Health reports whether the provider looks usable: configured, and with no
+// failure in the recent window. Ancient failures age out — a blip last week
+// is not today's health.
+func (c *Client) Health() (ok bool, detail string) {
+	if c.baseURL == "" || c.apiKey == "" || c.model == "" {
+		return false, "AI provider not configured"
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.lastErr != "" && time.Since(c.lastErrAt) < 5*time.Minute {
+		return false, "last provider error: " + c.lastErr
+	}
+	return true, "ok"
+}
+
+// noteFailure records a provider failure for health checks. The message is
+// truncated: health detail names the problem, never dumps bodies or keys.
+func (c *Client) noteFailure(err error) {
+	if err == nil {
+		return
+	}
+	msg := err.Error()
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastErr = msg
+	c.lastErrAt = time.Now()
 }
 
 // ProviderConfig holds all configuration for an AI provider.
@@ -96,6 +135,21 @@ func New() (*Client, error) {
 
 // Model reports the configured model id, for logging and usage accounting.
 func (c *Client) Model() string { return c.model }
+
+// WithModel returns a client pointed at a different model on the same
+// endpoint with the same credentials. Routing picks models per turn; the copy
+// shares only the (read-only) http client. Constructed field-by-field, never
+// struct-copied, so the health mutex is never duplicated.
+func (c *Client) WithModel(model string) *Client {
+	return &Client{
+		protocol:     c.protocol,
+		baseURL:      c.baseURL,
+		apiKey:       c.apiKey,
+		model:        model,
+		httpClient:   c.httpClient,
+		workspaceDir: c.workspaceDir,
+	}
+}
 
 type PlanResponse struct {
 	Message string   `json:"message"`
@@ -535,12 +589,16 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("could not reach the AI service: %w", err)
+		err = fmt.Errorf("could not reach the AI service: %w", err)
+		c.noteFailure(err)
+		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, fmt.Errorf("AI service returned HTTP %d: %s", resp.StatusCode, truncate(string(detail), 500))
+		err := fmt.Errorf("AI service returned HTTP %d: %s", resp.StatusCode, truncate(string(detail), 500))
+		c.noteFailure(err)
+		return nil, err
 	}
 	return resp.Body, nil
 }

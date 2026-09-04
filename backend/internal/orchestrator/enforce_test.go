@@ -99,7 +99,8 @@ func TestScreenBaseNameStripsQualifier(t *testing.T) {
 	}
 }
 
-func TestMarkScreenMatchesQualifiedNames(t *testing.T) {	o := &Orchestrator{}
+func TestMarkScreenMatchesQualifiedNames(t *testing.T) {
+	o := &Orchestrator{}
 	sess := newTestSession(t)
 	// Seeded the way seedPlanTasks seeds them: qualifier stripped for the ID.
 	sess.AddTask("plan:screen:"+planSlug(screenBaseName("Portfolio (tab)")), "Screen: Portfolio (tab)")
@@ -111,7 +112,8 @@ func TestMarkScreenMatchesQualifiedNames(t *testing.T) {	o := &Orchestrator{}
 	}
 }
 
-func TestRemainingNoteSplitsScreensAndFeatures(t *testing.T) {	sess := newTestSession(t)
+func TestRemainingNoteSplitsScreensAndFeatures(t *testing.T) {
+	sess := newTestSession(t)
 	sess.AddTask("plan:screen:portfolio", "Screen: Portfolio")
 	sess.AddTask("plan:feature:3", "Feature: pull-to-refresh")
 	note := remainingNote(sess, "Verified, but stopping")
@@ -158,5 +160,38 @@ func TestNoteProbeCountsPerTurn(t *testing.T) {
 	sess.ResetWriteCounts()
 	if n := sess.NoteProbe("@solana/web3.js"); n != 1 {
 		t.Errorf("expected reset, got %d", n)
+	}
+}
+
+func TestAuditUnmarksPhantomScreens(t *testing.T) {
+	o := &Orchestrator{}
+	sess := newTestSession(t)
+	sess.AddTask("plan:screen:wallet", "Screen: Wallet")
+	sess.AddTask("plan:screen:settings", "Screen: Settings")
+	sess.MarkPlanTask("plan:screen:wallet", "Screen: Wallet", "completed", "claimed")
+	sess.MarkPlanTask("plan:screen:settings", "Screen: Settings", "completed", "claimed")
+
+	exists := map[string]bool{"app/(tabs)/wallet.tsx": true}
+	o.auditScreenTasks(sess, RunOptions{
+		Exists: func(path string) bool { return exists[path] },
+	})
+
+	statusOf := func(id string) string {
+		for _, task := range sess.GetTasks() {
+			if task.ID == id {
+				return task.Status
+			}
+		}
+		return "missing"
+	}
+	if got := statusOf("plan:screen:wallet"); got != "completed" {
+		t.Errorf("built screen should stay completed, got %q", got)
+	}
+	if got := statusOf("plan:screen:settings"); got != "pending" {
+		t.Errorf("phantom screen should flip back to pending, got %q", got)
+	}
+	remaining := pendingPlanTasks(sess)
+	if len(remaining) != 1 {
+		t.Errorf("expected the phantom in remaining_tasks, got %v", remaining)
 	}
 }

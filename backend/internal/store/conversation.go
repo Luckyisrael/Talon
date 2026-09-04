@@ -198,3 +198,34 @@ func (s *Store) RecordPromptTokens(promptID, userID int64, in, out, cacheRead in
 	)
 	return err
 }
+
+// RecordPromptRouting attributes a turn's dollar cost and routing decision to
+// the same prompt and usage rows the token counters update — one ledger, not
+// two. Billing reads tokens and dollars from the same source of truth.
+func (s *Store) RecordPromptRouting(promptID, userID int64, costUSD float64, model, reason string) error {
+	if _, err := s.db.Exec(
+		`UPDATE prompts SET cost_usd = cost_usd + ?, routed_model = ?, route_reason = ? WHERE id = ?`,
+		costUSD, model, reason, promptID,
+	); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`UPDATE usage SET cost_usd = cost_usd + ? WHERE user_id = ?`,
+		costUSD, userID,
+	)
+	return err
+}
+
+// UsageCostTotal sums model spend across all usage rows for the metrics
+// scrape. A missing column (pre-migration database) reads as zero rather
+// than failing the scrape.
+func (s *Store) UsageCostTotal() (float64, error) {
+	var total *float64
+	if err := s.db.QueryRow("SELECT SUM(cost_usd) FROM usage").Scan(&total); err != nil {
+		return 0, err
+	}
+	if total == nil {
+		return 0, nil
+	}
+	return *total, nil
+}

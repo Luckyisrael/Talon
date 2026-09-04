@@ -17,6 +17,7 @@ import (
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/events"
+	"github.com/seekersstudio/backend/internal/metrics"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/tools"
@@ -186,7 +187,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	outcome, buildErr := h.runBuild(ctx, req.ProjectID, prompt.ID, userID, req.Prompt, nil,
-		buildOptions{persistUserTurn: true, meterPrompt: true})
+		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode})
 
 	response := map[string]interface{}{
 		"id":              prompt.ID,
@@ -254,7 +255,7 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.streamBuild(ctx, w, flusher, req.ProjectID, prompt.ID, userID, req.Prompt,
-		buildOptions{persistUserTurn: true, meterPrompt: true})
+		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode})
 }
 
 // resumePrompt is the synthetic instruction a resumed turn injects. It is not
@@ -334,7 +335,7 @@ func (h *PromptHandler) Resume(w http.ResponseWriter, r *http.Request) {
 	// The synthetic prompt is neither persisted nor metered — resuming an
 	// interrupted turn is a continuation, not a new prompt.
 	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, resumePrompt,
-		buildOptions{persistUserTurn: false, meterPrompt: false})
+		buildOptions{persistUserTurn: false, meterPrompt: false, mode: "build"})
 }
 
 // answerRequest is the body of POST /v1/prompts/{id}/answer: the user's reply
@@ -431,7 +432,7 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 	// it is not metered, because the question and its answer are one prompt,
 	// already charged when the turn first ran.
 	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, body.Answer,
-		buildOptions{persistUserTurn: false, meterPrompt: false, answer: true})
+		buildOptions{persistUserTurn: false, meterPrompt: false, answer: true, mode: "build"})
 }
 
 // Discard marks an interrupted turn as abandoned so a later reload stops
@@ -706,6 +707,8 @@ type buildOptions struct {
 	persistUserTurn bool
 	meterPrompt     bool
 	answer          bool
+	// mode is "plan" or "build": routing classifies the turn from it.
+	mode string
 }
 
 // runBuild executes one agentic turn: replay the stored conversation, run the
@@ -767,8 +770,10 @@ func (h *PromptHandler) runBuild(
 
 	history := h.turnHistory(projectID, promptID, userPrompt, bo)
 
+	turnStart := time.Now()
 	outcome, runErr := h.orch.RunAgentLoop(ctx, sess, orchestrator.RunOptions{
 		SystemPrompt: h.systemPrompt(),
+		Mode:         bo.mode,
 		History:      history,
 		Tools:        bs.defs,
 		Execute:      bs.executor(),
@@ -792,7 +797,7 @@ func (h *PromptHandler) runBuild(
 	// Everything below runs whether or not the loop succeeded: a failed turn
 	// still changed files and still cost tokens, and losing that record is how
 	// the next turn ends up contradicting this one.
-	h.finalizeTurn(projectID, promptID, userID, outcome, runErr, bo.meterPrompt)
+	h.finalizeTurn(projectID, promptID, userID, outcome, runErr, bo.meterPrompt, time.Since(turnStart))
 	h.checkpoint(projectID, promptID, userPrompt, bs.fs.Journal())
 
 	if outcome != nil && len(outcome.FilesTouched) > 0 {
@@ -874,7 +879,7 @@ func (h *PromptHandler) persistTurn(projectID, promptID int64, m ai.Message, lab
 // already stored — the user prompt up front and each round through the loop's
 // Persist callback — so this does not re-append them; doing so would double the
 // transcript.
-func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome *orchestrator.BuildOutcome, runErr error, meterPrompt bool) {
+func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome *orchestrator.BuildOutcome, runErr error, meterPrompt bool, elapsed time.Duration) {
 	round := 0
 	if outcome != nil {
 		round = outcome.Rounds
@@ -929,6 +934,25 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 	// turn increments it, or resuming would charge a second prompt.
 	h.store.RecordPromptTokens(promptID, userID,
 		outcome.Usage.InputTokens, outcome.Usage.OutputTokens, outcome.Usage.CacheReadTokens)
+	// Dollar cost lands on the same rows as the tokens — one ledger. The model
+	// priced is the one that actually served the turn, not the default.
+	model := outcome.RoutedModel
+	if model == "" {
+		model = h.ai.Model()
+	}
+	cost := ai.CostUSD(model,
+		outcome.Usage.InputTokens, outcome.Usage.OutputTokens, outcome.Usage.CacheReadTokens,
+		ai.DefaultPricing())
+	if err := h.store.RecordPromptRouting(promptID, userID, cost, model, outcome.RouteReason); err != nil {
+		log.Printf("project %d: could not record routing cost: %v", projectID, err)
+	}
+	// Operational turn metrics: wall time, tokens, dollars. A turn that ended
+	// in a real error counts against reliability; paused, waiting, exhausted,
+	// and cancelled turns are deliberate stops, not failures.
+	metrics.Default.ObserveTurn(runErr == nil,
+		elapsed.Milliseconds(),
+		int64(outcome.Usage.InputTokens), int64(outcome.Usage.OutputTokens),
+		int64(cost*1e6))
 	if meterPrompt {
 		h.store.IncrementPrompts(userID)
 	}

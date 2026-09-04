@@ -56,7 +56,7 @@ func (m *Manager) Reconcile(s *store.Store) error {
 		if !exists || info.State != "running" {
 			// Container gone or stopped → mark session destroyed
 			log.Printf("reconciler: session %d container %s missing/stopped (state=%s) → marking destroyed",
-				session.ID, session.ContainerID[:12], info.State)
+				session.ID, shortID(session.ContainerID), info.State)
 			s.UpdateSessionState(session.ID, "destroyed")
 			s.UpdateSessionContainer(session.ID, "", "", 0)
 			m.portAlloc.Release(session.ID)
@@ -65,7 +65,7 @@ func (m *Manager) Reconcile(s *store.Store) error {
 			// Container is running — recover port allocation
 			m.portAlloc.Restore(int64(info.ADBPort), session.ID)
 			log.Printf("reconciler: session %d container %s recovered (port %d)",
-				session.ID, session.ContainerID[:12], info.ADBPort)
+				session.ID, shortID(session.ContainerID), info.ADBPort)
 			recovered++
 		}
 	}
@@ -75,7 +75,7 @@ func (m *Manager) Reconcile(s *store.Store) error {
 	for _, info := range dockerContainers {
 		if _, claimed := dbByContainerID[info.ContainerID]; !claimed {
 			log.Printf("reconciler: orphan container %s (session %d, port %d) → removing",
-				info.ContainerID[:12], info.SessionID, info.ADBPort)
+				shortID(info.ContainerID), info.SessionID, info.ADBPort)
 			m.forceRemove(info.ContainerID)
 			orphaned++
 		}
@@ -113,4 +113,13 @@ func (m *Manager) StartCleanupLoop(s *store.Store, interval time.Duration) {
 		}
 	}()
 	log.Printf("reconciler: cleanup loop started (interval=%v)", interval)
+}
+
+// shortID truncates a container id for logs without panicking on short or
+// test-injected ids.
+func shortID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }

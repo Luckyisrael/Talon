@@ -23,6 +23,7 @@ import (
 	"github.com/seekersstudio/backend/internal/billing"
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/gitremote"
+	"github.com/seekersstudio/backend/internal/logx"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/store"
@@ -61,6 +62,15 @@ func main() {
 		log.Fatalf("could not open the database at %s: %v", dbPath, err)
 	}
 	defer s.Close()
+
+	// Export jobs left running/queued by a previous process can never finish —
+	// their gradle run died with it. Fail them loudly at boot so no job sits
+	// in a terminally hopeful state.
+	if n, err := s.FailStaleExportJobs(); err != nil {
+		log.Printf("WARNING: could not sweep stale export jobs: %v", err)
+	} else if n > 0 {
+		log.Printf("marked %d stale export job(s) as failed (server restart)", n)
+	}
 
 	authSvc := auth.New()
 
@@ -125,9 +135,13 @@ func main() {
 
 	authHandler := api.NewAuthHandler(s, authSvc)
 	projectHandler := api.NewProjectHandler(s, wsMgr, workspaceDir)
+	exportHandler := api.NewExportHandler(s, api.LoadReleaseCipher(), workspaceDir, templateDir, filepath.Join(workspaceDir, "..", "exports"))
+	log.Printf("release export ready (keystores + submission bundles)")
 	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr, knowledge)
 	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, workspaceDir, devClientMgr, walletMgr)
 	usageHandler := api.NewUsageHandler(s)
+	metricsHandler := api.NewMetricsHandler(s, containerMgr)
+	errorsHandler := api.NewErrorsHandler()
 	terminalHandler := ws.NewTerminalHandler(authSvc, s)
 	streamHandler := ws.NewStreamHandler(authSvc, s)
 	inputHandler := ws.NewInputHandler(authSvc, s)
@@ -171,8 +185,12 @@ func main() {
 	if api.TrustingProxyHeaders() {
 		r.Use(middleware.RealIP)
 	}
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+	// Structured request log with the correlation id, replacing chi's
+	// unstructured Logger. One line per request: join on req=<id>.
+	r.Use(logx.RequestLogger)
+	// Captures panics with the request identity instead of printing them
+	// bare; the client still gets a plain 500 with no internals.
+	r.Use(logx.Recoverer)
 	r.Use(corsMiddleware(allowedOrigins()))
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +207,13 @@ func main() {
 		code := http.StatusOK
 		if err := s.Ping(r.Context()); err != nil {
 			body["status"], body["database"] = "degraded", err.Error()
+			code = http.StatusServiceUnavailable
+		}
+		// The ai field used to be a hardcoded "ok". It now reports the
+		// provider's real state: unconfigured, or failed within the recent
+		// window. Ancient failures age out inside Health.
+		if ok, detail := aiClient.Health(); !ok {
+			body["status"], body["ai"] = "degraded", detail
 			code = http.StatusServiceUnavailable
 		}
 		w.WriteHeader(code)
@@ -241,13 +266,30 @@ func main() {
 		r.Get("/v1/projects/{projectID}/checkpoints", promptHandler.ListCheckpoints)
 		r.Post("/v1/projects/{projectID}/checkpoints/{checkpointID}/restore", promptHandler.RestoreCheckpoint)
 
+		// Release export (Phase 11) — tier-gated server-side, async, isolated
+		// from the dev loop. Produces a signed APK + submission bundle the
+		// user submits themselves with their own publisher wallet.
+		r.Post("/v1/projects/{id}/export", exportHandler.Create)
+		r.Post("/v1/projects/{id}/assets", exportHandler.UploadAsset)
+		r.Get("/v1/exports/{id}", exportHandler.Get)
+		r.Get("/v1/exports/{id}/download", exportHandler.Download)
+
 		r.Post("/v1/sessions", sessionHandler.Create)
 		r.Get("/v1/sessions/{id}", sessionHandler.Get)
+		r.Get("/v1/sessions/{id}/screenshot", sessionHandler.Screenshot)
 		r.Post("/v1/sessions/{id}/pause", sessionHandler.Pause)
 		r.Post("/v1/sessions/{id}/resume", sessionHandler.Resume)
 		r.Delete("/v1/sessions/{id}", sessionHandler.Destroy)
 
 		r.Get("/v1/usage", usageHandler.Get)
+
+		// Operational metrics in Prometheus format, same auth as everything
+		// else under /v1. Gauges read live sources at scrape time.
+		r.Get("/v1/metrics", metricsHandler.Get)
+
+		// Captured errors (backend panics and frontend reports), newest first.
+		r.Get("/v1/errors", errorsHandler.List)
+		r.Post("/v1/client-errors", errorsHandler.Report)
 
 		// Profile + billing (Phase 9). Reading and changing the profile, and
 		// starting/cancelling a subscription, all require the caller's identity, so

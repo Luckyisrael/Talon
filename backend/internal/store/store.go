@@ -73,6 +73,7 @@ type Usage struct {
 	UserID        int64     `json:"user_id"`
 	PromptsUsed   int       `json:"prompts_used"`
 	DeviceMinutes float64   `json:"device_minutes"`
+	CostUSD       float64   `json:"cost_usd"`
 	PeriodStart   time.Time `json:"period_start"`
 }
 
@@ -310,6 +311,47 @@ func (s *Store) migrate() error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
+		// project_keystores holds one signing keystore per project for release
+		// export. The keystore FILE lives on disk (see release.KeystoreDir);
+		// only its path, alias, fingerprint, and the ENCRYPTED password live
+		// here. project_id UNIQUE so a project always re-signs with the same
+		// key — app stores require it.
+		`CREATE TABLE IF NOT EXISTS project_keystores (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL UNIQUE,
+			path TEXT NOT NULL,
+			alias TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			enc_password TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
+		// export_jobs tracks release export runs: async because a release
+		// gradle build takes tens of minutes and must never block the dev loop.
+		`CREATE TABLE IF NOT EXISTS export_jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			status TEXT NOT NULL DEFAULT 'queued',
+			artifact_path TEXT DEFAULT '',
+			manifest_path TEXT DEFAULT '',
+			error TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
+		// project_assets holds validated store assets. kind is one of
+		// screenshot, icon, banner — validated at upload time, never conflated:
+		// an emulator screenshot cannot become an icon by accident.
+		`CREATE TABLE IF NOT EXISTS project_assets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			path TEXT NOT NULL,
+			width INTEGER NOT NULL,
+			height INTEGER NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
 	}
 
 	for _, q := range queries {
@@ -342,6 +384,14 @@ func (s *Store) migrate() error {
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN input_tokens INTEGER DEFAULT 0")
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN output_tokens INTEGER DEFAULT 0")
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN cache_read_tokens INTEGER DEFAULT 0")
+
+	// Migration: routing + cost accounting. cost_usd lands on the same rows
+	// the token counters already update — one ledger, not two — so billing
+	// reads tokens and dollars from the same source of truth.
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN cost_usd REAL DEFAULT 0")
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN routed_model TEXT DEFAULT ''")
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN route_reason TEXT DEFAULT ''")
+	s.db.Exec("ALTER TABLE usage ADD COLUMN cost_usd REAL DEFAULT 0")
 
 	// Migration: run-status tracking, so an interrupted turn is distinguishable
 	// from a finished one and can be resumed. Existing rows backfill to
@@ -600,8 +650,8 @@ func (s *Store) GetSessionByContainerID(containerID string) (*Session, error) {
 
 func (s *Store) GetUsage(userID int64) (*Usage, error) {
 	u := &Usage{}
-	err := s.db.QueryRow("SELECT id, user_id, prompts_used, device_minutes, period_start FROM usage WHERE user_id = ? ORDER BY period_start DESC LIMIT 1", userID).
-		Scan(&u.ID, &u.UserID, &u.PromptsUsed, &u.DeviceMinutes, &u.PeriodStart)
+	err := s.db.QueryRow("SELECT id, user_id, prompts_used, device_minutes, cost_usd, period_start FROM usage WHERE user_id = ? ORDER BY period_start DESC LIMIT 1", userID).
+		Scan(&u.ID, &u.UserID, &u.PromptsUsed, &u.DeviceMinutes, &u.CostUSD, &u.PeriodStart)
 	if err == sql.ErrNoRows {
 		_, err2 := s.db.Exec("INSERT INTO usage (user_id) VALUES (?)", userID)
 		if err2 != nil {

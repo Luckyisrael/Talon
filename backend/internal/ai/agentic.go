@@ -185,6 +185,7 @@ func (c *Client) doWithEnvelopeRetry(ctx context.Context, url string, body []byt
 	for attempt := 0; ; attempt++ {
 		respBody, err := c.doWithRetry(ctx, url, body, setHeaders, label)
 		if err != nil {
+			c.noteFailure(err)
 			return nil, err
 		}
 		msg, code, ok := envelopeError(respBody)
@@ -193,10 +194,14 @@ func (c *Client) doWithEnvelopeRetry(ctx context.Context, url string, body []byt
 		}
 		transient := (code == 429 || (code >= 500 && code < 600)) || transientEnvelopeRe.MatchString(msg)
 		if !transient {
-			return nil, fmt.Errorf("%s: provider refused the request (code %d): %s", label, code, truncate(msg, 500))
+			err := fmt.Errorf("%s: provider refused the request (code %d): %s", label, code, truncate(msg, 500))
+			c.noteFailure(err)
+			return nil, err
 		}
 		if attempt+1 >= maxEnvelopeRetries {
-			return nil, fmt.Errorf("%s: provider errored %d times, last: %s", label, maxEnvelopeRetries, truncate(msg, 300))
+			err := fmt.Errorf("%s: provider errored %d times, last: %s", label, maxEnvelopeRetries, truncate(msg, 300))
+			c.noteFailure(err)
+			return nil, err
 		}
 		delay := time.Duration(1<<uint(attempt)) * 2 * time.Second
 		delay += time.Duration(rand.Int63n(int64(time.Second)))

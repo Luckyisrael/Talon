@@ -20,6 +20,7 @@ type usageResponse struct {
 	PromptsLimit  int     `json:"prompts_limit"`
 	DeviceMinutes float64 `json:"device_minutes"`
 	DeviceLimit   int     `json:"device_limit"`
+	CostUSD       float64 `json:"cost_usd"`
 	Tier          string  `json:"tier"`
 }
 
@@ -48,6 +49,7 @@ func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
 		PromptsLimit:  quota.Prompts,
 		DeviceMinutes: usage.DeviceMinutes,
 		DeviceLimit:   quota.DeviceMinutes,
+		CostUSD:       usage.CostUSD,
 		Tier:          user.Tier,
 	}
 

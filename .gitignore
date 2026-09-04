@@ -26,6 +26,11 @@ android/
 local.properties
 *.keystore
 *.jks
+# Release signing keystores (per-project, generated at first export)
+keystores/
+backend/keystores/
+# Release export artifacts (signed APKs, scratch dirs, store assets)
+backend/exports/
 
 # Backend template build artifacts
 backend/template/android/
