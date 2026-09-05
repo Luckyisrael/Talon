@@ -1,10 +1,15 @@
 package orchestrator
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/runtime"
 )
@@ -99,5 +104,87 @@ func TestCrashTx(t *testing.T) {
 	}
 	if got := crashTx([]byte(`{}`)); got != "" {
 		t.Errorf("empty args, got %q", got)
+	}
+}
+
+func patchTestSession(t *testing.T, content string) (*SessionState, string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return newTestSession(t), dir
+}
+
+// Flag off: interception owns nothing — the session behaves as today.
+func TestPatchBufferOffOwnsNothing(t *testing.T) {
+	sess, _ := patchTestSession(t, "v1")
+	calls := []ai.ToolUseBlock{{ID: "1", Name: "try_edit", Input: json.RawMessage(`{"path":"a.txt","mode":"edit"}`)}}
+	owned := (&Orchestrator{}).applyPatchBuffer(context.Background(), sess, calls, RunOptions{})
+	if len(owned) != 0 {
+		t.Fatal("flag off must own no calls")
+	}
+	if sess.PatchBuffer != nil {
+		t.Fatal("flag off must not create a buffer")
+	}
+	if patchBufferOn(RunOptions{}) {
+		t.Fatal("env default must be off")
+	}
+}
+
+// Flag on, type-breaking edit: auto-reverted with Reverted: on the result.
+func TestTryEditRevertsOnTypeFailure(t *testing.T) {
+	sess, dir := patchTestSession(t, "v1")
+	sess.WorkspacePath = dir
+	exec := func(ctx context.Context, name string, input json.RawMessage) (string, bool) {
+		switch name {
+		case "edit_file":
+			_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("BROKEN"), 0o644)
+			return "edited", false
+		case "run_typecheck":
+			return `{"passed":false,"summary":"1 type error(s)","errors":"a.txt: error TS2322"}`, false
+		}
+		return "", true
+	}
+	call := ai.ToolUseBlock{ID: "1", Name: "try_edit", Input: json.RawMessage(`{"path":"a.txt","mode":"edit","old":"v1","new":"BROKEN"}`)}
+	res := (&Orchestrator{}).applyTryEdit(context.Background(), sess, call, RunOptions{Execute: exec, PatchBufferEnabled: true})
+	if !res.IsError || !strings.Contains(res.Content, "Reverted:") {
+		t.Fatalf("expected Reverted: result, got %+v", res)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "a.txt")); string(data) != "v1" {
+		t.Fatalf("file should be reverted to v1, got %q", data)
+	}
+}
+
+// Flag on, fixing edit: kept, pre-image staged for keep_edit.
+func TestTryEditKeepsOnTypePass(t *testing.T) {
+	sess, dir := patchTestSession(t, "v1")
+	sess.WorkspacePath = dir
+	exec := func(ctx context.Context, name string, input json.RawMessage) (string, bool) {
+		if name == "edit_file" {
+			_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("v2"), 0o644)
+			return "edited", false
+		}
+		return `{"passed":true,"summary":"no type errors"}`, false
+	}
+	call := ai.ToolUseBlock{ID: "1", Name: "try_edit", Input: json.RawMessage(`{"path":"a.txt","mode":"edit","old":"v1","new":"v2"}`)}
+	res := (&Orchestrator{}).applyTryEdit(context.Background(), sess, call, RunOptions{Execute: exec, PatchBufferEnabled: true})
+	if res.IsError {
+		t.Fatalf("passing edit should succeed, got %+v", res)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "a.txt")); string(data) != "v2" {
+		t.Fatalf("file should hold v2, got %q", data)
+	}
+	pre, ok := sess.PatchBuffer.PreImage("a.txt")
+	if !ok || string(pre) != "v1" {
+		t.Fatalf("pre-image should be staged, got %q %v", pre, ok)
+	}
+	keep := ai.ToolUseBlock{ID: "2", Name: "keep_edit", Input: json.RawMessage(`{"path":"a.txt"}`)}
+	kres := (&Orchestrator{}).applyKeepEdit(sess, keep)
+	if kres.IsError {
+		t.Fatalf("keep should succeed, got %+v", kres)
+	}
+	if _, ok := sess.PatchBuffer.PreImage("a.txt"); ok {
+		t.Fatal("keep_edit should clear the pre-image")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/build"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/runtime"
 	"github.com/seekersstudio/backend/internal/store"
@@ -119,6 +120,11 @@ type SessionState struct {
 	// device step (boot, vision, interact, wallet tx) with its log excerpt.
 	// It dies with the run — the next turn re-derives it from fresh logs.
 	CrashEntries []runtime.CrashEntry
+
+	// PatchBuffer is the try_edit pre-image store. Nil unless the patch
+	// buffer lane is enabled for the session — nil means try_edit behaves
+	// as the plain underlying edit, identical to today.
+	PatchBuffer *build.PatchBuffer
 
 	mu sync.Mutex
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/build"
 	"github.com/seekersstudio/backend/internal/runtime"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/events"
@@ -459,6 +460,11 @@ type RunOptions struct {
 	// twice. A slow or failing Persist must not wedge the loop; keep it cheap and
 	// swallow its own errors.
 	Persist func(msgs []ai.Message)
+	// PatchBufferEnabled opts one session into the try_edit lane: edits are
+	// staged with pre-images and type-breaking changes auto-revert. Default
+	// off — off behaves identically to today. The SEEKERSTUDIO_PATCH_BUFFER
+	// env var (1/true/on) opts in without a code change.
+	PatchBufferEnabled bool
 }
 
 // RunAgentLoop drives the agent until it stops calling tools and the code
@@ -685,7 +691,26 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			// its benign Execute so the tool_use still gets a matching tool_result.
 			o.applyMarkTaskDone(sess, result.ToolUses)
 
-			results := o.executeTools(ctx, sess, result.ToolUses, opts)
+			// try_edit/keep_edit are orchestrator-owned when the patch buffer
+			// lane is on: intercept them here, run the rest normally, and
+			// merge back in call order so downstream indices still align.
+			owned := o.applyPatchBuffer(ctx, sess, result.ToolUses, opts)
+			var rest []ai.ToolUseBlock
+			var restIdx []int
+			for i, u := range result.ToolUses {
+				if _, ok := owned[i]; !ok {
+					rest = append(rest, u)
+					restIdx = append(restIdx, i)
+				}
+			}
+			restResults := o.executeTools(ctx, sess, rest, opts)
+			results := make([]ai.Block, len(result.ToolUses))
+			for i, r := range owned {
+				results[i] = r
+			}
+			for j, i := range restIdx {
+				results[i] = restResults[j]
+			}
 			userTurn := ai.ToolResults(results)
 			conversation = append(conversation, userTurn)
 			outcome.Messages = append(outcome.Messages, userTurn)
@@ -890,6 +915,174 @@ func (o *Orchestrator) applyMarkTaskDone(sess *SessionState, uses []ai.ToolUseBl
 			o.markOnePlanTask(sess, want, note)
 		}
 	}
+}
+
+// patchBufferOn resolves the G6 lane: per-session opt-in, or the
+// SEEKERSTUDIO_PATCH_BUFFER env var for fleet-wide experiments. Both default
+// off — off behaves identically to today.
+func patchBufferOn(opts RunOptions) bool {
+	if opts.PatchBufferEnabled {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SEEKERSTUDIO_PATCH_BUFFER"))) {
+	case "1", "true", "on":
+		return true
+	}
+	return false
+}
+
+// applyPatchBuffer intercepts try_edit/keep_edit calls, returning owned
+// result blocks keyed by call index. Calls it does not own are absent from
+// the map and flow to executeTools normally. When the lane is off the map
+// is empty and the calls reach their benign fallback Execute.
+func (o *Orchestrator) applyPatchBuffer(ctx context.Context, sess *SessionState, calls []ai.ToolUseBlock, opts RunOptions) map[int]ai.Block {
+	owned := make(map[int]ai.Block)
+	if !patchBufferOn(opts) {
+		return owned
+	}
+	if sess.PatchBuffer == nil {
+		sess.PatchBuffer = build.NewPatchBuffer()
+	}
+	for i, call := range calls {
+		switch call.Name {
+		case "try_edit":
+			owned[i] = o.applyTryEdit(ctx, sess, call, opts)
+		case "keep_edit":
+			owned[i] = o.applyKeepEdit(sess, call)
+		}
+	}
+	return owned
+}
+
+type tryEditArgs struct {
+	Path    string `json:"path"`
+	Mode    string `json:"mode"`
+	Old     string `json:"old"`
+	New     string `json:"new"`
+	Content string `json:"content"`
+	Edits   []struct {
+		Old string `json:"old"`
+		New string `json:"new"`
+	} `json:"edits"`
+}
+
+func tryEditResult(call ai.ToolUseBlock, content string, isError bool) ai.Block {
+	return ai.Block{Type: "tool_result", ToolUseID: call.ID, Content: content, IsError: isError}
+}
+
+// resolvePatchPath keeps try_edit inside the workspace: clean the path and
+// refuse anything escaping the root. The tool path is model-controlled, so
+// this is a guardrail, not a helper.
+func resolvePatchPath(workspace, path string) (string, error) {
+	clean := filepath.Clean("/" + strings.TrimSpace(path))
+	abs := filepath.Join(workspace, clean)
+	rel, err := filepath.Rel(workspace, abs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("path escapes the workspace")
+	}
+	return abs, nil
+}
+
+func (o *Orchestrator) applyTryEdit(ctx context.Context, sess *SessionState, call ai.ToolUseBlock, opts RunOptions) ai.Block {
+	var a tryEditArgs
+	if json.Unmarshal(call.Input, &a) != nil || strings.TrimSpace(a.Path) == "" {
+		return tryEditResult(call, "try_edit needs a path and a mode (edit/write/multi).", true)
+	}
+	// Defensive: the loop always inits via applyPatchBuffer, but a direct
+	// call must not panic on a nil buffer.
+	if sess.PatchBuffer == nil {
+		sess.PatchBuffer = build.NewPatchBuffer()
+	}
+	abs, err := resolvePatchPath(sess.WorkspacePath, a.Path)
+	if err != nil {
+		return tryEditResult(call, "try_edit refused: "+err.Error(), true)
+	}
+
+	// Map the mode onto the underlying tool call the model would have made.
+	var tool string
+	var toolArgs map[string]any
+	switch a.Mode {
+	case "edit":
+		if a.Old == "" {
+			return tryEditResult(call, "mode edit needs old and new text.", true)
+		}
+		tool, toolArgs = "edit_file", map[string]any{"path": a.Path, "old": a.Old, "new": a.New}
+	case "write":
+		tool, toolArgs = "write_file", map[string]any{"path": a.Path, "content": a.Content}
+	case "multi":
+		if len(a.Edits) == 0 {
+			return tryEditResult(call, "mode multi needs at least one old/new pair.", true)
+		}
+		tool, toolArgs = "multi_edit", map[string]any{"path": a.Path, "edits": a.Edits}
+	default:
+		return tryEditResult(call, "unknown mode — use edit, write, or multi.", true)
+	}
+
+	// Pre-image first: read the current content (missing is fine for write),
+	// then stage it before anything mutates the file.
+	var preImage []byte
+	if data, rerr := os.ReadFile(abs); rerr == nil {
+		preImage = data
+	} else if a.Mode != "write" {
+		return tryEditResult(call, "cannot try_edit a file that does not exist (use mode write to create it).", true)
+	}
+	evicted := sess.PatchBuffer.Stage(a.Path, preImage, sess.GetRound())
+	notice := ""
+	if evicted != "" {
+		notice = fmt.Sprintf("\nNote: the patch buffer is full — the oldest pre-image (%s) was dropped and can no longer be reverted.", evicted)
+	}
+
+	toolInput, _ := json.Marshal(toolArgs)
+	output, isError := opts.Execute(ctx, tool, toolInput)
+	if isError {
+		// The edit itself failed — nothing changed, so the stage is stale.
+		sess.PatchBuffer.Accept(a.Path)
+		return tryEditResult(call, output+notice, true)
+	}
+
+	// Gate 1 minimum: the change must typecheck. Unavailable (no tsconfig)
+	// reads as passed — same policy as the ladder.
+	verifyOut, _ := opts.Execute(ctx, "run_typecheck", json.RawMessage(`{}`))
+	var vr tools.VerifyResult
+	passed := true
+	reason := ""
+	if json.Unmarshal([]byte(verifyOut), &vr) == nil {
+		passed = vr.Passed
+		reason = vr.Summary
+		if vr.Errors != "" {
+			reason = vr.Errors
+		}
+	}
+	if passed {
+		return tryEditResult(call, output+fmt.Sprintf("\nTypecheck passed — edit stands, pre-image staged (keep_edit %s to accept).", a.Path)+notice, false)
+	}
+
+	// Type-breaking: revert to the pre-image with a direct write (not the
+	// write_file tool — re-entering the tool would re-trigger guardrails on
+	// a file whose mtime just moved), then refresh the session's freshness
+	// tracking so the next fix is not refused as unread.
+	if werr := os.WriteFile(abs, preImage, 0o644); werr != nil {
+		return tryEditResult(call, fmt.Sprintf("Typecheck failed (%s) AND the revert failed (%v) — the file may be half-edited. Read it before touching it.", reason, werr), true)
+	}
+	sess.MarkFileRead(a.Path)
+	if mt, ok := fileMtime(sess.WorkspacePath, a.Path); ok {
+		sess.NoteFileKnown(a.Path, mt)
+	}
+	return tryEditResult(call, fmt.Sprintf("Reverted: typecheck failed (%s). The file is back to what it was — fix the error and try again, do not build on the broken version.", reason)+notice, true)
+}
+
+func (o *Orchestrator) applyKeepEdit(sess *SessionState, call ai.ToolUseBlock) ai.Block {
+	var a struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(call.Input, &a) != nil || strings.TrimSpace(a.Path) == "" {
+		return tryEditResult(call, "keep_edit needs the path the try_edit used.", true)
+	}
+	if sess.PatchBuffer == nil {
+		return tryEditResult(call, "Nothing staged — the patch buffer is off in this session.", false)
+	}
+	sess.PatchBuffer.Accept(strings.TrimSpace(a.Path))
+	return tryEditResult(call, "Accepted — the edit stands as an ordinary change.", false)
 }
 
 // markOnePlanTask flips the first pending plan task matching want.

@@ -97,6 +97,11 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	// capable model can check off screens and features as it finishes them.
 	reg.Register(&tools.MarkTaskDone{})
 
+	// Sandboxed edits. Like mark_task_done, try_edit/keep_edit are
+	// orchestrator-owned (the loop owns the patch buffer and the verify
+	// path); registered so the model sees their schemas.
+	reg.Register(&tools.TryEdit{})
+	reg.Register(&tools.KeepEdit{})
 	// Project knowledge.
 	adapter := h.storeAdapter()
 	reg.Register(tools.NewWriteADR(adapter, projectID))
