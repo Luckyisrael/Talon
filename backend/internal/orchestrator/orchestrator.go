@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/runtime"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/guardrails"
@@ -168,6 +169,35 @@ func parseFailurePattern(content string) fpParts {
 		}
 	}
 	return p
+}
+
+// isDeviceStep reports whether a failed tool call belongs in the run-scoped
+// crash index: the gates and tools whose failures mean something on the
+// device went wrong, as opposed to a code error.
+func isDeviceStep(tool string) bool {
+	switch tool {
+	case "run_boot", "run_vision", "run_interact", "test_wallet_roundtrip",
+		"capture_screenshot", "tail_logcat":
+		return true
+	}
+	return false
+}
+
+// crashTx names the transaction a failed device step belonged to, so the
+// vision screenshot and the logcat delta for one wallet tx share one crash
+// entry. Falls back to the intended screen, then to no name.
+func crashTx(input json.RawMessage) string {
+	var a struct {
+		Tx             string `json:"tx"`
+		IntendedScreen string `json:"intended_screen"`
+	}
+	if json.Unmarshal(input, &a) != nil {
+		return ""
+	}
+	if a.Tx != "" {
+		return a.Tx
+	}
+	return a.IntendedScreen
 }
 
 // seedPlanTasks turns the project's saved plan into a task list the build loop can
@@ -1058,6 +1088,8 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		// Failure-pattern lookup: if the error matches a known pattern and
 		// its cooldown has expired, inject a one-line reminder so the model
 		// fixes the known issue instead of reasoning it from scratch.
+		// Failed device steps additionally file in the run-scoped crash
+		// index, so the crash triage sees every failed step in one place.
 		if isError {
 			patterns := agent.DefaultFailureIndex()
 			// Compile and append runtime patterns from project memory.
@@ -1072,6 +1104,13 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 					failReminder = "\n\n" + pat.Reminder()
 					sess.NoteCooldown(call.Name, norm, pat.CooldownRounds)
 				}
+			}
+			if isDeviceStep(call.Name) {
+				sess.NoteCrash(runtime.CrashEntry{
+					Tx:      crashTx(call.Input),
+					Tool:    call.Name,
+					Excerpt: runtime.CrashExcerpt(output, 20),
+				})
 			}
 		}
 
@@ -1521,11 +1560,15 @@ func gradleFeedback(vr verifyResult) string {
 }
 
 func bootFeedback(vr verifyResult) string {
-	return "The APK was built but did not come up on the device. adb install may have failed, " +
-		"or the process crashed before pidof could see it.\n\n" +
+	return "The APK was built but did not come up on the device. Distinguish the three cases " +
+		"before retrying: (1) adb install failed — reinstall; (2) the process never appeared in " +
+		"pidof — it crashed on launch, read the logcat excerpt for the FATAL block; (3) the " +
+		"process is alive but produced no first-launch log — the launch activity is wrong or " +
+		"the app white-screens before running code, not a build problem.\n\n" +
 		"adb reported:\n\n" + vr.Errors + "\n\n" +
-		"Re-run build_apk with install=true to retry the install path, or check " +
-		"`adb logcat -d *:E` for the package's last crash."
+		"Check this run's crash index for earlier failed device steps on the same package — " +
+		"a repeated identical failure already has its known fix. Otherwise run tail_logcat " +
+		"scoped to the package before re-running run_boot with a cleared buffer."
 }
 
 func visionFeedback(vr verifyResult) string {

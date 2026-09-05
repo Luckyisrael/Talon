@@ -1,10 +1,12 @@
 package orchestrator
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/seekersstudio/backend/internal/agent"
 	"github.com/seekersstudio/backend/internal/events"
+	"github.com/seekersstudio/backend/internal/runtime"
 )
 
 // The loop consults the failure index before re-asking: a known error gets a
@@ -59,5 +61,43 @@ func TestParseFailurePattern(t *testing.T) {
 	}
 	if bad := parseFailurePattern("no separators here"); bad.match != "" {
 		t.Errorf("garbage should parse to empty match: %+v", bad)
+	}
+}
+
+func TestCrashIndexCollectsDeviceSteps(t *testing.T) {
+	sess := newTestSession(t)
+	if sess.CrashIndex() != "" {
+		t.Fatal("empty index should render empty")
+	}
+	sess.NoteCrash(runtime.CrashEntry{Tx: "connect", Tool: "test_wallet_roundtrip", Excerpt: "fakewallet not installed"})
+	sess.NoteCrash(runtime.CrashEntry{Tool: "run_boot", Excerpt: "alive but silent"})
+	idx := sess.CrashIndex()
+	if !strings.Contains(idx, "test_wallet_roundtrip [connect]") || !strings.Contains(idx, "run_boot") {
+		t.Errorf("index should name both steps:\n%s", idx)
+	}
+}
+
+func TestIsDeviceStep(t *testing.T) {
+	for _, tool := range []string{"run_boot", "run_vision", "run_interact", "test_wallet_roundtrip", "capture_screenshot", "tail_logcat"} {
+		if !isDeviceStep(tool) {
+			t.Errorf("%s should be a device step", tool)
+		}
+	}
+	for _, tool := range []string{"run_typecheck", "write_file", "read_skill"} {
+		if isDeviceStep(tool) {
+			t.Errorf("%s should not be a device step", tool)
+		}
+	}
+}
+
+func TestCrashTx(t *testing.T) {
+	if got := crashTx([]byte(`{"tx":"connect"}`)); got != "connect" {
+		t.Errorf("tx field wins, got %q", got)
+	}
+	if got := crashTx([]byte(`{"intended_screen":"Wallet"}`)); got != "Wallet" {
+		t.Errorf("intended_screen fallback, got %q", got)
+	}
+	if got := crashTx([]byte(`{}`)); got != "" {
+		t.Errorf("empty args, got %q", got)
 	}
 }

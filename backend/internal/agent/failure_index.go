@@ -88,6 +88,10 @@ func DefaultFailureIndex() []FailurePattern {
 			"bundler syntax failure", "fix the flagged file's syntax; check imports resolve", "expo-router-nav", cd),
 		mustPattern("", `device not found|no devices|device unauthorized|device offline`,
 			"device unreachable", "check adb devices, reconnect, verify the target", "", cd),
+		mustPattern("run_boot", `alive but silent|produced no log output`,
+			"process up but app code never ran", "check the launch activity and read the logcat excerpt for the real crash", "", cd),
+		mustPattern("run_boot", `did not come up|returned empty`,
+			"process never started", "reinstall and check logcat *:E for the install or launch crash", "", cd),
 	}
 }
 

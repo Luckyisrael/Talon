@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -68,6 +69,33 @@ func (a *ADBRunner) InstallAPK(apkPath string) (string, error) {
 	args := []string{"-s", a.Target, "install", "-r", apkPath}
 	out, err := exec.Command("adb", args...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
+}
+
+// ClearLogcat wipes the device log buffer. Boot-gated flows clear before
+// launch so the tail they read afterwards contains only this run —
+// yesterday's crash must not triage today's boot.
+func (a *ADBRunner) ClearLogcat() error {
+	args := []string{"-s", a.Target, "logcat", "-c"}
+	out, err := exec.Command("adb", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("logcat -c failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// DumpLogcat returns the last lines of the device log in `-v time` format
+// (timestamps are what boot-gap detection reads). filter scopes to one tag
+// when non-empty.
+func (a *ADBRunner) DumpLogcat(filter string, lines int) (string, error) {
+	args := []string{"-s", a.Target, "logcat", "-d", "-v", "time", "-t", strconv.Itoa(lines)}
+	if filter != "" {
+		args = append(args, filter)
+	}
+	out, err := exec.Command("adb", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("logcat dump failed: %s", strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (t *BuildAPK) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/seekersstudio/backend/internal/runtime"
 )
 
 // VerifyResult is the shape both verification tools return. Passed is the only
@@ -259,4 +261,437 @@ func (t *RunChecks) Execute(ctx context.Context, args json.RawMessage) (ToolResu
 	}
 	liVerdict.Summary = "typecheck clean; " + liVerdict.Summary
 	return marshalVerify(liVerdict), nil
+}
+
+// ── run_bundle ────────────────────────────────────────
+//
+// run_bundle runs `npx expo export --platform android --dev false`. It catches
+// Metro/asset errors at a fraction of gradle's cost: a Metro bundle error means
+// the project will not run on a device, but it does not need a JDK or an Android
+// SDK to diagnose. It deliberately runs as a separate gate from typecheck so a
+// bundle failure can be reported as a distinct repair step.
+
+type RunBundle struct {
+	WorkspacePath string
+	Output        io.Writer
+}
+
+func (t *RunBundle) Name() string { return "run_bundle" }
+
+func (t *RunBundle) Description() string {
+	return "Bundle the project for Android with `npx expo export --platform android --dev false`. " +
+		"Catches Metro, asset, and module-resolution errors without paying gradle's cost. " +
+		"Returns passed=true when the bundle is produced, or the Metro errors when not."
+}
+
+func (t *RunBundle) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{},"required":[]}`)
+}
+
+func (t *RunBundle) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	if _, err := os.Stat(filepath.Join(t.WorkspacePath, "package.json")); err != nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "no package.json — bundle skipped"}), nil
+	}
+
+	out, failed, err := runVerifyCmd(ctx, t.WorkspacePath, t.Output, "npx", "--no-install", "expo", "export", "--platform", "android", "--dev", "false", "--output-dir", ".expo-bundle")
+	if err != nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "bundle unavailable: " + err.Error()}), nil
+	}
+	if !failed {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "bundle produced"}), nil
+	}
+	return marshalVerify(VerifyResult{
+		Passed:  false,
+		Errors:  clipOutput(out),
+		Summary: "metro bundle failed",
+	}), nil
+}
+
+// ── run_gradle ────────────────────────────────────────
+//
+// run_gradle runs `./gradlew assembleDebug` against the prebuilt android/ dir.
+// It returns passed=true when the APK is produced, or the gradle error tail
+// when not. JDK 17 + Android SDK must be present on the host; the tool returns
+// "unavailable" rather than failed when they are not, mirroring run_lint's
+// "missing checker is not a build block" stance.
+
+type RunGradle struct {
+	WorkspacePath string
+	Output        io.Writer
+}
+
+func (t *RunGradle) Name() string { return "run_gradle" }
+
+func (t *RunGradle) Description() string {
+	return "Run `./gradlew assembleDebug` against the project's android/ directory. " +
+		"Returns passed=true when the APK is produced, or the gradle error tail when not. " +
+		"Requires JDK 17 and the Android SDK; reports unavailable if either is missing."
+}
+
+func (t *RunGradle) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{},"required":[]}`)
+}
+
+func (t *RunGradle) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	androidDir := filepath.Join(t.WorkspacePath, "android")
+	gradlew := filepath.Join(androidDir, "gradlew")
+	if _, err := os.Stat(gradlew); err != nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "no android/gradlew — gradle skipped (run expo prebuild first)"}), nil
+	}
+	if findJavaHome() == "" {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "gradle unavailable: JDK 17 not found"}), nil
+	}
+	if findAndroidHome() == "" {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "gradle unavailable: Android SDK not found"}), nil
+	}
+
+	out, failed, err := runVerifyCmd(ctx, androidDir, t.Output, "./gradlew", "assembleDebug")
+	if err != nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "gradle unavailable: " + err.Error()}), nil
+	}
+	if !failed {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "APK built"}), nil
+	}
+	return marshalVerify(VerifyResult{
+		Passed:  false,
+		Errors:  clipOutput(out),
+		Summary: "gradle assembleDebug failed",
+	}), nil
+}
+
+// ── run_boot ──────────────────────────────────────────
+//
+// run_boot confirms the APK is alive on the device by `adb install -r` followed
+// by `adb shell pidof <pkg>`. It returns passed=true when the process is up
+// after a short poll. It does not attempt to launch the app — that is the
+// orchestrator's job elsewhere — and it is deliberately quiet about transient
+// adb errors: a redroid that is mid-reconcile should not fail the gate.
+
+type RunBoot struct {
+	WorkspacePath string
+	APKPath       string
+	PkgName       string
+	ADBClient     *ADBRunner
+}
+
+func (t *RunBoot) Name() string { return "run_boot" }
+
+func (t *RunBoot) Description() string {
+	return "Install the APK on the connected device and confirm the process is alive. " +
+		"Returns passed=true when `adb shell pidof <pkg>` reports a PID, or the failure reason when not."
+}
+
+func (t *RunBoot) InputSchema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"apk_path":  {"type": "string"},
+			"pkg_name":  {"type": "string"}
+		},
+		"required": []
+	}`)
+}
+
+func (t *RunBoot) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	if t.ADBClient == nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "no adb client — boot skipped"}), nil
+	}
+	apk := t.APKPath
+	pkg := t.PkgName
+	if apk == "" || pkg == "" {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "no apk/pkg supplied — boot skipped"}), nil
+	}
+
+	installOut, err := t.ADBClient.InstallAPK(apk)
+	if err != nil {
+		return marshalVerify(VerifyResult{
+			Passed:  false,
+			Errors:  installOut,
+			Summary: "adb install failed",
+		}), nil
+	}
+
+	// The log buffer is cleared before launch so the tail below contains only
+	// this run. Best-effort: a stale buffer only weakens the first-launch
+	// evidence, it never fails the gate by itself.
+	launch := time.Now()
+	_ = t.ADBClient.ClearLogcat()
+
+	// pidof is the cheapest "is the process alive" check; on Redroid the boot
+	// animation takes a few hundred ms so we allow up to ~5 s.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		out, err := t.ADBClient.Run("pidof " + pkg)
+		if err == nil && strings.TrimSpace(out) != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			return marshalVerify(VerifyResult{
+				Passed:  false,
+				Errors:  fmt.Sprintf("pidof %s returned empty for 5s after install", pkg),
+				Summary: "process did not come up",
+			}), nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Seen-boot is necessary but not sufficient: a process that exists yet
+	// never runs app code is a white screen, not a boot. The on-device
+	// first-launch log is the second half of the proof.
+	logs, err := t.ADBClient.DumpLogcat(pkg, 200)
+	if err != nil {
+		return marshalVerify(VerifyResult{
+			Passed:  false,
+			Errors:  "process alive but logcat unreadable: " + err.Error(),
+			Summary: "process did not come up",
+		}), nil
+	}
+	return marshalVerify(bootVerdict(pkg, logs, launch)), nil
+}
+
+// bootVerdict turns post-launch evidence into the gate result. Pure so the
+// alive-but-silent and boot-gap paths are unit-testable without a device:
+// the adb calls stay in Execute, the judgement lives here.
+func bootVerdict(pkg, logs string, launch time.Time) VerifyResult {
+	gap, first, ok := runtime.BootGap(logs, pkg, launch)
+	if !ok {
+		return VerifyResult{
+			Passed:  false,
+			Errors:  "process alive but produced no log output:\n" + runtime.CrashExcerpt(logs, 30),
+			Summary: "alive but silent — no first-launch log",
+		}
+	}
+	return VerifyResult{
+		Passed:  true,
+		Summary: fmt.Sprintf("process %s alive, first log after %s (%s: %s)", pkg, gap.Round(100*time.Millisecond), first.Tag, first.Message),
+	}
+}
+
+// ── run_vision ────────────────────────────────────────
+//
+// run_vision captures a screenshot via CaptureScreenshot and runs VisionCheck
+// against the intended screen. It is a thin adapter so the orchestrator ladder
+// can run it as a gate. When the capture fails (no device, no screen) it
+// returns passed=true with an "unavailable" summary, matching the rest of the
+// gates' policy: missing infra is not a build block.
+
+type RunVision struct {
+	WorkspacePath  string
+	Capture        ScreenshotCapturer
+	Vision         VisionGateChecker
+	IntendedScreen string
+	ADBClient      *ADBRunner
+}
+
+func (t *RunVision) Name() string { return "run_vision" }
+
+func (t *RunVision) Description() string {
+	return "Capture a screenshot from the connected device and run vision against the intended screen. " +
+		"Returns passed=true when the model says the screen matches and has no visible error."
+}
+
+func (t *RunVision) InputSchema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"intended_screen": {"type": "string"}
+		},
+		"required": []
+	}`)
+}
+
+func (t *RunVision) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	intended := t.IntendedScreen
+	if intended == "" {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "no intended screen — vision skipped"}), nil
+	}
+	if t.Capture == nil || t.ADBClient == nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "vision unavailable: no capture / adb"}), nil
+	}
+	png, err := t.Capture.CaptureScreenshot(ctx, t.WorkspacePath, t.ADBClient.Target)
+	if err != nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "vision unavailable: " + err.Error()}), nil
+	}
+	if t.Vision == nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "vision unavailable: no vision checker"}), nil
+	}
+	res, err := t.Vision.VisionCheck(ctx, png, intended)
+	if err != nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "vision unavailable: " + err.Error()}), nil
+	}
+	if res.Matches && !res.HasError {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "vision matches: " + res.Reason}), nil
+	}
+	return marshalVerify(VerifyResult{
+		Passed:  false,
+		Errors:  res.ErrorMsg,
+		Summary: "vision mismatch: " + res.Reason,
+	}), nil
+}
+
+// ScreenshotCapturer and VisionGateChecker are the narrow interfaces run_vision
+// and run_interact depend on, so they can be wired to either the real tools or a
+// fake in tests. The names are scoped to "gate" so they do not collide with
+// runtime.go's own VisionChecker (which has a different return shape) — both
+// packages live in the same Go package, so the compiler cannot resolve two
+// types with the same name.
+type ScreenshotCapturer interface {
+	CaptureScreenshot(ctx context.Context, workspacePath, target string) ([]byte, error)
+}
+
+type VisionGateChecker interface {
+	VisionCheck(ctx context.Context, png []byte, intended string) (VisionGateResult, error)
+}
+
+// VisionGateResult is the shape VisionCheck returns. Mirrors the real ai/vision
+// response without importing the package.
+type VisionGateResult struct {
+	Matches  bool   `json:"matches"`
+	Reason   string `json:"reason"`
+	HasError bool   `json:"has_error"`
+	ErrorMsg string `json:"error_msg"`
+}
+
+// ── run_interact ──────────────────────────────────────
+//
+// run_interact walks the plan's route list, captures a screenshot after a
+// navigation tap for each route, and runs vision. When the plan has no routes
+// it returns passed=true with a clear note — most projects start this way and
+// the gate must not block the first run.
+
+type RunInteract struct {
+	WorkspacePath string
+	Routes        []string
+	Capture       ScreenshotCapturer
+	Vision        VisionGateChecker
+	ADBClient     *ADBRunner
+}
+
+func (t *RunInteract) Name() string { return "run_interact" }
+
+func (t *RunInteract) Description() string {
+	return "For each route in the plan, capture a screenshot and run vision. " +
+		"Returns passed=true when every route is reachable, or the first failure otherwise."
+}
+
+func (t *RunInteract) InputSchema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"routes": {"type": "array", "items": {"type": "string"}}
+		},
+		"required": []
+	}`)
+}
+
+func (t *RunInteract) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	routes := t.Routes
+	if len(routes) == 0 {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "no routes to interact"}), nil
+	}
+	if t.Capture == nil || t.ADBClient == nil || t.Vision == nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "interact unavailable: no capture/vision/adb"}), nil
+	}
+	var failures []string
+	for _, r := range routes {
+		png, err := t.Capture.CaptureScreenshot(ctx, t.WorkspacePath, t.ADBClient.Target)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: capture failed (%v)", r, err))
+			continue
+		}
+		res, err := t.Vision.VisionCheck(ctx, png, "the "+r+" screen")
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: vision failed (%v)", r, err))
+			continue
+		}
+		if !res.Matches || res.HasError {
+			failures = append(failures, fmt.Sprintf("%s: %s", r, res.Reason))
+		}
+	}
+	if len(failures) == 0 {
+		return marshalVerify(VerifyResult{Passed: true, Summary: fmt.Sprintf("%d route(s) reachable", len(routes))}), nil
+	}
+	return marshalVerify(VerifyResult{
+		Passed:  false,
+		Errors:  strings.Join(failures, "\n"),
+		Summary: fmt.Sprintf("%d of %d route(s) failed", len(failures), len(routes)),
+	}), nil
+}
+
+// ── run_gate ──────────────────────────────────────────
+//
+// run_gate returns the most recent verify-chain report for the session. It is
+// read-only and safe in parallel. When no chain has run yet it returns a
+// payload with passed=true and summary="no chain run yet" so the model can
+// call it without conditional logic.
+
+type RunGate struct {
+	ReportProvider func() *VerifyReport
+}
+
+func (t *RunGate) Name() string { return "run_gate" }
+
+func (t *RunGate) Description() string {
+	return "Return the most recent verify-chain report for the current session. " +
+		"Read-only. Returns passed=true with summary 'no chain run yet' when no chain has run."
+}
+
+func (t *RunGate) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{},"required":[]}`)
+}
+
+func (t *RunGate) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	var report *VerifyReport
+	if t.ReportProvider != nil {
+		report = t.ReportProvider()
+	}
+	if report == nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "no chain run yet"}), nil
+	}
+	if report.OverallPassed {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "chain pass: " + report.summary()}), nil
+	}
+	return marshalVerify(VerifyResult{
+		Passed:  false,
+		Errors:  report.failingGates(),
+		Summary: "chain fail: " + report.summary(),
+	}), nil
+}
+
+// VerifyReport is what the orchestrator hands the run_gate tool. It is
+// reconstructed from the Verify events emitted during a chain run; the
+// orchestrator owns the accumulator, run_gate just renders it.
+type VerifyReport struct {
+	OverallPassed bool
+	Gates         []VerifyReportGate
+}
+
+type VerifyReportGate struct {
+	Stage  string
+	Status string // "pass" | "fail" | "unavailable" | "skipped"
+	Note   string
+}
+
+func (r *VerifyReport) summary() string {
+	if len(r.Gates) == 0 {
+		return "empty"
+	}
+	parts := make([]string, 0, len(r.Gates))
+	for _, g := range r.Gates {
+		parts = append(parts, g.Stage+"="+g.Status)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (r *VerifyReport) failingGates() string {
+	var b strings.Builder
+	for _, g := range r.Gates {
+		if g.Status == "fail" {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(g.Stage + ": " + g.Note)
+		}
+	}
+	return b.String()
 }

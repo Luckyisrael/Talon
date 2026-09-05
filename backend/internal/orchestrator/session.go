@@ -1,11 +1,14 @@
 package orchestrator
 
 import (
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/seekersstudio/backend/internal/agent"
 	"github.com/seekersstudio/backend/internal/events"
+	"github.com/seekersstudio/backend/internal/runtime"
 	"github.com/seekersstudio/backend/internal/store"
 )
 
@@ -111,6 +114,11 @@ type SessionState struct {
 	// RuntimePatterns holds failure patterns loaded from project memory on
 	// session start. These are merged with the default index at lookup time.
 	RuntimePatterns []agent.FailurePattern
+
+	// CrashEntries is the run-scoped crash index: one entry per failed
+	// device step (boot, vision, interact, wallet tx) with its log excerpt.
+	// It dies with the run — the next turn re-derives it from fresh logs.
+	CrashEntries []runtime.CrashEntry
 
 	mu sync.Mutex
 }
@@ -362,6 +370,36 @@ func (s *SessionState) TickCooldowns() {
 			s.FailureCooldowns[k] = v - 1
 		}
 	}
+}
+
+// NoteCrash appends a run-scoped crash entry. The excerpt should already be
+// trimmed (CrashExcerpt) — the index is for triage, not full logs.
+func (s *SessionState) NoteCrash(e runtime.CrashEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e.Round == 0 {
+		e.Round = s.CurrentRound
+	}
+	s.CrashEntries = append(s.CrashEntries, e)
+}
+
+// CrashIndex renders the run's crash entries for prompt injection: one line
+// per failed device step, newest last.
+func (s *SessionState) CrashIndex() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.CrashEntries) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, e := range s.CrashEntries {
+		label := e.Tool
+		if e.Tx != "" {
+			label += " [" + e.Tx + "]"
+		}
+		b.WriteString("- round " + strconv.Itoa(e.Round) + " " + label + ": " + firstLine(e.Excerpt) + "\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // probeConsolidateThreshold is the inspection count that triggers the
