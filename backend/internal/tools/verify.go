@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/seekersstudio/backend/internal/runtime"
+	"github.com/seekersstudio/backend/internal/verify"
 )
 
 // VerifyResult is the shape both verification tools return. Passed is the only
@@ -511,6 +512,28 @@ func (t *RunVision) Execute(ctx context.Context, args json.RawMessage) (ToolResu
 	png, err := t.Capture.CaptureScreenshot(ctx, t.WorkspacePath, t.ADBClient.Target)
 	if err != nil {
 		return marshalVerify(VerifyResult{Passed: true, Summary: "vision unavailable: " + err.Error()}), nil
+	}
+	// Deterministic pixels before model eyes: a blank screen is a failed
+	// gate without spending a vision call, and the verdict is exact rather
+	// than lenient. The summary names the gate and screen so the crash
+	// index entry for this failure points at the right screenshot context.
+	if rep := verify.Analyze(png); rep.Blank || rep.Reason != "" {
+		name := "vision"
+		if t.IntendedScreen != "" {
+			name += " [" + t.IntendedScreen + "]"
+		}
+		if rep.Blank {
+			return marshalVerify(VerifyResult{
+				Passed:  false,
+				Errors:  "blank screen: screen is effectively empty",
+				Summary: name + ": blank screen, no vision call spent",
+			}), nil
+		}
+		return marshalVerify(VerifyResult{
+			Passed:  false,
+			Errors:  "screenshot capture unhealthy: " + rep.Reason,
+			Summary: name + ": " + rep.Reason,
+		}), nil
 	}
 	if t.Vision == nil {
 		return marshalVerify(VerifyResult{Passed: true, Summary: "vision unavailable: no vision checker"}), nil

@@ -1,8 +1,12 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -249,5 +253,59 @@ func TestBootFailureSuggestsSameFix(t *testing.T) {
 		} else if pat.Reminder() != first {
 			t.Fatalf("round %d suggests a different fix:\n%q\nvs\n%q", i+1, pat.Reminder(), first)
 		}
+	}
+}
+
+type stubCapture struct{ png []byte }
+
+func (s stubCapture) CaptureScreenshot(ctx context.Context, _, _ string) ([]byte, error) {
+	return s.png, nil
+}
+
+type explodingVision struct{ called bool }
+
+func (v *explodingVision) VisionCheck(ctx context.Context, _ []byte, _ string) (VisionGateResult, error) {
+	v.called = true
+	return VisionGateResult{}, nil
+}
+
+func solidTestPNG(w, h int, white bool) []byte {
+	c := color.Black
+	if white {
+		c = color.White
+	}
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
+// A blank screenshot fails the vision gate without spending a model call.
+func TestRunVisionBlankFailsFast(t *testing.T) {
+	vis := &explodingVision{}
+	rv := &RunVision{
+		Capture:        stubCapture{png: solidTestPNG(100, 200, true)},
+		Vision:         vis,
+		IntendedScreen: "Wallet",
+		ADBClient:      &ADBRunner{Target: "localhost:5555"},
+	}
+	res, err := rv.Execute(context.Background(), json.RawMessage(`{"intended_screen":"Wallet"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vr := mustUnmarshalVerify(t, []byte(res.Content))
+	if vr.Passed {
+		t.Fatal("blank screenshot should fail the gate")
+	}
+	if vis.called {
+		t.Fatal("blank screen must not spend a vision call")
+	}
+	if !strings.Contains(vr.Summary, "vision [Wallet]") {
+		t.Fatalf("summary should name gate+screen, got %q", vr.Summary)
 	}
 }

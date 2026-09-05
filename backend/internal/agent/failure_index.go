@@ -92,6 +92,8 @@ func DefaultFailureIndex() []FailurePattern {
 			"process up but app code never ran", "check the launch activity and read the logcat excerpt for the real crash", "", cd),
 		mustPattern("run_boot", `did not come up|returned empty`,
 			"process never started", "reinstall and check logcat *:E for the install or launch crash", "", cd),
+		mustPattern("run_vision", `blank screen`,
+			"screen drew nothing", "check the route renders content; look for an early return or a missing component", "", cd),
 	}
 }
 
