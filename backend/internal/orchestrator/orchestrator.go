@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/seekersstudio/backend/internal/agent"
@@ -45,6 +46,10 @@ type Orchestrator struct {
 	// strong model (which needs none) and when there is no AI client.
 	discipline string
 	maxRounds  int
+	// verifyReport is the chain report accumulator the run_gate tool reads. It is
+	// reset at the start of every verify call and populated as each gate runs.
+	// Atomic.Pointer so run_gate can read it without holding the mutex.
+	verifyReport atomic.Pointer[tools.VerifyReport]
 }
 
 const (
@@ -83,6 +88,7 @@ func New(aiClient *ai.Client, s *store.Store, knowledge *agent.Registry) *Orches
 		preinstalled: knowledge.PreinstalledSet(),
 		maxRounds:    maxRoundsFromEnv(),
 	}
+	o.verifyReport.Store(&tools.VerifyReport{OverallPassed: true})
 	// Adapt the prompt to the model once at startup: a weaker model gets the
 	// working discipline spelled out, a strong one is trusted with the base
 	// prompt. Guarded on a real client so tests that pass nil stay silent.
@@ -113,7 +119,55 @@ func (o *Orchestrator) loadProjectContext(sess *SessionState, projectID int64) {
 	if memory, err := o.store.GetAllMemory(projectID); err == nil {
 		sess.LoadMemory(memory)
 	}
+	// Load runtime failure patterns from memory — these augment the default
+	// seed and are recorded by the model via record_failure_pattern.
+	if mem, err := o.store.GetAllMemory(projectID); err == nil {
+		for _, m := range mem {
+			if m.EntryType == "failure_pattern" {
+				parts := parseFailurePattern(m.Content)
+				if parts.match != "" {
+					re, err := regexp.Compile(parts.match)
+					if err != nil {
+						continue
+					}
+					sess.RuntimePatterns = append(sess.RuntimePatterns, agent.FailurePattern{
+						Tool:           parts.tool,
+						Match:          re,
+						Cause:          parts.cause,
+						Fix:            parts.fix,
+						Skill:          m.Metadata,
+						CooldownRounds: 3,
+					})
+				}
+			}
+		}
+	}
 	o.seedPlanTasks(sess, projectID)
+}
+
+type fpParts struct {
+	tool, match, cause, fix string
+}
+
+func parseFailurePattern(content string) fpParts {
+	var p fpParts
+	for _, field := range strings.Split(content, " | ") {
+		kv := strings.SplitN(field, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		switch kv[0] {
+		case "tool":
+			p.tool = kv[1]
+		case "match":
+			p.match = kv[1]
+		case "cause":
+			p.cause = kv[1]
+		case "fix":
+			p.fix = kv[1]
+		}
+	}
+	return p
 }
 
 // seedPlanTasks turns the project's saved plan into a task list the build loop can
@@ -473,6 +527,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		outcome.Rounds = round
 		flush() // persist what the previous round produced before starting this one
 		sess.SetRound(round)
+		sess.TickCooldowns()
 
 		// Rebuild the system prompt only when the ADRs, memory, or plan-task graph
 		// that feed it changed since the last round. When nothing changed the prompt
@@ -920,12 +975,13 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 
 		output, isError := opts.Execute(ctx, call.Name, call.Input)
 
-		// readNote/watchNote/probeNote carry cross-turn knowledge into this result. They
-		// are set by the tracking below and appended to the tool result at the
-		// end of run(): small hints that prevent whole wasted rounds.
-		readNote := ""
-		watchNote := ""
-		probeNote := ""
+	// readNote/watchNote/probeNote carry cross-turn knowledge into this result. They
+	// are set by the tracking below and appended to the tool result at the
+	// end of run(): small hints that prevent whole wasted rounds.
+	readNote := ""
+	watchNote := ""
+	probeNote := ""
+	failReminder := ""
 
 		status := "completed"
 		if isError {
@@ -999,6 +1055,26 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			}
 		}
 
+		// Failure-pattern lookup: if the error matches a known pattern and
+		// its cooldown has expired, inject a one-line reminder so the model
+		// fixes the known issue instead of reasoning it from scratch.
+		if isError {
+			patterns := agent.DefaultFailureIndex()
+			// Compile and append runtime patterns from project memory.
+			for _, rp := range sess.RuntimePatterns {
+				if rp.Match != nil {
+					patterns = append(patterns, rp)
+				}
+			}
+			if pat, ok := agent.Lookup(patterns, call.Name, output); ok {
+				norm := agent.NormalizeError(output)
+				if sess.CooldownLeft(call.Name, norm) == 0 {
+					failReminder = "\n\n" + pat.Reminder()
+					sess.NoteCooldown(call.Name, norm, pat.CooldownRounds)
+				}
+			}
+		}
+
 		// A recorded decision — an architecture decision (write_adr) or a durable
 		// memory (write_memory) — surfaces as its own card so the user sees the
 		// choice the agent just committed to, not a bare "wrote memory" row that
@@ -1059,7 +1135,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		results[i] = ai.Block{
 			Type:      "tool_result",
 			ToolUseID: call.ID,
-			Content:   output + readNote + watchNote + probeNote,
+			Content:   output + readNote + watchNote + probeNote + failReminder,
 			IsError:   isError,
 		}
 	}
@@ -1307,12 +1383,22 @@ func (o *Orchestrator) verifyGates() []verifyGate {
 	return []verifyGate{
 		{stage: "typecheck", tool: "run_typecheck", feedback: typecheckFeedback},
 		{stage: "lint", tool: "run_lint", feedback: lintFeedback},
+		// The gates below are G4. Each one returns passed=true with an
+		// "unavailable" summary when its infra is missing (no android/ dir,
+		// no JDK, no device) so the ladder is safe to run on every repair
+		// without blowing up on hosts that lack the full toolchain.
+		{stage: "bundle", tool: "run_bundle", feedback: bundleFeedback},
+		{stage: "gradle", tool: "run_gradle", feedback: gradleFeedback},
+		{stage: "boot", tool: "run_boot", feedback: bootFeedback},
+		{stage: "vision", tool: "run_vision", feedback: visionFeedback},
+		{stage: "interact", tool: "run_interact", feedback: interactFeedback},
 	}
 }
 
 // verify walks the gates in order and returns the first failure as feedback the
 // agent can act on, or ok once every gate is satisfied (or unavailable).
 func (o *Orchestrator) verify(ctx context.Context, sess *SessionState, opts RunOptions) verifyVerdict {
+	o.resetVerifyReport()
 	for _, g := range o.verifyGates() {
 		if v := o.runGate(ctx, sess, opts, g); !v.ok {
 			return v
@@ -1342,6 +1428,7 @@ func (o *Orchestrator) runGate(ctx context.Context, sess *SessionState, opts Run
 		}
 		log.Printf("orchestrator: %s check unavailable (%s); skipping so the build is not blocked by checker breakage", g.stage, reason)
 		sess.Emitter.EmitVerify(g.stage, "unavailable", reason)
+		o.appendVerifyGate(g.stage, "unavailable", reason)
 		return verifyVerdict{ok: true}
 	}
 
@@ -1349,15 +1436,33 @@ func (o *Orchestrator) runGate(ctx context.Context, sess *SessionState, opts Run
 	if err := json.Unmarshal([]byte(raw), &vr); err != nil {
 		log.Printf("orchestrator: %s check output unreadable (%v); skipping so the build is not blocked by checker breakage", g.stage, err)
 		sess.Emitter.EmitVerify(g.stage, "unavailable", "unreadable "+g.stage+" output")
+		o.appendVerifyGate(g.stage, "unavailable", "unreadable "+g.stage+" output")
 		return verifyVerdict{ok: true}
+	}
+
+	// A verdict without an explicit "passed" field is a checker that does not
+	// speak the contract — {"ok":true} parses fine with passed defaulting to
+	// false, which used to fail the whole build on an empty error message.
+	// Treat it like unreadable output: unavailable, visible, non-blocking.
+	// A checker that wants to fail a build must say passed:false explicitly.
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &shape); err == nil {
+		if _, ok := shape["passed"]; !ok {
+			log.Printf("orchestrator: %s check omitted the passed verdict; skipping so the build is not blocked by checker breakage", g.stage)
+			sess.Emitter.EmitVerify(g.stage, "unavailable", g.stage+" omitted the passed verdict")
+			o.appendVerifyGate(g.stage, "unavailable", g.stage+" omitted the passed verdict")
+			return verifyVerdict{ok: true}
+		}
 	}
 
 	if vr.Passed {
 		sess.Emitter.EmitVerify(g.stage, "pass", vr.Summary)
+		o.appendVerifyGate(g.stage, "pass", vr.Summary)
 		return verifyVerdict{ok: true}
 	}
 
 	sess.Emitter.EmitVerify(g.stage, "fail", vr.Summary)
+	o.appendVerifyGate(g.stage, "fail", vr.Summary)
 	return verifyVerdict{feedback: g.feedback(vr)}
 }
 
@@ -1391,6 +1496,76 @@ func lintFeedback(vr verifyResult) string {
 		"comment unless it is genuinely a false positive. When you believe it is fixed, call run_lint " +
 		"to confirm. Fix everything in as few edits as you can, then verify once.")
 	return b.String()
+}
+
+// G4 feedback functions. Each turns a failed gate verdict into repair guidance.
+// "Unavailable" verdicts are passed=true so they never reach these — the ladder
+// short-circuits on passed, so an unavailable gate never invokes feedback.
+
+func bundleFeedback(vr verifyResult) string {
+	return "Metro bundling failed. The project compiles but cannot be bundled for Android, " +
+		"which means it will not run on a device. Metro errors are usually a missing module, " +
+		"a broken asset path, or a Reanimated/Babel plugin mismatch.\n\n" +
+		"Metro reported:\n\n" + vr.Errors + "\n\n" +
+		"Read the file Metro names, then check the import path. If Reanimated is involved, " +
+		"confirm babel.config.js includes 'react-native-reanimated/plugin'. " +
+		"Then call run_bundle to confirm."
+}
+
+func gradleFeedback(vr verifyResult) string {
+	return "Gradle assembleDebug failed. The project bundles for Metro but will not produce an APK. " +
+		"This is usually a native module version mismatch, a missing permission, or a JDK / SDK mismatch.\n\n" +
+		"Gradle reported:\n\n" + vr.Errors + "\n\n" +
+		"Read android/app/build.gradle and the failing module's build.gradle. " +
+		"Then call run_gradle to confirm."
+}
+
+func bootFeedback(vr verifyResult) string {
+	return "The APK was built but did not come up on the device. adb install may have failed, " +
+		"or the process crashed before pidof could see it.\n\n" +
+		"adb reported:\n\n" + vr.Errors + "\n\n" +
+		"Re-run build_apk with install=true to retry the install path, or check " +
+		"`adb logcat -d *:E` for the package's last crash."
+}
+
+func visionFeedback(vr verifyResult) string {
+	return "The app is on the device but the screen does not match what the plan intended, " +
+		"or the screen shows an error state. Vision is the cheapest way to catch a white screen, " +
+		"a crash dialog, or a wrong route.\n\n" +
+		"Vision reported:\n\n" + vr.Errors + "\n\n" +
+		"Read the named file or route, then re-run the build loop. The vision check is " +
+		"intentionally lenient — if it disagrees, the screen is genuinely wrong."
+}
+
+func interactFeedback(vr verifyResult) string {
+	return "At least one route in the plan is not reachable. The app launched, but a tap " +
+		"did not land on the intended screen, or the screen on the other side is broken.\n\n" +
+		"Interact reported:\n\n" + vr.Errors + "\n\n" +
+		"Read the route file the gate named, confirm the screen exists and is registered, " +
+		"then re-run the build loop."
+}
+
+// lastVerifyReport is the chain report accumulator the run_gate tool reads. It
+// is reset at the start of every verify call and populated as each gate runs.
+// The accessor is a method on Orchestrator so tests can substitute a fake.
+func (o *Orchestrator) lastVerifyReport() *tools.VerifyReport {
+	return o.verifyReport.Load()
+}
+
+func (o *Orchestrator) resetVerifyReport() {
+	o.verifyReport.Store(&tools.VerifyReport{})
+}
+
+func (o *Orchestrator) appendVerifyGate(stage, status, note string) {
+	cur := o.verifyReport.Load()
+	if cur == nil {
+		cur = &tools.VerifyReport{}
+	}
+	next := &tools.VerifyReport{
+		OverallPassed: cur.OverallPassed && status != "fail",
+		Gates:         append(append([]tools.VerifyReportGate{}, cur.Gates...), tools.VerifyReportGate{Stage: stage, Status: status, Note: note}),
+	}
+	o.verifyReport.Store(next)
 }
 
 // errorFiles pulls the distinct file paths out of tsc output, preserving the

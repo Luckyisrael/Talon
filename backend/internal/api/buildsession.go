@@ -12,6 +12,7 @@ import (
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/orchestrator"
+	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/tools"
 )
 
@@ -52,6 +53,12 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	reg.Register(&tools.ListFiles{FS: fs})
 	reg.Register(&tools.ReadFile{FS: fs})
 	reg.Register(&tools.GrepCodebase{FS: fs})
+	// search_files is a name-alias for grep_codebase (see tools/read.go) so
+	// models that reach for the more familiar name get the same implementation
+	// without busting the AI provider's tool-schema cache.
+	reg.Register(&tools.SearchFiles{Inner: &tools.GrepCodebase{FS: fs}})
+	reg.Register(&tools.FindFiles{FS: fs})
+	reg.Register(&tools.Explore{FS: fs})
 	// Grounding: survey the whole project at once, and read an installed package's
 	// real type surface — so the model orients and checks APIs instead of guessing
 	// on a stack newer than its training data. Both are read-only (run concurrently).
@@ -94,6 +101,13 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	adapter := h.storeAdapter()
 	reg.Register(tools.NewWriteADR(adapter, projectID))
 	reg.Register(tools.NewWriteMemory(adapter, projectID))
+	reg.Register(tools.NewRecordFailurePattern(adapter, projectID))
+	// read_memory is the symmetric read counterpart — see tools/memory.go.
+	// Registered only when the adapter actually has the read hooks wired, so a
+	// future "write-only" project variant can register write_memory alone.
+	if adapter.GetAllMemoryFn != nil {
+		reg.Register(tools.NewReadMemory(adapter, projectID))
+	}
 
 	// Skills: registered only when the knowledge layer actually loaded skills.
 	// Offering read_skill with an empty library would only ever answer "none".
@@ -133,13 +147,44 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 }
 
 func (h *PromptHandler) storeAdapter() *tools.StoreAdapter {
+	// The adapter's read-side hooks convert the store's `ProjectMemory` shape
+	// to the tools-package `MemoryEntry` so the tools layer never imports the
+	// store. Doing it here, at the wiring boundary, keeps the contract clean.
 	return &tools.StoreAdapter{
 		CreateADRFn: func(projectID int64, decision, context, options, outcome string) error {
 			_, err := h.store.CreateADR(projectID, decision, context, options, outcome)
 			return err
 		},
 		AddMemoryFn: h.store.AddMemory,
+		GetAllMemoryFn: func(projectID int64) ([]tools.MemoryEntry, error) {
+			rows, err := h.store.GetAllMemory(projectID)
+			if err != nil {
+				return nil, err
+			}
+			return projectMemoryToEntries(rows), nil
+		},
+		GetMemoryByTypeFn: func(projectID int64, entryType string) ([]tools.MemoryEntry, error) {
+			rows, err := h.store.GetMemoryByType(projectID, entryType)
+			if err != nil {
+				return nil, err
+			}
+			return projectMemoryToEntries(rows), nil
+		},
 	}
+}
+
+func projectMemoryToEntries(rows []store.ProjectMemory) []tools.MemoryEntry {
+	out := make([]tools.MemoryEntry, len(rows))
+	for i, r := range rows {
+		out[i] = tools.MemoryEntry{
+			ID:        r.ID,
+			EntryType: r.EntryType,
+			Content:   r.Content,
+			Metadata:  r.Metadata,
+			CreatedAt: r.CreatedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+		}
+	}
+	return out
 }
 
 // visionAdapter lets *ai.Client satisfy tools.VisionChecker. It exists so the

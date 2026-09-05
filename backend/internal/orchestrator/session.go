@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seekersstudio/backend/internal/agent"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/store"
 )
@@ -102,6 +103,15 @@ type SessionState struct {
 	// past it. Reset on every passing check and at every turn start.
 	WritesSinceVerify int
 
+	// FailureCooldowns tracks how many rounds a known-failure reminder should
+	// be suppressed after the model has already been told the fix. Keys are
+	// toolName+":"+normalizedError. Value is remaining rounds; zero means active.
+	FailureCooldowns map[string]int
+
+	// RuntimePatterns holds failure patterns loaded from project memory on
+	// session start. These are merged with the default index at lookup time.
+	RuntimePatterns []agent.FailurePattern
+
 	mu sync.Mutex
 }
 
@@ -143,9 +153,10 @@ func NewSession(id, projectID int64, workspacePath string, emitter *events.Sessi
 		ReadFiles:     make(map[string]bool),
 		SeenSkills:    make(map[string]bool),
 		KnownFiles:    make(map[string]int64),
-		WriteCounts:   make(map[string]int),
-		ProbeCounts:   make(map[string]int),
-		TaskTracker:   NewTaskTracker(),
+		WriteCounts:      make(map[string]int),
+		ProbeCounts:      make(map[string]int),
+		FailureCooldowns: make(map[string]int),
+		TaskTracker:      NewTaskTracker(),
 	}
 }
 
@@ -319,9 +330,38 @@ func (s *SessionState) NoteFileWrite(path string) int {
 func (s *SessionState) ResetWriteCounts() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.WritesSinceVerify = 0
 	s.WriteCounts = make(map[string]int)
 	s.ProbeCounts = make(map[string]int)
-	s.WritesSinceVerify = 0
+}
+
+// CooldownLeft returns the remaining rounds a known-failure reminder is
+// suppressed. Zero means active (fire the reminder).
+func (s *SessionState) CooldownLeft(tool, norm string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.FailureCooldowns[tool+":"+norm]
+}
+
+// NoteCooldown sets the suppression window for a known failure after the
+// reminder has been delivered.
+func (s *SessionState) NoteCooldown(tool, norm string, rounds int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.FailureCooldowns[tool+":"+norm] = rounds
+}
+
+// TickCooldowns decrements all active cooldowns by one round.
+func (s *SessionState) TickCooldowns() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, v := range s.FailureCooldowns {
+		if v <= 1 {
+			delete(s.FailureCooldowns, k)
+		} else {
+			s.FailureCooldowns[k] = v - 1
+		}
+	}
 }
 
 // probeConsolidateThreshold is the inspection count that triggers the
