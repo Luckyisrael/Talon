@@ -346,6 +346,15 @@ export interface ExportJob {
   error?: string;
 }
 
+export interface TriageReport {
+  id: number;
+  project_id: number;
+  decision: string;
+  cutover_date: string;
+  exposure_cents: number;
+  notes: string;
+}
+
 export interface ProjectAsset {
   id: number;
   project_id: number;

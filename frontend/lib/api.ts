@@ -14,6 +14,7 @@ import type {
   ProjectMemory,
   PromptResponse,
   Session,
+  TriageReport,
   Usage,
 } from "./types";
 
@@ -704,6 +705,23 @@ export const exportApi = {
   },
   async listAssets(projectId: number) {
     return request<ProjectAsset[]>(`/v1/projects/${projectId}/assets`);
+  },
+};
+
+// ── Play Billing cutover triage ──────────────────────
+// One structured record per project. Dollars travel as integer cents.
+export const triageApi = {
+  async get(projectId: number) {
+    return request<TriageReport | null>(`/v1/projects/${projectId}/triage`);
+  },
+  async save(
+    projectId: number,
+    input: { decision: string; cutover_date: string; exposure_cents: number; notes: string },
+  ) {
+    return request<TriageReport>(`/v1/projects/${projectId}/triage`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
   },
 };
 

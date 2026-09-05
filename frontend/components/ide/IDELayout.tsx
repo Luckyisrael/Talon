@@ -13,6 +13,7 @@ import FileTree from "./FileTree";
 import MemoryPanel from "./MemoryPanel";
 import PhonePreview from "./PhonePreview";
 import PlanViewer from "./PlanViewer";
+import TriageForm from "./TriageForm";
 import PushToGitHub from "./PushToGitHub";
 import ExportPanel from "./ExportPanel";
 import Terminal from "./Terminal";
@@ -33,7 +34,7 @@ export default function IDELayout({
 }: IDELayoutProps) {
   const store = useIDEStore();
   const aiChatRef = useRef<AIChatHandle>(null);
-  const [leftTab, setLeftTab] = useState<"chat" | "files" | "memory">("chat");
+  const [leftTab, setLeftTab] = useState<"chat" | "files" | "memory" | "triage">("chat");
 
   // Below md the agent panel is a slide-over drawer rather than a fixed column.
   // isDesktop gates which one mounts, so there is only ever one AIChat instance
@@ -219,7 +220,7 @@ export default function IDELayout({
       aria-label="What the panel shows"
       className="flex overflow-hidden rounded-md border border-graphite"
     >
-      {(["chat", "files", "memory"] as const).map((tab) => (
+      {(["chat", "files", "memory", "triage"] as const).map((tab) => (
         <button
           key={tab}
           type="button"
@@ -309,6 +310,10 @@ export default function IDELayout({
 
       <div className={leftTab === "memory" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
         <MemoryPanel projectId={projectId} active={leftTab === "memory"} />
+      </div>
+
+      <div className={leftTab === "triage" ? "flex min-h-0 flex-1 flex-col overflow-y-auto" : "hidden"}>
+        <TriageForm projectId={projectId} />
       </div>
     </div>
   );

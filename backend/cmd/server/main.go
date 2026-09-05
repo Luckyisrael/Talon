@@ -137,6 +137,7 @@ func main() {
 	projectHandler := api.NewProjectHandler(s, wsMgr, workspaceDir)
 	exportHandler := api.NewExportHandler(s, api.LoadReleaseCipher(), workspaceDir, templateDir, filepath.Join(workspaceDir, "..", "exports"))
 	log.Printf("release export ready (keystores + submission bundles)")
+	triageHandler := api.NewTriageHandler(s)
 	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr, knowledge)
 	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, workspaceDir, devClientMgr, walletMgr)
 	usageHandler := api.NewUsageHandler(s)
@@ -272,6 +273,8 @@ func main() {
 		r.Post("/v1/projects/{id}/export", exportHandler.Create)
 		r.Post("/v1/projects/{id}/assets", exportHandler.UploadAsset)
 		r.Get("/v1/projects/{id}/assets", exportHandler.ListAssets)
+		r.Get("/v1/projects/{id}/triage", triageHandler.Get)
+		r.Put("/v1/projects/{id}/triage", triageHandler.Save)
 		r.Get("/v1/exports/{id}", exportHandler.Get)
 		r.Get("/v1/exports/{id}/download", exportHandler.Download)
 

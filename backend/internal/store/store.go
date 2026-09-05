@@ -98,6 +98,21 @@ type ArchitectureDecision struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// TriageReport is the Play Billing cutover triage for one project: the
+// cutover decision, the cutover date, and the dollar exposure. Exposure is
+// integer cents — floats never touch money, so what the form sends is what
+// comes back, exactly.
+type TriageReport struct {
+	ID            int64     `json:"id"`
+	ProjectID     int64     `json:"project_id"`
+	Decision      string    `json:"decision"`
+	CutoverDate   string    `json:"cutover_date"`
+	ExposureCents int64     `json:"exposure_cents"`
+	Notes         string    `json:"notes"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 type Store struct {
 	db *sql.DB
 }
@@ -350,6 +365,20 @@ func (s *Store) migrate() error {
 			width INTEGER NOT NULL,
 			height INTEGER NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
+		// triage_reports holds the Play Billing cutover triage: the decision,
+		// the cutover date, and the dollar exposure in integer cents (exact —
+		// floats never touch money). One row per project, upserted.
+		`CREATE TABLE IF NOT EXISTS triage_reports (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL UNIQUE,
+			decision TEXT NOT NULL DEFAULT '',
+			cutover_date TEXT NOT NULL DEFAULT '',
+			exposure_cents INTEGER NOT NULL DEFAULT 0,
+			notes TEXT NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
 	}
@@ -831,6 +860,38 @@ func (s *Store) SupersedeADR(id int64) error {
 func (s *Store) DeleteADR(id int64) error {
 	_, err := s.db.Exec("DELETE FROM architecture_decisions WHERE id = ?", id)
 	return err
+}
+
+// SaveTriageReport upserts the Play Billing cutover triage for a project.
+// One row per project: revising the triage rewrites it, it never forks.
+func (s *Store) SaveTriageReport(projectID int64, decision, cutoverDate string, exposureCents int64, notes string) (*TriageReport, error) {
+	_, err := s.db.Exec(
+		`INSERT INTO triage_reports (project_id, decision, cutover_date, exposure_cents, notes)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(project_id) DO UPDATE SET decision = ?, cutover_date = ?, exposure_cents = ?, notes = ?, updated_at = CURRENT_TIMESTAMP`,
+		projectID, decision, cutoverDate, exposureCents, notes,
+		decision, cutoverDate, exposureCents, notes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return s.LoadTriageReport(projectID)
+}
+
+// LoadTriageReport returns the triage report for a project, or (nil, nil)
+// when none has been recorded yet.
+func (s *Store) LoadTriageReport(projectID int64) (*TriageReport, error) {
+	r := &TriageReport{}
+	err := s.db.QueryRow(
+		"SELECT id, project_id, decision, cutover_date, exposure_cents, notes, created_at, updated_at FROM triage_reports WHERE project_id = ?", projectID,
+	).Scan(&r.ID, &r.ProjectID, &r.Decision, &r.CutoverDate, &r.ExposureCents, &r.Notes, &r.CreatedAt, &r.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 // FormatADRsForPrompt returns all active ADRs formatted for injection into the AI context.
