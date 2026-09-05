@@ -10,7 +10,7 @@ import (
 )
 
 // TestWalletRoundtrip tests the MWA wallet round-trip on a device.
-// It launches fakedapp, initiates an MWA connection, and checks logcat for success.
+// It launches demodapp, initiates an MWA connection, and checks logcat for success.
 type TestWalletRoundtrip struct {
 	ADBTarget string // optional — if empty, auto-detects from connected devices
 }
@@ -18,7 +18,7 @@ type TestWalletRoundtrip struct {
 func (t *TestWalletRoundtrip) Name() string { return "test_wallet_roundtrip" }
 
 func (t *TestWalletRoundtrip) Description() string {
-	return "Test the MWA wallet round-trip on a connected Android device. Launches fakedapp, initiates connection to fakewallet, and verifies the MWA protocol works. Use this after generating wallet code to verify the wallet integration is functional."
+	return "Test the MWA wallet round-trip on a connected Android device. Launches demodapp, initiates connection to the demo wallet, and verifies the MWA protocol works. Use this after generating wallet code to verify the wallet integration is functional."
 }
 
 func (t *TestWalletRoundtrip) InputSchema() json.RawMessage {
@@ -81,7 +81,7 @@ func (t *TestWalletRoundtrip) Execute(ctx context.Context, args json.RawMessage)
 		return ToolResult{
 			Content: mustJSON(WalletTestResult{
 				Passed:  false,
-				Message: "fakewallet not installed on device — cannot test round-trip",
+				Message: "demo wallet not installed on device — cannot test round-trip",
 			}),
 			IsError: true,
 		}, nil
@@ -91,7 +91,7 @@ func (t *TestWalletRoundtrip) Execute(ctx context.Context, args json.RawMessage)
 		return ToolResult{
 			Content: mustJSON(WalletTestResult{
 				Passed:  false,
-				Message: "fakedapp not installed on device — cannot test round-trip",
+				Message: "demodapp not installed on device — cannot test round-trip",
 			}),
 			IsError: true,
 		}, nil
@@ -101,19 +101,19 @@ func (t *TestWalletRoundtrip) Execute(ctx context.Context, args json.RawMessage)
 	t.adb("logcat", "-c")
 	time.Sleep(500 * time.Millisecond)
 
-	// Step 3: Force-stop any running fakedapp/fakewallet instances
+	// Step 3: Force-stop any running demodapp/demo-wallet instances
 	t.adb("shell", "am", "force-stop", "com.solana.mobilewalletadapter.fakedapp")
 	t.adb("shell", "am", "force-stop", "com.solana.mobilewalletadapter.fakewallet")
 	time.Sleep(500 * time.Millisecond)
 
-	// Step 4: Launch fakedapp
+	// Step 4: Launch demodapp
 	output, err := t.adb("shell", "am", "start", "-n",
 		"com.solana.mobilewalletadapter.fakedapp/.MainActivity")
 	if err != nil {
 		return ToolResult{
 			Content: mustJSON(WalletTestResult{
 				Passed:  false,
-				Message: fmt.Sprintf("failed to launch fakedapp: %v — %s", err, output),
+				Message: fmt.Sprintf("failed to launch demodapp: %v — %s", err, output),
 			}),
 			IsError: true,
 		}, nil
@@ -129,7 +129,7 @@ func (t *TestWalletRoundtrip) Execute(ctx context.Context, args json.RawMessage)
 	}
 	time.Sleep(2 * time.Second)
 
-	// Step 6: Wait for fakewallet to appear and auto-approve
+	// Step 6: Wait for demo wallet to appear and auto-approve
 	// The mock wallet auto-approves all requests
 	time.Sleep(3 * time.Second)
 
@@ -159,10 +159,12 @@ func (t *TestWalletRoundtrip) Execute(ctx context.Context, args json.RawMessage)
 		}
 	}
 
-	// Also check if fakedapp is still running (indicates successful connection)
+	// Also check if demodapp is still running (indicates successful connection)
 	psOutput, _ := t.adb("shell", "ps", "-A")
+	// The process name is Solana's package-derived name — intentionally not
+	// renamed with the infra (see demowallet/demodapp rename).
 	if strings.Contains(psOutput, "fakedapp") {
-		messages = append(messages, "fakedapp is running")
+		messages = append(messages, "demodapp is running")
 	}
 
 	result := WalletTestResult{

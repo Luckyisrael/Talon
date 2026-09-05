@@ -74,7 +74,7 @@ func TestCrashIndexCollectsDeviceSteps(t *testing.T) {
 	if sess.CrashIndex() != "" {
 		t.Fatal("empty index should render empty")
 	}
-	sess.NoteCrash(runtime.CrashEntry{Tx: "connect", Tool: "test_wallet_roundtrip", Excerpt: "fakewallet not installed"})
+	sess.NoteCrash(runtime.CrashEntry{Tx: "connect", Tool: "test_wallet_roundtrip", Excerpt: "demo wallet not installed"})
 	sess.NoteCrash(runtime.CrashEntry{Tool: "run_boot", Excerpt: "alive but silent"})
 	idx := sess.CrashIndex()
 	if !strings.Contains(idx, "test_wallet_roundtrip [connect]") || !strings.Contains(idx, "run_boot") {

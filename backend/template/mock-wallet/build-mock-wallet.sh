@@ -1,10 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-# build-mock-wallet.sh — Builds the Solana Mobile mock wallet + fakedapp.
+# build-mock-wallet.sh — Builds the Solana Mobile mock wallet + demodapp.
 # Source: github.com/solana-mobile/mobile-wallet-adapter (android/fakewallet, android/fakedapp)
 # This script runs ONCE offline, not per-container.
 # Output: template/mock-wallet/v{version}/
+# Naming: our outputs are demowallet/demodapp; the gradle module paths and
+# Solana package names below are upstream's and stay as-is.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$(dirname "$SCRIPT_DIR")"
@@ -66,14 +68,14 @@ git clone --depth 1 https://github.com/solana-mobile/mobile-wallet-adapter.git "
 
 cd "$BUILD_DIR"
 
-# Step 2: Build fakewallet APK
+# Step 2: Build demo wallet APK (upstream module :fakewallet)
 echo ""
-echo "=== Step 2: Build fakewallet ==="
+echo "=== Step 2: Build demowallet ==="
 ./gradlew :fakewallet:assembleDebug
 
-# Step 3: Build fakedapp APK (verification baseline)
+# Step 3: Build demodapp APK (verification baseline; upstream module :fakedapp)
 echo ""
-echo "=== Step 3: Build fakedapp ==="
+echo "=== Step 3: Build demodapp ==="
 ./gradlew :fakedapp:assembleDebug
 
 # Step 4: Copy APKs to output
@@ -87,12 +89,12 @@ if [ ! -f "$FAKEWALLET_APK" ]; then
 fi
 
 if [ -z "$FAKEWALLET_APK" ] || [ ! -f "$FAKEWALLET_APK" ]; then
-    echo "ERROR: fakewallet APK not found"
+    echo "ERROR: demowallet APK not found"
     exit 1
 fi
 
-cp "$FAKEWALLET_APK" "$OUTPUT_DIR/fakewallet-debug.apk"
-echo "fakewallet APK copied to: $OUTPUT_DIR/fakewallet-debug.apk"
+cp "$FAKEWALLET_APK" "$OUTPUT_DIR/demowallet-debug.apk"
+echo "demowallet APK copied to: $OUTPUT_DIR/demowallet-debug.apk"
 
 FAKEDAPP_APK="$BUILD_DIR/android/fakedapp/build/outputs/apk/debug/fakedapp-debug.apk"
 if [ ! -f "$FAKEDAPP_APK" ]; then
@@ -101,10 +103,10 @@ if [ ! -f "$FAKEDAPP_APK" ]; then
 fi
 
 if [ -n "$FAKEDAPP_APK" ] && [ -f "$FAKEDAPP_APK" ]; then
-    cp "$FAKEDAPP_APK" "$OUTPUT_DIR/fakedapp-debug.apk"
-    echo "fakedapp APK copied to: $OUTPUT_DIR/fakedapp-debug.apk"
+    cp "$FAKEDAPP_APK" "$OUTPUT_DIR/demodapp-debug.apk"
+    echo "demodapp APK copied to: $OUTPUT_DIR/demodapp-debug.apk"
 else
-    echo "WARNING: fakedapp APK not found (non-fatal)"
+    echo "WARNING: demodapp APK not found (non-fatal)"
 fi
 
 # Step 5: Record version info
@@ -113,13 +115,13 @@ echo "=== Step 5: Record version ==="
 cat > "$OUTPUT_DIR/manifest.json" << EOF
 {
   "templateVersion": "$VERSION",
-  "walletType": "fakewallet",
+  "walletType": "demowallet",
   "sourceRepo": "https://github.com/solana-mobile/mobile-wallet-adapter",
   "sourceModule": "android/fakewallet",
   "verificationDapp": "android/fakedapp",
   "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "apkFile": "fakewallet-debug.apk",
-  "verificationApk": "fakedapp-debug.apk"
+  "apkFile": "demowallet-debug.apk",
+  "verificationApk": "demodapp-debug.apk"
 }
 EOF
 
@@ -131,6 +133,6 @@ rm -rf "$BUILD_DIR"
 echo ""
 echo "=== Done ==="
 echo "Mock wallet built successfully:"
-echo "  fakewallet: $OUTPUT_DIR/fakewallet-debug.apk"
-echo "  fakedapp:   $OUTPUT_DIR/fakedapp-debug.apk (verification baseline)"
+echo "  demowallet: $OUTPUT_DIR/demowallet-debug.apk"
+echo "  demodapp:   $OUTPUT_DIR/demodapp-debug.apk (verification baseline)"
 echo "  Manifest:   $OUTPUT_DIR/manifest.json"

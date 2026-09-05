@@ -44,12 +44,12 @@ func NewWalletManager(templateDir string) (*WalletManager, error) {
 
 // MockWalletAPKPath returns the path to the pre-built mock wallet APK.
 func (wm *WalletManager) MockWalletAPKPath() string {
-	return filepath.Join(wm.templateDir, "mock-wallet", "v"+wm.version, "fakewallet-debug.apk")
+	return filepath.Join(wm.templateDir, "mock-wallet", "v"+wm.version, "demowallet-debug.apk")
 }
 
-// FakeDappAPKPath returns the path to the pre-built fakedapp APK (verification baseline).
-func (wm *WalletManager) FakeDappAPKPath() string {
-	return filepath.Join(wm.templateDir, "mock-wallet", "v"+wm.version, "fakedapp-debug.apk")
+// DemoDappAPKPath returns the path to the pre-built demodapp APK (verification baseline).
+func (wm *WalletManager) DemoDappAPKPath() string {
+	return filepath.Join(wm.templateDir, "mock-wallet", "v"+wm.version, "demodapp-debug.apk")
 }
 
 // MockWalletManifestPath returns the path to the wallet manifest.
@@ -64,9 +64,9 @@ func (wm *WalletManager) IsInstalled() bool {
 	return err == nil
 }
 
-// HasFakeDapp checks if the fakedapp verification APK exists.
-func (wm *WalletManager) HasFakeDapp() bool {
-	apkPath := wm.FakeDappAPKPath()
+// HasDemoDapp checks if the demodapp verification APK exists.
+func (wm *WalletManager) HasDemoDapp() bool {
+	apkPath := wm.DemoDappAPKPath()
 	_, err := os.Stat(apkPath)
 	return err == nil
 }
@@ -194,26 +194,26 @@ func (wm *WalletManager) VerifyWallet(ctx context.Context, adbTarget string) err
 	return nil
 }
 
-// InstallFakeDapp installs the fakedapp verification baseline APK.
-func (wm *WalletManager) InstallFakeDapp(ctx context.Context, adbTarget string) error {
-	apkPath := wm.FakeDappAPKPath()
+// InstallDemoDapp installs the demodapp verification baseline APK.
+func (wm *WalletManager) InstallDemoDapp(ctx context.Context, adbTarget string) error {
+	apkPath := wm.DemoDappAPKPath()
 
 	if _, err := os.Stat(apkPath); os.IsNotExist(err) {
-		log.Printf("fakedapp APK not found at %s (non-fatal)", apkPath)
+		log.Printf("demodapp APK not found at %s (non-fatal)", apkPath)
 		return nil
 	}
 
 	cmd := exec.CommandContext(ctx, "adb", "-s", adbTarget, "install", "-r", apkPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("fakedapp install failed: %s — %w", string(output), err)
+		return fmt.Errorf("demodapp install failed: %s — %w", string(output), err)
 	}
 
-	log.Printf("fakedapp installed on %s", adbTarget)
+	log.Printf("demodapp installed on %s", adbTarget)
 	return nil
 }
 
-// VerifyRoundTrip attempts to launch fakedapp and verify it can connect to fakewallet.
+// VerifyRoundTrip attempts to launch demodapp and verify it can connect to the demo wallet.
 // This is a basic smoke test — a full round trip requires UI interaction.
 func (wm *WalletManager) VerifyRoundTrip(ctx context.Context, adbTarget string) error {
 	// Check if both apps are installed
@@ -235,28 +235,28 @@ func (wm *WalletManager) VerifyRoundTrip(ctx context.Context, adbTarget string) 
 	}
 
 	if !walletInstalled {
-		return fmt.Errorf("fakewallet not installed — cannot verify round trip")
+		return fmt.Errorf("demo wallet not installed — cannot verify round trip")
 	}
 
 	if !dappInstalled {
-		log.Printf("fakedapp not installed — skipping round trip verification")
+		log.Printf("demodapp not installed — skipping round trip verification")
 		return nil
 	}
 
-	// Launch fakedapp to verify it starts (best-effort — monkey may return non-zero)
+	// Launch demodapp to verify it starts (best-effort — monkey may return non-zero)
 	launchOut, _ := exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
 		"monkey", "-p", "com.solana.mobilewalletadapter.fakedapp",
 		"-c", "android.intent.category.LAUNCHER", "1").CombinedOutput()
-	log.Printf("fakedapp launch output: %s", strings.TrimSpace(string(launchOut)))
+	log.Printf("demodapp launch output: %s", strings.TrimSpace(string(launchOut)))
 
-	log.Printf("round trip verification: fakedapp launched on %s (manual approval required for full test)", adbTarget)
+	log.Printf("round trip verification: demodapp launched on %s (manual approval required for full test)", adbTarget)
 	return nil
 }
 
 // SetupSession performs the full wallet setup for a new session:
 // 1. Wait for device boot completion
 // 2. Install the mock wallet APK
-// 3. Install fakedapp APK (verification baseline)
+// 3. Install demodapp APK (verification baseline)
 // 4. Configure device PIN
 // 5. Verify wallet is functional
 // Returns an error if any step fails (hard failure per §2.9).
@@ -273,9 +273,9 @@ func (wm *WalletManager) SetupSession(ctx context.Context, adbTarget string) err
 		return fmt.Errorf("wallet install failed: %w", err)
 	}
 
-	// Step 2: Install fakedapp (non-fatal if missing)
-	if err := wm.InstallFakeDapp(ctx, adbTarget); err != nil {
-		log.Printf("WARNING: fakedapp install failed: %v (continuing)", err)
+	// Step 2: Install demodapp (non-fatal if missing)
+	if err := wm.InstallDemoDapp(ctx, adbTarget); err != nil {
+		log.Printf("WARNING: demodapp install failed: %v (continuing)", err)
 	}
 
 	// Step 3: Configure device PIN

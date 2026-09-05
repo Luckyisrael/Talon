@@ -77,7 +77,8 @@ func TestPhaseS8TriageCents(t *testing.T) {
 // G5: boot gap resolves on first app log and reports silence honestly.
 func TestPhaseG5BootGap(t *testing.T) {
 	launch := testLaunch()
-	logs := "09-05 14:22:31.123  1234  1234 I com.test.app: Application onCreate\n"
+	stamp := launch.Add(30 * time.Second).Format("01-02 15:04:05.000")
+	logs := stamp + "  1234  1234 I com.test.app: Application onCreate\n"
 	if _, _, ok := runtime.BootGap(logs, "com.test.app", launch); !ok {
 		t.Error("healthy: first app log should resolve the gap")
 	}
