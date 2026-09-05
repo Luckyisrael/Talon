@@ -271,6 +271,7 @@ func main() {
 		// user submits themselves with their own publisher wallet.
 		r.Post("/v1/projects/{id}/export", exportHandler.Create)
 		r.Post("/v1/projects/{id}/assets", exportHandler.UploadAsset)
+		r.Get("/v1/projects/{id}/assets", exportHandler.ListAssets)
 		r.Get("/v1/exports/{id}", exportHandler.Get)
 		r.Get("/v1/exports/{id}/download", exportHandler.Download)
 

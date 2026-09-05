@@ -328,6 +328,30 @@ func (h *ExportHandler) UploadAsset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, asset)
 }
 
+// GET /v1/projects/{id}/assets — the store checklist: validated screenshots,
+// icon, and banner recorded for this project. The ExportPanel reads this to
+// show what the submission bundle will contain before the user starts a
+// (long, Pro-gated) release build.
+func (h *ExportHandler) ListAssets(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	if _, ok := h.gateExport(w, r, projectID); !ok {
+		return
+	}
+	assets, err := h.store.ListAssets(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list assets")
+		return
+	}
+	if assets == nil {
+		assets = []store.Asset{}
+	}
+	writeJSON(w, http.StatusOK, assets)
+}
+
 // assetPaths collects validated assets for the manifest: screenshots in
 // upload order, the latest icon and banner. Screenshot-set orientation is
 // re-checked here so a set that drifted since upload cannot slip through.

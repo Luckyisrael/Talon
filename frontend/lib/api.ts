@@ -10,6 +10,7 @@ import type {
   GitStatus,
   MeProfile,
   Project,
+  ProjectAsset,
   ProjectMemory,
   PromptResponse,
   Session,
@@ -700,6 +701,9 @@ export const exportApi = {
       throw new Error(body.error || `upload failed (${res.status})`);
     }
     return res.json();
+  },
+  async listAssets(projectId: number) {
+    return request<ProjectAsset[]>(`/v1/projects/${projectId}/assets`);
   },
 };
 

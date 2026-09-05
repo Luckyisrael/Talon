@@ -11,6 +11,7 @@ export interface Project {
   name: string;
   status: string;
   plan?: string;
+  android_package?: string;
   created_at: string;
 }
 

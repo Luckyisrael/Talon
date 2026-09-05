@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { exportApi, usage as usageApi } from "@/lib/api";
-import type { ExportJob } from "@/lib/types";
+import { exportApi, projects as projectsApi, usage as usageApi } from "@/lib/api";
+import type { ExportJob, Project, ProjectAsset } from "@/lib/types";
 
 /**
  * Release export, from inside the IDE.
@@ -26,17 +26,29 @@ export default function ExportPanel({ projectId }: ExportPanelProps) {
   const [starting, setStarting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
+  const [assets, setAssets] = useState<ProjectAsset[]>([]);
+  const [uploading, setUploading] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Tier comes from the server on open — the button label never decides
-  // eligibility, the export endpoint does.
+  // eligibility, the export endpoint does. Project + assets load alongside
+  // so the store checklist is visible before the (long) build starts.
   useEffect(() => {
     if (!open) return;
     usageApi
       .get()
       .then((u) => setIsPro(u.tier !== "free"))
       .catch(() => {});
-  }, [open ]);
+    projectsApi
+      .get(projectId)
+      .then(setProject)
+      .catch(() => {});
+    exportApi
+      .listAssets(projectId)
+      .then(setAssets)
+      .catch(() => {});
+  }, [open, projectId]);
 
   // Close on outside click and Escape. Mirrors CheckpointMenu.
   useEffect(() => {
@@ -111,6 +123,55 @@ export default function ExportPanel({ projectId }: ExportPanelProps) {
 
   const live = job && (job.status === "queued" || job.status === "running");
 
+  const shots = assets.filter((a) => a.kind === "screenshot");
+  const icon = assets.find((a) => a.kind === "icon");
+  const banner = assets.find((a) => a.kind === "banner");
+
+  async function upload(kind: "screenshot" | "icon" | "banner", file: File) {
+    setUploading(kind);
+    setError(null);
+    try {
+      await exportApi.uploadAsset(projectId, kind, file);
+      setAssets(await exportApi.listAssets(projectId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploading(null);
+    }
+  }
+
+  function row(
+    label: string,
+    present: boolean,
+    detail: string,
+    kind?: "screenshot" | "icon" | "banner",
+  ) {
+    return (
+      <div className="flex items-center justify-between py-1">
+        <span className="text-sm text-fog">
+          <span className={present ? "text-lime" : "text-ash"}>{present ? "● " : "○ "}</span>
+          {label} <span className="font-mono text-xs text-ash">{detail}</span>
+        </span>
+        {kind && (
+          <label className="cursor-pointer font-mono text-xs text-mist underline underline-offset-2 hover:text-paper">
+            {uploading === kind ? "…" : "upload"}
+            <input
+              type="file"
+              accept="image/png,image/jpeg"
+              className="hidden"
+              disabled={uploading !== null}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) void upload(kind, f);
+              }}
+            />
+          </label>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div ref={rootRef} className="relative">
       <button
@@ -142,6 +203,18 @@ export default function ExportPanel({ projectId }: ExportPanelProps) {
               </p>
             ) : !job ? (
               <>
+                <p className="gauge mb-1">Store checklist</p>
+                <div className="mb-3 rounded-lg border border-graphite px-2 py-1">
+                  <div className="flex items-center justify-between py-1">
+                    <span className="text-sm text-fog">
+                      <span className="text-lime">● </span>
+                      Bundle <span className="font-mono text-xs text-ash">{project?.android_package || "…"}</span>
+                    </span>
+                  </div>
+                  {row("Icon", !!icon, icon ? `${icon.width}×${icon.height}` : "512×512 PNG", "icon")}
+                  {row("Banner", !!banner, banner ? `${banner.width}×${banner.height}` : "1024×500", "banner")}
+                  {row("Screenshots", shots.length > 0, `${shots.length} uploaded`, "screenshot")}
+                </div>
                 <label className="block">
                   <span className="gauge">What&apos;s new in this release</span>
                   <textarea
@@ -163,6 +236,7 @@ export default function ExportPanel({ projectId }: ExportPanelProps) {
                 </button>
                 <p className="mt-2 font-mono text-xs text-ash">
                   Full clean build — takes a while, runs in the background.
+                  Publishing costs real SOL (~0.2); you submit yourself.
                 </p>
               </>
             ) : (
