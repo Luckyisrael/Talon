@@ -16,3 +16,21 @@ Not yet measured (need live infra): session-provision wall time (~3.2 min
 observed once: ~40s boot + serial installs), `assembleDebug` cold/warm,
 Metro bundle cold/warm. Those require server + Redroid up; capture when the
 device lane reopens.
+
+## Measured live 2026-09-06 (session 17, ws27 SolMate)
+
+- **Provision: 3.5 min** fire→ready (container ~7s, boot ~2m13s, installs
+  overlapping 12–47s, PIN+verify+smoke ~25s). P4 parallel installs verified
+  overlapping (demodapp 12s ∥ wallet 47s ∥ dev-client, saving ~25s vs
+  serial). **Boot is ~65% of the pipeline** — the warm-pool case.
+- **assembleDebug flagged: 12m53s**, BUILD SUCCESSFUL, 783/828 tasks
+  up-to-date (daemon+cache engaged). Prior unflagged run was killed at
+  ~10 min without finishing — not a clean A/B, but caching demonstrably
+  works now.
+- **Boot verified on device**: SolMate (com.seekerstudio.e2echeck)
+  installed, `am start` → PID alive, app-code log lines present
+  (G5 seen-boot + first-launch proof). Note: `monkey -p` exited -5 without
+  launching despite a valid LAUNCHER activity — prefer `am start` in
+  run_boot evidence paths.
+- **Sessions boot-wait (90s) expired** while actual boot took ~2m13s;
+  wallet's internal wait covered it. Consider unifying/raising the timeout.
