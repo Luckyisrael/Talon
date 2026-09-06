@@ -86,8 +86,8 @@ install_apk() {
     fi
 }
 
-install_apk "$REPO_ROOT/backend/template/mock-wallet/v1.0.0/fakewallet-debug.apk"
-install_apk "$REPO_ROOT/backend/template/mock-wallet/v1.0.0/fakedapp-debug.apk"
+install_apk "$REPO_ROOT/backend/template/mock-wallet/v1.0.0/demowallet-debug.apk"
+install_apk "$REPO_ROOT/backend/template/mock-wallet/v1.0.0/demodapp-debug.apk"
 install_apk "$REPO_ROOT/backend/template/dev-client/v1.0.0/app-debug.apk"
 
 # Step 8: Set device PIN

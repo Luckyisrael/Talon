@@ -5,7 +5,7 @@
 # This script:
 # 1. Starts Redroid (Android) in the background
 # 2. Waits for the device to fully boot
-# 3. Installs pre-baked APKs (fakewallet, fakedapp, devclient)
+# 3. Installs pre-baked APKs (demowallet, demodapp, devclient)
 # 4. Sets device PIN for MWA testing
 # 5. Continues running as PID 1
 # ============================================================
@@ -85,8 +85,8 @@ install_apk() {
     fi
 }
 
-install_apk "$SEEKER_DIR/fakewallet.apk"
-install_apk "$SEEKER_DIR/fakedapp.apk"
+install_apk "$SEEKER_DIR/demowallet.apk"
+install_apk "$SEEKER_DIR/demodapp.apk"
 install_apk "$SEEKER_DIR/devclient.apk"
 
 # Set device PIN (required for MWA wallet signing)

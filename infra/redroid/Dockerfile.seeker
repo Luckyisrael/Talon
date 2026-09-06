@@ -4,6 +4,6 @@ LABEL description="SeekerStudio Redroid — pre-baked with mock wallet + dev-cli
 
 # Copy pre-built APKs (installed at runtime via ADB from host)
 # Redroid has no shell — /init is the only entrypoint
-COPY backend/template/mock-wallet/v1.0.0/fakewallet-debug.apk /opt/seeker/fakewallet.apk
-COPY backend/template/mock-wallet/v1.0.0/fakedapp-debug.apk /opt/seeker/fakedapp.apk
+COPY backend/template/mock-wallet/v1.0.0/demowallet-debug.apk /opt/seeker/demowallet.apk
+COPY backend/template/mock-wallet/v1.0.0/demodapp-debug.apk /opt/seeker/demodapp.apk
 COPY backend/template/dev-client/v1.0.0/app-debug.apk /opt/seeker/devclient.apk
