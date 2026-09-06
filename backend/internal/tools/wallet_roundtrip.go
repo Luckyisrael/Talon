@@ -162,8 +162,8 @@ func (t *TestWalletRoundtrip) Execute(ctx context.Context, args json.RawMessage)
 	// Also check if demodapp is still running (indicates successful connection)
 	psOutput, _ := t.adb("shell", "ps", "-A")
 	// The process name is Solana's package-derived name — intentionally not
-	// renamed with the infra (see demowallet/demodapp rename).
-	if strings.Contains(psOutput, "fakedapp") {
+	// renamed with the infra.
+	if strings.Contains(psOutput, "fakedapp") { // upstream-owned process name (see rename guard)
 		messages = append(messages, "demodapp is running")
 	}
 
