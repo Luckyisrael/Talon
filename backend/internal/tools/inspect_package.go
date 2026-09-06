@@ -24,7 +24,9 @@ func (t *InspectPackage) Name() string { return "inspect_package" }
 func (t *InspectPackage) Description() string {
 	return "Read an installed package's TypeScript type declarations from node_modules and return its public " +
 		"API surface — exported functions, types, and their signatures. Use this before calling into a library " +
-		"whose exact API you are unsure of, rather than guessing: this stack is newer than your training data."
+		"whose exact API you are unsure of, rather than guessing: this stack is newer than your training data. " +
+		"If you catch yourself opening node_modules/<pkg>/...*.d.ts by hand, stop and call this instead — " +
+		"one call here replaces several rounds of declaration spelunking."
 }
 
 func (t *InspectPackage) InputSchema() json.RawMessage {

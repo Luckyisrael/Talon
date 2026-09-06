@@ -1349,17 +1349,16 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		}
 
 		// Third-party API discovery is legitimate exactly once per question: the
-		// third inspection of the same package means the shape is confirmed and
-		// should be recorded (write_memory) instead of re-probed.
+		// first inspection redirects to inspect_package (one call returns the
+		// whole API surface — hand-reading .d.ts files burns rounds), and the
+		// third means the shape is confirmed and should be recorded
+		// (write_memory) instead of re-probed.
 		if !isError {
 			switch call.Name {
 			case "run_shell", "grep_codebase", "read_file":
 				if target := probeTarget(call.Name, call.Input); target != "" {
-					if n := sess.NoteProbe(target); n == probeConsolidateThreshold {
-						probeNote = fmt.Sprintf("\n\nNote: this is your %drd look at %s this turn. "+
-							"You have confirmed what you came for — record the API shape with write_memory "+
-							"and proceed to write code instead of probing it again.", n, target)
-					}
+					n := sess.NoteProbe(target)
+					probeNote = probeNoteFor(n, target)
 				}
 			}
 		}
@@ -1454,6 +1453,25 @@ func probeTarget(toolName string, input json.RawMessage) string {
 		return parts[0] + "/" + strings.TrimRight(parts[1], "\"'`")
 	}
 	return strings.TrimRight(parts[0], "\"'`")
+}
+
+// probeNoteFor renders the probe policy: first look redirects to
+// inspect_package, third look consolidates to write_memory, anything else is
+// silent. Pure so the policy is unit-testable without a running loop.
+func probeNoteFor(n int, target string) string {
+	switch n {
+	case 1:
+		return fmt.Sprintf("\n\nNote: you are reading %s by hand. Call inspect_package "+
+			"with {\"package\": \"%s\"} instead — one call returns its full exported API "+
+			"surface, which is what %d rounds of .d.ts spelunking approximates.",
+			target, target, probeConsolidateThreshold)
+	case probeConsolidateThreshold:
+		return fmt.Sprintf("\n\nNote: this is your %drd look at %s this turn. "+
+			"You have confirmed what you came for — record the API shape with write_memory "+
+			"and proceed to write code instead of probing it again.", n, target)
+	default:
+		return ""
+	}
 }
 
 // fileMtime stats a workspace-relative path and reports its mtime. Used to

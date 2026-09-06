@@ -188,3 +188,17 @@ func TestTryEditKeepsOnTypePass(t *testing.T) {
 		t.Fatal("keep_edit should clear the pre-image")
 	}
 }
+
+func TestProbeNotePolicy(t *testing.T) {
+	first := probeNoteFor(1, "@react-navigation/bottom-tabs")
+	if !strings.Contains(first, "inspect_package") || !strings.Contains(first, "@react-navigation/bottom-tabs") {
+		t.Errorf("first probe should redirect to inspect_package with the package: %q", first)
+	}
+	third := probeNoteFor(3, "@react-navigation/bottom-tabs")
+	if !strings.Contains(third, "write_memory") {
+		t.Errorf("third probe should consolidate to write_memory: %q", third)
+	}
+	if probeNoteFor(2, "x") != "" || probeNoteFor(4, "x") != "" {
+		t.Error("probes 2 and 4+ should stay silent")
+	}
+}
