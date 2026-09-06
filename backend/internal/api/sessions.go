@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -41,6 +42,25 @@ func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.
 
 type createSessionRequest struct {
 	ProjectID int64 `json:"project_id"`
+}
+
+// setupWalletForSession covers the wallet branch of session provisioning:
+// pre-baked images skip straight to verification, otherwise the full setup
+// runs (installs, PIN, verify, round-trip smoke). Extracted so Create can run
+// it concurrently with the dev-client install.
+func (h *SessionHandler) setupWalletForSession(sessionID int64, adbTarget string) error {
+	if h.wallet.IsInstalledOnDevice(adbTarget) {
+		log.Printf("wallet already installed on %s (pre-baked image), skipping install", adbTarget)
+		if err := h.wallet.VerifyWallet(context.Background(), adbTarget); err != nil {
+			log.Printf("WARN: wallet verification failed for session %d: %v", sessionID, err)
+		}
+		return nil
+	}
+	if err := h.wallet.SetupSession(context.Background(), adbTarget); err != nil {
+		return err
+	}
+	log.Printf("mock wallet configured for session %d on %s", sessionID, adbTarget)
+	return nil
 }
 
 func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -93,34 +113,40 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WARN: device boot wait failed for session %d: %v", session.ID, err)
 	}
 
-	// Install dev-client APK into the container
+	// Install dev-client APK and set up the mock wallet concurrently.
+	// Separate packages, no ordering dependency — the wallet branch carries
+	// the hard-failure semantics (§2.9), the dev-client branch stays
+	// warn-and-continue. Metro starts after both (it reverse-forwards).
+	var wg sync.WaitGroup
+	var devClientErr, walletErr error
 	if h.devClient != nil {
-		if err := h.devClient.InstallDevClient(context.Background(), adbTarget); err != nil {
-			log.Printf("WARN: dev-client install failed for session %d: %v (container will run without pre-built dev-client)", session.ID, err)
-		} else {
-			log.Printf("dev-client installed for session %d on %s", session.ID, adbTarget)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := h.devClient.InstallDevClient(context.Background(), adbTarget); err != nil {
+				devClientErr = err
+			}
+		}()
 	}
-
-	// Setup mock wallet (hard failure if not available — §2.9)
 	if h.wallet != nil && h.wallet.IsInstalled() {
-		// Check if wallet is already installed on device (pre-baked image)
-		if h.wallet.IsInstalledOnDevice(adbTarget) {
-			log.Printf("wallet already installed on %s (pre-baked image), skipping install", adbTarget)
-			// Just verify it's working
-			if err := h.wallet.VerifyWallet(context.Background(), adbTarget); err != nil {
-				log.Printf("WARN: wallet verification failed for session %d: %v", session.ID, err)
-			}
-		} else {
-			// Legacy path: install at session creation
-			if err := h.wallet.SetupSession(context.Background(), adbTarget); err != nil {
-				log.Printf("ERROR: mock wallet setup failed for session %d: %v", session.ID, err)
-				h.store.UpdateSessionState(session.ID, "destroyed")
-				writeError(w, http.StatusServiceUnavailable, "wallet setup failed: "+err.Error())
-				return
-			}
-			log.Printf("mock wallet configured for session %d on %s", session.ID, adbTarget)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			walletErr = h.setupWalletForSession(session.ID, adbTarget)
+		}()
+	}
+	wg.Wait()
+
+	if devClientErr != nil {
+		log.Printf("WARN: dev-client install failed for session %d: %v (container will run without pre-built dev-client)", session.ID, devClientErr)
+	} else if h.devClient != nil {
+		log.Printf("dev-client installed for session %d on %s", session.ID, adbTarget)
+	}
+	if walletErr != nil {
+		log.Printf("ERROR: mock wallet setup failed for session %d: %v", session.ID, walletErr)
+		h.store.UpdateSessionState(session.ID, "destroyed")
+		writeError(w, http.StatusServiceUnavailable, "wallet setup failed: "+walletErr.Error())
+		return
 	}
 
 	// Start Metro bundler for this session

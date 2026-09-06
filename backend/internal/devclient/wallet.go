@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -255,10 +256,9 @@ func (wm *WalletManager) VerifyRoundTrip(ctx context.Context, adbTarget string) 
 
 // SetupSession performs the full wallet setup for a new session:
 // 1. Wait for device boot completion
-// 2. Install the mock wallet APK
-// 3. Install demodapp APK (verification baseline)
-// 4. Configure device PIN
-// 5. Verify wallet is functional
+// 2. Install the mock wallet + demodapp APKs concurrently
+// 3. Configure device PIN
+// 4. Verify wallet is functional
 // Returns an error if any step fails (hard failure per §2.9).
 func (wm *WalletManager) SetupSession(ctx context.Context, adbTarget string) error {
 	log.Printf("setting up mock wallet for session (target: %s)", adbTarget)
@@ -268,14 +268,32 @@ func (wm *WalletManager) SetupSession(ctx context.Context, adbTarget string) err
 		return fmt.Errorf("device boot wait failed: %w", err)
 	}
 
-	// Step 1: Install wallet
-	if err := wm.InstallWallet(ctx, adbTarget); err != nil {
-		return fmt.Errorf("wallet install failed: %w", err)
+	// Step 1+2: Install wallet and demodapp concurrently. Separate packages,
+	// no ordering dependency — serial installs just add their times.
+	var wg sync.WaitGroup
+	var walletErr, dappErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if err := wm.InstallWallet(ctx, adbTarget); err != nil {
+			walletErr = fmt.Errorf("wallet install failed: %w", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		// Non-fatal if missing, per InstallDemoDapp contract.
+		if err := wm.InstallDemoDapp(ctx, adbTarget); err != nil {
+			dappErr = err
+		}
+	}()
+	wg.Wait()
+	if walletErr != nil {
+		return walletErr
 	}
 
-	// Step 2: Install demodapp (non-fatal if missing)
-	if err := wm.InstallDemoDapp(ctx, adbTarget); err != nil {
-		log.Printf("WARNING: demodapp install failed: %v (continuing)", err)
+	// Demodapp install problems stay non-fatal (verification baseline only).
+	if dappErr != nil {
+		log.Printf("WARNING: demodapp install failed: %v (continuing)", dappErr)
 	}
 
 	// Step 3: Configure device PIN

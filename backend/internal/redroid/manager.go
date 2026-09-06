@@ -20,7 +20,6 @@ const (
 	containerPrefix = "seeker-redroid-"
 	imageRef        = "redroid/redroid:14.0.0_64only-latest"
 	adbWaitTimeout  = 45 * time.Second
-	adbPollInterval = 2 * time.Second
 )
 
 // ContainerInfo holds metadata about a managed container.
@@ -297,26 +296,20 @@ func (m *Manager) ListContainers() ([]ContainerInfo, error) {
 
 // waitForADB polls until ADB can connect to the given port.
 func (m *Manager) waitForADB(port int) error {
-	deadline := time.Now().Add(adbWaitTimeout)
 	target := fmt.Sprintf("localhost:%d", port)
+	ctx, cancel := context.WithTimeout(context.Background(), adbWaitTimeout)
+	defer cancel()
 
-	for time.Now().Before(deadline) {
-		out, err := exec.Command("adb", "devices").CombinedOutput()
-		if err == nil && strings.Contains(string(out), target) {
-			// Try to connect explicitly
-			connectOut, _ := exec.Command("adb", "connect", target).CombinedOutput()
-			if strings.Contains(string(connectOut), "connected") || strings.Contains(string(connectOut), "already") {
-				return nil
-			}
-		}
+	// One connect up front: adbd inside a fresh container is not always
+	// registered with the host server yet.
+	_ = exec.CommandContext(ctx, "adb", "connect", target).Run()
 
-		// Also try direct connect
-		exec.Command("adb", "connect", target).Run()
-
-		time.Sleep(adbPollInterval)
+	// wait-for-device blocks in a single adb invocation until the device is
+	// present — no 2s poll loop spawning dozens of short-lived processes.
+	if out, err := exec.CommandContext(ctx, "adb", "-s", target, "wait-for-device").CombinedOutput(); err != nil {
+		return fmt.Errorf("ADB not reachable at %s after %v: %s", target, adbWaitTimeout, strings.TrimSpace(string(out)))
 	}
-
-	return fmt.Errorf("ADB not reachable at %s after %v", target, adbWaitTimeout)
+	return nil
 }
 
 // GetContainerID returns the container ID for a session, or empty string.
