@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	sdk "github.com/seekersstudio/backend/internal/sdk"
 )
 
 type BuildAPK struct {
@@ -115,7 +117,7 @@ func (t *BuildAPK) Execute(ctx context.Context, args json.RawMessage) (ToolResul
 	}
 
 	// Find Java
-	javaHome := findJavaHome()
+	javaHome := sdk.JavaHome()
 	if javaHome == "" {
 		return ToolResult{
 			Content: "Java JDK 17 not found. Install JDK 17 and set JAVA_HOME.",
@@ -124,7 +126,7 @@ func (t *BuildAPK) Execute(ctx context.Context, args json.RawMessage) (ToolResul
 	}
 
 	// Find Android SDK
-	androidHome := findAndroidHome()
+	androidHome := sdk.AndroidHome()
 	if androidHome == "" {
 		return ToolResult{
 			Content: "Android SDK not found. Install Android SDK and set ANDROID_HOME.",
@@ -209,64 +211,6 @@ func (t *BuildAPK) installAPK(apkPath string) (string, error) {
 	cmd := exec.Command("adb", "-s", target, "install", "-r", apkPath)
 	output, err := runCaptured(cmd, t.Output)
 	return strings.TrimSpace(string(output)), err
-}
-
-func findJavaHome() string {
-	if jh := os.Getenv("JAVA_HOME"); jh != "" {
-		return jh
-	}
-
-	// Linux: use standard paths and discover via alternatives
-	candidates := []string{
-		"/usr/lib/jvm/java-17-openjdk-amd64",
-		"/usr/lib/jvm/java-17-openjdk",
-		"/usr/lib/jvm/java-17",
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "bin", "java")); err == nil {
-			return c
-		}
-	}
-
-	// Try to find via which (Linux equivalent of where)
-	if out, err := exec.Command("which", "java").Output(); err == nil {
-		javaPath := strings.TrimSpace(string(out))
-		if javaPath != "" {
-			// Resolve symlink and get the JDK home (java is in bin/)
-			if resolved, err := filepath.EvalSymlinks(javaPath); err == nil {
-				javaPath = resolved
-			}
-			binDir := filepath.Dir(javaPath)
-			return filepath.Dir(binDir)
-		}
-	}
-
-	return ""
-}
-
-func findAndroidHome() string {
-	if ah := os.Getenv("ANDROID_HOME"); ah != "" {
-		return ah
-	}
-	if ah := os.Getenv("ANDROID_SDK_ROOT"); ah != "" {
-		return ah
-	}
-
-	// Linux: standard Android SDK locations
-	homeDir, _ := os.UserHomeDir()
-	candidates := []string{
-		filepath.Join(homeDir, "Android", "Sdk"),
-		"/opt/android-sdk",
-		"/usr/local/android-sdk",
-		filepath.Join(homeDir, "android-sdk"),
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "platform-tools", "adb")); err == nil {
-			return c
-		}
-	}
-
-	return ""
 }
 
 func findAPK(androidDir string) string {

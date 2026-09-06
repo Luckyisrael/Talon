@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	sdk "github.com/seekersstudio/backend/internal/sdk"
 )
 
 // Manager handles dev-client lifecycle: installation, rebuild detection, and async rebuilds.
@@ -180,8 +182,8 @@ func (m *Manager) runRebuild(ctx context.Context, sessionID int64, workspacePath
 	log.Printf("session %d: starting background native rebuild", sessionID)
 
 	// Find Java and Android SDK
-	javaHome := findJavaHome()
-	androidHome := findAndroidHome()
+	javaHome := sdk.JavaHome()
+	androidHome := sdk.AndroidHome()
 	if javaHome == "" || androidHome == "" {
 		m.finishRebuild(sessionID, "", "Java JDK 17 or Android SDK not found")
 		return
@@ -283,60 +285,6 @@ func (m *Manager) finishRebuild(sessionID int64, newAPK, errMsg string) {
 }
 
 // findJavaHome locates Java JDK 17 on the system.
-func findJavaHome() string {
-	if jh := os.Getenv("JAVA_HOME"); jh != "" {
-		return jh
-	}
-
-	candidates := []string{
-		"/usr/lib/jvm/java-17-openjdk-amd64",
-		"/usr/lib/jvm/java-17-openjdk",
-		"/usr/lib/jvm/java-17",
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "bin", "java")); err == nil {
-			return c
-		}
-	}
-
-	if out, err := exec.Command("which", "java").Output(); err == nil {
-		javaPath := string(out)
-		if resolved, err := filepath.EvalSymlinks(javaPath); err == nil {
-			javaPath = resolved
-		}
-		binDir := filepath.Dir(javaPath)
-		return filepath.Dir(binDir)
-	}
-
-	return ""
-}
-
-// findAndroidHome locates the Android SDK on the system.
-func findAndroidHome() string {
-	if ah := os.Getenv("ANDROID_HOME"); ah != "" {
-		return ah
-	}
-	if ah := os.Getenv("ANDROID_SDK_ROOT"); ah != "" {
-		return ah
-	}
-
-	homeDir, _ := os.UserHomeDir()
-	candidates := []string{
-		filepath.Join(homeDir, "Android", "Sdk"),
-		"/opt/android-sdk",
-		"/usr/local/android-sdk",
-		filepath.Join(homeDir, "android-sdk"),
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "platform-tools", "adb")); err == nil {
-			return c
-		}
-	}
-
-	return ""
-}
-
-// findAPK locates the built APK in the android directory.
 func findAPK(androidDir string) string {
 	buildDir := filepath.Join(androidDir, "app", "build", "outputs", "apk", "debug")
 	apkPath := filepath.Join(buildDir, "app-debug.apk")

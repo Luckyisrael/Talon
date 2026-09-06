@@ -10,11 +10,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
 	gbuild "github.com/seekersstudio/backend/internal/build"
+	sdk "github.com/seekersstudio/backend/internal/sdk"
 	"github.com/seekersstudio/backend/internal/store"
 )
 
@@ -73,11 +73,11 @@ func (b *Builder) Build(ctx context.Context, projectID int64) (string, error) {
 		return "", err
 	}
 
-	javaHome, androidHome := findJavaHome(), findAndroidHome()
+	javaHome, androidHome := sdk.JavaHome(), sdk.AndroidHome()
 	if javaHome == "" || androidHome == "" {
 		return "", fmt.Errorf("JDK 17 or Android SDK not found")
 	}
-	apksigner, err := findApksigner(androidHome)
+	apksigner, err := sdk.Apksigner(androidHome)
 	if err != nil {
 		return "", err
 	}
@@ -313,11 +313,11 @@ type AppVersions struct {
 // APKVersions reads versionCode and versionName from the APK's own manifest.
 // Versions come from the artifact, never from user input.
 func APKVersions(apk string) (AppVersions, error) {
-	androidHome := findAndroidHome()
+	androidHome := sdk.AndroidHome()
 	if androidHome == "" {
 		return AppVersions{}, fmt.Errorf("Android SDK not found")
 	}
-	apksigner, err := findApksigner(androidHome)
+	apksigner, err := sdk.Apksigner(androidHome)
 	if err != nil {
 		return AppVersions{}, err
 	}
@@ -397,64 +397,6 @@ func tail(s string) string {
 	return "… [" + fmt.Sprint(len(s)-max) + " earlier bytes omitted] …\n" + s[len(s)-max:]
 }
 
-func findJavaHome() string {
-	if jh := os.Getenv("JAVA_HOME"); jh != "" {
-		return jh
-	}
-	for _, c := range []string{"/usr/lib/jvm/java-17-openjdk-amd64", "/usr/lib/jvm/java-17-openjdk"} {
-		if _, err := os.Stat(filepath.Join(c, "bin", "java")); err == nil {
-			return c
-		}
-	}
-	return ""
-}
-
-func findAndroidHome() string {
-	for _, k := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
-		if ah := os.Getenv(k); ah != "" {
-			return ah
-		}
-	}
-	if homeDir, _ := os.UserHomeDir(); homeDir != "" {
-		if p := filepath.Join(homeDir, "Android", "Sdk"); isDir(p) {
-			return p
-		}
-	}
-	return ""
-}
-
-func isDir(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
-}
-
-// findApksigner picks the newest installed build-tools apksigner.
-func findApksigner(androidHome string) (string, error) {
-	entries, err := os.ReadDir(filepath.Join(androidHome, "build-tools"))
-	if err != nil {
-		return "", fmt.Errorf("no build-tools in %s", androidHome)
-	}
-	var versions []string
-	for _, e := range entries {
-		if e.IsDir() {
-			versions = append(versions, e.Name())
-		}
-	}
-	if len(versions) == 0 {
-		return "", fmt.Errorf("no build-tools versions installed")
-	}
-	sort.Strings(versions)
-	for i := len(versions) - 1; i >= 0; i-- {
-		p := filepath.Join(androidHome, "build-tools", versions[i], "apksigner")
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("apksigner not found in any build-tools version")
-}
-
-// copyTree duplicates src into dst, skipping node_modules (relinked by the
-// caller) and other host-specific dirs.
 func copyTree(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {

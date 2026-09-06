@@ -21,7 +21,7 @@ echo "Version: $TEMPLATE_VERSION"
 echo ""
 echo "--- Installing dependencies ---"
 cd "$TEMPLATE_DIR"
-npm install --production=false 2>&1 | tail -5
+npm ci --production=false 2>&1 | tail -5
 
 # Step 2: Write version file
 echo ""
