@@ -2,6 +2,9 @@ package build
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -55,5 +58,45 @@ func TestRestageRefreshes(t *testing.T) {
 	}
 	if pre, _ := b.PreImage("a.tsx"); string(pre) != "v2" {
 		t.Errorf("re-stage should replace content, got %q", pre)
+	}
+}
+
+func TestEnsureGradlePerfFlags(t *testing.T) {
+	dir := t.TempDir()
+	props := "# expo defaults\norg.gradle.jvmargs=-Xmx2048m\nandroid.useAndroidX=true\n"
+	if err := os.WriteFile(filepath.Join(dir, "gradle.properties"), []byte(props), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureGradlePerfFlags(dir); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(filepath.Join(dir, "gradle.properties"))
+	s := string(out)
+	for _, want := range []string{
+		"org.gradle.daemon=true",
+		"org.gradle.caching=true",
+		"org.gradle.configureondemand=true",
+		"org.gradle.jvmargs=-Xmx4g",
+		"android.useAndroidX=true",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "Xmx2048m") {
+		t.Error("old jvmargs should be replaced")
+	}
+	// Idempotent: second run changes nothing.
+	again, _ := os.ReadFile(filepath.Join(dir, "gradle.properties"))
+	if err := EnsureGradlePerfFlags(dir); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := os.ReadFile(filepath.Join(dir, "gradle.properties"))
+	if string(again) != string(final) {
+		t.Error("second run should be a no-op")
+	}
+	// Missing file is benign.
+	if err := EnsureGradlePerfFlags(filepath.Join(dir, "nonexistent")); err != nil {
+		t.Errorf("missing file should not error: %v", err)
 	}
 }

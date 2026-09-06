@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	gbuild "github.com/seekersstudio/backend/internal/build"
 	"github.com/seekersstudio/backend/internal/store"
 )
 
@@ -112,12 +113,24 @@ func (b *Builder) Build(ctx context.Context, projectID int64) (string, error) {
 	}
 
 	b.phase("prebuild")
-	if out, err := runIn(ctx, scratch, env, "npx", "expo", "prebuild", "-p", "android", "--clean", "--no-install"); err != nil {
+	// No --clean: wiping android/ every release destroys incremental gradle
+	// state. Identity staleness is handled surgically below (patchApplicationID)
+	// and verified at verify-identity — a mismatch fails the build loudly
+	// instead of shipping the wrong package.
+	if out, err := runIn(ctx, scratch, env, "npx", "expo", "prebuild", "-p", "android", "--no-install"); err != nil {
 		return "", fmt.Errorf("expo prebuild failed: %v\n%s", err, tail(out))
+	}
+
+	b.phase("identity-patch")
+	if err := patchApplicationID(filepath.Join(scratch, "android", "app", "build.gradle"), project.AndroidPackage); err != nil {
+		return "", err
 	}
 
 	b.phase("assembleRelease")
 	androidDir := filepath.Join(scratch, "android")
+	// Perf flags, same as the verify gate: the scratch tree is prebuilt fresh,
+	// so its gradle.properties is always expo-default.
+	_ = gbuild.EnsureGradlePerfFlags(androidDir)
 	if out, err := runIn(ctx, androidDir, env, "./gradlew", "assembleRelease", "--build-cache", "--daemon"); err != nil {
 		return "", fmt.Errorf("assembleRelease failed: %v\n%s", err, tail(out))
 	}
@@ -232,6 +245,35 @@ func injectIdentity(scratch, androidPackage, scheme string) error {
 	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
 
+// patchApplicationID surgically sets the package in a prebuilt android/
+// tree: both the `namespace` and `applicationId` lines in app/build.gradle.
+// A non-clean prebuild reuses android/ for gradle incrementality, but the
+// tree may predate the project's identity — this pins it. Fails loudly when
+// either line is absent (a generated tree always has both); the downstream
+// verify-identity phase re-checks the built artifact independently.
+func patchApplicationID(gradlePath, androidPackage string) error {
+	raw, err := os.ReadFile(gradlePath)
+	if err != nil {
+		return fmt.Errorf("read build.gradle: %w", err)
+	}
+	out := string(raw)
+	changed := 0
+	for _, key := range []string{"namespace", "applicationId"} {
+		re := regexp.MustCompile(`(?m)^(\s*` + key + `\s+)'[^']*'`)
+		if re.MatchString(out) {
+			out = re.ReplaceAllString(out, `${1}'`+androidPackage+`'`)
+			changed++
+		}
+	}
+	if changed != 2 {
+		return fmt.Errorf("build.gradle lacks namespace/applicationId lines — refusing to guess identity")
+	}
+	if err := os.WriteFile(gradlePath, []byte(out), 0o644); err != nil {
+		return fmt.Errorf("write build.gradle: %w", err)
+	}
+	return nil
+}
+
 // signAPK signs with apksigner, passing the password via a 0600 temp file —
 // never on the command line where ps could read it — and returns the final
 // artifact path under the exports dir.
@@ -246,8 +288,11 @@ func (b *Builder) signAPK(ctx context.Context, apksigner, unsigned, ksPath, alia
 		return "", err
 	}
 	signed := filepath.Join(b.exportsDir(), fmt.Sprintf("project-%d-%d.apk", projectID, time.Now().Unix()))
+	// NOTE: --ks-pass takes its provider as the NEXT arg ("--ks-pass",
+	// "file:<path>"); the single-arg colon form (--ks-pass:file) is rejected
+	// by this build-tools version.
 	args := []string{"sign", "--ks", ksPath, "--ks-key-alias", alias,
-		"--ks-pass:file", pwPath, "--key-pass:file", pwPath,
+		"--ks-pass", "file:" + pwPath, "--key-pass", "file:" + pwPath,
 		"--out", signed, unsigned}
 	if out, err := exec.CommandContext(ctx, apksigner, args...).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("apksigner failed: %v\n%s", err, tail(string(out)))

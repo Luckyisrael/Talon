@@ -3,6 +3,9 @@ package build
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -91,4 +94,48 @@ func (b *PatchBuffer) removeFromOrder(path string) {
 			return
 		}
 	}
+}
+
+// Gradle perf flags every workspace build should carry. Applied by editing
+// gradle.properties in place (not by shipping a template file) because
+// android/ is generated per workspace by expo prebuild — a template file
+// would never reach it. configuration-cache stays off: still incubating,
+// breaks RN/Expo plugins.
+var gradlePerfFlags = map[string]string{
+	"org.gradle.daemon":            "true",
+	"org.gradle.caching":           "true",
+	"org.gradle.configureondemand": "true",
+	"org.gradle.jvmargs":           "-Xmx4g -XX:MaxMetaspaceSize=512m -XX:+UseParallelGC -Dfile.encoding=UTF-8",
+}
+
+// EnsureGradlePerfFlags idempotently pins the perf flags in the
+// gradle.properties at androidDir/gradle.properties, preserving every other
+// line (including expo's). Missing file is not an error — the caller may run
+// before prebuild; gradle just runs unflagged that once.
+func EnsureGradlePerfFlags(androidDir string) error {
+	path := filepath.Join(androidDir, "gradle.properties")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	lines := strings.Split(string(raw), "\n")
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if eq := strings.Index(t, "="); eq > 0 {
+			if val, ok := gradlePerfFlags[strings.TrimSpace(t[:eq])]; ok {
+				lines[i] = strings.TrimSpace(t[:eq]) + "=" + val
+				seen[strings.TrimSpace(t[:eq])] = true
+			}
+		}
+	}
+	for key, val := range gradlePerfFlags {
+		if !seen[key] {
+			lines = append(lines, key+"="+val)
+		}
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
 }
