@@ -693,6 +693,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 
             case "done": {
               const touched = d.files_touched ?? [];
+              const skipped = Array.isArray(d.skipped_gates) ? d.skipped_gates : [];
               patch((prev) => ({
                 ...prev,
                 isStreaming: false,
@@ -704,6 +705,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                       : "DONE",
                 filesTouched: touched,
                 verified: d.verified,
+                skippedGates: skipped,
                 rounds: d.rounds,
                 traceRows: prev.traceRows.map((r) =>
                   r.status === "running" ? { ...r, status: "done" } : r,
@@ -1406,6 +1408,11 @@ function TurnFooter({ msg }: { msg: StreamMessage }) {
   return (
     <p className="gauge tnum flex items-center gap-2">
       {msg.verified === false && <span className="text-coral-red">checks did not pass</span>}
+      {msg.verified && msg.skippedGates && msg.skippedGates.length > 0 && (
+        <span className="text-amber-400" title={`Did not run: ${msg.skippedGates.join(", ")}`}>
+          verified (static only — {msg.skippedGates.join(", ")} could not run)
+        </span>
+      )}
       {parts.join("  ·  ")}
     </p>
   );

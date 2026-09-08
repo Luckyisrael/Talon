@@ -332,9 +332,22 @@ func (h *PromptHandler) Resume(w http.ResponseWriter, r *http.Request) {
 	// writes the terminal status when the loop returns.
 	h.store.UpdatePromptStatus(id, "running", prompt.Round)
 
+	// A turn interrupted by a server restart lost its in-memory session
+	// state (probe counts, cooldowns, the crash index). The transcript and
+	// files survived, so the model sees what it did — this note tells it not
+	// to trust everything it sees: re-verify completed work before building
+	// on it. A graceful pause (budget stop) needs no such caution.
+	instruction := resumePrompt
+	if prompt.Status == "interrupted" {
+		instruction = resumePrompt + "\n\nNote: the server restarted mid-turn, " +
+			"so working state (what you had verified, probed, or latched) was lost. " +
+			"Re-check the files and the checklist before continuing — do not assume " +
+			"work that appears done was actually verified."
+	}
+
 	// The synthetic prompt is neither persisted nor metered — resuming an
 	// interrupted turn is a continuation, not a new prompt.
-	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, resumePrompt,
+	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, instruction,
 		buildOptions{persistUserTurn: false, meterPrompt: false, mode: "build"})
 }
 
@@ -670,6 +683,7 @@ func (h *PromptHandler) finishBuildStream(w http.ResponseWriter, flusher http.Fl
 		payload["message"] = outcome.FinalText
 		payload["files_touched"] = outcome.FilesTouched
 		payload["verified"] = outcome.Verified
+		payload["skipped_gates"] = outcome.SkippedGates
 		payload["rounds"] = outcome.Rounds
 		payload["remaining_tasks"] = outcome.RemainingTasks
 		// A turn paused on ask_user ended cleanly but is not done: it is waiting for
@@ -989,6 +1003,12 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 		}
 	}
 	h.store.UpdatePromptResponse(promptID, response)
+	// Persist the gates that could not run, so "verified" stays honest past
+	// the live stream: a reload or a later GET reports them instead of
+	// forgetting the turn was only statically verified.
+	if outcome.Verified {
+		h.store.UpdatePromptSkippedGates(promptID, outcome.SkippedGates)
+	}
 	// Token accounting is additive, so a resumed turn correctly adds its own
 	// cost onto the interrupted turn's. The prompt count is not: only a fresh
 	// turn increments it, or resuming would charge a second prompt.

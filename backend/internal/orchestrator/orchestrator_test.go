@@ -571,3 +571,77 @@ func TestSkippedGatesSurfaceOnVerified(t *testing.T) {
 		t.Fatalf("final clean sweep should clear skips, got %v", got)
 	}
 }
+
+// Item 1 (durable backlog): task state written through during a session is
+// what a fresh session re-seeds from — restarts and resume see real progress,
+// and a plan edit supersedes dropped work instead of deleting history.
+func TestPlanTaskPersistenceRoundTrip(t *testing.T) {
+	st, err := store.New(t.TempDir() + "/tasks.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	u, _ := st.CreateUser("pt@test.com", "hash")
+	p, _ := st.CreateProject(u.ID, "pt", "1.0.0", "pt-slug", "com.test.pt", "", "")
+	planJSON := `{"screens":[{"name":"Watchlist"},{"name":"Activity"}],"features":["MWA auth"]}`
+	if err := st.UpdateProjectPlan(p.ID, planJSON); err != nil {
+		t.Fatal(err)
+	}
+
+	o := New(nil, st, nil)
+	sess := o.CreateSession(1, p.ID, t.TempDir())
+	t.Cleanup(func() { o.RemoveSession(1) })
+
+	// Fresh seed: two screens + one feature, all pending.
+	if tasks := sess.GetTasks(); len(tasks) != 3 {
+		t.Fatalf("expected 3 seeded tasks, got %d", len(tasks))
+	}
+	sess.MarkPlanTask("plan:screen:watchlist", "Screen: Watchlist", "completed", "route written")
+
+	rows, err := st.LoadPlanTasks(p.ID)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("seed should persist the full backlog (3 rows): %v %v", rows, err)
+	}
+	var completedRow *store.PlanTask
+	for i := range rows {
+		if rows[i].TaskID == "plan:screen:watchlist" {
+			completedRow = &rows[i]
+		}
+	}
+	if completedRow == nil || completedRow.Status != "completed" || completedRow.CompletedByPrompt != 1 {
+		t.Fatalf("write-through should persist the completion: %+v", completedRow)
+	}
+
+	// A new session (a restart, effectively) re-seeds from the table.
+	sess2 := o.CreateSession(2, p.ID, t.TempDir())
+	t.Cleanup(func() { o.RemoveSession(2) })
+	for _, task := range sess2.GetTasks() {
+		if task.ID == "plan:screen:watchlist" && task.Status != "completed" {
+			t.Fatalf("completed task must survive re-seed, got %+v", task)
+		}
+		if task.ID == "plan:screen:activity" && task.Status != "pending" {
+			t.Fatalf("untouched task must stay pending, got %+v", task)
+		}
+	}
+
+	// A plan edit dropping Activity supersedes its row, keeps the rest.
+	planJSON2 := `{"screens":[{"name":"Watchlist"}],"features":["MWA auth"]}`
+	if err := st.UpdateProjectPlan(p.ID, planJSON2); err != nil {
+		t.Fatal(err)
+	}
+	sess3 := o.CreateSession(3, p.ID, t.TempDir())
+	t.Cleanup(func() { o.RemoveSession(3) })
+	final, _ := st.LoadPlanTasks(p.ID)
+	var superseded int
+	for _, r := range final {
+		if r.TaskID == "plan:screen:activity" && r.Status == "superseded" {
+			superseded++
+		}
+	}
+	if superseded != 1 {
+		t.Fatalf("dropped screen should be superseded once, table: %+v", final)
+	}
+	if len(sess3.GetTasks()) != 2 {
+		t.Fatalf("superseded work must not re-seed, got %+v", sess3.GetTasks())
+	}
+}

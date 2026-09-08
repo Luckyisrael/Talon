@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"github.com/seekersstudio/backend/internal/agent"
-	"github.com/seekersstudio/backend/internal/build"
-	"github.com/seekersstudio/backend/internal/runtime"
 	"github.com/seekersstudio/backend/internal/ai"
+	"github.com/seekersstudio/backend/internal/build"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/guardrails"
 	"github.com/seekersstudio/backend/internal/metrics"
+	"github.com/seekersstudio/backend/internal/runtime"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/tools"
 )
@@ -105,6 +105,16 @@ func New(aiClient *ai.Client, s *store.Store, knowledge *agent.Registry) *Orches
 func (o *Orchestrator) CreateSession(id, projectID int64, workspacePath string) *SessionState {
 	emitter := events.NewSessionEmitter(id, 128)
 	sess := NewSession(id, projectID, workspacePath, emitter)
+
+	// Durable backlog mirror: every MarkPlanTask write-through lands in
+	// plan_task_status keyed by this session's prompt id (attribution).
+	sess.AttachTaskPersistence(func(pid int64, t Task, byPrompt int64) {
+		if err := o.store.UpsertPlanTask(pid, store.PlanTask{
+			TaskID: t.ID, Description: t.Description, Status: t.Status, Result: t.Result, CompletedByPrompt: byPrompt,
+		}); err != nil {
+			log.Printf("orchestrator: could not persist plan task %s (project %d): %v", t.ID, pid, err)
+		}
+	})
 
 	o.mu.Lock()
 	o.sessions[id] = sess
@@ -217,6 +227,32 @@ func (o *Orchestrator) seedPlanTasks(sess *SessionState, projectID int64) {
 	if err := json.Unmarshal([]byte(project.PlanJSON), &plan); err != nil {
 		return
 	}
+	// The durable backlog is the seed: statuses recorded by earlier turns
+	// (and survived restarts) load as-is, so resume sees what is genuinely
+	// done instead of re-deriving — or redoing — it.
+	persisted := map[string]store.PlanTask{}
+	if rows, err := o.store.LoadPlanTasks(projectID); err == nil {
+		for _, r := range rows {
+			persisted[r.TaskID] = r
+		}
+	}
+	var liveIDs []string
+	seed := func(id, desc string) {
+		liveIDs = append(liveIDs, id)
+		// Persist the seed row so the table holds the full backlog — not
+		// only terminal states — and SupersedeMissingPlanTasks can see drift.
+		// A row already present keeps its status (the conflict update only
+		// refreshes the description).
+		if o.store != nil {
+			_ = o.store.UpsertPlanTask(projectID, store.PlanTask{TaskID: id, Description: desc, Status: "pending"})
+		}
+		sess.AddTask(id, desc)
+		if p, ok := persisted[id]; ok && p.Status != "superseded" {
+			// Restore the recorded state without re-emitting (EmitPlanSeed
+			// delivers the full list after seeding completes).
+			_ = sess.TaskTracker.UpdateTask(id, p.Status, p.Result)
+		}
+	}
 	for _, sc := range plan.Screens {
 		name := strings.TrimSpace(sc.Name)
 		if name == "" {
@@ -230,14 +266,19 @@ func (o *Orchestrator) seedPlanTasks(sess *SessionState, projectID int64) {
 		// that never appear in route file names. Slug the base name so the
 		// file heuristic can match portfolio.tsx to the Portfolio screen; the
 		// full name stays in the description the model sees.
-		sess.AddTask("plan:screen:"+planSlug(screenBaseName(name)), desc)
+		seed("plan:screen:"+planSlug(screenBaseName(name)), desc)
 	}
 	for i, ft := range plan.Features {
 		ft = strings.TrimSpace(ft)
 		if ft == "" {
 			continue
 		}
-		sess.AddTask(fmt.Sprintf("plan:feature:%d", i), "Feature: "+ft)
+		seed(fmt.Sprintf("plan:feature:%d", i), "Feature: "+ft)
+	}
+	// A plan edit that dropped work leaves stale rows: mark them superseded
+	// (kept for the audit trail), never deleted.
+	if n, err := o.store.SupersedeMissingPlanTasks(projectID, liveIDs); err == nil && n > 0 {
+		log.Printf("orchestrator: %d plan task(s) superseded by a plan edit (project %d)", n, projectID)
 	}
 }
 
@@ -1212,13 +1253,13 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 
 		output, isError := opts.Execute(ctx, call.Name, call.Input)
 
-	// readNote/watchNote/probeNote carry cross-turn knowledge into this result. They
-	// are set by the tracking below and appended to the tool result at the
-	// end of run(): small hints that prevent whole wasted rounds.
-	readNote := ""
-	watchNote := ""
-	probeNote := ""
-	failReminder := ""
+		// readNote/watchNote/probeNote carry cross-turn knowledge into this result. They
+		// are set by the tracking below and appended to the tool result at the
+		// end of run(): small hints that prevent whole wasted rounds.
+		readNote := ""
+		watchNote := ""
+		probeNote := ""
+		failReminder := ""
 
 		status := "completed"
 		if isError {

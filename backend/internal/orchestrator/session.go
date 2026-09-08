@@ -130,6 +130,12 @@ type SessionState struct {
 	// the current sweep, so a verified outcome can name what never ran.
 	skippedGates []string
 
+	// persistTask, when set, mirrors every MarkPlanTask write into the
+	// durable plan_task_status table — the project's canonical backlog.
+	// Nil in tests and sessions without a store; the in-memory tracker
+	// remains the working copy either way.
+	persistTask func(projectID int64, t Task, byPrompt int64)
+
 	mu sync.Mutex
 }
 
@@ -162,15 +168,15 @@ type Task struct {
 
 func NewSession(id, projectID int64, workspacePath string, emitter *events.SessionEmitter) *SessionState {
 	return &SessionState{
-		ID:            id,
-		ProjectID:     projectID,
-		WorkspacePath: workspacePath,
-		CurrentPhase:  PhaseIntake,
-		StartedAt:     time.Now(),
-		Emitter:       emitter,
-		ReadFiles:     make(map[string]bool),
-		SeenSkills:    make(map[string]bool),
-		KnownFiles:    make(map[string]int64),
+		ID:               id,
+		ProjectID:        projectID,
+		WorkspacePath:    workspacePath,
+		CurrentPhase:     PhaseIntake,
+		StartedAt:        time.Now(),
+		Emitter:          emitter,
+		ReadFiles:        make(map[string]bool),
+		SeenSkills:       make(map[string]bool),
+		KnownFiles:       make(map[string]int64),
 		WriteCounts:      make(map[string]int),
 		ProbeCounts:      make(map[string]int),
 		FailureCooldowns: make(map[string]int),
@@ -592,10 +598,23 @@ func (s *SessionState) AddTask(id, description string) {
 // status or result actually changed. Emitting unconditionally would bust the
 // prompt cache and spam the trace with a task re-asserting a status it already
 // held; this keeps both the cache and the checklist quiet until something moves.
+// When a persistence hook is attached, the write also lands in
+// plan_task_status so the backlog survives restarts.
 func (s *SessionState) MarkPlanTask(id, description, status, result string) {
 	if s.TaskTracker.UpdateTask(id, status, result) {
 		s.Emitter.EmitTaskUpdate(id, description, status, result)
+		if s.persistTask != nil {
+			s.persistTask(s.ProjectID, Task{ID: id, Description: description, Status: status, Result: result}, s.ID)
+		}
 	}
+}
+
+// AttachTaskPersistence wires the durable-backlog mirror. Call once, at
+// session creation; MarkPlanTask writes through from then on.
+func (s *SessionState) AttachTaskPersistence(fn func(projectID int64, t Task, byPrompt int64)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persistTask = fn
 }
 
 // EmitPlanSeed sends the seeded plan tasks to the frontend as their initial

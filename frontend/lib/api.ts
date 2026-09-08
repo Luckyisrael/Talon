@@ -368,6 +368,7 @@ export interface StreamEventData {
   // done
   files_touched?: string[];
   verified?: boolean;
+  skipped_gates?: string[];
   rounds?: number;
 }
 

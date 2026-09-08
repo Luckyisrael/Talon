@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -133,5 +134,71 @@ func TestPlanAsksQuestion(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(raw), &pr); err != nil || pr.Plan == nil {
 		t.Errorf("plan-bearing reply must parse with a plan: %v %v", pr.Plan, err)
+	}
+}
+
+// Item 2: a server restart sweeps live-looking prompt rows to interrupted,
+// so resume is honest about lost in-memory state.
+func TestMarkInterruptedPromptsSweep(t *testing.T) {
+	st, err := store.New(t.TempDir() + "/int.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	u, _ := st.CreateUser("int@test.com", "hash")
+	p, _ := st.CreateProject(u.ID, "int", "1.0.0", "int-slug", "com.test.int", "", "")
+
+	// Simulate the crash state: two turns left running/waiting, one completed.
+	for _, status := range []string{"running", "waiting", "completed"} {
+		pr, _ := st.CreatePrompt(p.ID, "build", "do the thing")
+		_ = st.UpdatePromptStatus(pr.ID, status, 1)
+	}
+
+	ids, err := st.MarkInterruptedPrompts()
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("sweep should flip exactly the 2 live rows: %v %v", ids, err)
+	}
+	for _, id := range ids {
+		pr, _ := st.GetPrompt(id)
+		if pr.Status != "interrupted" {
+			t.Fatalf("row %d should be interrupted, got %q", id, pr.Status)
+		}
+	}
+	// The completed one is untouched: re-fetch every prompt and count.
+	var completed int
+	for i := int64(1); i <= 3; i++ {
+		if pr, err := st.GetPrompt(i); err == nil && pr.Status == "completed" {
+			completed++
+		}
+	}
+	if completed != 1 {
+		t.Fatalf("completed rows must survive the sweep, got %d", completed)
+	}
+	// Idempotent: a second sweep finds nothing.
+	if ids2, _ := st.MarkInterruptedPrompts(); len(ids2) != 0 {
+		t.Fatalf("second sweep should find nothing, got %v", ids2)
+	}
+}
+
+// Item 3: skipped gates persist on the prompt row and round-trip through
+// UpdatePromptSkippedGates → GetPrompt.
+func TestSkippedGatesPersist(t *testing.T) {
+	st, err := store.New(t.TempDir() + "/sg.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	u, _ := st.CreateUser("sg@test.com", "hash")
+	p, _ := st.CreateProject(u.ID, "sg", "1.0.0", "sg-slug", "com.test.sg", "", "")
+	pr, _ := st.CreatePrompt(p.ID, "build", "build it")
+
+	st.UpdatePromptSkippedGates(pr.ID, []string{"boot", "vision"})
+	got, _ := st.GetPrompt(pr.ID)
+	if got.SkippedGatesJSON == "" || !strings.Contains(got.SkippedGatesJSON, "boot") {
+		t.Fatalf("skipped gates should persist, got %q", got.SkippedGatesJSON)
+	}
+	var gates []string
+	if err := json.Unmarshal([]byte(got.SkippedGatesJSON), &gates); err != nil || len(gates) != 2 {
+		t.Fatalf("persisted value should be a JSON array: %q %v", got.SkippedGatesJSON, err)
 	}
 }

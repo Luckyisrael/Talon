@@ -320,6 +320,8 @@ export interface StreamMessage {
   /** From the terminal `done` event. */
   filesTouched?: string[];
   verified?: boolean;
+  /** Verify stages that could not run (missing infra) when verified=true. */
+  skippedGates?: string[];
   rounds?: number;
   /** True for turns restored from the stored conversation rather than streamed. */
   restored?: boolean;

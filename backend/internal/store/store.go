@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -51,9 +52,14 @@ type Prompt struct {
 	// only state the loop never writes itself.
 	Status string `json:"status"`
 	// Round is how far the agent loop got, for a resumable turn's progress hint.
-	Round     int        `json:"round"`
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	Round int `json:"round"`
+	// SkippedGatesJSON holds the verify-ladder stages that could not run when
+	// the turn verified (missing infra) — JSON string array. "Verified" then
+	// honestly means "everything that could run, ran", and the UI can offer
+	// to run the missing gates.
+	SkippedGatesJSON string     `json:"skipped_gates,omitempty"`
+	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
 }
 
 type Session struct {
@@ -265,6 +271,24 @@ func (s *Store) migrate() error {
 			UNIQUE(prompt_id, scope),
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
+		// plan_task_status is the durable project backlog. One canonical row
+		// per (project, task) so every turn — and every restart — sees the
+		// same truth: a server restart used to blank the checklist and make
+		// resume redo work. completed_by_prompt keeps turn attribution.
+		// Superseded rows stay (history is cheap; deletion loses the audit
+		// trail of what was once claimed done).
+		`CREATE TABLE IF NOT EXISTS plan_task_status (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			task_id TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			result TEXT NOT NULL DEFAULT '',
+			completed_by_prompt INTEGER NOT NULL DEFAULT 0,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(project_id, task_id),
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
 		// customers is the link between a user and the payment provider's own
 		// customer record. user_id is UNIQUE so there is exactly one canonical
 		// customer per user (Phase 9 rule 2.2) — a re-visit reuses the row rather
@@ -433,6 +457,7 @@ func (s *Store) migrate() error {
 	// reads tokens and dollars from the same source of truth.
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN cost_usd REAL DEFAULT 0")
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN routed_model TEXT DEFAULT ''")
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN skipped_gates TEXT DEFAULT '[]'")
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN route_reason TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE usage ADD COLUMN cost_usd REAL DEFAULT 0")
 
@@ -569,15 +594,19 @@ func (s *Store) CreatePrompt(projectID int64, mode, prompt string) (*Prompt, err
 	return s.GetPrompt(id)
 }
 
-const promptColumns = "id, project_id, mode, prompt, response, status, round, updated_at, created_at"
+const promptColumns = "id, project_id, mode, prompt, response, status, round, skipped_gates, updated_at, created_at"
 
 // scanPrompt reads one prompt row in promptColumns order, mapping the nullable
 // updated_at (existing rows predate it) onto the optional struct field.
 func scanPrompt(row *sql.Row) (*Prompt, error) {
 	p := &Prompt{}
 	var updatedAt sql.NullTime
-	if err := row.Scan(&p.ID, &p.ProjectID, &p.Mode, &p.Prompt, &p.Response, &p.Status, &p.Round, &updatedAt, &p.CreatedAt); err != nil {
+	var skipped sql.NullString
+	if err := row.Scan(&p.ID, &p.ProjectID, &p.Mode, &p.Prompt, &p.Response, &p.Status, &p.Round, &skipped, &updatedAt, &p.CreatedAt); err != nil {
 		return nil, err
+	}
+	if skipped.Valid && strings.TrimSpace(skipped.String) != "" {
+		p.SkippedGatesJSON = skipped.String
 	}
 	if updatedAt.Valid {
 		t := updatedAt.Time
@@ -607,11 +636,50 @@ func (s *Store) UpdatePromptResponse(id int64, response string) error {
 	return err
 }
 
+// UpdatePromptSkippedGates persists the verify stages that could not run when
+// the turn verified, as a JSON string array. Best-effort per caller intent:
+// a bookkeeping failure never fails a finished turn.
+func (s *Store) UpdatePromptSkippedGates(id int64, gates []string) {
+	raw, err := json.Marshal(gates)
+	if err != nil {
+		raw = []byte("[]")
+	}
+	_, _ = s.db.Exec("UPDATE prompts SET skipped_gates = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", string(raw), id)
+}
+
 // UpdatePromptStatus records the run state of a turn and how far it got. The
 // timestamp lets a later reader see when the turn last made progress.
 func (s *Store) UpdatePromptStatus(id int64, status string, round int) error {
 	_, err := s.db.Exec("UPDATE prompts SET status = ?, round = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", status, round, id)
 	return err
+}
+
+// MarkInterruptedPrompts flips every running/waiting prompt to interrupted.
+// Called once at server start: a prompt whose loop died with the process
+// (crash, restart, kill) is neither running nor answerable, and resume must
+// not pretend the session's in-memory state survived. Returns the affected
+// ids so callers can log/metric the restart blast radius.
+func (s *Store) MarkInterruptedPrompts() ([]int64, error) {
+	rows, err := s.db.Query("SELECT id FROM prompts WHERE status IN ('running','waiting','paused')")
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if _, err := s.db.Exec("UPDATE prompts SET status = 'interrupted', updated_at = CURRENT_TIMESTAMP WHERE id = ?", id); err != nil {
+			return ids, err
+		}
+	}
+	return ids, nil
 }
 
 // ScopeDeviceBuild is the turn_approvals scope unlocking build_apk.
@@ -629,6 +697,101 @@ func (s *Store) HasApproval(promptID int64, scope string) bool {
 	var count int
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM turn_approvals WHERE prompt_id = ? AND scope = ?", promptID, scope).Scan(&count)
 	return count > 0
+}
+
+// PlanTask is the durable per-project backlog row. Status mirrors the in-memory
+// tracker: pending, in_progress, completed, failed — plus superseded, set when
+// a plan edit removes the work the row described.
+type PlanTask struct {
+	TaskID            string `json:"task_id"`
+	Description       string `json:"description"`
+	Status            string `json:"status"`
+	Result            string `json:"result,omitempty"`
+	CompletedByPrompt int64  `json:"completed_by_prompt,omitempty"`
+}
+
+// UpsertPlanTask writes one task's state, creating or refreshing the row.
+// completed_by_prompt is recorded only when the status is terminal
+// (completed) so attribution means "the turn that finished it".
+// The conflict path keeps an existing terminal status: seeding writes
+// "pending" for the whole backlog, and a blind overwrite would clobber a
+// persisted completion back to pending on every session start.
+func (s *Store) UpsertPlanTask(projectID int64, t PlanTask) error {
+	by := t.CompletedByPrompt
+	if t.Status != "completed" {
+		by = 0
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO plan_task_status (project_id, task_id, description, status, result, completed_by_prompt)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(project_id, task_id) DO UPDATE SET
+		   description = excluded.description,
+		   status = CASE WHEN plan_task_status.status IN ('completed','superseded') AND excluded.status = 'pending'
+		         THEN plan_task_status.status ELSE excluded.status END,
+		   result = CASE WHEN plan_task_status.status IN ('completed','superseded') AND excluded.status = 'pending'
+		         THEN plan_task_status.result ELSE excluded.result END,
+		   completed_by_prompt = CASE WHEN plan_task_status.status = 'completed' AND excluded.status = 'pending'
+		         THEN plan_task_status.completed_by_prompt ELSE excluded.completed_by_prompt END,
+		   updated_at = CURRENT_TIMESTAMP`,
+		projectID, t.TaskID, t.Description, t.Status, t.Result, by,
+	)
+	return err
+}
+
+// LoadPlanTasks returns the project's durable backlog, oldest first.
+func (s *Store) LoadPlanTasks(projectID int64) ([]PlanTask, error) {
+	rows, err := s.db.Query(
+		"SELECT task_id, description, status, result, completed_by_prompt FROM plan_task_status WHERE project_id = ? ORDER BY id ASC", projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlanTask
+	for rows.Next() {
+		var t PlanTask
+		if err := rows.Scan(&t.TaskID, &t.Description, &t.Status, &t.Result, &t.CompletedByPrompt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// SupersedeMissingPlanTasks marks rows whose task_id no longer appears in the
+// current plan as superseded (kept, not deleted). Returns the count so callers
+// can log the drift. A row already superseded stays that way.
+func (s *Store) SupersedeMissingPlanTasks(projectID int64, liveTaskIDs []string) (int, error) {
+	rows, err := s.db.Query(
+		"SELECT task_id FROM plan_task_status WHERE project_id = ? AND status != 'superseded'", projectID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	var stale []string
+	live := make(map[string]bool, len(liveTaskIDs))
+	for _, id := range liveTaskIDs {
+		live[id] = true
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if !live[id] {
+			stale = append(stale, id)
+		}
+	}
+	rows.Close()
+	for _, id := range stale {
+		if _, err := s.db.Exec(
+			"UPDATE plan_task_status SET status = 'superseded', updated_at = CURRENT_TIMESTAMP WHERE project_id = ? AND task_id = ?", projectID, id,
+		); err != nil {
+			return len(stale), err
+		}
+	}
+	return len(stale), nil
 }
 
 func (s *Store) CreateSession(projectID int64) (*Session, error) {

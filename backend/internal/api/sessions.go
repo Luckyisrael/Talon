@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/seekersstudio/backend/internal/adb"
 	"github.com/seekersstudio/backend/internal/devclient"
+	"github.com/seekersstudio/backend/internal/device"
 	"github.com/seekersstudio/backend/internal/metro"
 	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/store"
@@ -109,7 +110,7 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	adbTarget := "localhost:" + strconv.Itoa(containerInfo.ADBPort)
 
 	// Wait for device boot before any ADB operations
-	if err := h.waitForDeviceBoot(adbTarget, 90*time.Second); err != nil {
+	if err := h.waitForDeviceBoot(adbTarget, device.BootBudget); err != nil {
 		log.Printf("WARN: device boot wait failed for session %d: %v", session.ID, err)
 	}
 

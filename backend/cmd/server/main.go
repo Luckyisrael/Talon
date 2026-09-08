@@ -72,6 +72,17 @@ func main() {
 		log.Printf("marked %d stale export job(s) as failed (server restart)", n)
 	}
 
+	// Agent turns left running/waiting/paused by a previous process can
+	// never finish either — their in-memory session state (probe counts,
+	// cooldowns, task tracker latches, crash index) died with it. Mark them
+	// interrupted so resume is honest about what was lost instead of
+	// pretending the loop paused gracefully.
+	if ids, err := s.MarkInterruptedPrompts(); err != nil {
+		log.Printf("WARNING: could not sweep interrupted prompts: %v", err)
+	} else if len(ids) > 0 {
+		log.Printf("marked %d prompt(s) interrupted by restart: %v", len(ids), ids)
+	}
+
 	authSvc := auth.New()
 
 	// A misconfigured AI provider is fatal: the whole product is the agent, and

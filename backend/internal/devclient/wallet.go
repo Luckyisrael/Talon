@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/seekersstudio/backend/internal/device"
 )
 
 // WalletManager handles mock wallet lifecycle: installation, configuration, verification.
@@ -185,10 +187,11 @@ func (wm *WalletManager) VerifyWallet(ctx context.Context, adbTarget string) err
 		return fmt.Errorf("mock wallet package not found on device")
 	}
 
-	// Launch the wallet (best-effort — monkey may return non-zero even on success)
+	// Launch the wallet. am start, not monkey: monkey exits -5 silently on
+	// this image without launching despite a valid LAUNCHER activity (E2E
+	// finding), so its "best-effort" launch proved nothing.
 	launchOut, _ := exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
-		"monkey", "-p", "com.solana.mobilewalletadapter.fakewallet",
-		"-c", "android.intent.category.LAUNCHER", "1").CombinedOutput()
+		"am", "start", "-n", "com.solana.mobilewalletadapter.fakewallet/.MainActivity").CombinedOutput()
 	log.Printf("wallet launch output: %s", strings.TrimSpace(string(launchOut)))
 
 	log.Printf("mock wallet verified on %s", adbTarget)
@@ -244,10 +247,10 @@ func (wm *WalletManager) VerifyRoundTrip(ctx context.Context, adbTarget string) 
 		return nil
 	}
 
-	// Launch demodapp to verify it starts (best-effort — monkey may return non-zero)
+	// Launch demodapp to verify it starts. am start over monkey (see
+	// VerifyWallet) — "Error type 3" in the output is an explicit failure.
 	launchOut, _ := exec.CommandContext(ctx, "adb", "-s", adbTarget, "shell",
-		"monkey", "-p", "com.solana.mobilewalletadapter.fakedapp",
-		"-c", "android.intent.category.LAUNCHER", "1").CombinedOutput()
+		"am", "start", "-n", "com.solana.mobilewalletadapter.fakedapp/.MainActivity").CombinedOutput()
 	log.Printf("demodapp launch output: %s", strings.TrimSpace(string(launchOut)))
 
 	log.Printf("round trip verification: demodapp launched on %s (manual approval required for full test)", adbTarget)
@@ -315,10 +318,13 @@ func (wm *WalletManager) SetupSession(ctx context.Context, adbTarget string) err
 	return nil
 }
 
-// waitForBoot polls until the device reports boot_completed=1.
+// waitForBoot polls until the device reports boot_completed=1, within the
+// shared device.BootBudget (the old fixed 30×2s loop ran out at 60s while
+// real cold boot takes ~2m13s — the sessions waiter had to rescue it).
 func (wm *WalletManager) waitForBoot(ctx context.Context, adbTarget string) error {
 	log.Printf("waiting for device boot completion (target: %s)", adbTarget)
-	for i := 0; i < 30; i++ {
+	deadline := time.Now().Add(device.BootBudget)
+	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -342,5 +348,5 @@ func (wm *WalletManager) waitForBoot(ctx context.Context, adbTarget string) erro
 			return nil
 		}
 	}
-	return fmt.Errorf("device did not boot within 60s (target: %s)", adbTarget)
+	return fmt.Errorf("device did not boot within %v (target: %s)", device.BootBudget, adbTarget)
 }
