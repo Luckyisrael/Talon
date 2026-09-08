@@ -250,9 +250,11 @@ func (o *Orchestrator) seedPlanTasks(sess *SessionState, projectID int64) {
 // does not match — in prompts it almost always means "build the screen".
 var deviceBuildRe = regexp.MustCompile(`(?i)\b(apk|device|preview|emulator|install|release|deploy|on[ -]?device|physical)\b`)
 
-// wantsDeviceBuild reports whether the user's prompt asks for a device build.
-// Only the user's words count — model plans never unlock gradle.
-func wantsDeviceBuild(prompt string) bool {
+// WantsDeviceBuild reports whether the user's prompt asks for a device build.
+// Only the user's words count — model plans never unlock gradle. Exported so
+// the Answer path can grant the same unlock for approval replies, which arrive
+// as tool_result turns and are invisible to text scanning.
+func WantsDeviceBuild(prompt string) bool {
 	return deviceBuildRe.MatchString(prompt)
 }
 
@@ -404,6 +406,13 @@ type BuildOutcome struct {
 	FinalText    string
 	FilesTouched []string
 	Verified     bool
+	// SkippedGates names verify-ladder stages that reported "unavailable"
+	// when the turn finished verified. The ladder is deliberately fail-open
+	// (missing infra must not block a build), but "verified: true" with
+	// silently skipped gates reads as "fully tested" — the E2E shipped a
+	// stub-only app this way. Callers surface these so verified means what
+	// it says: everything that could run, ran.
+	SkippedGates []string
 	// RemainingTasks names the seeded plan items still pending when the turn
 	// ended. A turn can compile cleanly while the plan is half-built (the
 	// foundation-first stop); callers surface these so "success" is never
@@ -533,7 +542,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	// words, once, up front — never from the model's plans. A bare "build"
 	// does not count (it usually means "build the screen"); only device words
 	// unlock the 10-minute gradle run.
-	sess.SetBuildRequested(wantsDeviceBuild(lastUserText(conversation)))
+	sess.SetBuildRequested(WantsDeviceBuild(lastUserText(conversation)))
 
 	// Routing resolves once per round, not once per turn: a turn that enters
 	// repair escalates tier mid-flight. The policy loads once — it is process
@@ -786,8 +795,13 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			sess.Emitter.EmitDone("success")
 			outcome.FilesTouched = touched
 			outcome.Verified = true
+			outcome.SkippedGates = sess.SkippedGates()
 			outcome.RemainingTasks = pendingPlanTasks(sess)
 			outcome.FinalText += remainingNote(sess, "Verified, but stopping")
+			if len(outcome.SkippedGates) > 0 {
+				outcome.FinalText += "\n\nVerification note: " + strings.Join(outcome.SkippedGates, ", ") +
+					" check(s) could not run (missing infra) — verified covers everything that ran, not these."
+			}
 			o.recordTurnMemory(sess, touched, outcome)
 			logTurn("done-verified")
 			return outcome, nil
@@ -1558,9 +1572,10 @@ func (g guardState) FileExists(path string) bool {
 // even when the model does not comply.
 func (o *Orchestrator) guardrail(sess *SessionState, name string, input json.RawMessage, opts RunOptions) guardrails.Decision {
 	// build_apk is a 10-minute gradle run: refuse it unless the user's own
-	// prompt asked for a device build. The E2E caught it firing unprompted on
-	// a pure code task.
-	if name == "build_apk" && !sess.WantsBuild() {
+	// prompt asked for a device build, or the user granted device_build approval
+	// mid-turn by answering. Answers arrive as tool_result turns, invisible to
+	// text scanning — the turn_approvals table is their binding record.
+	if name == "build_apk" && !sess.WantsBuild() && !o.approved(sess.ID) {
 		return guardrails.Decision{
 			Allowed: false,
 			Rule:    "scope",
@@ -1570,6 +1585,16 @@ func (o *Orchestrator) guardrail(sess *SessionState, name string, input json.Raw
 	}
 	st := guardState{sess: sess, exists: opts.Exists}
 	return guardrails.Check(name, input, st, o.preinstalled)
+}
+
+// approved reports whether the prompt lifecycle holds a device_build
+// approval (granted via Answer). Nil-store safe: test harnesses and
+// sessions without persistence simply have no approvals.
+func (o *Orchestrator) approved(promptID int64) bool {
+	if o.store == nil {
+		return false
+	}
+	return o.store.HasApproval(promptID, store.ScopeDeviceBuild)
 }
 
 // autoAttachSkills injects the bodies of any auto-attach skills whose triggers
@@ -1604,6 +1629,10 @@ func (o *Orchestrator) autoAttachSkills(sess *SessionState, calls []ai.ToolUseBl
 type verifyVerdict struct {
 	ok       bool
 	feedback string
+	// unavailable marks a gate that did not run (tool error, unreadable or
+	// contract-less output). ok stays true — fail-open — but the sweep
+	// records it so a verified outcome can name what never ran.
+	unavailable bool
 }
 
 // verifyResult mirrors the JSON every verification tool returns. The orchestrator
@@ -1646,12 +1675,19 @@ func (o *Orchestrator) verifyGates() []verifyGate {
 }
 
 // verify walks the gates in order and returns the first failure as feedback the
-// agent can act on, or ok once every gate is satisfied (or unavailable).
+// agent can act on, or ok once every gate is satisfied (or unavailable). Each
+// unavailable gate is noted on the session so a verified outcome can list
+// exactly which checks never actually ran.
 func (o *Orchestrator) verify(ctx context.Context, sess *SessionState, opts RunOptions) verifyVerdict {
 	o.resetVerifyReport()
+	sess.BeginGateSweep()
 	for _, g := range o.verifyGates() {
-		if v := o.runGate(ctx, sess, opts, g); !v.ok {
+		v := o.runGate(ctx, sess, opts, g)
+		if !v.ok {
 			return v
+		}
+		if v.unavailable {
+			sess.NoteGateUnavailable(g.stage)
 		}
 	}
 	return verifyVerdict{ok: true}
@@ -1679,7 +1715,7 @@ func (o *Orchestrator) runGate(ctx context.Context, sess *SessionState, opts Run
 		log.Printf("orchestrator: %s check unavailable (%s); skipping so the build is not blocked by checker breakage", g.stage, reason)
 		sess.Emitter.EmitVerify(g.stage, "unavailable", reason)
 		o.appendVerifyGate(g.stage, "unavailable", reason)
-		return verifyVerdict{ok: true}
+		return verifyVerdict{ok: true, unavailable: true}
 	}
 
 	var vr verifyResult
@@ -1687,7 +1723,7 @@ func (o *Orchestrator) runGate(ctx context.Context, sess *SessionState, opts Run
 		log.Printf("orchestrator: %s check output unreadable (%v); skipping so the build is not blocked by checker breakage", g.stage, err)
 		sess.Emitter.EmitVerify(g.stage, "unavailable", "unreadable "+g.stage+" output")
 		o.appendVerifyGate(g.stage, "unavailable", "unreadable "+g.stage+" output")
-		return verifyVerdict{ok: true}
+		return verifyVerdict{ok: true, unavailable: true}
 	}
 
 	// A verdict without an explicit "passed" field is a checker that does not
@@ -1701,7 +1737,7 @@ func (o *Orchestrator) runGate(ctx context.Context, sess *SessionState, opts Run
 			log.Printf("orchestrator: %s check omitted the passed verdict; skipping so the build is not blocked by checker breakage", g.stage)
 			sess.Emitter.EmitVerify(g.stage, "unavailable", g.stage+" omitted the passed verdict")
 			o.appendVerifyGate(g.stage, "unavailable", g.stage+" omitted the passed verdict")
-			return verifyVerdict{ok: true}
+			return verifyVerdict{ok: true, unavailable: true}
 		}
 	}
 

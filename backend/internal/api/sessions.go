@@ -357,8 +357,13 @@ func (h *SessionHandler) waitForDeviceBoot(adbTarget string, timeout time.Durati
 	log.Printf("waiting for device boot completion (target: %s)", adbTarget)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		cmd := exec.Command("adb", "-s", adbTarget, "shell", "getprop", "sys.boot_completed")
+		pollCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cmd := exec.CommandContext(pollCtx, "adb", "-s", adbTarget, "shell", "getprop", "sys.boot_completed")
 		output, err := cmd.CombinedOutput()
+		cancel()
+		// A wedged adbd must not wedge provisioning: the per-command timeout
+		// converts a hung shell into an empty poll, and the outer deadline
+		// still bounds the whole wait.
 		if err == nil && strings.TrimSpace(string(output)) == "1" {
 			// Extra 3s for services to initialize after boot_completed
 			time.Sleep(3 * time.Second)

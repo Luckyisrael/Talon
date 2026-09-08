@@ -50,11 +50,16 @@ func TestAutoAttachSkillsDedup(t *testing.T) {
 }
 
 // A skill the model read for itself must not then be auto-injected on a later
-// trigger — MarkSkillSeen is the shared gate for both paths.
+// trigger — MarkSkillSeen is the shared gate for both paths. The new
+// seeker-mobile skill bundle fires on the same install trigger; this test
+// marks every skill that would fire as seen, then asserts the report is empty.
+// That is the contract: read skills do not re-inject, regardless of which
+// skill the trigger fan-out reaches.
 func TestAutoAttachSkipsExplicitlyReadSkill(t *testing.T) {
 	o := New(nil, nil, loadKnowledge(t))
 	sess := newTestSession(t)
 	sess.MarkSkillSeen("wallet-mwa")
+	sess.MarkSkillSeen("seeker-mobile")
 
 	call := toolCall("install_package", `{"name":"@solana-mobile/mobile-wallet-adapter-protocol-web3js"}`)
 	if got := o.autoAttachSkills(sess, call); got != "" {
@@ -371,8 +376,8 @@ func TestVerifyLadder(t *testing.T) {
 		if !v.ok {
 			t.Fatalf("want ok, got feedback: %q", v.feedback)
 		}
-		if want := []string{"run_typecheck", "run_lint"}; !equalStrings(calls, want) {
-			t.Errorf("gates ran %v, want %v (typecheck before lint)", calls, want)
+		if want := []string{"run_typecheck", "run_lint", "run_bundle", "run_gradle", "run_boot", "run_vision", "run_interact"}; !equalStrings(calls, want) {
+			t.Errorf("gates ran %v, want %v (typecheck before lint, then the G4 gates in order)", calls, want)
 		}
 		stages := verifyStages(sess.Emitter)
 		if !hasStage(stages, "typecheck", "pass") || !hasStage(stages, "lint", "pass") {
@@ -456,7 +461,7 @@ func TestVerifyLadder(t *testing.T) {
 		if !hasStage(stages, "typecheck", "unavailable") {
 			t.Errorf("the broken gate should be reported as unavailable, got %v", stages)
 		}
-		if !equalStrings(calls, []string{"run_typecheck", "run_lint"}) {
+		if !equalStrings(calls, []string{"run_typecheck", "run_lint", "run_bundle", "run_gradle", "run_boot", "run_vision", "run_interact"}) {
 			t.Errorf("an unavailable gate must not stop the ladder, got %v", calls)
 		}
 	})
@@ -478,6 +483,27 @@ func TestVerifyLadder(t *testing.T) {
 		}
 		if stages := verifyStages(sess.Emitter); !hasStage(stages, "typecheck", "unavailable") {
 			t.Errorf("unparseable output should be reported as unavailable, got %v", stages)
+		}
+	})
+
+	// Valid JSON without an explicit "passed" verdict (e.g. {"ok":true}) parses
+	// with passed defaulting to false — which used to fail the whole build on
+	// an empty error message. A missing verdict is checker drift, not a code
+	// failure: surface as unavailable and keep going.
+	t.Run("missing passed verdict is surfaced as unavailable", func(t *testing.T) {
+		o := New(nil, nil, nil)
+		sess := newTestSession(t)
+		opts := RunOptions{Execute: ladderExec(map[string]gateResponse{
+			"run_typecheck": {out: `{"ok":true}`},
+			"run_lint":      {out: verifyJSON(t, true, "", "no lint errors")},
+		}, nil)}
+
+		v := o.verify(context.Background(), sess, opts)
+		if !v.ok {
+			t.Fatalf("missing verdict must fail open, got feedback: %q", v.feedback)
+		}
+		if stages := verifyStages(sess.Emitter); !hasStage(stages, "typecheck", "unavailable") {
+			t.Errorf("missing verdict should be reported as unavailable, got %v", stages)
 		}
 	})
 }
@@ -522,5 +548,26 @@ func TestEnrichPromptAppendsWorkingDiscipline(t *testing.T) {
 	}
 	if memIdx >= 0 && discIdx > memIdx {
 		t.Error("the discipline block belongs in the stable prefix, before per-session memory")
+	}
+}
+
+// Fix 4: a verified outcome must name the gates that never ran. The sweep
+// records unavailability; SkippedGates reflects the final sweep only.
+func TestSkippedGatesSurfaceOnVerified(t *testing.T) {
+	sess := newTestSession(t)
+	if got := sess.SkippedGates(); len(got) != 0 {
+		t.Fatalf("fresh session should have no skipped gates, got %v", got)
+	}
+	sess.BeginGateSweep()
+	sess.NoteGateUnavailable("boot")
+	sess.NoteGateUnavailable("vision")
+	sess.NoteGateUnavailable("boot") // dedup
+	if got := sess.SkippedGates(); len(got) != 2 || got[0] != "boot" || got[1] != "vision" {
+		t.Fatalf("want [boot vision], got %v", got)
+	}
+	// A later sweep that runs clean erases early unavailability.
+	sess.BeginGateSweep()
+	if got := sess.SkippedGates(); len(got) != 0 {
+		t.Fatalf("final clean sweep should clear skips, got %v", got)
 	}
 }

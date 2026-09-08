@@ -112,7 +112,15 @@ type ToolDef struct {
 // toolTimeout bounds any single tool call. Long-running work (typecheck, apk
 // builds) applies its own, shorter budget internally; this is the backstop that
 // keeps a wedged subprocess from holding a build open forever.
-const toolTimeout = 10 * time.Minute
+// Vars (not consts) purely so the timeout test can scale them down.
+var toolTimeout = 10 * time.Minute
+
+// buildToolTimeout is the one exception: build_apk is prebuild + a cold gradle
+// compile, which measures ~13 minutes on this host. The generic budget made
+// every cold agent-driven build die at exactly 10 minutes — the tool needs
+// room for the real run, with the terminal stream (gradle output is mirrored
+// live) serving as the visible heartbeat while it runs.
+var buildToolTimeout = 30 * time.Minute
 
 // maxToolOutput caps what one tool call can add to the conversation.
 const maxToolOutput = 32 * 1024
@@ -139,7 +147,11 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		return ToolResult{Content: msg, IsError: true}, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, toolTimeout)
+	budget := toolTimeout
+	if name == "build_apk" {
+		budget = buildToolTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
 	result, err := t.Execute(ctx, args)
@@ -156,7 +168,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		result.IsError = true
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		result.Content = fmt.Sprintf("%s timed out after %s", name, toolTimeout)
+		result.Content = fmt.Sprintf("%s timed out after %s", name, budget)
 		result.IsError = true
 	}
 	if result.Content == "" {
@@ -171,15 +183,57 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 }
 
 // StoreAdapter wraps the store so tools can persist without importing it.
+// Both function fields are nilable — a tool built against this adapter
+// should check before calling, because the wiring layer (api/buildsession)
+// chooses which to populate per tool. That keeps the surface small for
+// tools that only need one direction.
 type StoreAdapter struct {
-	CreateADRFn func(projectID int64, decision, context, options, outcome string) error
-	AddMemoryFn func(projectID int64, entryType, content, metadata string) error
+	CreateADRFn      func(projectID int64, decision, context, options, outcome string) error
+	AddMemoryFn      func(projectID int64, entryType, content, metadata string) error
+	GetAllMemoryFn   func(projectID int64) ([]MemoryEntry, error)
+	GetMemoryByTypeFn func(projectID int64, entryType string) ([]MemoryEntry, error)
+}
+
+// MemoryEntry is the read-side view of a project memory row. It mirrors the
+// fields WriteMemory would emit plus a creation timestamp; the store-side
+// store.ProjectMemory type stays in the store package and is converted at the
+// adapter boundary so tools never need to import the store.
+type MemoryEntry struct {
+	ID         int64
+	EntryType  string
+	Content    string
+	Metadata   string
+	CreatedAt  string
 }
 
 func (a *StoreAdapter) CreateADR(projectID int64, decision, context, options, outcome string) error {
+	if a == nil || a.CreateADRFn == nil {
+		return fmt.Errorf("ADR persistence is not wired in this session")
+	}
 	return a.CreateADRFn(projectID, decision, context, options, outcome)
 }
 
 func (a *StoreAdapter) AddMemory(projectID int64, entryType, content, metadata string) error {
+	if a == nil || a.AddMemoryFn == nil {
+		return fmt.Errorf("project memory is not wired in this session")
+	}
 	return a.AddMemoryFn(projectID, entryType, content, metadata)
+}
+
+// ListMemory returns every memory entry for a project, oldest first — the same
+// order the system-prompt enrichment uses, so what the model sees in context
+// matches what read_memory returns.
+func (a *StoreAdapter) ListMemory(projectID int64) ([]MemoryEntry, error) {
+	if a == nil || a.GetAllMemoryFn == nil {
+		return nil, fmt.Errorf("project memory is not wired in this session")
+	}
+	return a.GetAllMemoryFn(projectID)
+}
+
+// ListMemoryByType returns the entries of one type, oldest first.
+func (a *StoreAdapter) ListMemoryByType(projectID int64, entryType string) ([]MemoryEntry, error) {
+	if a == nil || a.GetMemoryByTypeFn == nil {
+		return nil, fmt.Errorf("project memory is not wired in this session")
+	}
+	return a.GetMemoryByTypeFn(projectID, entryType)
 }

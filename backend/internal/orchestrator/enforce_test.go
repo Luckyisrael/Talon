@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/seekersstudio/backend/internal/ai"
+	"github.com/seekersstudio/backend/internal/events"
+	"github.com/seekersstudio/backend/internal/store"
 )
 
 func writeResult(id string) ai.Block {
@@ -204,7 +206,7 @@ func TestWantsDeviceBuild(t *testing.T) {
 		"test it on the emulator",
 	}
 	for _, prompt := range yes {
-		if !wantsDeviceBuild(prompt) {
+		if !WantsDeviceBuild(prompt) {
 			t.Errorf("expected device build for %q", prompt)
 		}
 	}
@@ -216,7 +218,7 @@ func TestWantsDeviceBuild(t *testing.T) {
 		"",
 	}
 	for _, prompt := range no {
-		if wantsDeviceBuild(prompt) {
+		if WantsDeviceBuild(prompt) {
 			t.Errorf("expected no device build for %q", prompt)
 		}
 	}
@@ -235,4 +237,50 @@ func TestBuildApkGuardrail(t *testing.T) {
 	if !d.Allowed {
 		t.Errorf("requested build_apk must pass the gate, got %+v", d)
 	}
+}
+
+// The Fix-1 contract: an approval granted mid-turn (stored via Answer) must
+// unlock build_apk even when the session's own prompt text did not ask for
+// a device build — answers land as tool_results, invisible to text scans.
+func TestBuildApkGuardrailApprovalBinding(t *testing.T) {
+	st, err := store.New(t.TempDir() + "/appr.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	u, _ := st.CreateUser("appr@test.com", "hash")
+	p, _ := st.CreateProject(u.ID, "appr", "1.0.0", "appr-slug", "com.test.appr", "", "")
+
+	o := &Orchestrator{store: st}
+	sess := NewSession(77, p.ID, t.TempDir(), events.NewSessionEmitter(77, 128))
+	sess.SetBuildRequested(false)
+
+	// No approval: still refused.
+	if d := o.guardrail(sess, "build_apk", json.RawMessage(`{}`), RunOptions{}); d.Allowed {
+		t.Fatal("no approval, no prompt ask — must refuse")
+	}
+
+	// User answers "yes, build the APK": approval binds to prompt 77.
+	if !orchestratorWantsBuild(t, "Yes — build the APK and install it on the device") {
+		t.Fatal("answer text should classify as a device-build approval")
+	}
+	if err := st.GrantApproval(p.ID, 77, store.ScopeDeviceBuild); err != nil {
+		t.Fatal(err)
+	}
+	if !o.approved(77) {
+		t.Fatal("approval should be readable for the prompt")
+	}
+	if d := o.guardrail(sess, "build_apk", json.RawMessage(`{}`), RunOptions{}); !d.Allowed {
+		t.Fatalf("granted approval must unlock build_apk, got %+v", d)
+	}
+
+	// The approval is prompt-scoped: a different prompt stays locked.
+	if o.approved(78) {
+		t.Fatal("approval must not leak across prompts")
+	}
+}
+
+func orchestratorWantsBuild(t *testing.T, s string) bool {
+	t.Helper()
+	return WantsDeviceBuild(s)
 }

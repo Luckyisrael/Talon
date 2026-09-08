@@ -388,13 +388,11 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only a build turn paused on ask_user is answerable. A turn in any other
-	// status is not waiting for a reply, and injecting a tool_result into a
-	// transcript with no pending question would corrupt it.
-	if prompt.Mode != "build" {
-		writeError(w, http.StatusBadRequest, "only build turns can be answered")
-		return
-	}
+	// A turn paused on ask_user is answerable in either mode. Build turns
+	// resume the loop with the answer as the pending tool_result; plan turns
+	// have no tool call to answer — the reply continues the planning as a new
+	// plan request carrying the conversation so far, which is exactly how plan
+	// Q&A worked before, minus the dead "only build turns" error.
 	if prompt.Status != "waiting" {
 		writeError(w, http.StatusConflict, "this turn is not waiting for an answer")
 		return
@@ -427,10 +425,30 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 	// writes the terminal status when the loop returns.
 	h.store.UpdatePromptStatus(id, "running", prompt.Round)
 
+	// An answer that approves a device build (e.g. "yes, build the APK and
+	// install it") binds to this prompt's lifecycle: text-scanning guardrails
+	// never see tool_result turns, so the approval is recorded explicitly and
+	// the build_apk gate reads it. Without this, every approval looped back
+	// to another ask_user — the approval spin.
+	if orchestrator.WantsDeviceBuild(body.Answer) {
+		if err := h.store.GrantApproval(prompt.ProjectID, id, store.ScopeDeviceBuild); err != nil {
+			log.Printf("WARN: could not record device-build approval for prompt %d: %v", id, err)
+		}
+	}
+
 	// The answer is injected as the tool_result for the pending ask_user call, not
 	// appended as a fresh user prompt. It is real user input, so it is persisted;
 	// it is not metered, because the question and its answer are one prompt,
 	// already charged when the turn first ran.
+	//
+	// Plan turns never had a tool call to answer: the reply continues the
+	// planning, streaming a fresh plan request that carries the conversation
+	// so far (the question already lives in it). Metered like the original
+	// plan turn — this is the second half of one planning exchange.
+	if prompt.Mode == "plan" {
+		h.streamPlan(r.Context(), w, flusher, id, prompt.ProjectID, body.Answer)
+		return
+	}
 	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, body.Answer,
 		buildOptions{persistUserTurn: false, meterPrompt: false, answer: true, mode: "build"})
 }
@@ -534,9 +552,51 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 		writeSSE(w, "text.delta", ai.StreamTextDelta{Text: raw})
 	}
 
-	writeSSE(w, "done", map[string]string{"status": "success"})
-	h.store.UpdatePromptStatus(promptID, "completed", 0)
+	// A plan reply that asks questions instead of settling a plan is not done:
+	// mark it waiting so the Answer endpoint can continue the planning with the
+	// user's reply, exactly as build turns continue after ask_user. The
+	// distinction is structural — a plan turn that produced screens is settled
+	// even if its message also asks something minor.
+	waiting := planResp.Plan == nil && planAsksQuestion(raw)
+	if waiting {
+		writeSSE(w, "done", map[string]string{"status": "waiting"})
+		h.store.UpdatePromptStatus(promptID, "waiting", 0)
+	} else {
+		writeSSE(w, "done", map[string]string{"status": "success"})
+		h.store.UpdatePromptStatus(promptID, "completed", 0)
+	}
 	flusher.Flush()
+}
+
+// planAsksQuestion reports whether a plan-mode reply is asking the user
+// something rather than settling a plan. Plan responses are JSON; the
+// heuristic reads the human-readable message for the shape a blocking
+// question takes (an interrogative or an explicit "which/what/… do you want"
+// construction). It runs only when the reply carries no plan, so a settled
+// plan with rhetorical phrasing never trips it.
+func planAsksQuestion(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	msg := raw
+	var probe struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal([]byte(raw), &probe) == nil {
+		msg = probe.Message
+	}
+	msg = strings.ToLower(msg)
+	if len(msg) > 2000 {
+		msg = msg[len(msg)-2000:] // questions live at the end
+	}
+	markers := []string{"which one", "which do you", "what do you want", "do you want",
+		"do you need", "should i", "would you rather", "?", "your call", "you decide"}
+	for _, m := range markers {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // streamBuild runs the agent loop while forwarding its events to the client.

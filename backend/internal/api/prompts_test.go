@@ -107,3 +107,31 @@ func TestPlanModeSendsNoToolsToModel(t *testing.T) {
 		}
 	}
 }
+
+// Fix 5: a plan reply that asks questions instead of settling a plan is
+// waiting, not completed — both polarities of the structural check.
+func TestPlanAsksQuestion(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{`{"message":"Which one are you actually building — the tracker or the wallet?"}`, true},
+		{`{"message":"Do you want MWA at all?"}`, true},
+		{`{"message":"Here is the settled plan for the tracker."}`, false},
+		{``, false},
+	}
+	for _, c := range cases {
+		if got := planAsksQuestion(c.raw); got != c.want {
+			t.Errorf("planAsksQuestion(%q) = %v, want %v", c.raw, got, c.want)
+		}
+	}
+	// A plan reply carrying screens is settled regardless of phrasing —
+	// that gate lives in the caller (Plan == nil), asserted here for clarity.
+	raw := `{"message":"Which color?","plan":{"screens":[{"name":"Home"}]}}`
+	var pr struct {
+		Plan *json.RawMessage
+	}
+	if err := json.Unmarshal([]byte(raw), &pr); err != nil || pr.Plan == nil {
+		t.Errorf("plan-bearing reply must parse with a plan: %v %v", pr.Plan, err)
+	}
+}

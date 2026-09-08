@@ -251,6 +251,20 @@ func (s *Store) migrate() error {
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_checkpoints_project ON checkpoints(project_id, id DESC)`,
+		// turn_approvals records user approvals granted mid-turn (e.g. answering
+		// "yes, build the APK" to an ask_user question). Answers arrive as
+		// tool_result turns, never as user text, so text-scanning guardrails
+		// cannot see them — approvals must be stored explicitly, keyed to the
+		// prompt lifecycle: a new prompt re-evaluates from its own words.
+		`CREATE TABLE IF NOT EXISTS turn_approvals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			prompt_id INTEGER NOT NULL,
+			scope TEXT NOT NULL,
+			granted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(prompt_id, scope),
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
 		// customers is the link between a user and the payment provider's own
 		// customer record. user_id is UNIQUE so there is exactly one canonical
 		// customer per user (Phase 9 rule 2.2) — a re-visit reuses the row rather
@@ -598,6 +612,23 @@ func (s *Store) UpdatePromptResponse(id int64, response string) error {
 func (s *Store) UpdatePromptStatus(id int64, status string, round int) error {
 	_, err := s.db.Exec("UPDATE prompts SET status = ?, round = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", status, round, id)
 	return err
+}
+
+// ScopeDeviceBuild is the turn_approvals scope unlocking build_apk.
+const ScopeDeviceBuild = "device_build"
+
+// GrantApproval records a mid-turn user approval (scope "device_build").
+// INSERT OR IGNORE: re-granting is a no-op, and approval never spans prompts.
+func (s *Store) GrantApproval(projectID, promptID int64, scope string) error {
+	_, err := s.db.Exec("INSERT OR IGNORE INTO turn_approvals (project_id, prompt_id, scope) VALUES (?, ?, ?)", projectID, promptID, scope)
+	return err
+}
+
+// HasApproval reports whether the prompt lifecycle holds the scope.
+func (s *Store) HasApproval(promptID int64, scope string) bool {
+	var count int
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM turn_approvals WHERE prompt_id = ? AND scope = ?", promptID, scope).Scan(&count)
+	return count > 0
 }
 
 func (s *Store) CreateSession(projectID int64) (*Session, error) {

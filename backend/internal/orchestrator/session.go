@@ -126,6 +126,10 @@ type SessionState struct {
 	// as the plain underlying edit, identical to today.
 	PatchBuffer *build.PatchBuffer
 
+	// skippedGates accumulates ladder stages that reported unavailable in
+	// the current sweep, so a verified outcome can name what never ran.
+	skippedGates []string
+
 	mu sync.Mutex
 }
 
@@ -603,4 +607,33 @@ func (s *SessionState) EmitPlanSeed() {
 	for _, t := range s.TaskTracker.GetTasks() {
 		s.Emitter.EmitTaskUpdate(t.ID, t.Description, t.Status, t.Result)
 	}
+}
+
+// BeginGateSweep resets the per-sweep unavailable-gate list. One sweep is one
+// ladder walk; the final sweep's unavailability is what a verified outcome
+// reports (a gate unavailable in an early sweep that ran in the final one
+// was repaired, not skipped).
+func (s *SessionState) BeginGateSweep() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.skippedGates = nil
+}
+
+// NoteGateUnavailable records a ladder stage that could not run.
+func (s *SessionState) NoteGateUnavailable(stage string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, g := range s.skippedGates {
+		if g == stage {
+			return
+		}
+	}
+	s.skippedGates = append(s.skippedGates, stage)
+}
+
+// SkippedGates returns the unavailable stages from the final ladder sweep.
+func (s *SessionState) SkippedGates() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.skippedGates...)
 }
