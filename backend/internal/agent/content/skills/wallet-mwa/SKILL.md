@@ -1,79 +1,89 @@
 ---
 name: wallet-mwa
-description: Connect a wallet and sign or send transactions with Mobile Wallet Adapter. Load this whenever the task touches wallet connection, signing, sending transactions, or reading the connected account.
-version: "@solana-mobile/mobile-wallet-adapter-protocol-web3js@2.1.x, @solana/web3.js@1.98.x"
+description: Connect a wallet and sign or send transactions with Mobile Wallet Adapter via the wallet-ui kit. Load this whenever the task touches wallet connection, signing, sending transactions, or reading the connected account.
+version: "@wallet-ui/react-native-kit@4.x, @solana/kit@6.x, @solana-mobile/mobile-wallet-adapter-protocol-kit@0.4.x"
 autoAttach: true
-triggers: [import:mobile-wallet-adapter, import:transact, pkg:@solana-mobile]
+triggers: [import:mobile-wallet-adapter, import:transact, import:useMobileWallet, import:wallet-ui, pkg:@solana-mobile, pkg:@wallet-ui, pkg:@solana/kit]
 ---
 
-# Wallet connection & signing via MWA
+# Wallet connection & signing via MWA (kit)
 
-This project talks to wallets **only** through Mobile Wallet Adapter. There is no
-browser wallet, no `@solana/wallet-adapter-react`, no injected provider. Every
-wallet interaction is one `transact()` session with the installed wallet app.
+This project talks to wallets **only** through Mobile Wallet Adapter, via the
+`@wallet-ui/react-native-kit` hook. There is no browser wallet, no
+`@solana/wallet-adapter-react`, no injected provider, no `@solana/web3.js`
+(`Connection`, `PublicKey`, `Transaction` are legacy — do not import them).
 
-**Pinned to this project:** `@solana-mobile/mobile-wallet-adapter-protocol-web3js`
-(2.1.x) and `@solana/web3.js` (1.98.x) — both already installed. This package pairs
-MWA with web3.js `Transaction`/`VersionedTransaction` objects directly.
+**Pinned to this project:** `@wallet-ui/react-native-kit` (4.x),
+`@solana/kit` (6.x), `@solana-mobile/mobile-wallet-adapter-protocol-kit`
+(0.4.x) — all already installed. Working examples live in
+`features/account/` (`account-feature-connect`, `-sign-transaction`,
+`-get-balance`): read the installed feature before inventing your own flow.
 
 ## Confirm the exact API before you rely on it
 
-The shapes below are correct for the 2.1.x line, but signatures shift between minor
-versions. Before writing signing code, read the installed types to confirm method
-names and argument shapes:
+The shapes below are correct for the pinned line, but signatures shift between
+minor versions. Before writing signing code, read the installed types to
+confirm method names and argument shapes:
 
-- `node_modules/@solana-mobile/mobile-wallet-adapter-protocol-web3js/lib/typescript/`
+- `node_modules/@wallet-ui/react-native-kit/dist/types/index.d.ts`
+- `node_modules/@solana/kit/dist/types/index.d.ts`
 
-Trust the installed `.d.ts` over memory. If what you find differs from this skill,
-follow the installed types and keep going.
+If a package uses a different layout, read its `types` (or `typings`) field
+in `package.json` — that field is the entry point, not any conventional path.
+
+Trust the installed `.d.ts` over memory. If what you find differs from this
+skill, follow the installed types and keep going. Better yet, call
+`inspect_package` with the package name — one call returns the full surface.
 
 ## The one pattern that matters
 
-Everything happens inside a `transact` callback. The session is only alive inside it.
+Everything goes through the `useMobileWallet()` hook. Connect once, send
+instructions; the hook owns the MWA session lifecycle.
 
-```ts
-import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol-web3js';
-import { PublicKey, Transaction } from '@solana/web3.js';
+```tsx
+import { useMobileWallet } from '@wallet-ui/react-native-kit';
+import { getAddMemoInstruction } from '@solana-program/memo';
+import { Address, Instruction } from '@solana/kit';
 
-const APP_IDENTITY = {
-  name: 'Seeker App',
-  uri: 'https://seeker.app',
-  icon: 'favicon.ico', // relative to uri
-};
+const { account, connect, sendTransactions } = useMobileWallet();
 
-// Connect: authorize once, keep the returned authToken to reauthorize later.
-const { accounts, auth_token } = await transact(async (wallet) => {
-  return await wallet.authorize({
-    chain: 'solana:devnet',      // 'solana:mainnet' for production
-    identity: APP_IDENTITY,
-  });
-});
-// accounts[0].address is a base64-encoded address, NOT a base58 string.
+// Connect: hook handles authorize + session. account holds the address.
+await connect();
+
+// Send: build kit Instructions, hand them over. No manual transact,
+// no base64 juggling, no PublicKey — addresses are kit `Address` strings.
+const instructions: Instruction[] = [
+  getAddMemoInstruction({ memo: 'hello seeker' }),
+];
+const signature = await sendTransactions(instructions);
 ```
 
 ## Rules that keep this correct
 
-- **Reuse the auth token.** Store `auth_token` from the first `authorize`, then call
-  `wallet.reauthorize({ auth_token, identity })` on later sessions so the user is not
-  re-prompted every time.
-- **Convert the address.** MWA returns `accounts[0].address` as base64. Decode it to
-  bytes and build a `PublicKey` — do not treat it as a base58 string.
-- **Prefer `signAndSendTransactions`.** For sending, use
-  `wallet.signAndSendTransactions({ transactions: [...] })`. `signTransactions` is
-  deprecated in MWA 2.x — only sign-without-send when you have a specific reason
-  (e.g. handing the signed tx to a relayer).
-- **Rejection is normal.** The user can dismiss the wallet sheet. That throws — catch
-  it, treat it as "cancelled", and return the UI to its resting state. It is not an
-  error to surface as a crash.
+- **Use the hook, not raw transact.** Do not import
+  `@solana-mobile/mobile-wallet-adapter-protocol` (or `-kit`) directly for
+  signing when `@wallet-ui/react-native-kit` is installed; the hook owns the
+  session and the account state your UI reads.
+- **Addresses are strings.** Kit `Address` is a base58 string type — there is
+  no base64 decode step, no `PublicKey` construction. If an API hands you
+  raw bytes, convert once at the boundary with kit codecs, not inline.
+- **Build instructions with program clients.** `@solana-program/memo`,
+  `@solana-program/system`, `@solana-program/token` — never hand-roll
+  instruction bytes.
+- **Rejection is normal.** The user can dismiss the wallet sheet. That throws —
+  catch it, treat it as "cancelled", and return the UI to its resting state.
+  It is not an error to surface as a crash.
 - **Show before you sign.** Render what the user is about to approve (amount,
   recipient, action) before the sheet opens.
-- **Fetch a blockhash first.** Build transactions with a recent blockhash from your
-  `Connection` before entering `transact` where possible; keep the callback short.
+- **Read balances with kit RPC, not MWA.** MWA is for signing; balances and
+  account data come from `@solana/kit` RPC (`rpc.getBalance(address).send()`).
+  See `use-account-get-balance.tsx` in the installed features.
 
 ## What not to do
 
 - Do not persist keys or seeds — there are none to persist.
-- Do not open a second `transact` inside another; do one session at a time.
-- Do not import `@solana-mobile/mobile-wallet-adapter-protocol` directly for signing
-  when the `-web3js` variant is installed; the web3js wrapper is what handles
-  `Transaction` objects for you.
+- Do not import `@solana/web3.js` (`Connection`, `Keypair`, `Transaction`,
+  `PublicKey`) — legacy v1 API, not installed. The kit-web3-interop reference
+  covers migration only if you inherit v1 code.
+- Do not open raw `transact()` sessions alongside the hook; one session owner
+  per screen.

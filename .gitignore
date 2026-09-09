@@ -91,5 +91,5 @@ coverage/
 # Yarn
 frontend/yarn.lock
 
-# Package lock (using npm)
-backend/template/package-lock.json
+# Template lockfile is tracked: reproducible installs via `npm ci` in
+# build-template.sh (P5). The old ignore predates that decision.

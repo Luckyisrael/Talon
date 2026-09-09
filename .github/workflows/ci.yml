@@ -48,6 +48,18 @@ jobs:
             exit 1;
           fi
 
+      - name: Kit guard (no web3.js imports)
+        working-directory: ${{ github.workspace }}
+        run: |
+          # The template migrated to @solana/kit (Phase 2 migration). Legacy
+          # @solana/web3.js imports in template code or agent skills would
+          # silently teach the model the wrong API. Docs may mention it for
+          # migration context; code may not import it.
+          if grep -rn "@solana/web3.js\|from ['\"]web3\|require(['\"]@solana/web3" --include="*.ts" --include="*.tsx" backend/template/app backend/template/components backend/template/features backend/template/lib backend/template/utils backend/internal/agent/content/skills/ 2>/dev/null | grep -v "kit-web3-interop\|legacy\|Legacy" | grep -q .; then
+            echo "Legacy @solana/web3.js import found (see above). Use @solana/kit; migration context belongs in docs, not code.";
+            exit 1;
+          fi
+
   frontend:
     name: frontend (types + lint + tests + build)
     runs-on: ubuntu-latest

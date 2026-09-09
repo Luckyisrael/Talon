@@ -8,6 +8,17 @@ plan must move one of these numbers.
 | Benchmark | Baseline | Notes |
 |---|---|---|
 | Typecheck (`tsc --noEmit`, ws27) | **2.29 s/op** (hot cache; ~9 s cold) | Full project, parse-bound on the Expo SDK graph. `tsc --build` measured **no faster** (9.0 s vs 9.2 s warm) — buildinfo doesn't skip on this workload, so verify stays on `--noEmit`. Template keeps `incremental`+`noEmit` for future adoption. Baseline is cache-sensitive: compare runs back-to-back. |
+
+## Kit template re-baseline (Phase 3 migration, SEEKER_BENCH_WS=template)
+
+New template (kit v6, 600 packages) vs old (web3.js, ws27 workspaces):
+
+| Benchmark | Old template | Kit template | Delta |
+|---|---|---|---|
+| Typecheck | 2.29 s hot / ~9 s cold | **36.5 s** | **16x regression** — kit's declaration graph dominates despite `skipLibCheck:true`. Every verify turn pays this. Biggest perf cost of the migration; no mitigation yet (program is parse-bound, `--build` won't help — same finding as above, larger). |
+| LintWalk | 0.30 ms | 8.9 ms | Bigger tree, still negligible. #11 stays deprioritized. |
+| CopyTree | 3.7 ms | 7.0 ms | Fine. |
+| Analyze | 115 ms | 196 ms | Machine variance + larger binary; same code. |
 | LintWalk (`walkSource`, ws27) | **0.30 ms/op** | File walk itself is negligible — if lint is slow, the cost is eslint, not the walk. Deprioritizes plan #11. |
 | CopyTree (template `app/`) | **3.7 ms/op** | Small tree; hardlinking (#12) only matters for large workspaces — measure on ws27+node_modules before doing it. |
 | Analyze (1080×2400 PNG) | **115 ms/op** | Slower than the "low ms" comment claims (`img.At` dispatch per sample). Runs before every vision call; direct-`Pix` access is the fix if it ever matters. |
