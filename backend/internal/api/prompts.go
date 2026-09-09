@@ -174,10 +174,14 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		h.store.UpdatePromptResponse(prompt.ID, string(respBytes))
 		h.store.IncrementPrompts(userID)
 		h.persistPlanExchange(req.ProjectID, prompt.ID, req.Prompt, planResp.Message, planJSON(planResp.Plan))
-		// A plan turn finishes here — it never reaches the build finalizer, so its
-		// terminal status must be written explicitly or the row stays 'running'
-		// and the next reload would offer to resume a turn that is already done.
-		h.store.UpdatePromptStatus(prompt.ID, "completed", 0)
+		// A plan reply that asks questions instead of settling a plan is not
+		// done — waiting lets the Answer endpoint continue the planning. Same
+		// rule as the streaming path; both doors must classify identically.
+		status := "completed"
+		if planResp.Plan == nil && planAsksQuestion(string(respBytes)) {
+			status = "waiting"
+		}
+		h.store.UpdatePromptStatus(prompt.ID, status, 0)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"id":       prompt.ID,
 			"mode":     "plan",
