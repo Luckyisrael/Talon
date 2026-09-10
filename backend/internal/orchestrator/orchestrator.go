@@ -220,13 +220,17 @@ func parseFailurePattern(content string) fpParts {
 	return p
 }
 
+// IsDeviceStep is isDeviceStep exported for the phase guard — the
+// device-step set is a phase contract (crash-index membership).
+func IsDeviceStep(tool string) bool { return isDeviceStep(tool) }
+
 // isDeviceStep reports whether a failed tool call belongs in the run-scoped
 // crash index: the gates and tools whose failures mean something on the
 // device went wrong, as opposed to a code error.
 func isDeviceStep(tool string) bool {
 	switch tool {
 	case "run_boot", "run_vision", "run_interact", "test_wallet_roundtrip",
-		"capture_screenshot", "tail_logcat":
+		"capture_screenshot", "tail_logcat", "run_e2e":
 		return true
 	}
 	return false

@@ -1,15 +1,16 @@
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
+import { Code, Document, Edit, Star } from 'iconsax-react-native';
 import { UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
 
 export type TraceStatus = 'running' | 'done' | 'fail';
 
-// Tool family → glyph, mirroring web AgentTrace.toolIcon (file / pencil /
-// terminal / sparkle). Unknown tools get the dot.
-function familyIcon(tool?: string): 'document-text-outline' | 'pencil' | 'terminal' | 'sparkles' | 'ellipse' {
+// Tool family → Iconsax Linear glyph, mirroring web AgentTrace.toolIcon
+// (file / pencil / terminal / sparkle). Unknown tools keep the dot.
+function FamilyGlyph({ tool, color }: { tool?: string; color: string }) {
+  const props = { size: 13, color, variant: 'Linear' } as const;
   switch (tool) {
     case 'read_file':
     case 'list_files':
@@ -18,14 +19,14 @@ function familyIcon(tool?: string): 'document-text-outline' | 'pencil' | 'termin
     case 'find_files':
     case 'explore':
     case 'read_skill':
-      return 'document-text-outline';
+      return <Document {...props} />;
     case 'write_file':
     case 'edit_file':
     case 'multi_edit':
     case 'try_edit':
     case 'keep_edit':
     case 'install_package':
-      return 'pencil';
+      return <Edit {...props} />;
     case 'run_command':
     case 'run_shell':
     case 'run_typecheck':
@@ -41,9 +42,9 @@ function familyIcon(tool?: string): 'document-text-outline' | 'pencil' | 'termin
     case 'tail_logcat':
     case 'test_wallet_roundtrip':
     case 'capture_screenshot':
-      return 'terminal';
+      return <Code {...props} />;
     default:
-      return 'ellipse';
+      return <Star {...props} />;
   }
 }
 
@@ -81,11 +82,7 @@ export function TraceRow({
           {decision && !running ? (
             <View style={styles.decisionMark} />
           ) : (
-            <Ionicons
-              name={familyIcon(tool)}
-              size={13}
-              color={running ? Colors.acidLime : Colors.fog}
-            />
+            <FamilyGlyph tool={tool} color={running ? Colors.acidLime : Colors.fog} />
           )}
         </View>
         <UIText variant="bodySm" tone={running ? 'accent' : 'body'} style={styles.label}>

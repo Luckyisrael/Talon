@@ -203,6 +203,9 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 		reg.Register(&tools.CaptureScreenshot{ADBTarget: adbTarget, Vision: vision})
 		reg.Register(&tools.TailLogcat{ADBTarget: adbTarget})
 		reg.Register(&tools.TestWalletRoundtrip{ADBTarget: adbTarget})
+		// DV5: the E2E gate. Maestro flows under .maestro/flows/, executed
+		// against this device; honest skip when maestro is not installed.
+		reg.Register(&tools.RunE2E{WorkspacePath: workspacePath, ADBTarget: adbTarget})
 		// DV1: the bundler's voice. The buffer is pumped from the session's
 		// metro tap for the session's lifetime; the agent reads the tail.
 		if buf := h.metroBufferFor(projectID); buf != nil {

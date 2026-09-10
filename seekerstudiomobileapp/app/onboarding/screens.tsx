@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { Lamp, Layer, Wallet } from 'iconsax-react-native';
 import { GhostButton, LimeButton, Screen, UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
 
@@ -45,11 +45,12 @@ const styles = StyleSheet.create({
 
 // Medallion: carbon circle, hairline border, fog glyph  the visual anchor
 // that keeps onboarding from being buttons on void.
-function Medallion({ icon }: { icon: 'compass' | 'layers' | 'wallet' }) {
-  const glyph = { compass: 'compass-outline', layers: 'layers-outline', wallet: 'wallet-outline' } as const;
+function Medallion({ icon }: { icon: 'welcome' | 'features' | 'connect' }) {
+  const glyph = { welcome: Lamp, features: Layer, connect: Wallet } as const;
+  const Glyph = glyph[icon];
   return (
     <View style={styles.medallion}>
-      <Ionicons name={glyph[icon]} size={30} color={Colors.fog} />
+      <Glyph size={30} color={Colors.fog} variant="Linear" />
     </View>
   );
 }
@@ -64,7 +65,7 @@ export function WelcomeScreen() {
       </Animated.View>
       <View style={styles.body}>
         <Animated.View entering={FadeInDown.duration(450).delay(80)}>
-          <Medallion icon="compass" />
+          <Medallion icon="welcome" />
           <UIText variant="display" tone="hero">
             Build Solana apps by talking.
           </UIText>
@@ -95,7 +96,7 @@ export function FeaturesScreen() {
     <Screen>
       <StepCaps of="2" />
       <View style={styles.body}>
-        <Medallion icon="layers" />
+        <Medallion icon="features" />
         <UIText variant="heading" tone="hero">
           Three moves.
         </UIText>
@@ -131,7 +132,7 @@ export function ConnectScreen() {
     <Screen>
       <StepCaps of="3" />
       <View style={styles.body}>
-        <Medallion icon="wallet" />
+        <Medallion icon="connect" />
         <UIText variant="heading" tone="hero">
           One wallet to sign them.
         </UIText>

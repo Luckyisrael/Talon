@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Camera, Refresh, Send } from 'iconsax-react-native';
 import { Screen, UIText } from '@/components/ui';
 import { Badge } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
@@ -51,11 +51,12 @@ function IconButton({
   primary,
   onPress,
 }: {
-  icon: string;
+  icon: typeof Camera;
   label: string;
   primary?: boolean;
   onPress: () => void;
 }) {
+  const Icon = icon;
   return (
     <Pressable
       onPress={onPress}
@@ -66,11 +67,7 @@ function IconButton({
       ]}
       accessibilityLabel={label}
     >
-      <Ionicons
-        name={icon as never}
-        size={22}
-        color={primary ? Colors.acidLimeInk : Colors.mist}
-      />
+      <Icon size={22} color={primary ? Colors.acidLimeInk : Colors.mist} variant="Linear" />
     </Pressable>
   );
 }
@@ -114,16 +111,16 @@ export default function DeviceScreen() {
             )}
           </View>
 
-          {/* Icon toolbar: capture is primary, rotate + power secondary. */}
+          {/* Icon toolbar: capture is primary, rotate + install secondary. */}
           <View style={styles.toolbar}>
             <IconButton
-              icon="camera"
+              icon={Camera}
               label="Capture screenshot"
               primary
               onPress={() => setShot('frame · 1080×2400 · just now (dummy)')}
             />
-            <IconButton icon="refresh" label="Rotate display" onPress={() => {}} />
-            <IconButton icon="power" label="Reboot device" onPress={() => {}} />
+            <IconButton icon={Refresh} label="Rotate display" onPress={() => {}} />
+            <IconButton icon={Send} label="Install current build" onPress={() => {}} />
           </View>
 
           <UIText variant="title" tone="hero" style={styles.section}>

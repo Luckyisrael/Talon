@@ -2,7 +2,7 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { User } from 'iconsax-react-native';
 import { UIText } from '@/components/ui';
 import { Colors, Radii, Spacing } from '@/constants/theme';
 
@@ -29,7 +29,7 @@ export function TopNav({ onProfilePress }: { onProfilePress: () => void }) {
         accessibilityLabel="Open profile menu"
         style={({ pressed }) => [styles.avatar, pressed && styles.pressed]}
       >
-        <Ionicons name="person" size={18} color={Colors.mist} />
+        <User size={18} color={Colors.mist} variant="Linear" />
       </Pressable>
       <View style={styles.items}>
         {TABS.map((t) => {

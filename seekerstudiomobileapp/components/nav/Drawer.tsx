@@ -2,16 +2,16 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Clock, Logout, MessageQuestion, Setting, User } from 'iconsax-react-native';
 import { UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
 
-const ITEMS: { icon: string; label: string }[] = [
-  { icon: 'person-outline', label: 'Profile' },
-  { icon: 'time-outline', label: 'History' },
-  { icon: 'settings-outline', label: 'Settings' },
-  { icon: 'help-circle-outline', label: 'Help & Support' },
-];
+const ITEMS = [
+  { icon: User, label: 'Profile' },
+  { icon: Clock, label: 'History' },
+  { icon: Setting, label: 'Settings' },
+  { icon: MessageQuestion, label: 'Help & Support' },
+] as const;
 
 // Push drawer: fixed half-screen sheet sliding in from the left while the
 // content translates right by the same distance — shift, never squeeze.
@@ -41,7 +41,7 @@ export function Drawer({
       <View style={[styles.inner, { paddingTop: insets.top + Spacing.s16 }]}>
         <View style={styles.head}>
           <View style={styles.avatar}>
-            <Ionicons name="person" size={24} color={Colors.mist} />
+            <User size={24} color={Colors.mist} variant="Linear" />
           </View>
           <UIText variant="heading" tone="hero" style={styles.name}>
             Guest
@@ -50,17 +50,20 @@ export function Drawer({
             Not signed in — explore freely, nothing syncs yet.
           </UIText>
         </View>
-        {ITEMS.map((item) => (
-          <Pressable key={item.label} style={styles.item} onPress={onClose}>
-            <Ionicons name={item.icon as never} size={24} color={Colors.fog} />
-            <UIText variant="bodyLg" tone="body">
-              {item.label}
-            </UIText>
-          </Pressable>
-        ))}
+        {ITEMS.map((item) => {
+          const Icon = item.icon;
+          return (
+            <Pressable key={item.label} style={styles.item} onPress={onClose}>
+              <Icon size={24} color={Colors.fog} variant="Linear" />
+              <UIText variant="bodyLg" tone="body">
+                {item.label}
+              </UIText>
+            </Pressable>
+          );
+        })}
         <View style={styles.foot}>
           <Pressable style={styles.item} onPress={onClose}>
-            <Ionicons name="log-out-outline" size={24} color={Colors.coralRed} />
+            <Logout size={24} color={Colors.coralRed} variant="Linear" />
             <UIText variant="bodyLg" tone="danger">
               Sign out
             </UIText>

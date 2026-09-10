@@ -33,6 +33,7 @@ import (
 	"net"
 	"github.com/seekersstudio/backend/internal/api"
 	"github.com/seekersstudio/backend/internal/metro"
+	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/relay"
 	"github.com/seekersstudio/backend/internal/tools"
@@ -1284,5 +1285,41 @@ func TestPhaseDV4PoolAndReaper(t *testing.T) {
 		t.Fatalf("idle: %v", err)
 	} else if len(idle) != 0 {
 		t.Errorf("fault: touched session idle for pause window (%d rows)", len(idle))
+	}
+}
+
+// DV5: the E2E gate. run_e2e is a device step (crash-index member), its
+// unavailable states are honest skips, and a failing flow is a verdict.
+func TestPhaseDV5E2EGate(t *testing.T) {
+	// Crash-index membership: a failed run_e2e belongs to the device
+	// failure surface like the rest of the ladder.
+	if !orchestrator.IsDeviceStep("run_e2e") {
+		t.Error("fault: run_e2e missing from the device-step set")
+	}
+	// And the set it belongs to.
+	for _, name := range []string{"run_boot", "run_vision", "test_wallet_roundtrip", "run_e2e"} {
+		if !orchestrator.IsDeviceStep(name) {
+			t.Errorf("fault: %s not a device step", name)
+		}
+	}
+	if orchestrator.IsDeviceStep("run_typecheck") {
+		t.Error("fault: a code check is in the device set")
+	}
+
+	// The tool's skip honesty from outside the package: no device means
+	// the ladder sees "skipped", not a fabricated verdict.
+	res, err := (&tools.RunE2E{}).Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	var out struct {
+		Passed  bool   `json:"passed"`
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Passed || !strings.Contains(out.Summary, "skipped") {
+		t.Errorf("fault: no-device run_e2e = passed=%v summary=%q", out.Passed, out.Summary)
 	}
 }
