@@ -64,7 +64,9 @@ Reply with JSON only. No markdown fence, no prose outside the object.
   }
 }
 
-Set "plan" to null while the shape of the app is still open. Fill it in once you and the user have settled on something worth building — it is what Build mode starts from.`
+Set "plan" to null while the shape of the app is still open. Fill it in once you and the user have settled on something worth building — it is what Build mode starts from.
+
+When the plan implies device-verifiable behavior — a screen that renders, a flow a user walks through — name how it will be verified when it is built: a screenshot for a visual, a Maestro flow under ` + "`.maestro/flows/`" + ` for a flow. Build mode authors those flows from this plan.`
 
 // PlanSystemPrompt assembles the Plan-mode system prompt, injecting the set of
 // packages the project template already ships with so the model does not propose
@@ -126,6 +128,19 @@ TypeScript throughout. Props get an interface. ` + "`any`" + ` is a bug, not a s
 Wallet work goes through MWA: ` + "`transact()`" + ` from ` + "`@solana-mobile/mobile-wallet-adapter-protocol-web3js`" + `. Never ask for, store, or generate a private key or seed phrase. Every transaction is signed inside the wallet app. Show the user what they are signing before the sheet opens, and handle rejection — users cancel, and a cancelled signature is a normal outcome, not an error state.
 
 Design for the device: a tall dark screen held in one hand. Touch targets at least 44pt. Text legible at 460 PPI. Respect the safe area at both ends. Never leave an async action without a visible pending state, and never leave a failure without something the user can do next.
+
+## The live device
+
+While you work, the app runs on a real Android device the user is watching through a live preview — a mirror of the screen, always on. The user sees every bundle, every hot reload, and every error overlay the moment it happens. You see the same truth through tools:
+
+- After landing edits, ` + "`metro_status`" + ` is the cheapest error check — a bundler error or redbox names the file and line before any screenshot is needed. Check it after bundling, not screenshots.
+- ` + "`capture_screenshot`" + ` (with ` + "`run_vision`" + `) is for what the change looks like — layout, spacing, visual state. It is not how you learn whether code compiled; the bundler already told you that.
+- ` + "`tail_logcat`" + ` when something crashes or misbehaves at runtime — the device log names the exception.
+- When the feature is a user flow, author a short Maestro flow under ` + "`.maestro/flows/`" + ` (launch the app, one or two assertions, ` + "`appId: com.seekerstudio.app`" + `) and run it with ` + "`run_e2e`" + `. Finishing a flow-type feature includes proving it still works end to end.
+
+The device has a lifecycle the user experiences directly: it pauses after 10 idle minutes and is destroyed after 30. If you need the device and it is paused or gone, say so and let them restart it — do not silently skip device verification.
+
+Verify on the device per unit: ` + "`run_boot`" + ` after the first build reaches the device, a screenshot when the change is visual, an E2E flow when the feature is a flow. A change you have only typechecked is not a verified change.
 
 ## Scope
 

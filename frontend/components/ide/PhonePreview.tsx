@@ -452,23 +452,28 @@ export default function PhonePreview({
             }
           >
             {/* ── Device frame ──
-                Uniform bezel, generous uniform radius, grounding shadow, edge
-                highlight. Physical keys ride the frame edge as graphics. The
-                punch-hole sits over the screen top — the stream already carries
-                the device's own status bar, which is never redrawn. */}
+                Slim uniform bezel, concentric corner radii (outer radius minus
+                the bezel width — the premium tell), a hairline metallic edge
+                with a top specular, and one soft grounding shadow. Physical
+                keys sit recessed into the frame edge as machined graphics.
+                The punch-hole rides the screen top — the stream carries the
+                device's own status bar, which is never redrawn. */}
             <div
-              className="absolute inset-0 rounded-[30px] border border-smoke bg-gradient-to-b from-obsidian via-carbon to-obsidian"
-              style={{ boxShadow: "0 24px 64px -16px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.06)" }}
+              className="absolute inset-0 rounded-[34px] bg-gradient-to-b from-[#1c1f24] via-[#101215] to-[#050608]"
+              style={{
+                boxShadow:
+                  "0 32px 80px -24px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.07)",
+              }}
               aria-hidden
             >
-              {/* side keys — frame graphics, not controls */}
-              <span className="absolute -right-[2.5px] top-28 h-12 w-[3px] rounded-full bg-smoke" />
-              <span className="absolute -left-[2.5px] top-24 h-10 w-[3px] rounded-full bg-smoke" />
-              <span className="absolute -left-[2.5px] top-36 h-10 w-[3px] rounded-full bg-smoke" />
+              {/* side keys — recessed frame graphics, not controls */}
+              <span className="absolute -right-[1px] top-[104px] h-11 w-[2px] rounded-full bg-[#3a3f47]/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
+              <span className="absolute -left-[1px] top-[92px] h-9 w-[2px] rounded-full bg-[#3a3f47]/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
+              <span className="absolute -left-[1px] top-[136px] h-9 w-[2px] rounded-full bg-[#3a3f47]/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
             </div>
 
             {/* screen */}
-            <div className="absolute inset-[10px] overflow-hidden rounded-[20px] bg-black">
+            <div className="absolute inset-[5px] overflow-hidden rounded-[29px] bg-black">
               <canvas
                 ref={canvasRef}
                 onPointerDown={onPointerDown}
@@ -482,11 +487,11 @@ export default function PhonePreview({
               {/* punch-hole camera over the screen top */}
               <span
                 aria-hidden
-                className="pointer-events-none absolute left-1/2 top-[10px] size-2.5 -translate-x-1/2 rounded-full bg-black"
+                className="pointer-events-none absolute left-1/2 top-[8px] size-2 -translate-x-1/2 rounded-full bg-black"
                 style={{ boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08), 0 0 0 3px rgba(0,0,0,0.55)" }}
               />
               {/* top strip — target and frame rate over a scrim */}
-              <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/70 via-black/30 to-transparent px-3 pb-6 pt-2.5">
+              <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/50 via-black/25 to-transparent px-3 pb-6 pt-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <span className="lamp" data-state={lampState} />
                   <span className="gauge truncate" title={adbTarget ?? undefined}>
@@ -521,7 +526,7 @@ export default function PhonePreview({
               ) : null}
 
               {/* bottom nav keys */}
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent px-3 pb-2.5 pt-8">
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/50 via-black/25 to-transparent px-3 pb-2 pt-6">
                 <div className="pointer-events-auto flex items-center justify-center gap-1">
                   {NAV_KEYS.map((key) => (
                     <button
