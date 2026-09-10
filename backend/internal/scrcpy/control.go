@@ -319,6 +319,13 @@ func (c *ControlClient) Close() {
 
 // findScrcpyServer looks for scrcpy-server.jar in common locations.
 func findScrcpyServer() string {
+	// SCRCPY_SERVER is the explicit override — checked first so an operator
+	// can point at any jar without code changes.
+	if p := os.Getenv("SCRCPY_SERVER"); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
 	candidates := []string{
 		"/usr/share/scrcpy/scrcpy-server.jar",
 		"/usr/local/share/scrcpy/scrcpy-server.jar",
@@ -329,6 +336,17 @@ func findScrcpyServer() string {
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
 			return c
+		}
+	}
+
+	// Repo-local copy: dev machines without a system scrcpy can drop the jar
+	// next to the Makefile and the tools find it. Resolved from the binary's
+	// working directory first, then a plain relative path.
+	for _, c := range []string{"scrcpy-server.jar", "backend/scrcpy-server.jar"} {
+		if abs, err := filepath.Abs(c); err == nil {
+			if _, err := os.Stat(abs); err == nil {
+				return abs
+			}
 		}
 	}
 

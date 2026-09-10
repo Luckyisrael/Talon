@@ -111,12 +111,28 @@ func (t *RunE2E) Execute(ctx context.Context, args json.RawMessage) (ToolResult,
 	var passed []string
 	for _, flow := range flows {
 		// Maestro talks to the device over adb; the target travels via
-		// MAESTRO_ANDROID_ADB_TARGET? Maestro's own env is
 		// ANDROID_SERIAL, the standard adb selector.
+		//
+		// Maestro writes analytics + caches under Java's user.home; on hosts
+		// where $HOME is read-only (CI sandboxes) that write kills the CLI
+		// with NoSuchFileException before a flow ever runs. MAESTRO_USER_HOME
+		// redirects it (the E2E harness points it at a writable dir), and
+		// analytics stays off — this repo never sends telemetry.
+		env := append(os.Environ(),
+			"ANDROID_SERIAL="+t.ADBTarget,
+			"MAESTRO_CLI_NO_ANALYTICS=1",
+		)
+		if maestroHome := os.Getenv("MAESTRO_USER_HOME"); maestroHome != "" {
+			if err := os.MkdirAll(maestroHome, 0o755); err != nil {
+				failErrs = append(failErrs, fmt.Sprintf("%s FAILED: maestro user home %q unwritable: %v", flow, maestroHome, err))
+				continue
+			}
+			env = append(env, "JAVA_OPTS=-Duser.home="+maestroHome)
+		}
 		cmd := exec.CommandContext(ctx, maestroBin, "test",
 			"--format", "simple",
 			filepath.Join(flowDir, flow))
-		cmd.Env = append(os.Environ(), "ANDROID_SERIAL="+t.ADBTarget)
+		cmd.Env = env
 		cmd.Dir = t.WorkspacePath
 		// A generous bound: flows sleep by design (launch animations),
 		// but a wedged flow must not hold the run forever. Stop releases

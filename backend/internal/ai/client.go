@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"strconv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,9 +34,70 @@ type Client struct {
 	// lastErr records the most recent provider failure for health checks.
 	// A healthy provider never writes here; readyz degrades only on fresh
 	// failures, never on ancient history.
-	mu         sync.Mutex
-	lastErr    string
-	lastErrAt  time.Time
+	mu        sync.Mutex
+	lastErr   string
+	lastErrAt time.Time
+
+	// Gateway pacing: many gateways (free OpenRouter tiers especially)
+	// enforce requests-per-minute budgets the backend would otherwise blow
+	// through — an agentic build is dozens of sequential model calls, and
+	// parallel read-only tool rounds are several calls in flight at once.
+	// pacer enforces a minimum interval between gateway calls across every
+	// code path that shares this client. A nil pacer (the default) means no
+	// pacing — unit tests and evals, which mock the gateway, stay fast.
+	pacer *requestPacer
+}
+
+// requestPacer serializes gateway calls to at most one per interval. It is
+// deliberately simple: no queue, no burst allowance — callers already retry
+// on transient failures, so a strict interval is enough to stay under a
+// requests-per-minute budget.
+type requestPacer struct {
+	mu       sync.Mutex
+	nextAt   time.Time
+	interval time.Duration
+}
+
+// newRequestPacer builds a pacer from AI_MIN_REQUEST_INTERVAL (Go duration
+// syntax, e.g. "8s"). Empty means nil — no pacing, behavior byte-identical
+// to before.
+func newRequestPacer() *requestPacer {
+	raw := os.Getenv("AI_MIN_REQUEST_INTERVAL")
+	if raw == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return nil
+	}
+	return &requestPacer{interval: d}
+}
+
+// wait blocks until the next call slot. ctx cancellation propagates.
+// The slot is reserved under the lock BEFORE sleeping — two waiters that
+// arrive together must be spaced by the interval, not wake together.
+func (p *requestPacer) wait(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	now := time.Now()
+	if p.nextAt.After(now) {
+		// Reserve the next free slot for this caller, so a caller arriving
+		// while we sleep books the slot after ours, not alongside ours.
+		sleepFor := p.nextAt.Sub(now)
+		p.nextAt = p.nextAt.Add(p.interval)
+		p.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sleepFor):
+			return nil
+		}
+	}
+	p.nextAt = now.Add(p.interval)
+	p.mu.Unlock()
+	return nil
 }
 
 // Health reports whether the provider looks usable: configured, and with no
@@ -130,6 +192,7 @@ func New() (*Client, error) {
 		// reasoning model can spend minutes on one before the first byte.
 		httpClient:   &http.Client{Timeout: 10 * time.Minute},
 		workspaceDir: workspaceDir,
+		pacer:        newRequestPacer(),
 	}, nil
 }
 
@@ -336,6 +399,13 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 			time.Sleep(time.Duration(attempt*3) * time.Second)
 		}
 
+		// Gateway pacing: reserve the slot before the request leaves. On a
+		// rate-limited gateway the slot was paid for either way; the pacer
+		// is what keeps parallel read-only tool rounds from stampeding.
+		if err := c.pacer.wait(ctx); err != nil {
+			return "", fmt.Errorf("request canceled while pacing: %w", err)
+		}
+
 		url := c.baseURL + "/v1/messages"
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
@@ -357,9 +427,25 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 		}
 
 		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			// Retry-After is the gateway's own word on when the budget
+			// refills; when it is sent, sleep exactly that long instead of
+			// guessing. Without it the fixed 3s/6s backoff applies.
+			after := 0
+			if resp.StatusCode == 429 {
+				if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs > 0 {
+					after = secs
+				} else if d, err := http.ParseTime(resp.Header.Get("Retry-After")); err == nil {
+					after = int(time.Until(d).Seconds()) + 1
+				}
+			}
 			resp.Body.Close()
 			if attempt < maxRetries-1 {
-				log.Printf("chatAnthropic: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				if after > 0 {
+					log.Printf("chatAnthropic: HTTP %d (attempt %d), honoring Retry-After %ds", resp.StatusCode, attempt+1, after)
+					time.Sleep(time.Duration(after) * time.Second)
+				} else {
+					log.Printf("chatAnthropic: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				}
 				continue
 			}
 			switch resp.StatusCode {
@@ -452,6 +538,12 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 			time.Sleep(time.Duration(attempt*3) * time.Second)
 		}
 
+		// Gateway pacing: same law as the anthropic path — every gateway
+		// call, from any code path, reserves its slot first.
+		if err := c.pacer.wait(ctx); err != nil {
+			return "", fmt.Errorf("request canceled while pacing: %w", err)
+		}
+
 		url := c.baseURL + "/chat/completions"
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
@@ -473,9 +565,22 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 		}
 
 		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			after := 0
+			if resp.StatusCode == 429 {
+				if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs > 0 {
+					after = secs
+				} else if d, err := http.ParseTime(resp.Header.Get("Retry-After")); err == nil {
+					after = int(time.Until(d).Seconds()) + 1
+				}
+			}
 			resp.Body.Close()
 			if attempt < maxRetries-1 {
-				log.Printf("chatOpenAI: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				if after > 0 {
+					log.Printf("chatOpenAI: HTTP %d (attempt %d), honoring Retry-After %ds", resp.StatusCode, attempt+1, after)
+					time.Sleep(time.Duration(after) * time.Second)
+				} else {
+					log.Printf("chatOpenAI: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				}
 				continue
 			}
 			switch resp.StatusCode {
