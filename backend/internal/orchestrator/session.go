@@ -113,6 +113,10 @@ type SessionState struct {
 	// toolName+":"+normalizedError. Value is remaining rounds; zero means active.
 	FailureCooldowns map[string]int
 
+	// toolRepeats counts same-tool calls within the turn, feeding the H3
+	// advisory repeat reminder.
+	toolRepeats map[string]int
+
 	// RuntimePatterns holds failure patterns loaded from project memory on
 	// session start. These are merged with the default index at lookup time.
 	RuntimePatterns []knowledge.FailurePattern
@@ -522,6 +526,45 @@ func (s *SessionState) WritesUnverified() int {
 // rewriteWatchThreshold is the rewrite count that triggers the stop-and-reread
 // nudge: two rewrites are iteration, the third is thrash.
 const rewriteWatchThreshold = 3
+
+// repeatReminderThresholds are the same-tool call counts that fire the
+// advisory repeat reminder (H3, generalized from the write-watch): three
+// repeats is suspicious, five is a loop, eight is pathological. The reminder
+// is advisory — it rides the tool_result, the model keeps control — unlike the
+// file-write nudge which names a concrete corrective action.
+var repeatReminderThresholds = map[int]bool{3: true, 5: true, 8: true}
+
+// ResetToolRepeats clears the per-turn repeat counters at turn start.
+func (s *SessionState) ResetToolRepeats() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolRepeats = map[string]int{}
+}
+
+// NoteToolRepeat counts one more call of the named tool this turn and returns
+// the count. The loop consults repeatReminderThresholds for the reminder.
+func (s *SessionState) NoteToolRepeat(name string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.toolRepeats == nil {
+		s.toolRepeats = map[string]int{}
+	}
+	s.toolRepeats[name]++
+	return s.toolRepeats[name]
+}
+
+// repeatReminder is the advisory text for a repeated tool. Escalating, honest,
+// never more than one line — a wall of text gets skimmed, a line gets read.
+func repeatReminder(name string, count int) string {
+	switch count {
+	case 3:
+		return "\n\nNote: this is your third " + name + " call this turn. If the earlier results answer your question, re-read them from the transcript instead of calling again."
+	case 5:
+		return "\n\nNote: fifth " + name + " call this turn — you are repeating yourself. State what you are looking for and read it from the results you already have."
+	default:
+		return "\n\nNote: eighth " + name + " call this turn. Something is wrong with the approach — stop, describe what you actually need, and step back."
+	}
+}
 
 // MarkSkillSeen records that a skill's body has been delivered this session and
 // reports whether this was the first time. Auto-attach injects only when it gets

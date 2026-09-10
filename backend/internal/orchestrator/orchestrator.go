@@ -602,6 +602,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	sess.TransitionTo(PhaseGenerate)
 	sess.ClearReadFiles()
 	sess.ResetWriteCounts()
+	sess.ResetToolRepeats()
 
 	// conversation is what goes to the provider; added tracks just this run's
 	// turns so the caller can append them to storage.
@@ -1337,6 +1338,28 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		}
 	}
 
+	// H3 advisory repeat reminder, counted at the batch level: a tool that
+	// appears in this batch increments its counter once (the batch is the
+	// unit, matching how the model issues them — parallel siblings are one
+	// decision). Counting per dispatch instead made the reminder depend on
+	// goroutine interleaving, which the transcript-parity gate rejects.
+	// Escalating at 3/5/8 same-tool batches; the note rides the first
+	// matching result so whichever the model reads carries it.
+	repeatNotes := map[int]string{}
+	seenInBatch := map[string]bool{}
+	for i, c := range calls {
+		if seenInBatch[c.Name] {
+			continue
+		}
+		seenInBatch[c.Name] = true
+		if count := sess.NoteToolRepeat(c.Name); repeatReminderThresholds[count] {
+			// The first call of this tool in the batch carries the note —
+			// decided here, before dispatch, so no goroutine writes shared
+			// state deciding it.
+			repeatNotes[i] = repeatReminder(c.Name, count)
+		}
+	}
+
 	// Read-only calls can overlap; anything that writes files or shells out
 	// runs alone to keep the workspace consistent.
 	parallel := opts.ReadOnlyTool != nil && len(calls) > 1
@@ -1349,7 +1372,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		}
 	}
 
-	runCall := func(call ai.ToolUseBlock) (block ai.Block) {
+	runCall := func(i int, call ai.ToolUseBlock) (block ai.Block) {
 		// A tool that panics must not take the build down with it. Recover here,
 		// at the body both the parallel and sequential paths invoke, and turn the
 		// crash into a failed tool_result the model can react to. Without this a
@@ -1394,6 +1417,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		// readNote/watchNote/probeNote carry cross-turn knowledge into this result. They
 		// are set by the tracking below and appended to the tool result at the
 		// end of run(): small hints that prevent whole wasted rounds.
+		repeatNote := repeatNotes[i]
 		readNote := ""
 		watchNote := ""
 		probeNote := ""
@@ -1559,7 +1583,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		return ai.Block{
 			Type:      "tool_result",
 			ToolUseID: call.ID,
-			Content:   output + readNote + watchNote + probeNote + failReminder,
+			Content:   output + readNote + watchNote + probeNote + failReminder + repeatNote,
 			IsError:   isError,
 		}
 	}
@@ -1571,10 +1595,14 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 	// goroutine per call), and an exclusive call drains the pool and runs
 	// alone (legacy serializes the whole batch). The flag ships dark.
 	if pipelineEnabled() && len(calls) > 0 {
+		callIndex := map[string]int{}
+		for i, c := range calls {
+			callIndex[c.ID] = i
+		}
 		pipe := pipeline.New(
 			nil, // policy stays inside runCall — moving it to the stage is H4
 			pipeline.DispatcherFunc(func(ctx context.Context, call pipeline.Call) (string, bool) {
-				blk := runCall(ai.ToolUseBlock{ID: call.ID, Name: call.Name, Input: call.Input})
+				blk := runCall(callIndex[call.ID], ai.ToolUseBlock{ID: call.ID, Name: call.Name, Input: call.Input})
 				return blk.Content, blk.IsError
 			}),
 			pipeline.ClassifierFunc(func(name string) bool {
@@ -1592,13 +1620,13 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			wg.Add(1)
 			go func(i int, call ai.ToolUseBlock) {
 				defer wg.Done()
-				results[i] = runCall(call)
+				results[i] = runCall(i, call)
 			}(i, call)
 		}
 		wg.Wait()
 	} else {
 		for i, call := range calls {
-			results[i] = runCall(call)
+			results[i] = runCall(i, call)
 		}
 	}
 
