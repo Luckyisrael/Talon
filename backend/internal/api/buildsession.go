@@ -14,6 +14,7 @@ import (
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
+	"github.com/seekersstudio/backend/internal/harness/subagent"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/tools"
@@ -48,6 +49,11 @@ type buildSession struct {
 	// the extra pass, exactly today's behavior (the per-tool checks inside
 	// the registry still apply; the capability is the uniform outer ring).
 	sandbox *sandbox.Capability
+	// children is the H9 delegation service bound to this session: delegate
+	// spawns scoped child loops; list_children reports them. Nil (default)
+	// keeps the tools unregistered — the flag SEEKERSTUDIO_SUBAGENTS=1 opts
+	// a deployment in.
+	children *subagent.Service
 }
 
 // newBuildSession wires the agent's tools to one project's workspace.
@@ -68,6 +74,14 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	bs := &buildSession{fs: fs, reg: reg}
 	bs.sandbox = sandbox.New(sandboxModeFromEnv(), workspacePath,
 		[]string{os.TempDir()}, func(op sandbox.Operation) error { return nil })
+
+	// H9: opt-in delegation. The child runner is a second orchestrator loop
+	// over this same workspace with a read-scoped registry: children inspect
+	// and report; they never mutate (a review child must not be able to
+	// edit). Pool 2 is the rate-limit-aware default.
+	if subagentsEnabled() {
+		bs.children = subagent.NewService(childRunnerFor(h, workspacePath, projectID, adbTarget, output), 2)
+	}
 
 	// Reading and searching.
 	reg.Register(&tools.ListFiles{FS: fs})
@@ -146,6 +160,16 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	}
 	if skillLib != nil {
 		reg.Register(&tools.ReadSkill{Library: skillLib})
+	}
+
+	// H9 delegation: scoped children on the same loop. Registered only
+	// when the deployment opted in — delegation multiplies context and cost,
+	// so it ships dark until a composition turns it on. Depth 1 is enforced
+	// twice: the service seam refuses grandchildren, and delegate is never
+	// registered in a child's own registry.
+	if bs.children != nil {
+		reg.Register(&tools.Delegate{Service: bs.children, LabelPrefix: fmt.Sprintf("project-%d", projectID)})
+		reg.Register(&tools.ListChildren{Service: bs.children})
 	}
 
 	// Device feedback. Registered only when a device is actually attached —
@@ -324,4 +348,44 @@ func sandboxModeFromEnv() sandbox.Mode {
 		return sandbox.ModeReadOnly
 	}
 	return sandbox.ModeWorkspace
+}
+
+// subagentsEnabled reads SEEKERSTUDIO_SUBAGENTS: delegation ships dark (off
+// by default) — it multiplies context and cost, so a deployment opts in.
+func subagentsEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SEEKERSTUDIO_SUBAGENTS"))) {
+	case "1", "true", "on", "v1":
+		return true
+	}
+	return false
+}
+
+// childRunnerFor assembles the H9 in-process runner: the child gets a
+// read-only build session over the same workspace (inspect and report;
+// never mutate), the orchestrator's loop, and the session handler's prompts.
+func childRunnerFor(h *PromptHandler, workspacePath string, projectID int64, adbTarget string, output io.Writer) subagent.Runner {
+	return &childRunner{
+		build: func() *buildSession {
+			// A child's registry: the read tools only. bs.defs is rebuilt
+			// because newBuildSession would register the full set including
+			// delegate (depth-1 wall #2: the child cannot see the tool).
+			child := h.newBuildSession(workspacePath, projectID, adbTarget, output)
+			readOnly := child.reg
+			readDefs := make([]ai.ToolDefinition, 0, len(child.defs))
+			for _, d := range child.defs {
+				if readOnly.IsReadOnly(d.Name) {
+					readDefs = append(readDefs, d)
+				}
+			}
+			child.defs = readDefs
+			child.children = nil
+			return child
+		},
+		newSession: func() *orchestrator.SessionState {
+			return orchestrator.NewSession(0, projectID, workspacePath, nil)
+		},
+		systemPrompt: h.systemPrompt(),
+		orchestrator: h.orch,
+		parentTools:  nil,
+	}
 }

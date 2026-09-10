@@ -2,6 +2,7 @@ package evals
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"context"
@@ -26,6 +27,7 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/promptsec"
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
+	"github.com/seekersstudio/backend/internal/harness/subagent"
 	"github.com/seekersstudio/backend/internal/harness/skills"
 	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/runtime"
@@ -685,4 +687,78 @@ func TestPhaseH7PromptSections(t *testing.T) {
 	if d := promptsec.Diff(before, r.Fingerprints()); len(d) == 0 {
 		t.Error("fault: suppress not detected by Diff")
 	}
+}
+
+// H9: subagents. One-shot children return their final text as the tool
+// result (nothing interleaves); depth 1 is refused at the seam; the pool
+// bound holds; a 429 sets the cooldown that suppresses the next fan-out.
+func TestPhaseH9Subagents(t *testing.T) {
+	runner := &h9Runner{result: func(s subagent.Spec) subagent.Result {
+		return subagent.Result{FinalText: "Report: the package exports Connection.", Rounds: 2}
+	}}
+	svc := subagent.NewService(runner, 2)
+
+	res, err := svc.Spawn(context.Background(), subagent.Spec{Prompt: "inspect", Label: "pkg"})
+	if err != nil || res.Errored {
+		t.Fatalf("healthy: one-shot child failed: %v %+v", err, res)
+	}
+	if !strings.Contains(res.FinalText, "Connection") {
+		t.Error("healthy: child final text missing")
+	}
+	out := subagent.RenderResult("pkg", res)
+	if !strings.Contains(out, "BEGIN CHILD REPORT") {
+		t.Error("fault: result not delimited as a child report")
+	}
+	// The runner saw exactly the child's spec — nothing of the parent's
+	// conversation leaked in.
+	if len(runner.ran) != 1 || runner.ran[0].Prompt != "inspect" {
+		t.Errorf("fault: child transcript interleaved: %+v", runner.ran)
+	}
+
+	// Depth 1: a descended service refuses spawns.
+	if _, err := svc.Descend().Spawn(context.Background(), subagent.Spec{Prompt: "x"}); !errors.Is(err, subagent.ErrDeep) {
+		t.Errorf("fault: grandchild not refused: %v", err)
+	}
+
+	// 429 → cooldown suppresses the next fan-out.
+	runner.result = func(subagent.Spec) subagent.Result {
+		return subagent.Result{Errored: true, Err: "API error (status 429): rate limit"}
+	}
+	if _, err := svc.Spawn(context.Background(), subagent.Spec{Prompt: "boom"}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if _, err := svc.Spawn(context.Background(), subagent.Spec{Prompt: "next"}); !errors.Is(err, subagent.ErrCooldown) {
+		t.Errorf("fault: cooldown did not suppress fan-out: %v", err)
+	}
+
+	// Child crash is structured, and the pool is released.
+	svc.ClearCooldown()
+	runner.result = func(subagent.Spec) subagent.Result {
+		return subagent.Result{Errored: true, Err: "child panicked: index out of range"}
+	}
+	crashRes, err := svc.Spawn(context.Background(), subagent.Spec{Prompt: "crash"})
+	if err != nil {
+		t.Fatalf("crash surfaced as spawn error, want structured result: %v", err)
+	}
+	if !crashRes.Errored || !strings.Contains(crashRes.Err, "panicked") {
+		t.Errorf("fault: crash not structured: %+v", crashRes)
+	}
+	states := map[string]string{}
+	for _, c := range svc.List() {
+		states[c.Label] = c.State
+	}
+	if states["pkg"] != "done" {
+		t.Errorf("fault: done child listed as %q", states["pkg"])
+	}
+}
+
+// h9Runner is the evals stub.
+type h9Runner struct {
+	ran    []subagent.Spec
+	result func(subagent.Spec) subagent.Result
+}
+
+func (r *h9Runner) RunChild(_ context.Context, s subagent.Spec) subagent.Result {
+	r.ran = append(r.ran, s)
+	return r.result(s)
 }
