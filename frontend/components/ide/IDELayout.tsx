@@ -137,17 +137,52 @@ export default function IDELayout({
 
   // One approval path, reachable from the card in the chat and from the full
   // plan in the centre panel.
-  const approvePlan = useCallback((plan: PlanData) => {
-    const state = useIDEStore.getState();
-    state.setCurrentPlan(null);
-    const screens = (plan.screens ?? []).map((s) => s.name).filter(Boolean);
-    const list = screens.length > 0 ? screens.join(", ") : "the plan we just agreed on";
-    aiChatRef.current?.switchToBuild();
-    aiChatRef.current?.sendMessage(
-      `Build ${list}. Implement every screen fully — no placeholders, no TODOs — and wire up the navigation from the plan.`,
-      "build",
-    );
-  }, []);
+  const approvePlan = useCallback(
+    async (plan: PlanData) => {
+      const state = useIDEStore.getState();
+      state.setCurrentPlan(null);
+      const screens = (plan.screens ?? []).map((s) => s.name).filter(Boolean);
+      // §7 DSH plan flow: approval writes the plan to PLAN.md — the task
+      // file. The build works from the durable artifact (reload, resume, and
+      // the checklist all read the same record), not from a chat message's
+      // short-lived wording. A failed write still builds: the plan is in the
+      // conversation too; the file is the durable copy, not the only one.
+      const lines = ["# Build plan", ""];
+      if (screens.length > 0) {
+        lines.push("## Screens");
+        for (const s of plan.screens ?? []) {
+          lines.push(`- ${s.name}${s.description ? ` — ${s.description}` : ""}`);
+        }
+        lines.push("");
+      }
+      if (plan.navigation) {
+        lines.push("## Navigation", plan.navigation, "");
+      }
+      const features = plan.features ?? [];
+      if (features.length > 0) {
+        lines.push("## Features", ...features.map((f) => `- ${f}`), "");
+      }
+      const packages = plan.packages ?? [];
+      if (packages.length > 0) {
+        lines.push("## Packages", ...packages.map((p) => `- ${p}`), "");
+      }
+      try {
+        await projects.writeFiles(projectId, [
+          { path: "PLAN.md", content: lines.join("\n") + "\n" },
+        ]);
+        state.addFiles([{ path: "PLAN.md", content: lines.join("\n") + "\n" }]);
+      } catch {
+        // The plan still lives in the conversation; the build proceeds.
+      }
+      const list = screens.length > 0 ? screens.join(", ") : "the plan we just agreed on";
+      aiChatRef.current?.switchToBuild();
+      aiChatRef.current?.sendMessage(
+        `Build ${list} per PLAN.md in the workspace. Implement every screen fully — no placeholders, no TODOs — and wire up the navigation from the plan. Mark each plan item done as you finish it.`,
+        "build",
+      );
+    },
+    [projectId],
+  );
 
   // ── File operations ──
 

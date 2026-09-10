@@ -112,7 +112,18 @@ function AgentWorkspace({
             </div>
           </div>
         ) : tab === "file" && selectedFile ? (
-          <CodeEditor projectId={projectId} filePath={selectedFile} content={fileContent ?? ""} />
+          // §7: markdown files render like DSH — the plan/tasks are read,
+          // not edited; source files stay in the code view. The editor is
+          // gone from the centerpiece; reading stays first-class.
+          selectedFile.endsWith(".md") ? (
+            <div className="h-full overflow-y-auto px-6 py-6">
+              <div className="mx-auto max-w-2xl">
+                <Markdown>{fileContent ?? ""}</Markdown>
+              </div>
+            </div>
+          ) : (
+            <CodeEditor projectId={projectId} filePath={selectedFile} content={fileContent ?? ""} />
+          )
         ) : tab === "diff" ? (
           <DiffView projectId={projectId} files={filesTouched} />
         ) : null}

@@ -638,6 +638,32 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               // agent's tools ran; now the developer watches them do it.
               if (typeof d.text === "string" && d.text.trim()) {
                 useIDEStore.getState().appendBuildOutput(d.text);
+                // §7: the transcript carries the command's live output too —
+                // DSH renders bash inline, not only in a side terminal. The
+                // open run_command/typecheck/lint/build row accumulates a
+                // bounded tail; the full log keeps streaming to the terminal.
+                const chunk = d.text;
+                patch((prev) => {
+                  const rows = [...prev.traceRows];
+                  for (let i = rows.length - 1; i >= 0; i--) {
+                    const r = rows[i];
+                    if (
+                      r.kind === "tool" &&
+                      r.status === "running" &&
+                      (r.tool === "run_command" ||
+                        r.tool === "run_shell" ||
+                        r.tool === "run_typecheck" ||
+                        r.tool === "run_lint" ||
+                        r.tool === "build_apk")
+                    ) {
+                      const MAX = 2000;
+                      const merged = ((r.summary ?? "") + chunk).slice(-MAX);
+                      rows[i] = { ...r, summary: merged };
+                      break;
+                    }
+                  }
+                  return { ...prev, traceRows: rows };
+                });
               }
               break;
 
