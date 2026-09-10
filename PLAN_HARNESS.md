@@ -1,6 +1,8 @@
 # SeekerStudio — Harness Overhaul Plan (H-series)
 
-**Status:** PROPOSED — awaiting review.
+**Status:** EXECUTED — all 15 phases (H1–H14 + the §7 IDE refit) landed and green.
+Each phase shipped behind its flag, eval-gated in `make evals`
+(TestPhaseH1…TestPhaseH14), committed separately; no regressions.
 **Sources of truth:** this document, distilled from the DeepSeek Harness (DSH) architecture
 (its published package contracts, the base-bundle composition, and the agent-loop/session
 design) mapped against this repository's actual current state (backend, frontend, infra,
