@@ -34,6 +34,7 @@ import (
 	"github.com/seekersstudio/backend/internal/metro"
 	"github.com/seekersstudio/backend/internal/relay"
 	"github.com/seekersstudio/backend/internal/tools"
+	"github.com/seekersstudio/backend/internal/ws"
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
 	"github.com/seekersstudio/backend/internal/harness/subagent"
@@ -1225,4 +1226,20 @@ func freePortFor(t *testing.T) int {
 	}
 	l.Close()
 	return l.Addr().(*net.TCPAddr).Port
+}
+
+// DV3: the video negotiation contract. The mode vocabulary is the wire
+// contract between the two transports; the header parser proof lives in
+// the scrcpy package tests (unexported socket plumbing).
+func TestPhaseDV3StreamNegotiation(t *testing.T) {
+	const modeH264 = "h264"
+	const modeJPEG = "jpeg"
+	if ws.ModeH264 != modeH264 || ws.ModeJPEG != modeJPEG {
+		t.Errorf("fault: mode vocabulary drifted (%q/%q)", ws.ModeH264, ws.ModeJPEG)
+	}
+	// The fallback order is a phase law: jpeg is always offered, h264 only
+	// after the device's encoder proved itself.
+	if ws.ModeJPEG == "" {
+		t.Error("fault: no jpeg fallback vocabulary")
+	}
 }

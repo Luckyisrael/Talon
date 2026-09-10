@@ -98,6 +98,17 @@ export default function PhonePreview({
       setMetroBadge(null);
     };
   }, [status, projectId, streamEpoch]);
+
+  // DV3: the decoder dies with the subscription — never across re-subs.
+  useEffect(() => {
+    return () => {
+      if (decoderRef.current && decoderRef.current.state !== "closed") {
+        decoderRef.current.close();
+      }
+      decoderRef.current = null;
+      h264Active.current = false;
+    };
+  }, [streamEpoch, status, sessionId]);
   const [stalled, setStalled] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [captureNote, setCaptureNote] = useState<string | null>(null);
@@ -110,6 +121,11 @@ export default function PhonePreview({
     progress: number;
   } | null>(null);
   const metroTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // DV3: the stream's negotiated mode arrives as the first (text) frame —
+  // h264 (the device's own encoder, WebCodecs-decoded) or jpeg (the
+  // standing fallback). Null until the server speaks.
+  const [videoMode, setVideoMode] = useState<"h264" | "jpeg" | null>(null);
+  const decoderRef = useRef<VideoDecoder | null>(null);
   const frameCount = useRef(0);
 
   // Zero unless frames are actually arriving. Derived rather than written back on
@@ -198,6 +214,127 @@ export default function PhonePreview({
     [sendInput, toDevice],
   );
 
+  // ── Frame sinks ──
+  // JPEG: decode a bitmap and blit. The original path, unchanged.
+  const drawJPEG = useCallback(async (blob: Blob) => {
+    try {
+      const bmp = await createImageBitmap(blob);
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        bmp.close();
+        return;
+      }
+      if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+        canvas.width = bmp.width;
+        canvas.height = bmp.height;
+        setFrame({ w: bmp.width, h: bmp.height });
+      }
+      canvas.getContext("2d")?.drawImage(bmp, 0, 0);
+      bmp.close();
+      frameCount.current++;
+      lastFrameAt.current = Date.now();
+      setStalled(false);
+    } catch {
+      // A single corrupt frame is not worth tearing the stream down.
+    }
+  }, []);
+
+  // H.264: WebCodecs on the GPU. The server relays the device encoder's
+  // NAL stream; we demux access-unit boundaries ( Annex B start codes )
+  // and feed the decoder. No WebCodecs (old browser, jsdom) → the server
+  // is already told jpeg via nothing — the mode arrives from the server's
+  // own probe; if it still sends h264 to a browser without the API, frames
+  // are dropped silently and the stall retry re-subscribes.
+  const h264Active = useRef(false);
+
+  const startH264 = useCallback((w: number, h: number) => {
+    if (!("VideoDecoder" in window)) return; // no fallback mid-stream; jpeg comes from the server
+    try {
+      const decoder = new VideoDecoder({
+        output: (frame) => {
+          const canvas = canvasRef.current;
+          if (canvas) {
+            if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+              canvas.width = frame.displayWidth;
+              canvas.height = frame.displayHeight;
+              setFrame({ w: frame.displayWidth, h: frame.displayHeight });
+            }
+            canvas.getContext("2d")?.drawImage(frame, 0, 0);
+          }
+          frame.close();
+          frameCount.current++;
+          lastFrameAt.current = Date.now();
+          setStalled(false);
+        },
+        error: () => {
+          // A decoder error drops the h264 path; the next frame is skipped
+          // until the stall path re-subscribes (server re-negotiates jpeg).
+          h264Active.current = false;
+        },
+      });
+      decoder.configure({
+        codec: "avc1.42E01F", // baseline profile, the redroid encoder's output
+        codedWidth: w,
+        codedHeight: h,
+      });
+      decoderRef.current = decoder;
+      h264Active.current = true;
+    } catch {
+      h264Active.current = false;
+    }
+  }, []);
+
+  const feedH264 = useCallback(async (blob: Blob) => {
+    const decoder = decoderRef.current;
+    if (!decoder || decoder.state === "closed") return;
+    try {
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      // Annex B: split on 00 00 00 01 / 00 00 01 start codes into
+      // access-unit-ish chunks. The chunk type comes from the first NAL
+      // header after the start code: IDR slice (5) or SPS (7) → key; the
+      // rest are deltas. WebCodecs uses the type for decode order, so a
+      // lie here corrupts the stream.
+      const chunks: Array<{ data: Uint8Array; key: boolean }> = [];
+      let start = -1;
+      let key = false;
+      for (let i = 0; i < buf.length; i++) {
+        if (buf[i] !== 0 || i + 3 >= buf.length) continue;
+        const is4 = buf[i + 2] === 0 && buf[i + 3] === 1;
+        const is3 = buf[i + 2] === 1;
+        if (!is4 && !is3) continue;
+        if (start >= 0 && i > start) {
+          chunks.push({ data: buf.slice(start, i), key });
+        }
+        start = i;
+        // The NAL header byte sits just past the start code.
+        const hdr = buf[i + (is4 ? 4 : 3)];
+        if (hdr !== undefined) {
+          const nalType = hdr & 0x1f;
+          key = nalType === 5 || nalType === 7; // IDR or SPS
+        }
+        i += is4 ? 3 : 2;
+      }
+      if (start >= 0 && start < buf.length) {
+        chunks.push({ data: buf.slice(start), key });
+      }
+      const ts = performance.now() * 1000;
+      for (const c of chunks) {
+        decoder.decode(
+          new EncodedVideoChunk({
+            type: c.key ? "key" : "delta",
+            timestamp: ts,
+            data: c.data,
+          }),
+        );
+      }
+      if (decoder.decodeQueueSize > 5) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    } catch {
+      // A malformed chunk is dropped; the stream continues.
+    }
+  }, []);
+
   // ── Connections ──
   useEffect(() => {
     if (status !== "streaming" || !sessionId) return;
@@ -208,28 +345,27 @@ export default function PhonePreview({
     if (videoWs) {
       videoWsRef.current = videoWs;
       videoWs.onmessage = (event) => {
-        if (!(event.data instanceof Blob)) return;
-        createImageBitmap(event.data)
-          .then((bmp) => {
-            const canvas = canvasRef.current;
-            if (!canvas || closed) {
-              bmp.close();
-              return;
+        // DV3: the negotiation frame is text — the mode the server picked.
+        if (typeof event.data === "string") {
+          try {
+            const mode = JSON.parse(event.data) as { mode: "h264" | "jpeg"; w?: number; h?: number };
+            setVideoMode(mode.mode);
+            if (mode.mode === "h264" && "VideoDecoder" in window) {
+              if (mode.w && mode.h) setFrame({ w: mode.w, h: mode.h });
+              startH264(mode.w ?? 1080, mode.h ?? 2400);
             }
-            if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
-              canvas.width = bmp.width;
-              canvas.height = bmp.height;
-              setFrame({ w: bmp.width, h: bmp.height });
-            }
-            canvas.getContext("2d")?.drawImage(bmp, 0, 0);
-            bmp.close();
-            frameCount.current++;
-            lastFrameAt.current = Date.now();
-            setStalled(false);
-          })
-          .catch(() => {
-            // A single corrupt frame is not worth tearing the stream down.
-          });
+            return;
+          } catch {
+            return; // an unparsable negotiation is ignored; no frames decode
+          }
+        }
+        if (event.data instanceof Blob) {
+          if (h264Active.current) {
+            feedH264(event.data);
+          } else {
+            drawJPEG(event.data);
+          }
+        }
       };
     }
 

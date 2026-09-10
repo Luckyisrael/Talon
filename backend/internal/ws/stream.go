@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/seekersstudio/backend/internal/adb"
 	"github.com/seekersstudio/backend/internal/auth"
+	"github.com/seekersstudio/backend/internal/scrcpy"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/video"
 )
@@ -27,6 +28,19 @@ const (
 	// consecutive failures the loop backs off to slowRetryInterval instead.
 	failureThreshold  = 10
 	slowRetryInterval = 1 * time.Second
+)
+
+// StreamMode is the negotiation frame's vocabulary. The server picks once
+// per connection: h264 when the device's scrcpy video tap came up, jpeg
+// otherwise (no WebCodecs, scrcpy video failed, or a pre-negotiation
+// client). The client decodes whatever mode it was told.
+const (
+	// ModeH264/ModeJPEG: the negotiation vocabulary, exported for the
+	// phase guard — the wire contract between the two transports.
+	ModeH264 = "h264"
+	ModeJPEG = "jpeg"
+	modeH264 = ModeH264
+	modeJPEG = ModeJPEG
 )
 
 type StreamHandler struct {
@@ -47,6 +61,13 @@ func (h *StreamHandler) Routes() chi.Router {
 	return r
 }
 
+// modeFrame tells the client what the binary frames carry.
+type modeFrame struct {
+	Mode string `json:"mode"`
+	W    int    `json:"w,omitempty"`
+	H    int    `json:"h,omitempty"`
+}
+
 func (h *StreamHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	device, ok := authorize(w, r, h.authSvc, h.store)
 	if !ok {
@@ -64,22 +85,39 @@ func (h *StreamHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("stream session started for session %d (target %s)", sessionID, adbTarget)
 
-	// Initialize video pipeline
-	encoder := video.NewEncoder()
-	defer encoder.Close()
-	differ := video.NewFrameDiffer()
-
 	frameQueue := make(chan []byte, frameQueueSz)
 	var writeMu sync.Mutex
 	done := make(chan struct{})
 
+	// ── Try the device's own H.264 encoder first (DV3) ──
+	// The scrcpy video tap: the device encodes, the host relays. Failure is
+	// non-fatal by design — the JPEG path below is the standing fallback and
+	// the negotiation frame tells the client which one it is on.
+	vc := scrcpy.NewVideoClient()
+	if err := vc.Start(adbTarget); err == nil {
+		if err := conn.WriteJSON(modeFrame{Mode: modeH264, W: vc.Width, H: vc.Height}); err == nil {
+			log.Printf("session %d: h264 video (device encoder, %dx%d)", sessionID, vc.Width, vc.Height)
+			h.pumpH264(sessionID, conn, vc, frameQueue, &writeMu, done)
+			return
+		}
+		// The negotiation frame failed: the client never learned the mode,
+		// and a mode-less binary stream is undecodable. Fall through.
+	} else {
+		log.Printf("session %d: scrcpy video unavailable (%v) — JPEG fallback", sessionID, err)
+	}
+	vc.Close()
+
+	// ── The JPEG path (the original stream) ──
+	if err := conn.WriteJSON(modeFrame{Mode: modeJPEG}); err != nil {
+		log.Printf("session %d: negotiation frame failed: %v", sessionID, err)
+		return
+	}
+
+	encoder := video.NewEncoder()
+	defer encoder.Close()
+	differ := video.NewFrameDiffer()
+
 	// Capture loop — producer
-	// Uses raw screencap + fast JPEG encoding + frame diffing.
-	// This is significantly faster than the old PNG-based pipeline because:
-	// 1. No on-device PNG compression (raw RGBA from framebuffer)
-	// 2. No PNG decode on host
-	// 3. Fast frame diffing skips identical frames (static screen = minimal traffic)
-	// 4. JPEG encoding from raw data is faster than PNG→JPEG conversion
 	go func() {
 		defer close(frameQueue)
 		ticker := time.NewTicker(time.Second / frameFPS)
@@ -100,20 +138,15 @@ func (h *StreamHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
-		// consecutiveFailures tracks screencap errors so the loop can back off
-		// when the device goes away instead of logging at frame rate forever.
 		var consecutiveFailures int
 		var lastAttempt time.Time
 		var slowed bool
 
 		for range ticker.C {
-			// Once throttled, only try every slowRetryInterval — the ticker still
-			// fires at frame rate, so gate on elapsed time rather than the tick.
 			if slowed && time.Since(lastAttempt) < slowRetryInterval {
 				continue
 			}
 
-			// Raw screencap: no PNG flag = raw RGBA pixels
 			rawRGBA, width, height, err := adbClient.ScreenshotRaw()
 			lastAttempt = time.Now()
 			if err != nil {
@@ -125,27 +158,23 @@ func (h *StreamHandler) Handle(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			// The device answered again; resume full-rate capture.
 			if slowed {
 				slowed = false
 				log.Printf("session %d: device is back — resuming full-rate capture", sessionID)
 			}
 			consecutiveFailures = 0
 
-			// Frame diffing: skip identical frames
 			if differ.IsSame(rawRGBA) {
 				framesSkipped++
 				continue
 			}
 
-			// Fast JPEG encode from raw RGBA
 			jpegData, err := encoder.EncodeRaw(rawRGBA, width, height, jpegQuality)
 			if err != nil {
 				log.Printf("jpeg encode failed: %v", err)
 				continue
 			}
 
-			// Backpressure: drop oldest frame if queue full
 			select {
 			case frameQueue <- jpegData:
 				framesSent++
@@ -174,10 +203,6 @@ func (h *StreamHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Note: Touch input is now handled by a separate WebSocket at /v1/sessions/{id}/input
-	// This decoupling ensures input continues working even if video capture stalls.
-
-	// Wait for write loop to finish (client disconnected or error)
 	<-done
 
 	writeMu.Lock()
@@ -186,4 +211,52 @@ func (h *StreamHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	writeMu.Unlock()
 
 	log.Printf("stream session ended for session %d", sessionID)
+}
+
+// pumpH264 relays the device's NAL stream to the client. Bounded like the
+// JPEG queue: a slow client drops oldest frames — H.264's P-frames make a
+// dropped-frame policy safe (the next keyframe realigns the decoder) but a
+// stalled socket must never stall the device's encoder.
+func (h *StreamHandler) pumpH264(sessionID int64, conn *websocket.Conn, vc *scrcpy.VideoClient, frameQueue chan []byte, writeMu *sync.Mutex, done chan struct{}) {
+	defer vc.Close()
+
+	go func() {
+		defer close(frameQueue)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := vc.ReadChunk(buf)
+			if err != nil {
+				log.Printf("session %d: h264 tap ended (%v)", sessionID, err)
+				return
+			}
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			select {
+			case frameQueue <- chunk:
+			default:
+				// Drop oldest: backpressure at the socket, not the encoder.
+				select {
+				case <-frameQueue:
+				default:
+				}
+				frameQueue <- chunk
+			}
+		}
+	}()
+
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for frame := range frameQueue {
+			writeMu.Lock()
+			err := conn.WriteMessage(websocket.BinaryMessage, frame)
+			writeMu.Unlock()
+			if err != nil {
+				log.Printf("stream write failed: %v", err)
+				return
+			}
+		}
+	}()
+
+	<-done
+	log.Printf("stream session ended for session %d (h264)", sessionID)
 }
