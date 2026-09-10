@@ -9,6 +9,7 @@
 package guardrails
 
 import (
+	"fmt"
 	"encoding/json"
 	"strings"
 )
@@ -37,6 +38,41 @@ type State interface {
 	HasReadFile(path string) bool
 	// FileExists reports whether the path already exists in the workspace.
 	FileExists(path string) bool
+}
+
+// Versioned is the optional H5 extension of State: version-stamped
+// observation. An implementing State reports the file's modification stamp as
+// the model last saw it (read or write) and the workspace reports its current
+// stamp; a write whose current stamp moved past the last-seen one is a
+// conflict — someone else (the user, another agent) edited between the
+// model's read and its write, and overwriting would silently clobber them.
+// Zero from either side means unknown: the check degrades to today's
+// read-before-write rule rather than refusing on missing information.
+type Versioned interface {
+	State
+	// LastSeenVersion returns the file's mtime as the model last saw it, or 0
+	// when unknown.
+	LastSeenVersion(path string) int64
+	// CurrentVersion returns the file's on-disk mtime now, or 0 when it does
+	// not exist.
+	CurrentVersion(path string) int64
+}
+
+// versionConflict checks the H5 stamp on one path. ok=false means no conflict
+// (or no information): proceed.
+func versionConflict(st State, path string) (conflict bool, lastSeen, current int64) {
+	v, ok := st.(Versioned)
+	if !ok || path == "" {
+		return false, 0, 0
+	}
+	lastSeen = v.LastSeenVersion(path)
+	current = v.CurrentVersion(path)
+	// Unknown on either side is not a conflict — the check fails open to the
+	// existing read-before-write rule, never to a blind refusal.
+	if lastSeen == 0 || current == 0 {
+		return false, lastSeen, current
+	}
+	return current != lastSeen, lastSeen, current
 }
 
 // Check evaluates one tool call and returns the first guardrail it violates, or
@@ -133,6 +169,15 @@ func checkWrite(rawInput json.RawMessage, st State) Decision {
 	// not know was there. Creating a new file is fine.
 	if st != nil && a.Path != "" && st.FileExists(a.Path) && !st.HasReadFile(a.Path) {
 		return reject("read-before-write", readBeforeMsg(a.Path, "overwriting"))
+	}
+	// H5 version stamp: the file changed since the model last saw it — the
+	// user (or someone) edited between its read and this write. Overwriting
+	// would silently clobber their edit; refuse and name the conflict.
+	if conflict, _, current := versionConflict(st, a.Path); conflict {
+		return reject("write-conflict", fmt.Sprintf(
+			"%s changed on disk since you last read it (modified at %d — not by you). "+
+				"Re-read it, incorporate the changes you find, then write again. The other edit is preserved on disk.",
+			a.Path, current))
 	}
 	return allow
 }

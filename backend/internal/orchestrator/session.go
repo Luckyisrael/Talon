@@ -329,6 +329,18 @@ func (s *SessionState) ClearReadFiles() {
 // under 10 KB even if it never appears in the prompt at all.
 const maxKnownFiles = 150
 
+// KnownFileMtime returns the file's mtime as the model last saw it (read or
+// written), or 0 when unknown — the H5 version stamp the write guard compares
+// against the on-disk truth.
+func (s *SessionState) KnownFileMtime(path string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.KnownFiles == nil {
+		return 0
+	}
+	return s.KnownFiles[path]
+}
+
 // NoteFileKnown records that path was read or written with the given mtime.
 // When the cache is full the recording is skipped — an unbounded map is worse
 // than a missing hint.

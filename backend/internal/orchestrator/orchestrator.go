@@ -1872,14 +1872,33 @@ func backfillMissingResults(results []ai.Block, calls []ai.ToolUseBlock) {
 
 // guardState adapts a session to the guardrails.State interface: read tracking
 // comes from the session, existence from the workspace filesystem via RunOptions.
+// It also implements guardrails.Versioned (H5): version stamps come from the
+// session's KnownFiles (last-seen) and the workspace mtime (current), so a
+// write over a file someone else changed mid-turn is refused, not clobbering.
 type guardState struct {
-	sess   *SessionState
-	exists func(string) bool
+	sess        *SessionState
+	exists      func(string) bool
+	currentMtime func(path string) (int64, bool)
 }
 
 func (g guardState) HasReadFile(path string) bool { return g.sess.HasReadFile(path) }
 func (g guardState) FileExists(path string) bool {
 	return g.exists != nil && g.exists(path)
+}
+
+func (g guardState) LastSeenVersion(path string) int64 {
+	return g.sess.KnownFileMtime(path)
+}
+
+func (g guardState) CurrentVersion(path string) int64 {
+	if g.currentMtime == nil {
+		return 0
+	}
+	mt, ok := g.currentMtime(path)
+	if !ok {
+		return 0
+	}
+	return mt
 }
 
 // guardrail evaluates one tool call against the deterministic guardrails before
@@ -1899,7 +1918,9 @@ func (o *Orchestrator) guardrail(sess *SessionState, name string, input json.Raw
 				"If they actually want an APK on a device, ask them with ask_user first.",
 		}
 	}
-	st := guardState{sess: sess, exists: opts.Exists}
+	st := guardState{sess: sess, exists: opts.Exists, currentMtime: func(path string) (int64, bool) {
+		return fileMtime(sess.WorkspacePath, path)
+	}}
 	return guardrails.Check(name, input, st, o.preinstalled)
 }
 

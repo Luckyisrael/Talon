@@ -3,6 +3,7 @@ package evals
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"context"
 	"encoding/json"
 	"image"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/seekersstudio/backend/internal/build"
+	"github.com/seekersstudio/backend/internal/guardrails"
 	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
 	"github.com/seekersstudio/backend/internal/harness/compaction"
 	"github.com/seekersstudio/backend/internal/harness/events"
@@ -470,3 +472,63 @@ func TestPhaseH8ContextEconomy(t *testing.T) {
 		t.Error("fault: locator escaped the store scope")
 	}
 }
+
+// H5: version-stamped writes. Both polarities: a write over the version the
+// model last saw passes, and a write over a file that changed since the last
+// read is refused with the conflict named — the user's edit is preserved, not
+// clobbered.
+func TestPhaseH5VersionStampedWrites(t *testing.T) {
+	// A workspace with one file, stamped at mtime 100.
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "app.tsx"), []byte("original"), 0o600)
+
+	st := &h5State{
+		seen:    map[string]int64{"app.tsx": 100},
+		exists:  map[string]bool{"app.tsx": true},
+		read:    map[string]bool{"app.tsx": true},
+		current: map[string]int64{"app.tsx": 100},
+	}
+
+	write := `{"path":"app.tsx","content":"new body"}`
+	if d := guardrails.Check("write_file", json.RawMessage(write), st, nil); !d.Allowed {
+		t.Errorf("healthy: same-version write refused: %+v", d)
+	}
+
+	// The user edits behind the agent's back: the stamp moves.
+	st.current["app.tsx"] = 946684800
+	d := guardrails.Check("write_file", json.RawMessage(write), st, nil)
+	if d.Allowed {
+		t.Fatal("fault: write over a changed file was allowed — the user's edit would be clobbered")
+	}
+	if d.Rule != "write-conflict" {
+		t.Errorf("fault: refusal rule = %q, want write-conflict", d.Rule)
+	}
+	if !strings.Contains(d.Message, "changed on disk") {
+		t.Errorf("fault: message does not name the conflict: %q", d.Message)
+	}
+
+	// Unknown stamps degrade to the old rule: a never-read existing file is
+	// still refused by read-before-write, a fresh file still passes.
+	st2 := &h5State{exists: map[string]bool{"old.tsx": true}, current: map[string]int64{"old.tsx": 0}}
+	if d := guardrails.Check("write_file", json.RawMessage(`{"path":"old.tsx","content":"x"}`), st2, nil); d.Allowed {
+		t.Error("fault: read-before-write lost — never-read existing file was allowed")
+	}
+	if d := guardrails.Check("write_file", json.RawMessage(`{"path":"brand-new.tsx","content":"x"}`), st2, nil); !d.Allowed {
+		t.Errorf("healthy: new-file write refused: %+v", d)
+	}
+}
+
+// h5State is the evals-local guardrails.Versioned: stamps from maps, no fs.
+type h5State struct {
+	seen    map[string]int64
+	current map[string]int64
+	exists  map[string]bool
+	read    map[string]bool
+}
+
+func (s *h5State) HasReadFile(p string) bool { return s.read[p] }
+func (s *h5State) FileExists(p string) bool  { return s.exists[p] }
+func (s *h5State) LastSeenVersion(p string) int64 {
+	return s.seen[p]
+}
+func (s *h5State) CurrentVersion(p string) int64 { return s.current[p] }
