@@ -1,0 +1,51 @@
+event: tool_call
+data: {"id":"","name":"Scanned the project","path":"","status":"completed","tool":"context_build"}
+
+event: task_update
+data: {"description":"Screen: Welcome — Introduces TipKit and its purpose, then provides a Get started action. Records onboarding completion without introducing account creation or seed-phrase flows.","id":"plan:screen:welcome","result":"","status":"pending"}
+
+event: task_update
+data: {"description":"Screen: Connect — Uses the `useMobileWallet` hook from `@wallet-ui/react-native-kit` to show connection state, start MWA authorization, display the connected wallet identity, and continue to tipping. Seed Vault and the wallet app retain all signing material.","id":"plan:screen:connect","result":"","status":"pending"}
+
+event: task_update
+data: {"description":"Screen: Tip — Shows the configured jar recipient, three preset SOL amounts, and a custom SOL input. The Tip action validates the amount, builds a transfer plus memo instruction with `@solana/kit`, and sends it through the hook's MWA-backed `sendTransactions` path. Shows pending, success, and failure states inline, including the resulting signature on success.","id":"plan:screen:tip","result":"","status":"pending"}
+
+event: task_update
+data: {"description":"Screen: History — A bottom-tab list of mock tip records showing amount, relative time, memo, and status. It remains demonstration data and is neither fetched from RPC nor populated from real sends.","id":"plan:screen:history","result":"","status":"pending"}
+
+event: task_update
+data: {"description":"Feature: Force a consistent dark theme across app and Wallet UI kit components.","id":"plan:feature:0","result":"","status":"pending"}
+
+event: task_update
+data: {"description":"Feature: Connect exclusively through the MWA-backed `useMobileWallet` hook; no browser wallet adapter or private-key flow.","id":"plan:feature:1","result":"","status":"pending"}
+
+event: task_update
+data: {"description":"Feature: Build Solana transfer and memo instructions with `@solana/kit`, including a fresh blockhash.","id":"plan:feature:2","result":"","status":"pending"}
+
+event: task_update
+data: {"description":"Feature: Validate custom amounts and surface wallet cancellation, signing failure, and send failure without leaving the Tip screen.","id":"plan:feature:3","result":"","status":"pending"}
+
+event: task_update
+data: {"description":"Feature: Remember onboarding completion so returning users can enter Tip directly when a wallet is connected.","id":"plan:feature:4","result":"","status":"pending"}
+
+event: phase
+data: {"phase":"CONTEXT_BUILD","status":"started"}
+
+event: phase
+data: {"phase":"GENERATE","status":"started"}
+
+event: phase
+data: {"phase":"GENERATE","status":"round 1"}
+
+event: phase
+data: {"phase":"FAILED_NEEDS_USER","status":"started"}
+
+event: error
+data: {"message":"ChatWithTools(OpenAI) failed after 4 attempts: API error (status 429): {\"error\":{\"message\":\"Rate limit exceeded: free-models-per-day. Add 5 credits to unlock 1000 free model requests per day\",\"code\":429,\"metadata\":{\"headers\":{\"X-RateLimit-Limit\":\"50\",\"X-RateLimit-Remaining\":\"0\",\"X-RateLimit-Reset\":\"1788998400000\"},\"limit_source\":\"openrouter_free_tier_daily\",\"remedy_hint\":\"Wait for the daily reset (see X-RateLimit-Reset), or purchase credits to raise your free-model daily limit.\",\"provider_name\":null}},\"user_id\":\"user_3BY9E2Zk0DijjFAstnEryKbIstV\"}"}
+
+event: error
+data: {"message":"The AI service is rate limiting us right now. Wait a moment and try again."}
+
+event: done
+data: {"files_touched":null,"message":"","remaining_tasks":null,"rounds":1,"skipped_gates":null,"status":"failed","verified":false}
+

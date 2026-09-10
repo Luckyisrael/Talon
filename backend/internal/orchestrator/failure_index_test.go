@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/runtime"
@@ -25,12 +25,12 @@ func TestFailureReminderFiresOncePerCooldown(t *testing.T) {
 	output := "app/x.tsx(1,1): error TS2322: Type 'string' is not assignable to type 'number'."
 
 	// Simulate one error round: lookup, cooldown check, reminder.
-	patterns := agent.DefaultFailureIndex()
-	pat, ok := agent.Lookup(patterns, callName, output)
+	patterns := knowledge.DefaultFailureIndex()
+	pat, ok := knowledge.Lookup(patterns, callName, output)
 	if !ok {
 		t.Fatal("expected TS2322 to hit the failure index")
 	}
-	norm := agent.NormalizeError(output)
+	norm := knowledge.NormalizeError(output)
 	if sess.CooldownLeft(callName, norm) != 0 {
 		t.Fatal("cooldown should start at zero (reminder active)")
 	}
@@ -200,5 +200,23 @@ func TestProbeNotePolicy(t *testing.T) {
 	}
 	if probeNoteFor(2, "x") != "" || probeNoteFor(4, "x") != "" {
 		t.Error("probes 2 and 4+ should stay silent")
+	}
+}
+
+func TestProbeTargetRequire(t *testing.T) {
+	cases := []struct{ tool, input, want string }{
+		{"run_command", `{"command":"node -p require('@solana/web3.js').Connection"}`, "@solana/web3.js"},
+		{"run_shell", `{"command":"node -e \"require('js-base64')\""}`, "js-base64"},
+		{"run_shell", `{"command":"node -p \"Object.keys(require('@scope/pkg/sub'))\""}`, "@scope/pkg"},
+		{"run_shell", `{"command":"node -e \"const fs=require('fs')\""}`, ""},
+		{"run_shell", `{"command":"node -p require('./local')"}`, ""},
+		{"run_shell", `{"command":"ls app/"}`, ""},
+		{"read_file", `{"path":"node_modules/foo/bar.d.ts"}`, "foo"},
+		{"write_file", `{"path":"a.tsx"}`, ""},
+	}
+	for _, c := range cases {
+		if got := probeTarget(c.tool, json.RawMessage(c.input)); got != c.want {
+			t.Errorf("probeTarget(%s, %s) = %q, want %q", c.tool, c.input, got, c.want)
+		}
 	}
 }

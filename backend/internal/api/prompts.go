@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/events"
@@ -29,15 +29,19 @@ type PromptHandler struct {
 	workspaceDir string
 	orch         *orchestrator.Orchestrator
 	devClient    *devclient.Manager
-	knowledge    *agent.Registry
+	knowledge    *knowledge.Registry
 	// planPrompt is the Plan-mode system prompt, assembled once at startup with the
 	// template's preinstalled-package list folded in. Building it here — the one
 	// place that holds both the AI client and the knowledge registry — is what keeps
 	// the plan and build modes from drifting on which packages already ship.
 	planPrompt string
+	// slog is the H1 session-log cache: one append-only event log per project,
+	// dual-written alongside conversation_messages until the derivation read
+	// path is flipped on everywhere.
+	slog *sessionLogCache
 }
 
-func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *agent.Registry) *PromptHandler {
+func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *knowledge.Registry) *PromptHandler {
 	var preinstalled []string
 	if knowledge != nil {
 		preinstalled = knowledge.PreinstalledList()
@@ -50,6 +54,7 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *o
 		devClient:    dc,
 		knowledge:    knowledge,
 		planPrompt:   ai.PlanSystemPrompt(preinstalled),
+		slog:         newSessionLogCache(),
 	}
 }
 
@@ -700,6 +705,8 @@ func (h *PromptHandler) finishBuildStream(w http.ResponseWriter, flusher http.Fl
 			// error event above) but is not done. 'paused' tells the client to show it
 			// as resumable — Resume continues it — rather than as a success or a fault.
 			payload["status"] = "paused"
+		} else if outcome.Stalled {
+			payload["status"] = "stalled"
 		}
 	}
 	writeSSE(w, "done", payload)
@@ -710,7 +717,10 @@ func (h *PromptHandler) finishBuildStream(w http.ResponseWriter, flusher http.Fl
 func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event) {
 	switch evt.Type {
 	case events.PhaseEvent:
-		writeSSE(w, "phase", map[string]interface{}{"phase": evt.Phase, "status": evt.Status})
+		// prompt_id on every phase frame lets the client capture the running
+		// turn's id from the first event — the steer route is addressed by it,
+		// and before this only the question and done frames carried it.
+		writeSSE(w, "phase", map[string]interface{}{"phase": evt.Phase, "status": evt.Status, "prompt_id": evt.PromptID})
 	case events.ToolCallEvent:
 		writeSSE(w, "tool_call", map[string]interface{}{
 			"id": evt.ID, "tool": evt.Tool, "path": evt.Path, "name": evt.Name, "status": evt.Status,
@@ -862,11 +872,19 @@ func (h *PromptHandler) runBuild(
 		// keeps the rounds that already finished — the difference between a crash
 		// costing one round and costing the whole turn.
 		Persist: func(msgs []ai.Message) {
+			lg := h.slog.get(h.store, projectID)
 			for _, m := range msgs {
 				if err := h.store.AppendMessage(projectID, promptID, m.Role,
 					ai.MarshalBlocks(m.Blocks), 0, 0); err != nil {
 					log.Printf("project %d: could not persist a round: %v", projectID, err)
 					return
+				}
+				// H1 dual-write: the same turn lands in the append-only log so
+				// replay and shadow-compaction have the full record.
+				if m.Role == "user" {
+					appendLoggedUser(lg, m, promptID)
+				} else {
+					appendLoggedAssistant(lg, m, promptID)
 				}
 			}
 		},
@@ -945,10 +963,17 @@ func (h *PromptHandler) turnHistory(projectID, promptID int64, userPrompt string
 }
 
 // persistTurn stores one turn of the transcript, logging rather than failing the
-// build if the write does not land.
+// build if the write does not land. The same turn dual-writes into the H1
+// session log; a log failure logs too and never fails the build.
 func (h *PromptHandler) persistTurn(projectID, promptID int64, m ai.Message, label string) {
 	if err := h.store.AppendMessage(projectID, promptID, m.Role, ai.MarshalBlocks(m.Blocks), 0, 0); err != nil {
 		log.Printf("project %d: could not store the %s: %v", projectID, label, err)
+	}
+	lg := h.slog.get(h.store, projectID)
+	if m.Role == "user" {
+		appendLoggedUser(lg, m, promptID)
+	} else {
+		appendLoggedAssistant(lg, m, promptID)
 	}
 }
 
@@ -976,6 +1001,12 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 			status = "waiting"
 		case outcome.Exhausted:
 			status = "paused"
+		case outcome.Stalled:
+			// A stalled turn is terminal and deliberately not resumable:
+			// resuming would most likely resume the ramble. The transcript
+			// persists, so a fresh prompt can continue differently. 'stalled'
+			// matches no resume offer, by design.
+			status = "stalled"
 		}
 	}
 	if err := h.store.UpdatePromptStatus(promptID, status, round); err != nil {
@@ -1070,12 +1101,14 @@ func terminalStatus(runErr error) string {
 // then each round's messages) — without it, the first interactions on a project
 // (planning) vanished on refresh while build turns survived.
 func (h *PromptHandler) persistPlanExchange(projectID, promptID int64, userPrompt, message string, plan json.RawMessage) {
+	lg := h.slog.get(h.store, projectID)
 	userTurn := ai.UserText(userPrompt)
 	if err := h.store.AppendMessage(projectID, promptID, userTurn.Role,
 		ai.MarshalBlocks(userTurn.Blocks), 0, 0); err != nil {
 		log.Printf("project %d: could not store the plan prompt: %v", projectID, err)
 		return
 	}
+	appendLoggedUser(lg, userTurn, promptID)
 
 	// Guarantee a non-empty message so the assistant turn always has replayable
 	// text — an assistant turn carrying only a plan block would serialise to an
@@ -1088,6 +1121,7 @@ func (h *PromptHandler) persistPlanExchange(projectID, promptID int64, userPromp
 		ai.MarshalBlocks(assistant.Blocks), 0, 0); err != nil {
 		log.Printf("project %d: could not store the plan reply: %v", projectID, err)
 	}
+	appendLoggedAssistant(lg, assistant, promptID)
 
 	h.store.TrimConversation(projectID, 400)
 }
@@ -1134,7 +1168,16 @@ func truncateLabel(s string, n int) string {
 // validity trim. The answer path needs the raw tail — a turn paused on ask_user
 // ends with an unanswered tool_use that TrimToValidHistory would drop as an
 // orphan, which is the one turn resume must keep so it can answer it.
+//
+// H1: when SEEKERSTUDIO_SESSIONLOG=derive, the read comes from the append-only
+// session log's projection instead of conversation_messages — the flag flip
+// the dual-write migration ends on. Off (the default) reads the legacy table
+// exactly as before; both paths were proven byte-equivalent by the bridge
+// round-trip tests before this switch existed.
 func (h *PromptHandler) storedConversation(projectID int64) []ai.Message {
+	if derived := h.deriveFromLog(projectID); derived != nil {
+		return derived
+	}
 	stored, err := h.store.GetConversation(projectID, historyTurns)
 	if err != nil {
 		log.Printf("project %d: could not load the conversation: %v", projectID, err)

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/knowledge"
 )
 
 // All G4 gate tools must report "unavailable" rather than fail when the
@@ -237,14 +237,14 @@ func TestBootVerdictGap(t *testing.T) {
 // known fix — the suggestion is deterministic, never a fresh guess.
 func TestBootFailureSuggestsSameFix(t *testing.T) {
 	logs := "process alive but produced no log output:\n09-05 14:22:34.000   600   600 I other.tag: unrelated\n"
-	idx := agent.DefaultFailureIndex()
+	idx := knowledge.DefaultFailureIndex()
 	var first string
 	for i := 0; i < 5; i++ {
 		vr := bootVerdict("com.test.app", logs, time.Now().Add(-time.Minute))
 		if vr.Passed {
 			t.Fatal("silent boot must fail")
 		}
-		pat, ok := agent.Lookup(idx, "run_boot", vr.Errors)
+		pat, ok := knowledge.Lookup(idx, "run_boot", vr.Errors)
 		if !ok {
 			t.Fatalf("round %d: silent boot should hit the failure index", i+1)
 		}

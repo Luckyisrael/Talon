@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/evals"
 	"github.com/seekersstudio/backend/internal/orchestrator"
@@ -48,7 +48,7 @@ func TestEvalsLiveScorecard(t *testing.T) {
 	// The knowledge layer and store the real handler is built on. A temp DB keeps
 	// the run self-contained; the template package.json is the pinned dependency
 	// set every skill and rule is written against.
-	knowledge, err := agent.Load("../../template/package.json")
+	knowledge, err := knowledge.Load("../../template/package.json")
 	if err != nil {
 		t.Fatalf("loading knowledge: %v", err)
 	}

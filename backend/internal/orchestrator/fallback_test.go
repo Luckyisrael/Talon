@@ -91,11 +91,14 @@ func TestLoopFallsBackAndLatches(t *testing.T) {
 		Mode:         "build",
 		History:      []ai.Message{ai.UserText("add a comment noting the module purpose, nothing else, keep it minimal and surgical")},
 		Execute: func(_ context.Context, name string, _ json.RawMessage) (string, bool) {
-			if name == "run_typecheck" || name == "run_lint" {
-				out, _ := json.Marshal(map[string]any{"passed": true, "summary": "clean"})
-				return string(out), false
+			// Every gate answers the VerifyResult schema explicitly. A bare
+			// {"ok":true} would parse with passed=false and fail the ladder —
+			// checkers must say passed, not imply it.
+			if name == "write_file" {
+				return `{"ok":true}`, false
 			}
-			return `{"ok":true}`, false
+			out, _ := json.Marshal(map[string]any{"passed": true, "summary": "clean"})
+			return string(out), false
 		},
 		FilesTouched: func() []string { return []string{"app/x.tsx"} },
 	})

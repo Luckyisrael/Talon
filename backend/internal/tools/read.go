@@ -264,3 +264,26 @@ func (t *GrepCodebase) Execute(ctx context.Context, args json.RawMessage) (ToolR
 	}
 	return ToolResult{Content: result}, nil
 }
+
+// SearchFiles is a name-alias for GrepCodebase. The original tool's contract is
+// unchanged; the alias is registered alongside it so a model that asks for
+// either "grep_codebase" or "search_files" reaches the same implementation.
+// The AI providers cache the tool schema by name, so renaming would bust the
+// cache for callers that already learned the old name — aliasing is the
+// forward-compatible shape.
+type SearchFiles struct{ Inner *GrepCodebase }
+
+func (t *SearchFiles) Name() string { return "search_files" }
+
+func (t *SearchFiles) Description() string {
+	return "Search the project's source files with a regular expression. Alias of grep_codebase " +
+		"for callers that prefer the search_files name. Returns file, line number and the matching " +
+		"line."
+}
+
+func (t *SearchFiles) InputSchema() json.RawMessage { return t.Inner.InputSchema() }
+func (t *SearchFiles) ReadOnly() bool               { return true }
+
+func (t *SearchFiles) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	return t.Inner.Execute(ctx, args)
+}

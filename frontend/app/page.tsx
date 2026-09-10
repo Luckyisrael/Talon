@@ -43,7 +43,7 @@ const features = [
   },
 ];
 
-const ecosystem = ["Solana Mobile", "Expo SDK 55", "React Native", "AgentRouter", "Mobile Wallet Adapter"];
+const ecosystem = ["Solana Mobile", "Expo SDK 55", "React Native", "Mobile Wallet Adapter"];
 
 export default function Home() {
   return (
@@ -53,7 +53,7 @@ export default function Home() {
       <main className="flex-1 flex flex-col items-center">
         {/* ── Hero: left-aligned oversized headline + link CTA ── */}
         <section className="w-full max-w-[1200px] mx-auto px-6 pt-24 pb-16">
-          <div className="pill mb-6">Seeker-native vibe coding</div>
+          <div className="pill mb-6">Seeker-native AI coding platform</div>
           <h1 className="t-heading-lg max-w-[880px]">
             Build Solana Mobile apps at the speed of thought
           </h1>

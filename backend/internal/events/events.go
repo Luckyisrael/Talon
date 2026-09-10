@@ -90,7 +90,15 @@ func NewSessionEmitter(sessionID int64, bufferSize int) *SessionEmitter {
 }
 
 // Emit delivers an event, or returns immediately if the emitter is closed.
+// The session id (the prompt id of the running turn) is stamped on every
+// event so the client learns the running turn's id from the first frame —
+// the steer route is addressed by it. Individual Emit* helpers may set their
+// own PromptID (the question event's is meaningful); zero values never
+// overwrite a caller-set id.
 func (e *SessionEmitter) Emit(evt Event) {
+	if evt.PromptID == 0 {
+		evt.PromptID = e.sessionID
+	}
 	select {
 	case <-e.done:
 		return

@@ -286,6 +286,19 @@ export const prompts = {
       method: "POST",
     });
   },
+
+  // Deliver a message to a running build turn (H2 steer): the text lands in
+  // the next model request the loop makes — a mid-build redirect without
+  // aborting the turn. Class "inject" adds context without redirecting. The
+  // running turn keeps streaming on its original SSE connection; the steer
+  // surfaces there as a marked turn. 409 when the turn is not running (send
+  // a new prompt instead).
+  steer(promptId: number, message: string, klass: "steer" | "inject" = "steer") {
+    return request<{ prompt_id: number; delivered: boolean; sequence: number }>(
+      `/v1/prompts/${promptId}/steer`,
+      { method: "POST", body: JSON.stringify({ message, class: klass }) },
+    );
+  },
 };
 
 // ── Streaming ─────────────────────────────────────────

@@ -6,9 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/agent"
 	"github.com/seekersstudio/backend/internal/build"
 	"github.com/seekersstudio/backend/internal/events"
+	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
+	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/runtime"
 	"github.com/seekersstudio/backend/internal/store"
 )
@@ -114,7 +115,7 @@ type SessionState struct {
 
 	// RuntimePatterns holds failure patterns loaded from project memory on
 	// session start. These are merged with the default index at lookup time.
-	RuntimePatterns []agent.FailurePattern
+	RuntimePatterns []knowledge.FailurePattern
 
 	// CrashEntries is the run-scoped crash index: one entry per failed
 	// device step (boot, vision, interact, wallet tx) with its log excerpt.
@@ -125,6 +126,13 @@ type SessionState struct {
 	// buffer lane is enabled for the session — nil means try_edit behaves
 	// as the plain underlying edit, identical to today.
 	PatchBuffer *build.PatchBuffer
+
+	// steerLane is the H2 mid-turn message lane: user messages that arrive
+	// while this turn is running. Steers land in the next model request; injects
+	// ride along without redirecting. The loop drains it at round boundaries —
+	// a steer delivered between requests is picked up before the next one.
+	steerLane []harnessagent.Inbox
+	steerSeq  int64
 
 	// skippedGates accumulates ladder stages that reported unavailable in
 	// the current sweep, so a verified outcome can name what never ran.
@@ -457,6 +465,29 @@ func (s *SessionState) GetRound() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.CurrentRound
+}
+
+// Deliver appends one mid-turn message to the steer lane (the harness
+// agent.Steerable seam). Safe from any goroutine — the SSE steer route calls
+// it while the loop is between requests. The arrival sequence is honest
+// ordering, not a timestamp: two steers in one round keep their order.
+func (s *SessionState) Deliver(class harnessagent.Class, text string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.steerSeq++
+	s.steerLane = append(s.steerLane, harnessagent.Inbox{Class: class, Text: text, At: s.steerSeq})
+	return s.steerSeq
+}
+
+// DrainSteers returns and clears the pending mid-turn messages. The loop
+// calls it at every round boundary: a steer delivered while the model was
+// generating lands in the very next request, never later.
+func (s *SessionState) DrainSteers() []harnessagent.Inbox {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.steerLane
+	s.steerLane = nil
+	return out
 }
 
 // verifyEnforceThreshold is the write count that triggers mandatory

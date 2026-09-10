@@ -95,6 +95,14 @@ export interface ChatMessage {
   files?: FileEntry[];
   buildResult?: unknown;
   timestamp: number;
+  /** H2: true when this user message was delivered to a running build as a
+   * mid-turn steer rather than starting a new turn. Steers render dimmed with
+   * a "steer" label — honest about not being a fresh prompt. */
+  steer?: boolean;
+  /** H2: set only when a steer delivery failed (e.g. the turn finished between
+   * capture and send). Shows on the bubble so the user knows their words never
+   * reached the build. */
+  steerError?: string | null;
 }
 
 export interface AuthResponse {

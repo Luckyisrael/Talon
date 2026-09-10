@@ -271,6 +271,13 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     // new prompt. Derived from server truth on every load, so it never claims a
     // turn is resumable that isn't.
     const [resumable, setResumable] = useState<LatestPrompt | null>(null);
+    // H2 steer: while a turn streams, typed messages go to the running build
+    // (steer) by default. `queueInstead` flips that — the message waits for
+    // the next turn like before. The running prompt id is captured from the
+    // first phase event (every one carries prompt_id), because the steer
+    // route is addressed by it.
+    const [queueInstead, setQueueInstead] = useState(false);
+    const runningPromptIdRef = useRef<number>(0);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
@@ -476,6 +483,12 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               break;
 
             case "phase": {
+              // Capture the running turn's id from the first frame — the steer
+              // route is addressed by it. Zero stays zero (never steers) until
+              // the server names the turn.
+              if (typeof d.prompt_id === "number" && d.prompt_id > 0) {
+                runningPromptIdRef.current = d.prompt_id;
+              }
               const roundMatch = typeof d.status === "string" && d.status.match(/round (\d+)/);
               patch((prev) => ({
                 ...prev,
@@ -692,6 +705,8 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               break;
 
             case "done": {
+              // The turn is over: no more steers can be delivered to it.
+              runningPromptIdRef.current = 0;
               const touched = d.files_touched ?? [];
               const skipped = Array.isArray(d.skipped_gates) ? d.skipped_gates : [];
               patch((prev) => ({
@@ -864,20 +879,65 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       [handleEvent, isStreaming],
     );
 
+    // Deliver a message to the running build (H2 steer). The text lands in
+    // the loop's next model request; the running stream surfaces it as a
+    // marked turn. The bubble renders dimmed and labeled — honest that it is
+    // a redirect, not a new prompt. A failed delivery (turn finished between
+    // the phase event and here) shows the error on the bubble rather than
+    // silently dropping the user's words.
+    const steerRunning = useCallback(
+      async (raw: string) => {
+        const message = raw.trim();
+        const promptId = runningPromptIdRef.current;
+        if (!message || promptId <= 0) return;
+        setInput("");
+        setConfirmClear(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "user",
+            content: message,
+            timestamp: Date.now(),
+            steer: true,
+            steerError: null,
+          },
+        ]);
+        try {
+          await prompts.steer(promptId, message);
+        } catch (err) {
+          const text = err instanceof Error ? err.message : "steer failed";
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.role === "user" && m.steer && m.content === message
+                ? { ...m, steerError: text }
+                : m,
+            ),
+          );
+        }
+      },
+      [],
+    );
+
     // Declared after `send` on purpose: reading it from above the declaration is
     // a temporal-dead-zone hazard, and it only worked because the handle body
     // does not run until after the first render.
     useImperativeHandle(ref, () => ({
       switchToBuild: () => setMode("build"),
-      sendMessage: (msg: string, mode?: "plan" | "build") => {
-        void send(msg, mode);
+      sendMessage: (msg: string, modeArg?: "plan" | "build") => {
+        void send(msg, modeArg);
       },
     }));
 
     // Both the send button and Enter go through here. When a turn is waiting to
-    // be resumed, typing just "resume" or "continue" triggers that rather than a
-    // new prompt — the obvious thing to type when the banner is showing. Gated on
+    // be resumed, typing just "resume" or "continue" triggers that rather than
+    // a new prompt — the obvious thing to type when the banner is showing. Gated on
     // `resumable`, so the same words are an ordinary prompt at any other time.
+    //
+    // H2: while a turn streams, a submitted message steers the running build
+    // (dimmed, labeled) unless queueInstead is on — then it queues for the
+    // next turn like before. A turn paused on a question never steers: the
+    // question card owns the conversation.
     function submitInput() {
       // A pending question owns the conversation: it is answered in its card, not
       // here, so the paused turn is never left behind by a fresh prompt.
@@ -885,6 +945,14 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       if (resumable && !isStreaming && /^(resume|continue)$/i.test(input.trim())) {
         setInput("");
         resume();
+        return;
+      }
+      // H2 steer: while a turn runs and the queue toggle is off, a submitted
+      // message goes to the running build. With the queue toggle on, the
+      // message stays in the composer — it sends as the next turn when this
+      // one ends. Nothing is silently dropped or held in hidden state.
+      if (isStreaming) {
+        if (!queueInstead) void steerRunning(input);
         return;
       }
       void send(input);
@@ -1068,8 +1136,23 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                 />
               ) : (
                 <div key={msg.id} className="flex min-w-0 justify-end">
-                  <div className="max-w-[88%] whitespace-pre-wrap break-words rounded-xl bg-white/5 px-3 py-1.5 text-xs leading-relaxed text-mist">
+                  <div
+                    className={[
+                      "max-w-[88%] whitespace-pre-wrap break-words rounded-xl px-3 py-1.5 text-xs leading-relaxed",
+                      msg.steer
+                        ? "border border-acid-lime/20 bg-acid-lime/[0.04] text-fog"
+                        : "bg-white/5 text-mist",
+                    ].join(" ")}
+                  >
+                    {msg.steer ? (
+                      <span className="mr-1.5 font-mono text-[10px] uppercase tracking-wider text-acid-lime/70">
+                        {msg.steerError ? "steer failed" : "steer — not a new turn"}
+                      </span>
+                    ) : null}
                     {msg.content}
+                    {msg.steer && msg.steerError ? (
+                      <div className="mt-1 text-[11px] text-sunset">{msg.steerError}</div>
+                    ) : null}
                   </div>
                 </div>
               ),
@@ -1152,23 +1235,72 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               placeholder={
                 pendingQuestion
                   ? "Answer the question above to continue…"
-                  : mode === "plan"
-                    ? "Describe the app…"
-                    : "What should I build?"
+                  : isStreaming && !queueInstead
+                    ? "Steer the running build…"
+                    : isStreaming
+                      ? "Queue for the next turn…"
+                      : mode === "plan"
+                        ? "Describe the app…"
+                        : "What should I build?"
               }
               className="min-h-4 bg-transparent text-xs leading-[1.4] text-mist outline-none placeholder:text-ash resize-none"
-              disabled={isStreaming || pendingQuestion}
+              disabled={pendingQuestion}
               aria-label="Chat prompt"
             />
-            <div className="flex items-center justify-end">
+            <div className="flex items-center justify-end gap-1.5">
               {isStreaming ? (
-                <button
-                  type="button"
-                  onClick={stop}
-                  className="btn btn-stop h-7 flex-shrink-0"
-                >
-                  Stop
-                </button>
+                <>
+                  {/* H2: while a turn runs, submitted messages steer it by
+                      default. The toggle opts the next message into the old
+                      behavior — queue for the next turn — one submission at a
+                      time, so the common case needs no click. */}
+                  <button
+                    type="button"
+                    onClick={() => setQueueInstead((q) => !q)}
+                    title={
+                      queueInstead
+                        ? "Next message will queue for the next turn"
+                        : "Next message will steer the running build"
+                    }
+                    aria-pressed={queueInstead}
+                    className={[
+                      "flex h-7 items-center gap-1 rounded-full border px-2.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
+                      queueInstead
+                        ? "border-acid-lime/50 text-acid-lime"
+                        : "border-graphite text-fog hover:text-mist",
+                    ].join(" ")}
+                  >
+                    {queueInstead ? "Queue instead" : "Steers the build"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={stop}
+                    className="btn btn-stop h-7 flex-shrink-0"
+                  >
+                    Stop
+                  </button>
+                  <button
+                    type="submit"
+                    title={queueInstead ? "Queue for the next turn" : "Steer the running build"}
+                    aria-label={queueInstead ? "Queue for the next turn" : "Steer the running build"}
+                    disabled={!input.trim()}
+                    className="flex size-7 flex-shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 enabled:active:scale-[0.96]"
+                    style={{
+                      background: input.trim() ? "var(--color-acid-lime)" : "var(--color-graphite)",
+                      color: input.trim() ? "var(--color-void)" : "var(--color-fog)",
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+                      <path
+                        d="M2.5 8 13 3.5 10.8 8 13 12.5 2.5 8Z"
+                        fill="currentColor"
+                        stroke="currentColor"
+                        strokeWidth="1.2"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </>
               ) : (
                 <button
                   type="submit"

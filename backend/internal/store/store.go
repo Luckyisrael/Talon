@@ -245,6 +245,18 @@ func (s *Store) migrate() error {
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_conv_project_seq ON conversation_messages(project_id, seq)`,
+		// session_events is the H1 harness session log: the append-only,
+		// event-sourced record behind every agent turn. Messages are derived
+		// from it, never stored; compaction shadows rows for derivation
+		// without deleting them, so replay reproduces the exact conversation.
+		`CREATE TABLE IF NOT EXISTS session_events (
+			seq INTEGER PRIMARY KEY AUTOINCREMENT,
+			log_key TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			created_at DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_events_key ON session_events(log_key, seq)`,
 		// checkpoints hold the pre-promotion content of every file a turn touches,
 		// so a build can be rewound after the fact.
 		`CREATE TABLE IF NOT EXISTS checkpoints (

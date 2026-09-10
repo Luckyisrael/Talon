@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/store"
@@ -17,11 +17,11 @@ func newTestSession(t *testing.T) *SessionState {
 	return NewSession(1, 1, t.TempDir(), events.NewSessionEmitter(1, 128))
 }
 
-func loadKnowledge(t *testing.T) *agent.Registry {
+func loadKnowledge(t *testing.T) *knowledge.Registry {
 	t.Helper()
-	r, err := agent.Load("../../template/package.json")
+	r, err := knowledge.Load("../../template/package.json")
 	if err != nil {
-		t.Fatalf("agent.Load: %v", err)
+		t.Fatalf("knowledge.Load: %v", err)
 	}
 	return r
 }

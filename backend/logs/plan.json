@@ -1,0 +1,1 @@
+{"project_id": 34, "mode": "plan", "prompt": "A Solana tip jar called TipKit: onboarding welcome, MWA connect screen using the useMobileWallet hook, tip screen (preset amounts + custom, sendTransactions with a memo instruction), history tab (mock list). Use @solana/kit and @wallet-ui/react-native-kit only \u2014 no web3.js. Dark mode. Produce the plan."}

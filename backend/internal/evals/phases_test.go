@@ -2,14 +2,23 @@ package evals
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/agent"
 	"github.com/seekersstudio/backend/internal/build"
+	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
+	"github.com/seekersstudio/backend/internal/harness/events"
+	"github.com/seekersstudio/backend/internal/harness/pipeline"
+	"github.com/seekersstudio/backend/internal/harness/sessionlog"
+	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/runtime"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/verify"
@@ -25,11 +34,11 @@ import (
 // A3: the failure index resolves known errors to their known fix, and stays
 // silent on unknown ones.
 func TestPhaseA3FailureIndex(t *testing.T) {
-	idx := agent.DefaultFailureIndex()
-	if _, ok := agent.Lookup(idx, "run_typecheck", "error TS2322: Type 'string' is not assignable"); !ok {
+	idx := knowledge.DefaultFailureIndex()
+	if _, ok := knowledge.Lookup(idx, "run_typecheck", "error TS2322: Type 'string' is not assignable"); !ok {
 		t.Error("healthy: TS2322 should hit the index")
 	}
-	if _, ok := agent.Lookup(idx, "run_typecheck", "total gibberish with no meaning"); ok {
+	if _, ok := knowledge.Lookup(idx, "run_typecheck", "total gibberish with no meaning"); ok {
 		t.Error("fault: gibberish must not hit the index")
 	}
 }
@@ -138,4 +147,279 @@ func solidGradient(w, h int) []byte {
 		}
 	}
 	return encodePNG(img)
+}
+
+// H1: the harness session log is event-sourced — derivation is deterministic,
+// shadowing never deletes rows, and a fork carries a stable prefix. Both
+// polarities: the healthy path replays exactly, and the fault (a shadow that
+// destroyed history) is structurally impossible because Replay reads the rows
+// the shadow only marks.
+func TestPhaseH1SessionLog(t *testing.T) {
+	mem := &harnessMemStore{rows: map[string][]sessionlog.Event{}, seq: map[string]int64{}}
+
+	l, err := sessionlog.New(mem, "eval-h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Append(events.UserMessage, events.MessagePayload{
+		Role: "user", Blocks: []events.BlockPayload{{Type: "text", Text: "turn one"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	boundary := l.Seq()
+	if _, err := l.Append(events.UserMessage, events.MessagePayload{
+		Role: "user", Blocks: []events.BlockPayload{{Type: "text", Text: "turn two"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Shadow(boundary, "condensed", "eval"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Healthy: derivation is bounded by the shadow, replay is complete.
+	if got := len(l.DeriveMessages()); got != 2 {
+		t.Errorf("healthy: derived %d messages after shadow, want 2", got)
+	}
+	if got := len(l.Replay()); got != 4 { // 2 messages + shadow + summary
+		t.Errorf("healthy: replay lost rows after shadow: %d", got)
+	}
+
+	// Determinism: a second log over the same persisted rows derives
+	// byte-identical messages.
+	l2, err := sessionlog.New(mem, "eval-h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := json.Marshal(l.DeriveMessages())
+	b, _ := json.Marshal(l2.DeriveMessages())
+	if string(a) != string(b) {
+		t.Error("healthy: re-opened log derives different messages — replay is not re-derivation")
+	}
+
+	// Fork polarity: the child sees the prefix and nothing past it; a parent
+	// append after the fork never reaches the child.
+	child, err := l2.Fork(mem, "eval-h1-child", boundary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// boundary was captured after the first append, so the prefix is exactly
+	// that one event — the second message and the shadow markers stay behind.
+	if got := len(child.Replay()); got != 1 {
+		t.Errorf("fault: fork carried %d rows past the boundary, want 1", got)
+	}
+	if _, err := l2.Append(events.UserMessage, events.MessagePayload{
+		Role: "user", Blocks: []events.BlockPayload{{Type: "text", Text: "parent-only"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range child.Replay() {
+		if strings.Contains(string(e.Payload), "parent-only") {
+			t.Error("fault: child saw a parent append made after the fork")
+		}
+	}
+}
+
+// harnessMemStore is the evals-local sessionlog.Store: ordered rows per key,
+// no deletion — the contract the SQLite backend honours.
+type harnessMemStore struct {
+	rows map[string][]sessionlog.Event
+	seq  map[string]int64
+}
+
+func (m *harnessMemStore) AppendEvent(key string, kind events.Kind, payload []byte, at time.Time) (int64, error) {
+	m.seq[key]++
+	m.rows[key] = append(m.rows[key], sessionlog.Event{Seq: m.seq[key], Kind: kind, Payload: payload, At: at})
+	return m.seq[key], nil
+}
+
+func (m *harnessMemStore) EventsFrom(key string, fromSeq int64) ([]sessionlog.Event, error) {
+	var out []sessionlog.Event
+	for _, e := range m.rows[key] {
+		if e.Seq > fromSeq {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// H2: the steer contract — a mid-turn message reaches the running loop as a
+// marked turn, and only when delivered. Both polarities: the delivered steer
+// surfaces in the next request's conversation, and an undelivered one leaves
+// no marker anywhere.
+func TestPhaseH2SteerContract(t *testing.T) {
+	// The lane side: SessionState's Steerable seam drains exactly once, in
+	// order, with the class preserved.
+	lane := &steerLaneProbe{}
+	a := harnessagent.Handle(1, 1, lane)
+	if got := a.Steer(harnessagent.Steer, "use reanimated-v4"); got != 1 {
+		t.Errorf("first steer seq = %d, want 1", got)
+	}
+	if got := a.Steer(harnessagent.Inject, "node 20 on device"); got != 2 {
+		t.Errorf("inject seq = %d, want 2", got)
+	}
+	got := lane.drain()
+	if len(got) != 2 {
+		t.Fatalf("lane drained %d, want 2", len(got))
+	}
+	if got[0].Class != harnessagent.Steer || got[0].Text != "use reanimated-v4" {
+		t.Errorf("steer malformed: %+v", got[0])
+	}
+	if got[1].Class != harnessagent.Inject {
+		t.Errorf("inject class malformed: %+v", got[1])
+	}
+	if again := lane.drain(); len(again) != 0 {
+		t.Errorf("lane did not clear: %+v", again)
+	}
+
+	// The registry side: publish after setup, unpublish on exit, steer to a
+	// dead agent resolves nil (the route maps that to 409, not a void).
+	r := harnessagent.NewRegistry()
+	if r.Get(1) != nil {
+		t.Error("empty registry resolved an agent")
+	}
+	r.Publish(a)
+	if r.Get(1) == nil {
+		t.Error("published agent did not resolve")
+	}
+	r.Unpublish(1)
+	if r.Get(1) != nil {
+		t.Error("unpublished agent still resolves — a steer would vanish into it")
+	}
+}
+
+// steerLaneProbe is the evals-local Steerable: records deliveries, drains
+// once. It stands in for the orchestrator session the production path uses.
+type steerLaneProbe struct {
+	mu   sync.Mutex
+	lane []harnessagent.Inbox
+	seq  int64
+}
+
+func (p *steerLaneProbe) Deliver(class harnessagent.Class, text string) int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.seq++
+	p.lane = append(p.lane, harnessagent.Inbox{Class: class, Text: text, At: p.seq})
+	return p.seq
+}
+
+func (p *steerLaneProbe) drain() []harnessagent.Inbox {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := p.lane
+	p.lane = nil
+	return out
+}
+
+// H3: the bounded pipeline. Both polarities: the pool bound holds under a
+// 20-call read-only burst (unbounded would peak at 20), and an exclusive call
+// is an ordering barrier nothing overlaps.
+func TestPhaseH3PipelineBound(t *testing.T) {
+	ts := &h3Stages{}
+	p := pipeline.New(nil, ts, pipeline.ClassifierFunc(func(name string) bool {
+		return name == "read_file"
+	}), nil)
+	p.PoolOverride(4)
+
+	calls := make([]pipeline.Call, 20)
+	for i := range calls {
+		calls[i] = pipeline.Call{ID: strconv.Itoa(i), Name: "read_file"}
+	}
+	results := p.Run(context.Background(), calls)
+	if len(results) != 20 {
+		t.Fatalf("results %d, want 20", len(results))
+	}
+	peak := ts.Peak()
+	if peak > 4 {
+		t.Errorf("pool bound violated: peak %d > 4", peak)
+	}
+	if peak < 2 {
+		t.Errorf("pool never overlapped (peak %d): the bound serialized it", peak)
+	}
+
+	// Barrier polarity: reads before an exclusive call end before it starts.
+	b := &h3BarrierStages{spans: map[string][2]int64{}}
+	bp := pipeline.New(nil, b, pipeline.ClassifierFunc(func(name string) bool {
+		return name == "read_file"
+	}), nil)
+	res := bp.Run(context.Background(), []pipeline.Call{
+		{ID: "r1", Name: "read_file"},
+		{ID: "r2", Name: "read_file"},
+		{ID: "w1", Name: "write_file"},
+		{ID: "r3", Name: "read_file"},
+	})
+	if len(res) != 4 {
+		t.Fatalf("barrier results %d, want 4", len(res))
+	}
+	if !b.BarrierHeld() {
+		t.Error("exclusive call was not an ordering barrier")
+	}
+}
+
+// h3Stages counts concurrent dispatches.
+type h3Stages struct {
+	mu    sync.Mutex
+	live  int
+	peak  int
+	delay time.Duration
+}
+
+func (s *h3Stages) Dispatch(ctx context.Context, c pipeline.Call) (string, bool) {
+	s.mu.Lock()
+	s.live++
+	if s.live > s.peak {
+		s.peak = s.live
+	}
+	s.mu.Unlock()
+	time.Sleep(3 * time.Millisecond)
+	s.mu.Lock()
+	s.live--
+	s.mu.Unlock()
+	return "ok", false
+}
+
+func (s *h3Stages) Peak() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peak
+}
+
+// h3BarrierStages records spans and reports whether the exclusive call ran
+// alone: every read that started before it also ended before it.
+type h3BarrierStages struct {
+	mu    sync.Mutex
+	clock int64
+	spans map[string][2]int64
+}
+
+func (s *h3BarrierStages) Dispatch(ctx context.Context, c pipeline.Call) (string, bool) {
+	s.mu.Lock()
+	start := s.clock
+	s.clock++
+	s.spans[c.ID] = [2]int64{start, 0}
+	s.mu.Unlock()
+	time.Sleep(2 * time.Millisecond)
+	s.mu.Lock()
+	sp := s.spans[c.ID]
+	sp[1] = s.clock
+	s.clock++
+	s.spans[c.ID] = sp
+	s.mu.Unlock()
+	return "ok", false
+}
+
+func (s *h3BarrierStages) BarrierHeld() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	barrier := s.spans["w1"]
+	for id, sp := range s.spans {
+		if id == "w1" {
+			continue
+		}
+		overlaps := sp[0] < barrier[1] && sp[1] > barrier[0]
+		if overlaps {
+			return false
+		}
+	}
+	return true
 }

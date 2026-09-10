@@ -10,3 +10,6 @@ func (t *GrepCodebase) ReadOnly() bool   { return true }
 func (t *ReadSkill) ReadOnly() bool      { return true }
 func (t *ProjectMap) ReadOnly() bool     { return true }
 func (t *InspectPackage) ReadOnly() bool { return true }
+func (t *FindFiles) ReadOnly() bool      { return true }
+func (t *Explore) ReadOnly() bool        { return true }
+func (t *ReadMemory) ReadOnly() bool     { return true }

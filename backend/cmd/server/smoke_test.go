@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/knowledge"
 )
 
 // TestBootKnowledgeLoads reproduces the exact path resolution main() uses at
 // boot and proves the knowledge layer loads against the real template. It
-// guards the seam between path resolution and agent.Load: if the template dir
+// guards the seam between path resolution and knowledge.Load: if the template dir
 // moves or package.json stops parsing, builds would silently run with no rules
 // or skills, and this catches that before a deploy does.
 func TestBootKnowledgeLoads(t *testing.T) {
@@ -19,9 +19,9 @@ func TestBootKnowledgeLoads(t *testing.T) {
 		filepath.Join(projectRoot, "template"),
 		filepath.Join(projectRoot, "backend", "template"))
 
-	reg, err := agent.Load(filepath.Join(templateDir, "package.json"))
+	reg, err := knowledge.Load(filepath.Join(templateDir, "package.json"))
 	if err != nil {
-		t.Fatalf("agent.Load at boot path %q: %v", templateDir, err)
+		t.Fatalf("knowledge.Load at boot path %q: %v", templateDir, err)
 	}
 
 	if len(reg.SkillNames()) == 0 {

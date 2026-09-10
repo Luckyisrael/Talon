@@ -16,11 +16,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/agent"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/build"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/guardrails"
+	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
+	"github.com/seekersstudio/backend/internal/harness/loop"
+	"github.com/seekersstudio/backend/internal/harness/pipeline"
+	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/metrics"
 	"github.com/seekersstudio/backend/internal/runtime"
 	"github.com/seekersstudio/backend/internal/store"
@@ -38,7 +41,7 @@ type Orchestrator struct {
 	sessions map[int64]*SessionState
 
 	store     *store.Store
-	knowledge *agent.Registry
+	knowledge *knowledge.Registry
 	// preinstalled is the set the install guardrail checks against. Computed once
 	// from the knowledge layer at construction so every tool call does not rebuild
 	// it.
@@ -48,11 +51,23 @@ type Orchestrator struct {
 	// strong model (which needs none) and when there is no AI client.
 	discipline string
 	maxRounds  int
+	// agents is the H2 live agent registry: one handle per running turn. The
+	// SSE steer route looks the turn up here and delivers mid-turn messages
+	// through the session's steer lane; the loop drains the lane at every
+	// round boundary. Publish is rollback-covered: CreateSession registers
+	// only after the session is fully initialized, RemoveSession unpublishes.
+	agents *harnessagent.Registry
 	// verifyReport is the chain report accumulator the run_gate tool reads. It is
 	// reset at the start of every verify call and populated as each gate runs.
 	// Atomic.Pointer so run_gate can read it without holding the mutex.
 	verifyReport atomic.Pointer[tools.VerifyReport]
 }
+
+// maxRambleRounds caps consecutive tool-less max_tokens rounds before the
+// turn ends as stalled. One truncation can be a long file in prose form, two
+// is suspicious, three with zero tool calls is a ramble loop — each such
+// round burns ~35K tokens and minutes for zero progress.
+const maxRambleRounds = 3
 
 const (
 	// defaultMaxRounds is the round budget for one build turn when AI_MAX_ROUNDS is
@@ -81,7 +96,7 @@ func maxRoundsFromEnv() int {
 	return n
 }
 
-func New(aiClient *ai.Client, s *store.Store, knowledge *agent.Registry) *Orchestrator {
+func New(aiClient *ai.Client, s *store.Store, knowledge *knowledge.Registry) *Orchestrator {
 	o := &Orchestrator{
 		ai:           aiClient,
 		sessions:     make(map[int64]*SessionState),
@@ -89,6 +104,7 @@ func New(aiClient *ai.Client, s *store.Store, knowledge *agent.Registry) *Orches
 		knowledge:    knowledge,
 		preinstalled: knowledge.PreinstalledSet(),
 		maxRounds:    maxRoundsFromEnv(),
+		agents:       harnessagent.NewRegistry(),
 	}
 	o.verifyReport.Store(&tools.VerifyReport{OverallPassed: true})
 	// Adapt the prompt to the model once at startup: a weaker model gets the
@@ -120,6 +136,12 @@ func (o *Orchestrator) CreateSession(id, projectID int64, workspacePath string) 
 	o.sessions[id] = sess
 	o.mu.Unlock()
 
+	// Publish the H2 agent handle after the session is fully initialized —
+	// a steer that arrives before loadProjectContext finishes still lands in
+	// the steer lane, which the loop drains at its first round boundary.
+	// Publishing last is what makes setup failure never leak a phantom agent.
+	o.agents.Publish(harnessagent.Handle(id, id, sess))
+
 	o.loadProjectContext(sess, projectID)
 	return sess
 }
@@ -142,7 +164,7 @@ func (o *Orchestrator) loadProjectContext(sess *SessionState, projectID int64) {
 					if err != nil {
 						continue
 					}
-					sess.RuntimePatterns = append(sess.RuntimePatterns, agent.FailurePattern{
+					sess.RuntimePatterns = append(sess.RuntimePatterns, knowledge.FailurePattern{
 						Tool:           parts.tool,
 						Match:          re,
 						Cause:          parts.cause,
@@ -421,6 +443,9 @@ func (o *Orchestrator) GetSession(id int64) *SessionState {
 }
 
 func (o *Orchestrator) RemoveSession(id int64) {
+	// Unpublish the agent handle first: once removal starts, a steer must
+	// fail with "no running build" instead of vanishing into a dying session.
+	o.agents.Unpublish(id)
 	o.mu.Lock()
 	sess, ok := o.sessions[id]
 	if ok {
@@ -431,6 +456,39 @@ func (o *Orchestrator) RemoveSession(id int64) {
 	if ok {
 		sess.Emitter.Close()
 	}
+}
+
+// Agent returns the live H2 agent handle for a running prompt (nil when none
+// is running). The steer route is the caller; it delivers mid-turn messages
+// through the handle, which the loop drains at round boundaries.
+func (o *Orchestrator) Agent(id int64) *harnessagent.Agent {
+	return o.agents.Get(id)
+}
+
+// requestErrorListener is the default request-error policy (H2 seam): one
+// retry on the routing policy's fallback model when one is configured and the
+// turn has not used its fallback yet, latching on success; terminal otherwise.
+// This is exactly the inline policy it replaced — extracted so a composition
+// can swap it without editing the loop.
+func (o *Orchestrator) requestErrorListener(round int, model string, err error, fellBack bool) loop.RequestErrorDecision {
+	policy := ai.LoadRoutingPolicy()
+	if fellBack || policy.FallbackModel == "" || policy.FallbackModel == model {
+		return loop.Terminal("model request failed")
+	}
+	return loop.RetryOnModel(policy.FallbackModel, true,
+		fmt.Sprintf("falling back to %s once", policy.FallbackModel))
+}
+
+// pipelineEnabled reports whether the H3 bounded tool pipeline drives batch
+// dispatch. Ships dark: legacy (off) behaves identically to today, the flag
+// opts in per deployment. Flip the default only after the same-script
+// transcript-parity eval has run green on both modes.
+func pipelineEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SEEKERSTUDIO_PIPELINE"))) {
+	case "v1", "1", "true", "on":
+		return true
+	}
+	return false
 }
 
 // ToolExecutor runs a single tool call and returns its output. The bool reports
@@ -481,6 +539,11 @@ type BuildOutcome struct {
 	// not by answering a question. A caller must check Exhausted, like Paused,
 	// before treating a nil error as "done".
 	Exhausted bool
+	// Stalled is set when the ramble breaker ended the turn: the model
+	// produced maxRambleRounds consecutive full-length responses with zero
+	// tool calls. Stalled is terminal (not resumable) and never verified —
+	// the caller must surface why, not offer a resume.
+	Stalled bool
 }
 
 // RunOptions configures one agentic turn.
@@ -604,6 +667,10 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	// primary and die again — one retry that hands the turn back to a dead
 	// model is theater, not reliability.
 	latchedModel := ""
+	// rambleCount tracks consecutive tool-less max_tokens rounds. Any tool
+	// call resets it — only a model emitting full outputs with zero calls,
+	// repeatedly, trips the breaker.
+	rambleCount := 0
 
 	for round := 1; round <= o.maxRounds; round++ {
 		if err := ctx.Err(); err != nil {
@@ -614,6 +681,31 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		flush() // persist what the previous round produced before starting this one
 		sess.SetRound(round)
 		sess.TickCooldowns()
+
+		// H2 steer lane: drain mid-turn messages that arrived since the last
+		// round. A steer is the user redirecting the running build — it lands
+		// in this round's request as its own user turn, honestly labeled, so
+		// the model sees fresh instructions without the turn restarting. An
+		// inject rides the same way but is marked context, not direction.
+		// Deliveries made while the model was generating are picked up here,
+		// at the boundary — never later than the next request.
+		if steers := sess.DrainSteers(); len(steers) > 0 {
+			var lane strings.Builder
+			for i, in := range steers {
+				if i > 0 {
+					lane.WriteString("\n\n")
+				}
+				if in.Class == harnessagent.Steer {
+					lane.WriteString("[user steered the running build] " + in.Text)
+				} else {
+					lane.WriteString("[user added context mid-build] " + in.Text)
+				}
+			}
+			steerTurn := ai.UserText(lane.String())
+			conversation = append(conversation, steerTurn)
+			outcome.Messages = append(outcome.Messages, steerTurn)
+			sess.Emitter.EmitText("↪ " + lane.String())
+		}
 
 		// Rebuild the system prompt only when the ADRs, memory, or plan-task graph
 		// that feed it changed since the last round. When nothing changed the prompt
@@ -667,21 +759,45 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		}
 
 		result, err := client.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
-		if err != nil && !fellBack && routingPolicy.FallbackModel != "" && routingPolicy.FallbackModel != client.Model() {
-			// One retry on the fallback model, same endpoint: a flaky cheap
-			// tier must not kill a turn the heavy tier would have finished.
-			log.Printf("orchestrator: round %d model %s failed (%v); falling back to %s once",
-				round, client.Model(), err, routingPolicy.FallbackModel)
-			fellBack = true
-			routedModel = routingPolicy.FallbackModel
-			outcome.RoutedModel = routedModel
-			outcome.RouteReason = "fallback after " + client.Model() + " failed"
-			result, err = o.ai.WithModel(routingPolicy.FallbackModel).ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
-			if err == nil {
-				// The fallback answered: stay on it for the rest of the turn.
-				latchedModel = routingPolicy.FallbackModel
-				log.Printf("orchestrator: round %d latched to fallback model %s for the rest of the turn",
-					round, latchedModel)
+		if err != nil {
+			// H2: the request-error decision is a listener (harness/loop), not
+			// inline policy. The default listener reproduces today's behavior
+			// exactly — one retry on the fallback model, latch on success — so
+			// this is a pure seam extraction; a composition can swap the policy
+			// without touching the loop body.
+			dec := o.requestErrorListener(round, client.Model(), err, fellBack)
+			switch dec.Action {
+			case loop.ErrorRetryOnModel:
+				log.Printf("orchestrator: round %d model %s failed (%v); %s",
+					round, client.Model(), err, dec.Reason)
+				fellBack = true
+				retryClient := client
+				if dec.RetryModel != "" && dec.RetryModel != client.Model() {
+					retryClient = o.ai.WithModel(dec.RetryModel)
+				}
+				result, err = retryClient.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
+				if err == nil {
+					if retryClient.Model() != routedModel {
+						routedModel = retryClient.Model()
+						outcome.RoutedModel = routedModel
+						outcome.RouteReason = dec.Reason
+					}
+					if dec.Latch {
+						latchedModel = retryClient.Model()
+						log.Printf("orchestrator: round %d latched to fallback model %s for the rest of the turn",
+							round, latchedModel)
+					}
+				}
+			case loop.ErrorRetryWithBackoff:
+				log.Printf("orchestrator: round %d model %s failed (%v); %s",
+					round, client.Model(), err, dec.Reason)
+				select {
+				case <-time.After(dec.Backoff):
+				case <-ctx.Done():
+				}
+				result, err = client.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
+			case loop.ErrorTerminal:
+				// Fall through to the error exit below.
 			}
 		}
 		if err != nil {
@@ -736,6 +852,9 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 
 		// ── The model is still working ──
 		if len(result.ToolUses) > 0 {
+			// Any tool call is progress: the ramble breaker only counts
+			// consecutive tool-less rounds, so a working round resets it.
+			rambleCount = 0
 			// mark_task_done is orchestrator-owned like ask_user, but it does not
 			// pause: apply its effect on the plan graph here, then let the call run
 			// its benign Execute so the tool_use still gets a matching tool_result.
@@ -793,6 +912,26 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 
 		// ── The model stopped calling tools ──
 		if result.StopReason == "max_tokens" {
+			rambleCount++
+			if rambleCount >= maxRambleRounds {
+				// Ramble loop: full outputs, zero tool calls, repeatedly.
+				// Continuing just burns tokens — end the turn honestly as
+				// stalled (terminal, not resumable) with what happened named.
+				sess.TransitionTo(PhaseDone)
+				sess.Emitter.EmitDone("stalled")
+				outcome.FilesTouched = o.touchedFiles(opts)
+				outcome.Stalled = true
+				outcome.RemainingTasks = pendingPlanTasks(sess)
+				outcome.FinalText += remainingNote(sess, "Stalled") +
+					"\n\nThe model produced " + strconv.Itoa(rambleCount) +
+					" consecutive full-length responses without calling any tools, " +
+					"so the turn was stopped instead of burning the round budget. " +
+					"No files were written by those rounds — re-prompt with a smaller, " +
+					"concrete next step."
+				log.Printf("orchestrator: turn stalled after %d tool-less max_tokens rounds; not resumable", rambleCount)
+				logTurn("stalled")
+				return outcome, nil
+			}
 			nudge := ai.UserText("Your response was truncated at the output limit. Continue.")
 			conversation = append(conversation, nudge)
 			outcome.Messages = append(outcome.Messages, nudge)
@@ -1210,7 +1349,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		}
 	}
 
-	run := func(i int, call ai.ToolUseBlock) {
+	runCall := func(call ai.ToolUseBlock) (block ai.Block) {
 		// A tool that panics must not take the build down with it. Recover here,
 		// at the body both the parallel and sequential paths invoke, and turn the
 		// crash into a failed tool_result the model can react to. Without this a
@@ -1220,7 +1359,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("orchestrator: tool %q panicked: %v\n%s", call.Name, r, debug.Stack())
-				results[i] = ai.Block{
+				block = ai.Block{
 					Type:      "tool_result",
 					ToolUseID: call.ID,
 					Content:   fmt.Sprintf("The %s tool crashed unexpectedly (%v). This is a fault in the tool, not in your request — try a smaller step or a different approach.", call.Name, r),
@@ -1234,13 +1373,12 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		// reads why and corrects. This is where the always-on rules become binding.
 		if dec := o.guardrail(sess, call.Name, call.Input, opts); !dec.Allowed {
 			sess.Emitter.EmitGuardrail(dec.Rule, dec.Message)
-			results[i] = ai.Block{
+			return ai.Block{
 				Type:      "tool_result",
 				ToolUseID: call.ID,
 				Content:   "Blocked by a project guardrail (" + dec.Rule + "): " + dec.Message,
 				IsError:   true,
 			}
-			return
 		}
 
 		verb := describeTool(call.Name, call.Input, sess.WorkspacePath)
@@ -1339,15 +1477,15 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		// Failed device steps additionally file in the run-scoped crash
 		// index, so the crash triage sees every failed step in one place.
 		if isError {
-			patterns := agent.DefaultFailureIndex()
+			patterns := knowledge.DefaultFailureIndex()
 			// Compile and append runtime patterns from project memory.
 			for _, rp := range sess.RuntimePatterns {
 				if rp.Match != nil {
 					patterns = append(patterns, rp)
 				}
 			}
-			if pat, ok := agent.Lookup(patterns, call.Name, output); ok {
-				norm := agent.NormalizeError(output)
+			if pat, ok := knowledge.Lookup(patterns, call.Name, output); ok {
+				norm := knowledge.NormalizeError(output)
 				if sess.CooldownLeft(call.Name, norm) == 0 {
 					failReminder = "\n\n" + pat.Reminder()
 					sess.NoteCooldown(call.Name, norm, pat.CooldownRounds)
@@ -1418,7 +1556,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			}
 		}
 
-		results[i] = ai.Block{
+		return ai.Block{
 			Type:      "tool_result",
 			ToolUseID: call.ID,
 			Content:   output + readNote + watchNote + probeNote + failReminder,
@@ -1426,19 +1564,41 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		}
 	}
 
-	if parallel {
+	// H3: SEEKERSTUDIO_PIPELINE=v1 selects the bounded harness pipeline for
+	// batch dispatch. runCall — guardrails, emission, result notes — is the
+	// single body in both modes; the pipeline replaces only the scheduling:
+	// read-only runs overlap in a bounded rolling pool (legacy peaks at one
+	// goroutine per call), and an exclusive call drains the pool and runs
+	// alone (legacy serializes the whole batch). The flag ships dark.
+	if pipelineEnabled() && len(calls) > 0 {
+		pipe := pipeline.New(
+			nil, // policy stays inside runCall — moving it to the stage is H4
+			pipeline.DispatcherFunc(func(ctx context.Context, call pipeline.Call) (string, bool) {
+				blk := runCall(ai.ToolUseBlock{ID: call.ID, Name: call.Name, Input: call.Input})
+				return blk.Content, blk.IsError
+			}),
+			pipeline.ClassifierFunc(func(name string) bool {
+				return opts.ReadOnlyTool != nil && opts.ReadOnlyTool(name)
+			}),
+			nil,
+		)
+		batched := pipe.Run(ctx, toPipelineCalls(calls))
+		for i, r := range batched {
+			results[i] = ai.Block{Type: "tool_result", ToolUseID: r.ID, Content: r.Content, IsError: r.IsError}
+		}
+	} else if parallel {
 		var wg sync.WaitGroup
 		for i, call := range calls {
 			wg.Add(1)
 			go func(i int, call ai.ToolUseBlock) {
 				defer wg.Done()
-				run(i, call)
+				results[i] = runCall(call)
 			}(i, call)
 		}
 		wg.Wait()
 	} else {
 		for i, call := range calls {
-			run(i, call)
+			results[i] = runCall(call)
 		}
 	}
 
@@ -1460,14 +1620,41 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 	return results
 }
 
+// toPipelineCalls adapts the orchestrator's tool_use batch to pipeline
+// Calls — a pure shape conversion; the pipeline owns no orchestrator types.
+func toPipelineCalls(calls []ai.ToolUseBlock) []pipeline.Call {
+	out := make([]pipeline.Call, len(calls))
+	for i, c := range calls {
+		out[i] = pipeline.Call{ID: c.ID, Name: c.Name, Input: c.Input}
+	}
+	return out
+}
+
 // probeTarget extracts the third-party package under inspection from a tool
 // call, or "" when the call inspects workspace code. node_modules/<pkg> (with
 // an optional @scope) is the unit: repeated looks at one package answer one
 // question, so the counter keys on the package, not the exact command.
+// nodeBuiltins are the modules every Node install ships: probing one is
+// reading the platform, not discovering a third-party package, so they do
+// not count as probes.
+var nodeBuiltins = map[string]bool{
+	"fs": true, "path": true, "os": true, "util": true, "events": true,
+	"stream": true, "crypto": true, "http": true, "https": true, "url": true,
+	"child_process": true, "buffer": true, "process": true, "assert": true,
+	"zlib": true, "querystring": true, "string_decoder": true, "timers": true,
+}
+
+// requirePattern finds require('pkg') / require("pkg") mentions in a shell
+// command. Relative ('./x', '../x') and builtin (fs, path…) requires are not
+// third-party probes and return "".
+// requirePattern matches any require('…') argument; the package unit
+// (with @scope) is extracted in code below, so sub-paths cut correctly.
+var requirePattern = regexp.MustCompile(`require\(['"]([^'"]+)['"]\)`)
+
 func probeTarget(toolName string, input json.RawMessage) string {
 	var text string
 	switch toolName {
-	case "run_shell":
+	case "run_shell", "run_command":
 		var a struct {
 			Command string `json:"command"`
 		}
@@ -1495,6 +1682,33 @@ func probeTarget(toolName string, input json.RawMessage) string {
 	default:
 		return ""
 	}
+
+	// A require() in a shell command is the model probing a third-party
+	// package's shape by execution. The first such probe is a legitimate
+	// question; keyed on the package name so repeats count.
+	if m := requirePattern.FindStringSubmatch(text); m != nil {
+		pkg := m[1]
+		if strings.HasPrefix(pkg, "./") || strings.HasPrefix(pkg, "../") ||
+			strings.HasPrefix(pkg, "/") || nodeBuiltins[pkg] {
+			return ""
+		}
+		// The package unit is @scope/name or name — anything after a second
+		// slash (a sub-path) is the same package, not a new probe.
+		parts := strings.Split(pkg, "/")
+		if len(parts) > 2 && strings.HasPrefix(parts[0], "@") {
+			return parts[0] + "/" + parts[1]
+		}
+		if len(parts) > 1 && !strings.HasPrefix(parts[0], "@") && parts[0] != "" {
+			// Bare package with a sub-path: node_modules semantics say the
+			// first segment is the package.
+			return parts[0]
+		}
+		return pkg
+	}
+
+	// node_modules/<pkg> paths: the unit is the package (with @scope), not
+	// the deep file, because repeated looks at one package answer one
+	// question.
 	idx := strings.Index(text, "node_modules/")
 	if idx < 0 {
 		return ""

@@ -16,7 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/joho/godotenv"
-	"github.com/seekersstudio/backend/internal/agent"
+	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/api"
 	"github.com/seekersstudio/backend/internal/auth"
@@ -98,7 +98,7 @@ func main() {
 	// test guards against. We still degrade rather than die: a build that boots and
 	// serves without rules beats one that refuses to start, and the log makes the
 	// gap loud.
-	knowledge, err := agent.Load(filepath.Join(templateDir, "package.json"))
+	knowledge, err := knowledge.Load(filepath.Join(templateDir, "package.json"))
 	if err != nil {
 		log.Printf("WARNING: agent knowledge layer unavailable: %v — builds will run without rules and skills", err)
 	} else {
@@ -264,6 +264,10 @@ func main() {
 			// Answer resumes a turn paused on ask_user — same loop, same "one prompt
 			// covers the question and its answer" accounting as Resume.
 			r.Post("/v1/prompts/{id}/answer", promptHandler.Answer)
+			// Steer delivers a mid-turn message to a running build (H2): the
+			// text lands in the next model request the loop makes. Metered with
+			// the prompt routes because it spends the same provider budget.
+			r.Post("/v1/prompts/{id}/steer", promptHandler.Steer)
 		})
 		r.Get("/v1/prompts/{id}", promptHandler.Get)
 		// Discard only flips a status marker — no loop, no metering.
