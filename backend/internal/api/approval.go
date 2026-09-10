@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"github.com/seekersstudio/backend/internal/harness/approval"
+	"github.com/seekersstudio/backend/internal/harness/skills"
 	"github.com/seekersstudio/backend/internal/harness/events"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
 	"github.com/seekersstudio/backend/internal/orchestrator"
@@ -80,3 +81,22 @@ func (h *PromptHandler) buildApprovalSeam(lg *sessionlog.Log, projectID, promptI
 // WantsDeviceBuild re-exports the orchestrator's scanner for the answer
 // handler so this file is the single place the H4 vocabulary is defined.
 var WantsDeviceBuild = orchestrator.WantsDeviceBuild
+
+// catalogLibrary adapts the H6 skills catalog to the tools.SkillLibrary
+// interface read_skill consumes.
+type catalogLibrary struct{ c *skills.Catalog }
+
+func (l catalogLibrary) SkillBody(name string) (string, bool) {
+	body, _, ok := l.c.Body(name)
+	return body, ok
+}
+
+func (l catalogLibrary) SkillNames() []string { return l.c.Names() }
+
+// orchSkillCatalog extracts the catalog an orchestrator was attached, if any.
+func orchSkillCatalog(o *orchestrator.Orchestrator) *skills.Catalog {
+	if o == nil {
+		return nil
+	}
+	return o.SkillCatalog()
+}

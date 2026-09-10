@@ -21,6 +21,7 @@ import (
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/guardrails"
 	"github.com/seekersstudio/backend/internal/harness/compaction"
+	"github.com/seekersstudio/backend/internal/harness/skills"
 	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
 	"github.com/seekersstudio/backend/internal/harness/loop"
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
@@ -61,6 +62,16 @@ type Orchestrator struct {
 	// spill is the H8 oversized-output store. Nil until the composition
 	// provides a directory; nil means outputs keep today's 32KB hard cap.
 	spill *compaction.SpillStore
+	// skills is the H6 multi-source skill catalog. Nil keeps the embedded-only
+	// manifest from knowledge.Registry; non-nil, the manifest lists workspace
+	// skills too (bodies still load only via read_skill).
+	skills *skills.Catalog
+	// instructionsFor is the H6 AGENTS.md chain factory: workspace path →
+	// chain text. Nil disables the chain; non-nil, its text is appended to
+	// the cached prompt prefix and re-read at each enrichment (the
+	// reconciliation-on-touch discipline — no watcher). A factory instead of
+	// a single loader because workspaces are per-project.
+	instructionsChain func(workspacePath string) string
 	// verifyReport is the chain report accumulator the run_gate tool reads. It is
 	// reset at the start of every verify call and populated as each gate runs.
 	// Atomic.Pointer so run_gate can read it without holding the mutex.
@@ -466,6 +477,22 @@ func (o *Orchestrator) RemoveSession(id int64) {
 // composition; nil (the default) keeps the hard-cap behavior.
 func (o *Orchestrator) AttachSpill(s *compaction.SpillStore) {
 	o.spill = s
+}
+
+// AttachSkills provides the H6 multi-source catalog; nil keeps the embedded
+// manifest.
+func (o *Orchestrator) AttachSkills(c *skills.Catalog) {
+	o.skills = c
+}
+
+// SkillCatalog returns the attached catalog (nil when none) — the api layer
+// resolves read_skill through it.
+func (o *Orchestrator) SkillCatalog() *skills.Catalog { return o.skills }
+
+// AttachInstructions provides the H6 AGENTS.md chain factory; nil disables
+// the chain. The factory reads the workspace's chain fresh per call.
+func (o *Orchestrator) AttachInstructions(f func(workspacePath string) string) {
+	o.instructionsChain = f
 }
 
 // Agent returns the live H2 agent handle for a running prompt (nil when none
@@ -2245,9 +2272,27 @@ func (o *Orchestrator) enrichPromptWithContext(sess *SessionState, systemPrompt 
 			b.WriteString("\n\n")
 			b.WriteString(rules)
 		}
-		if manifest := o.knowledge.Manifest(); manifest != "" {
+		// H6: the multi-source catalog, when attached, replaces the
+		// embedded-only manifest — workspace skills are listed alongside
+		// embedded ones (bodies still load through read_skill only).
+		if o.skills != nil {
+			if manifest := o.skills.Manifest(); manifest != "" {
+				b.WriteString("\n\n")
+				b.WriteString(manifest)
+			}
+		} else if manifest := o.knowledge.Manifest(); manifest != "" {
 			b.WriteString("\n\n")
 			b.WriteString(manifest)
+		}
+	}
+	// H6: the AGENTS.md chain — the project's own conventions, budgeted,
+	// re-read on each enrichment (reconciliation-on-touch, no watcher).
+	// Appended after the stable sections so the cached prefix breaks only
+	// when conventions genuinely change.
+	if o.instructionsChain != nil && sess.WorkspacePath != "" {
+		if chain := o.instructionsChain(sess.WorkspacePath); chain != "" {
+			b.WriteString("\n\n")
+			b.WriteString(chain)
 		}
 	}
 

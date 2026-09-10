@@ -16,7 +16,9 @@ import "strings"
 //
 // Returns the scalar map, the list map, the remaining body, and whether a valid
 // front-matter block was found.
-func parseFrontMatter(content string) (scalars map[string]string, lists map[string][]string, body string, ok bool) {
+// ParseFrontMatter is the exported form: the harness skills package reuses
+// the exact embedded format for workspace-authored skills.
+func ParseFrontMatter(content string) (scalars map[string]string, lists map[string][]string, body string, ok bool) {
 	scalars = map[string]string{}
 	lists = map[string][]string{}
 

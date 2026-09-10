@@ -40,6 +40,10 @@ var configFiles = []string{
 	"package.json", "tsconfig.json", "app.json",
 	"babel.config.js", "metro.config.js", "index.js",
 	"polyfill.js", "eslint.config.js",
+	// AGENTS.md ships from the template so every workspace begins with the
+	// platform conventions in editable form — the agent reads it as its
+	// instructions chain (H6), and the user can edit it per project.
+	"AGENTS.md",
 }
 
 // templateDirs are directories copied recursively from the template into the

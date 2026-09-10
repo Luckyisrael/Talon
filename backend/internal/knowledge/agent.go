@@ -90,7 +90,7 @@ func (r *Registry) loadRules() error {
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", p, err)
 		}
-		scalars, lists, body, ok := parseFrontMatter(string(raw))
+		scalars, lists, body, ok := ParseFrontMatter(string(raw))
 		if !ok {
 			return fmt.Errorf("%s: missing front matter", p)
 		}
@@ -127,7 +127,7 @@ func (r *Registry) loadSkills() error {
 		if err != nil {
 			return fmt.Errorf("skill %q has no SKILL.md: %w", e.Name(), err)
 		}
-		scalars, lists, body, ok := parseFrontMatter(string(raw))
+		scalars, lists, body, ok := ParseFrontMatter(string(raw))
 		if !ok {
 			return fmt.Errorf("%s: missing front matter", p)
 		}

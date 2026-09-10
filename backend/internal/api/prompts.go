@@ -19,6 +19,7 @@ import (
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/metrics"
 	"github.com/seekersstudio/backend/internal/harness/approval"
+	"github.com/seekersstudio/backend/internal/harness/skills"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/tools"
@@ -40,6 +41,9 @@ type PromptHandler struct {
 	// dual-written alongside conversation_messages until the derivation read
 	// path is flipped on everywhere.
 	slog *sessionLogCache
+	// skillCatalog is the H6 multi-source skills catalog, when the
+	// composition attached one; read_skill resolves through it.
+	skillCatalog *skills.Catalog
 }
 
 func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *knowledge.Registry) *PromptHandler {

@@ -136,8 +136,16 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 
 	// Skills: registered only when the knowledge layer actually loaded skills.
 	// Offering read_skill with an empty library would only ever answer "none".
-	if h.knowledge != nil && len(h.knowledge.SkillNames()) > 0 {
-		reg.Register(&tools.ReadSkill{Library: h.knowledge})
+	// H6: when the multi-source catalog is attached, read_skill resolves
+	// through it — workspace skills load on demand exactly like embedded ones.
+	var skillLib tools.SkillLibrary
+	if h.skillCatalog != nil {
+		skillLib = catalogLibrary{c: h.skillCatalog}
+	} else if h.knowledge != nil && len(h.knowledge.SkillNames()) > 0 {
+		skillLib = h.knowledge
+	}
+	if skillLib != nil {
+		reg.Register(&tools.ReadSkill{Library: skillLib})
 	}
 
 	// Device feedback. Registered only when a device is actually attached —

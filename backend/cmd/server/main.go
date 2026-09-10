@@ -25,6 +25,8 @@ import (
 	"github.com/seekersstudio/backend/internal/gitremote"
 	"github.com/seekersstudio/backend/internal/logx"
 	"github.com/seekersstudio/backend/internal/harness/compaction"
+	"github.com/seekersstudio/backend/internal/harness/instructions"
+	"github.com/seekersstudio/backend/internal/harness/skills"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/store"
@@ -107,6 +109,28 @@ func main() {
 	}
 
 	orchestratorSvc := orchestrator.New(aiClient, s, knowledge)
+
+	// H6: the multi-source skill catalog — embedded knowledge is
+	// authoritative, and each workspace's .seeker/skills merge in (winner per
+	// name: embedded). The catalog reloads lazily; workspace skills are listed
+	// to the model but their bodies load only through read_skill, same trust
+	// boundary as today.
+	skillCatalog := skills.NewCatalog(skills.EmbeddedProvider{Registry: knowledge})
+
+	// H6: the AGENTS.md instructions chain factory — the user's global
+	// conventions ($SEEKER_HOME/AGENTS.md or ~/.seeker/AGENTS.md) plus each
+	// project's own AGENTS.md files, budgeted, re-read on every enrichment.
+	seekerHome := os.Getenv("SEEKER_HOME")
+	if seekerHome == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			seekerHome = filepath.Join(home, ".seeker")
+		}
+	}
+	globalAGENTS := filepath.Join(seekerHome, "AGENTS.md")
+	orchestratorSvc.AttachInstructions(func(workspacePath string) string {
+		return instructions.Loader{WorkspaceRoot: workspacePath, GlobalPath: globalAGENTS}.Load().Text()
+	})
+	orchestratorSvc.AttachSkills(skillCatalog)
 
 	// H8: the spill store files oversized tool outputs (from run_shell,
 	// inspect_package, and friends) under a locator instead of truncating

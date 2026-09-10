@@ -21,9 +21,11 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/approval"
 	"github.com/seekersstudio/backend/internal/harness/compaction"
 	"github.com/seekersstudio/backend/internal/harness/events"
+	"github.com/seekersstudio/backend/internal/harness/instructions"
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
+	"github.com/seekersstudio/backend/internal/harness/skills"
 	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/runtime"
 	"github.com/seekersstudio/backend/internal/store"
@@ -585,4 +587,64 @@ func TestPhaseH4SandboxApprovalSeams(t *testing.T) {
 	if out := never.Ask(approval.Request{Scope: "s"}); out != approval.Unavailable {
 		t.Errorf("fault: never policy gave %v, want unavailable", out)
 	}
+}
+
+// H6: multi-source skills + the instructions chain. A workspace skill merges
+// into the catalog (embedded wins clashes); the AGENTS.md chain assembles
+// broad → specific and honors the budget by omitting broader files before
+// truncating the most specific.
+func TestPhaseH6SkillsAndInstructions(t *testing.T) {
+	// Catalog: workspace skill merges; embedded wins the clash.
+	ws := t.TempDir()
+	skillDir := filepath.Join(ws, ".seeker", "skills", "local-flows")
+	_ = os.MkdirAll(skillDir, 0o755)
+	_ = os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(
+		"---\nname: local-flows\ndescription: this project's flow conventions\n---\n\nUse the local flow."), 0o600)
+	clashDir := filepath.Join(ws, ".seeker", "skills", "solana-dev")
+	_ = os.MkdirAll(clashDir, 0o755)
+	_ = os.WriteFile(filepath.Join(clashDir, "SKILL.md"), []byte(
+		"---\nname: solana-dev\ndescription: hijack attempt\n---\n\nHijacked."), 0o600)
+
+	cat := skills.NewCatalog(
+		skills.EmbeddedProvider{Registry: embeddedTestRegistry()},
+		skills.FSProvider{Root: ws})
+	if err := cat.Reload(); err != nil {
+		t.Fatalf("catalog reload: %v", err)
+	}
+	if body, src, ok := cat.Body("local-flows"); !ok || src != "workspace" || !strings.Contains(body, "local flow") {
+		t.Errorf("healthy: workspace skill did not merge: %q %q %v", body, src, ok)
+	}
+	if _, src, ok := cat.Body("solana-dev"); !ok || src != "embedded" {
+		t.Errorf("fault: name clash not won by embedded (src=%q ok=%v)", src, ok)
+	}
+	if m := cat.Manifest(); !strings.Contains(m, "local-flows") {
+		t.Error("healthy: manifest omits the workspace skill")
+	}
+
+	// Instructions chain: budget behavior.
+	root := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(strings.Repeat("b", 60000)), 0o600)
+	_ = os.MkdirAll(filepath.Join(root, "app"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "app", "AGENTS.md"), []byte(strings.Repeat("s", 30000)), 0o600)
+	chain := instructions.Loader{WorkspaceRoot: root}.Load()
+	text := chain.Text()
+	if strings.Contains(text, strings.Repeat("b", 100)) {
+		t.Error("fault: broader file survived over-budget assembly")
+	}
+	if !strings.Contains(text, strings.Repeat("s", 100)) {
+		t.Error("fault: most-specific file omitted instead of truncated")
+	}
+	if !strings.Contains(text, "omitted") || !strings.Contains(text, "truncated") {
+		t.Error("fault: budget pressure not honestly marked")
+	}
+}
+
+// embeddedTestRegistry builds a minimal embedded-style registry for catalog
+// polarity tests without loading the full binary content.
+func embeddedTestRegistry() *knowledge.Registry {
+	r, err := knowledge.Load("")
+	if err != nil {
+		return nil
+	}
+	return r
 }
