@@ -134,8 +134,7 @@ describe("DV3 stream negotiation", () => {
 
     // A jpeg frame goes through createImageBitmap — an opaque 1×1.
     const bmpStub = vi.fn();
-    // jsdom's createImageBitmap may be missing; stub it.
-    // @ts-expect-error stubbing
+    // jsdom's createImageBitmap resolves nothing useful; stub it.
     window.createImageBitmap = async () => {
       bmpStub();
       return {
