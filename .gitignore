@@ -93,3 +93,4 @@ frontend/yarn.lock
 
 # Template lockfile is tracked: reproducible installs via `npm ci` in
 # build-template.sh (P5). The old ignore predates that decision.
+backups/
