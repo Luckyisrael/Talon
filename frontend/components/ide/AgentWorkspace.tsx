@@ -168,12 +168,119 @@ function TranscriptView({
       className="h-full overflow-y-auto px-4 py-3"
     >
       <div className="mx-auto max-w-3xl space-y-2">
-        {rows.map((row) => (
-          <TranscriptRow key={row.id} row={row} />
-        ))}
+        <RoundBlocks rows={rows} />
       </div>
     </div>
   );
+}
+
+/** RoundBlocks partitions trace rows at group markers (Round N) into
+ *  collapsible round blocks — the confirmed §7 AgentTrace UX: intent line,
+ *  tool chips (green/red), one-line outcome, round number visible. Rows
+ *  before the first marker form the opening block (no header). */
+function RoundBlocks({ rows }: { rows: TraceRow[] }) {
+  const blocks: { label: string | null; rows: TraceRow[] }[] = [];
+  let current: { label: string | null; rows: TraceRow[] } = {
+    label: null,
+    rows: [],
+  };
+  for (const row of rows) {
+    if (row.kind === "group") {
+      if (current.rows.length > 0 || current.label !== null) {
+        blocks.push(current);
+      }
+      current = { label: row.label ?? "Round", rows: [] };
+    } else {
+      current.rows.push(row);
+    }
+  }
+  if (current.rows.length > 0 || current.label !== null) {
+    blocks.push(current);
+  }
+  return (
+    <>
+      {blocks.map((b, i) =>
+        b.label === null ? (
+          // The opening block: no round header, straight rows.
+          <div key={`open-${i}`} className="space-y-2">
+            {b.rows.map((r) => (
+              <TranscriptRow key={r.id} row={r} />
+            ))}
+          </div>
+        ) : (
+          <RoundBlock key={b.label} label={b.label} rows={b.rows} />
+        ),
+      )}
+    </>
+  );
+}
+
+/** RoundBlock: one agent round as a collapsible row. Header: round number,
+ *  intent (first narration), tool chips colored by result, one-line outcome
+ *  (the last tool's status or the last narration). Body: the full rows. */
+function RoundBlock({ label, rows }: { label: string; rows: TraceRow[] }) {
+  const [open, setOpen] = useState(true);
+  const tools = rows.filter((r) => r.kind === "tool");
+  const intent =
+    rows.find((r) => r.kind === "narration" && (r.text ?? "").trim())?.text ??
+    "";
+  const failed = tools.some((t) => t.status === "fail");
+  const running = tools.some((t) => t.status === "running");
+  const lastTool = tools[tools.length - 1];
+  const outcome = failed
+    ? "a call failed"
+    : running
+      ? "running…"
+      : lastTool
+        ? `${tools.length} call${tools.length === 1 ? "" : "s"}`
+        : "no tool calls";
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-graphite/70">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-ink/40"
+      >
+        <span className="gauge flex-shrink-0 text-cyan">{label}</span>
+        {intent ? (
+          <span className="truncate text-xs text-paper">{firstWords(intent, 12)}</span>
+        ) : null}
+        <span className="ml-auto flex flex-shrink-0 items-center gap-1.5">
+          {tools.slice(-8).map((t) => (
+            <span
+              key={t.id}
+              title={`${t.tool}${t.target ? ` ${t.target}` : ""}`}
+              className={`inline-block h-1.5 w-4 rounded-full ${
+                t.status === "fail"
+                  ? "bg-rose"
+                  : t.status === "running"
+                    ? "animate-pulse bg-acid-lime/60"
+                    : t.status === "warning"
+                      ? "bg-amber"
+                      : "bg-acid-lime"
+              }`}
+            />
+          ))}
+          <span className="gauge tnum text-fog">{outcome}</span>
+          <span className="gauge text-fog">{open ? "−" : "+"}</span>
+        </span>
+      </button>
+      {open ? (
+        <div className="space-y-2 border-t border-graphite/50 px-3 py-2">
+          {rows.map((r) => (
+            <TranscriptRow key={r.id} row={r} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** firstWords bounds a line for the round header. */
+function firstWords(s: string, n: number): string {
+  const parts = s.split(/\s+/);
+  return parts.length <= n ? s : `${parts.slice(0, n).join(" ")}…`;
 }
 
 /** TranscriptRow renders one trace row at full fidelity. */
@@ -193,6 +300,14 @@ function TranscriptRow({ row }: { row: TraceRow }) {
       return <ToolRow row={row} />;
     case "decision":
       return <DecisionRow row={row} />;
+    case "group":
+      // Round markers render as dividers; the blocks form in TranscriptView.
+      return (
+        <div className="flex items-center gap-2 pt-2">
+          <span className="gauge text-cyan">{row.label}</span>
+          <span className="h-px flex-1 bg-graphite" />
+        </div>
+      );
     case "narration":
       return (
         <div className="px-1 py-0.5 text-sm leading-relaxed text-paper">

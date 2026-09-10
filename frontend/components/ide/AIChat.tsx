@@ -526,11 +526,35 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                 setPlanTasks([]);
               }
               const roundMatch = typeof d.status === "string" && d.status.match(/round (\d+)/);
-              patch((prev) => ({
-                ...prev,
-                phase: d.phase,
-                ...(roundMatch ? { round: parseInt(roundMatch[1], 10) } : {}),
-              }));
+              patch((prev) => {
+                // §7: a new round opens a collapsible group row — DSH-style
+                // round blocks in the workspace transcript. Duplicate
+                // "round N" frames collapse into the one marker.
+                let rows = prev.traceRows;
+                if (roundMatch) {
+                  const n = parseInt(roundMatch[1], 10);
+                  const lastGroup = [...rows]
+                    .reverse()
+                    .find((r) => r.kind === "group");
+                  if (!lastGroup || lastGroup.label !== `Round ${n}`) {
+                    rows = [
+                      ...rows,
+                      {
+                        id: `${id}-round${n}`,
+                        kind: "group",
+                        label: `Round ${n}`,
+                        collapsed: false,
+                      },
+                    ];
+                  }
+                }
+                return {
+                  ...prev,
+                  phase: d.phase,
+                  traceRows: rows,
+                  ...(roundMatch ? { round: parseInt(roundMatch[1], 10) } : {}),
+                };
+              });
               break;
             }
 

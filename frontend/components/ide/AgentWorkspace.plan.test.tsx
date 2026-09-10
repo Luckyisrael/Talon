@@ -91,3 +91,50 @@ describe("§7 bash rows carry live output", () => {
     await waitFor(() => expect(screen.getByText(/checking/)).toBeTruthy());
   });
 });
+
+const roundRows: TraceRow[] = [
+  { id: "g1", kind: "group", label: "Round 1" },
+  { id: "r1", kind: "narration", text: "I'll write the wallet screen with MWA." },
+  { id: "t1", kind: "tool", tool: "write_file", target: "app/wallet.tsx", status: "done" },
+  { id: "t2", kind: "tool", tool: "run_command", target: "npm run typecheck", status: "fail" },
+  { id: "g2", kind: "group", label: "Round 2" },
+  { id: "n2", kind: "narration", text: "Fixing the type error." },
+  { id: "t3", kind: "tool", tool: "edit_file", target: "app/wallet.tsx", status: "done" },
+];
+
+describe("§7 AgentTrace rounds: collapsible round blocks", () => {
+  it("renders each round as a block with intent, chip colors, outcome", () => {
+    render(
+      <AgentWorkspace
+        projectId={1}
+        traceRows={roundRows}
+        selectedFile={null}
+        filesTouched={[]}
+      />,
+    );
+    expect(screen.getByText("Round 1")).toBeTruthy();
+    expect(screen.getByText("Round 2")).toBeTruthy();
+    // Round 1's intent line appears in the header and the open body.
+    expect(screen.getAllByText(/write the wallet screen/i).length).toBeGreaterThan(0);
+    // Round 1's outcome: a call failed.
+    expect(screen.getAllByText(/a call failed/i).length).toBeGreaterThan(0);
+    // Round 2: 1 call.
+    expect(screen.getAllByText(/1 call/i).length).toBeGreaterThan(0);
+  });
+
+  it("collapses a round block on click, hiding its rows", async () => {
+    render(
+      <AgentWorkspace
+        projectId={1}
+        traceRows={roundRows}
+        selectedFile={null}
+        filesTouched={[]}
+      />,
+    );
+    const header = screen.getByText("Round 1").closest("button");
+    header?.click();
+    // The round's rows disappear; the header stays.
+    expect(screen.getByText("Round 1")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("write_file")).toBeNull());
+  });
+});
