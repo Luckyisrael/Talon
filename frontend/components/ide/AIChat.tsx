@@ -20,7 +20,7 @@ import {
   type StreamEvent,
 } from "@/lib/api";
 import { useIDEStore } from "@/lib/store";
-import type { ChatMessage, PlanData, StreamMessage, TraceRow } from "@/lib/types";
+import type { ChatMessage, PlanData, PlanTask, StreamMessage, TraceRow } from "@/lib/types";
 import AgentTrace, { getToolLabel } from "./AgentTrace";
 import LoadingState from "@/components/ui/LoadingState";
 
@@ -33,6 +33,14 @@ interface AIChatProps {
   /** Approving a plan is one behaviour, owned by the layout, reachable from
       both the card here and the full plan view. */
   onApprovePlan?: (plan: PlanData) => void;
+  /** §7: the live turn's trace rows + touched files, lifted so the centre
+      AgentWorkspace renders the full-fidelity transcript alongside this
+      compact rail. Fires on every change while a turn streams. */
+  onLiveTrace?: (
+    rows: TraceRow[],
+    filesTouched: string[],
+    planTasks: PlanTask[],
+  ) => void;
 }
 
 export interface AIChatHandle {
@@ -256,7 +264,7 @@ function firstLine(s: string): string {
 }
 
 const AIChat = forwardRef<AIChatHandle, AIChatProps>(
-  ({ projectId, onFilesTouched, onPlan, onApprovePlan }, ref) => {
+  ({ projectId, onFilesTouched, onPlan, onApprovePlan, onLiveTrace }, ref) => {
     const [messages, setMessages] = useState<Entry[]>([]);
     const [input, setInput] = useState("");
     const [mode, setMode] = useState<"plan" | "build">("plan");
@@ -278,6 +286,14 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     // route is addressed by it.
     const [queueInstead, setQueueInstead] = useState(false);
     const runningPromptIdRef = useRef<number>(0);
+    // §7: the live turn's touched files, set as write tools fire. State, not
+    // a ref: the lifted trace effect must re-run when the set changes, so the
+    // workspace's Diff tab appears the moment a file changes.
+    const [liveTouched, setLiveTouched] = useState<string[]>([]);
+    // §7: the live turn's plan checklist — tasks whose id starts with
+    // "plan:" — upserted from task_update events. Lifted so the centre
+    // pane renders DSH-style pending/completed tasks.
+    const [planTasks, setPlanTasks] = useState<PlanTask[]>([]);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
@@ -349,6 +365,18 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         ),
       [messages],
     );
+
+    // §7: lift the live turn's trace to the layout's AgentWorkspace. The
+    // rows and the last reported touched files cross; the effect fires only
+    // when they actually change. Rows cap in the rail; the workspace gets
+    // the full stream.
+    useEffect(() => {
+      onLiveTrace?.(
+        liveMessage?.traceRows ?? [],
+        liveTouched,
+        planTasks,
+      );
+    }, [liveMessage, liveTouched, planTasks, onLiveTrace]);
 
     // Past user prompts for the history block: most recent first, deduped,
     // capped. Real transcript data — nothing invented.
@@ -486,8 +514,16 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               // Capture the running turn's id from the first frame — the steer
               // route is addressed by it. Zero stays zero (never steers) until
               // the server names the turn.
-              if (typeof d.prompt_id === "number" && d.prompt_id > 0) {
+              if (
+                typeof d.prompt_id === "number" &&
+                d.prompt_id > 0 &&
+                d.prompt_id !== runningPromptIdRef.current
+              ) {
+                // A new turn: the live touched-files window and the plan
+                // checklist start empty.
                 runningPromptIdRef.current = d.prompt_id;
+                setLiveTouched([]);
+                setPlanTasks([]);
               }
               const roundMatch = typeof d.status === "string" && d.status.match(/round (\d+)/);
               patch((prev) => ({
@@ -517,6 +553,20 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               if (tool === "read_file" && d.path) filesReadRef.current.add(d.path);
 
               const status = rowStatus(d.status);
+              // §7: write tools feed the live touched-files window so the
+              // Diff tab appears the moment a file changes, not only at done.
+              if (
+                status === "running" &&
+                typeof d.path === "string" &&
+                d.path &&
+                (tool === "write_file" ||
+                  tool === "edit_file" ||
+                  tool === "multi_edit" ||
+                  tool === "delete_file")
+              ) {
+                const p = d.path;
+                setLiveTouched((prev) => (prev.includes(p) ? prev : [...prev, p]));
+              }
 
               // One call streams as two events — running, then resolved —
               // sharing a stable id. Reconcile the row by that id so the resolve
@@ -592,6 +642,30 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               break;
 
             case "task_update":
+              // §7: plan: prefixed updates upsert the checklist state; all
+              // task updates keep their trace row.
+              if (typeof d.id === "string" && d.id.startsWith("plan:")) {
+                const task: PlanTask = {
+                  id: d.id,
+                  label: typeof d.description === "string" ? d.description : d.id,
+                  status:
+                    d.status === "completed"
+                      ? "completed"
+                      : d.status === "running" || d.status === "started"
+                        ? "in_progress"
+                        : d.status === "fail" || d.status === "failed"
+                          ? "failed"
+                          : "pending",
+                  note: typeof d.result === "string" ? firstLine(d.result) : undefined,
+                };
+                setPlanTasks((prev) => {
+                  const i = prev.findIndex((t) => t.id === task.id);
+                  if (i === -1) return [...prev, task];
+                  const next = [...prev];
+                  next[i] = task;
+                  return next;
+                });
+              }
               appendRow({
                 id: `${id}-k${d.id ?? Math.random().toString(36).slice(2, 8)}`,
                 kind: "tool",

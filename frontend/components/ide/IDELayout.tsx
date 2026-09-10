@@ -6,8 +6,10 @@ import { useIDEStore } from "@/lib/store";
 import type { PlanData } from "@/lib/types";
 import ResizablePanel from "../ui/ResizablePanel";
 import AIChat, { type AIChatHandle } from "./AIChat";
+import type { PlanTask, TraceRow } from "@/lib/types";
 import CheckpointMenu from "./CheckpointMenu";
 import CodeEditor from "./CodeEditor";
+import AgentWorkspace from "./AgentWorkspace";
 import CommandPalette from "./CommandPalette";
 import FileTree from "./FileTree";
 import MemoryPanel from "./MemoryPanel";
@@ -34,6 +36,21 @@ export default function IDELayout({
 }: IDELayoutProps) {
   const store = useIDEStore();
   const aiChatRef = useRef<AIChatHandle>(null);
+  // §7: the live turn's trace, lifted from AIChat so the centre pane's
+  // AgentWorkspace renders the full-fidelity transcript alongside the
+  // compact rail. Stable identity keeps AIChat's lift effect from
+  // refiring every render.
+  const [liveTrace, setLiveTrace] = useState<TraceRow[]>([]);
+  const [liveTouchedFiles, setLiveTouchedFiles] = useState<string[]>([]);
+  const [livePlanTasks, setLivePlanTasks] = useState<PlanTask[]>([]);
+  const handleLiveTrace = useCallback(
+    (rows: TraceRow[], touched: string[], tasks: PlanTask[]) => {
+      setLiveTrace(rows);
+      setLiveTouchedFiles(touched);
+      setLivePlanTasks(tasks);
+    },
+    [],
+  );
   const [leftTab, setLeftTab] = useState<"chat" | "files" | "memory" | "triage">("chat");
 
   // Below md the agent panel is a slide-over drawer rather than a fixed column.
@@ -269,6 +286,7 @@ export default function IDELayout({
             onFilesTouched={handleFilesTouched}
             onPlan={handlePlan}
             onApprovePlan={approvePlan}
+            onLiveTrace={handleLiveTrace}
           />
         </div>
       </div>
@@ -455,21 +473,15 @@ export default function IDELayout({
                 onApprove={() => approvePlan(store.currentPlan!.plan)}
                 onDismiss={() => store.setCurrentPlan(null)}
               />
-            ) : store.selectedFile && selectedContent !== undefined ? (
-              <CodeEditor
-                projectId={projectId}
-                filePath={store.selectedFile}
-                content={selectedContent}
-              />
             ) : (
-              <div className="flex h-full flex-col items-center justify-center px-8 text-center">
-                <p className="text-[15px] font-medium tracking-tight text-paper">Nothing open.</p>
-                <p className="mt-1.5 max-w-sm text-sm text-fog">
-                  Pick a file from the workspace, or tell the agent what to build
-                  and watch it get written here.
-                </p>
-                <p className="gauge mt-6">⌘K to search files</p>
-              </div>
+              <AgentWorkspace
+                projectId={projectId}
+                traceRows={liveTrace}
+                planTasks={livePlanTasks}
+                selectedFile={store.selectedFile}
+                fileContent={selectedContent}
+                filesTouched={liveTouchedFiles}
+              />
             )}
           </div>
 

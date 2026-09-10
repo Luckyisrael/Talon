@@ -202,12 +202,29 @@ export function isResumable(latest: LatestPrompt | null): boolean {
 export const conversation = {
   async get(
     projectId: number,
-  ): Promise<{ turns: ConversationTurn[]; latest: LatestPrompt | null }> {
+  ): Promise<{
+    turns: ConversationTurn[];
+    latest: LatestPrompt | null;
+    usage?: { in: number; out: number; cache_read: number };
+  }> {
     const res = await request<{
       turns: ConversationTurn[] | null;
       latest?: LatestPrompt;
+      usage?: { in: number; out: number; cache_read: number };
     }>(`/v1/projects/${projectId}/conversation`);
-    return { turns: res?.turns ?? [], latest: res?.latest ?? null };
+    return {
+      turns: res?.turns ?? [],
+      latest: res?.latest ?? null,
+      usage: res?.usage,
+    };
+  },
+
+  // §7 diff surface: the workspace's working-tree changes against the
+  // provision-time template baseline. Empty diff + note = no baseline.
+  diff(projectId: number) {
+    return request<{ diff: string; note?: string }>(
+      `/v1/projects/${projectId}/diff`,
+    );
   },
 
   clear(projectId: number) {

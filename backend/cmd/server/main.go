@@ -317,6 +317,7 @@ func main() {
 		// Project knowledge and history.
 		r.Get("/v1/projects/{projectID}/memory", promptHandler.GetMemory)
 		r.Get("/v1/projects/{projectID}/conversation", promptHandler.GetConversation)
+		r.Get("/v1/projects/{projectID}/diff", promptHandler.GitDiff)
 		r.Delete("/v1/projects/{projectID}/conversation", promptHandler.ClearConversation)
 
 		// Checkpoints — undo for anything the agent changed.

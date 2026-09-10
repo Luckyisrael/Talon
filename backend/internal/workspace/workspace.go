@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"os/exec"
 	"fmt"
 	"log"
 	"os"
@@ -140,7 +141,41 @@ func (m *Manager) provision(dir string) error {
 		}
 	}
 
+	// Git-init the workspace: the honest baseline for the §7 diff surface.
+	// The first commit is the pristine template; the working tree's changes
+	// against it are what the diff endpoint renders. Failures degrade (the
+	// diff surface reports "no git baseline") — they never block a build.
+	if err := initGitBaseline(dir); err != nil {
+		log.Printf("workspace %s: git baseline failed (%v); the diff surface will report no baseline", dir, err)
+	}
 	return nil
+}
+
+// initGitBaseline creates the repository and commits the pristine template
+// state. Idempotent: an existing repo is left alone.
+func initGitBaseline(dir string) error {
+	dotGit := filepath.Join(dir, ".git")
+	if _, err := os.Stat(dotGit); err == nil {
+		return nil // already a repo
+	}
+	run := func(args ...string) error {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=seeker", "GIT_AUTHOR_EMAIL=seeker@local",
+			"GIT_COMMITTER_NAME=seeker", "GIT_COMMITTER_EMAIL=seeker@local")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %v: %w (%s)", args[:1], err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	if err := run("git", "init", "-q"); err != nil {
+		return err
+	}
+	if err := run("git", "add", "-A"); err != nil {
+		return err
+	}
+	return run("git", "commit", "-q", "-m", "template baseline", "--allow-empty")
 }
 
 // copyDir recursively copies src into dst, creating directories as needed.
