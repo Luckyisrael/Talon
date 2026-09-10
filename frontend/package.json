@@ -34,5 +34,9 @@
     "typescript": "^5",
     "vite": "^8.2.2",
     "vitest": "^3.2.7"
-  }
+  },
+  "allowScripts": [
+    "esbuild",
+    "workerd"
+  ]
 }

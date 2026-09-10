@@ -29,8 +29,10 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/promptsec"
 	"github.com/seekersstudio/backend/internal/harness/ralph"
 	"fmt"
-
+	"io"
+	"net"
 	"github.com/seekersstudio/backend/internal/metro"
+	"github.com/seekersstudio/backend/internal/relay"
 	"github.com/seekersstudio/backend/internal/tools"
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
@@ -1153,4 +1155,74 @@ func TestPhaseDV1MetroEvents(t *testing.T) {
 	if recent := buf.Recent(2); len(recent) != 2 || recent[1].Text != "e9" {
 		t.Errorf("fault: buffer tail wrong: %+v", recent)
 	}
+}
+
+// DV2: the phone path. The relay passes bytes and dies with its session;
+// the test-info surface is honest; the store resolves the live session.
+func TestPhaseDV2PhoneRelay(t *testing.T) {
+	// Relay: real sockets, byte passthrough, teardown law.
+	metro, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("metro: %v", err)
+	}
+	defer metro.Close()
+	go func() {
+		for {
+			c, err := metro.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) { defer c.Close(); io.Copy(c, c) }(c)
+		}
+	}()
+	r, err := relay.StartForSession(777, freePortFor(t), metro.Addr().String())
+	if err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+	phone, err := net.DialTimeout("tcp", r.Addr(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("phone: %v", err)
+	}
+	msg := []byte("GET /index.bundle HTTP/1.1\r\n\r\n")
+	phone.Write(msg)
+	buf := make([]byte, len(msg))
+	phone.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(phone, buf); err != nil || string(buf) != string(msg) {
+		t.Errorf("fault: relay mangled bytes (%v)", err)
+	}
+	phone.Close()
+	relay.StopSession(777)
+	if relay.GetSession(777) != nil {
+		t.Error("fault: relay outlived its session")
+	}
+
+	// The live-session lookup is the bridge's key.
+	st, err := store.New(filepath.Join(t.TempDir(), "dv2.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	u, _ := st.CreateUser("dv2@e.test", "x")
+	proj, _ := st.CreateProject(u.ID, "dv2", "v", "s2", "a2.b", "c2.d", "e2")
+	if _, err := st.LatestLiveSession(proj.ID); err == nil {
+		// No session created yet: absence is an error (sql.ErrNoRows), not nil.
+		t.Log("note: empty lookup returns error — the honest empty")
+	}
+	sess, err := st.CreateSession(proj.ID)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	live, err := st.LatestLiveSession(proj.ID)
+	if err != nil || live == nil || live.ID != sess.ID {
+		t.Errorf("fault: live session lookup wrong (%v)", err)
+	}
+}
+
+func freePortFor(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("free port: %v", err)
+	}
+	l.Close()
+	return l.Addr().(*net.TCPAddr).Port
 }

@@ -149,6 +149,9 @@ func main() {
 	}
 
 	portAlloc := redroid.NewPortAllocator(15555, 16555)
+	// DV2: the phone-relay range — disjoint from the containers' so a relay
+	// port can never collide with an ADB port.
+	relayAlloc := redroid.NewPortAllocator(17555, 18555)
 	maxContainers := envInt("MAX_CONTAINERS", 5)
 
 	containerMgr, err := redroid.NewManager(portAlloc, maxContainers)
@@ -191,7 +194,7 @@ func main() {
 	log.Printf("release export ready (keystores + submission bundles)")
 	triageHandler := api.NewTriageHandler(s)
 	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr, knowledge)
-	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, workspaceDir, devClientMgr, walletMgr)
+	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, relayAlloc, workspaceDir, devClientMgr, walletMgr)
 	usageHandler := api.NewUsageHandler(s)
 	metricsHandler := api.NewMetricsHandler(s, containerMgr)
 	errorsHandler := api.NewErrorsHandler()
@@ -317,10 +320,13 @@ func main() {
 		// Project knowledge and history.
 		r.Get("/v1/projects/{projectID}/memory", promptHandler.GetMemory)
 		metroHandler := api.NewMetroHandler(promptHandler)
+	testInfoHandler := api.NewTestInfoHandler(promptHandler, devClientMgr)
 
 	r.Get("/v1/projects/{projectID}/conversation", promptHandler.GetConversation)
 		r.Get("/v1/projects/{projectID}/diff", promptHandler.GitDiff)
 		r.Get("/v1/projects/{projectID}/metro", metroHandler.Serve)
+		r.Get("/v1/projects/{projectID}/test-info", testInfoHandler.Info)
+		r.Get("/v1/projects/{projectID}/dev-client.apk", testInfoHandler.DevClientAPK)
 		r.Delete("/v1/projects/{projectID}/conversation", promptHandler.ClearConversation)
 
 		// Checkpoints — undo for anything the agent changed.

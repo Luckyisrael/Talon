@@ -39,6 +39,22 @@ export interface MetroEvent {
 
 /** Open the project's metro SSE stream. Returns a close handle; the caller
  *  owns the lifetime (browser close, device stop). */
+/** The phone-test surface (DV2): the deep link a phone's dev client opens,
+ *  and the dev-client APK download for first-time phones. */
+export const testInfo = {
+  async get(
+    projectId: number,
+  ): Promise<{
+    available: boolean;
+    reason?: string;
+    deep_link?: string;
+    metro_url?: string;
+    dev_client_url?: string;
+  }> {
+    return request(`/v1/projects/${projectId}/test-info`);
+  },
+};
+
 export function openMetroStream(
   projectId: number,
   token: string,

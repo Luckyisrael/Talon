@@ -62,8 +62,11 @@ func Start(sessionID int64, workspaceDir string, adbTarget string) (*Server, err
 		events:       &emitter{},
 	}
 
-	// Start Metro directly on native Linux (no WSL wrapper)
-	args := []string{"expo", "start", "--port", fmt.Sprintf("%d", port), "--non-interactive"}
+	// Start Metro directly on native Linux (no WSL wrapper).
+	// --host lan binds 0.0.0.0: the DV2 relay dials in over TCP from outside
+	// localhost, and LAN phones reach the bundler directly when on-network.
+	// The adb reverse forward (for the cloud device) still works either way.
+	args := []string{"expo", "start", "--host", "lan", "--port", fmt.Sprintf("%d", port), "--non-interactive"}
 	s.cmd = exec.Command("npx", args...)
 	s.cmd.Dir = workspaceDir
 

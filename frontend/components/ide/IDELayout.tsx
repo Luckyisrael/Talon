@@ -14,6 +14,7 @@ import CommandPalette from "./CommandPalette";
 import FileTree from "./FileTree";
 import MemoryPanel from "./MemoryPanel";
 import PhonePreview from "./PhonePreview";
+import TestOnPhone from "./TestOnPhone";
 import PlanViewer from "./PlanViewer";
 import TriageForm from "./TriageForm";
 import PushToGitHub from "./PushToGitHub";
@@ -565,14 +566,21 @@ export default function IDELayout({
           handleSide="start"
           label="device panel"
         >
-          <div className="flex h-full flex-col overflow-hidden rounded-xl border border-graphite bg-void">
-            <PhonePreview
-              status={store.previewStatus}
-              sessionId={store.sessionId}
-              projectId={projectId}
-              adbTarget={store.adbTarget}
-              onStartSession={startSession}
-            />
+          <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-graphite bg-void">
+            <div className="min-h-0 flex-1">
+              <PhonePreview
+                status={store.previewStatus}
+                sessionId={store.sessionId}
+                projectId={projectId}
+                adbTarget={store.adbTarget}
+                onStartSession={startSession}
+              />
+            </div>
+            {/* DV2: the phone surface rides the device rail — refetches on
+                every session change so the QR tracks the live relay. */}
+            <div className="flex-shrink-0 overflow-y-auto">
+              <TestOnPhone projectId={projectId} epoch={store.sessionId ?? 0} />
+            </div>
           </div>
         </ResizablePanel>
       </div>

@@ -17,6 +17,7 @@ import (
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/device"
 	"github.com/seekersstudio/backend/internal/metro"
+	"github.com/seekersstudio/backend/internal/relay"
 	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/store"
 )
@@ -25,16 +26,20 @@ type SessionHandler struct {
 	store        *store.Store
 	manager      *redroid.Manager
 	portAlloc    *redroid.PortAllocator
+	// relayAlloc hands the DV2 phone-relay its public ports — a disjoint
+	// range from the containers' (main wires 17555-18555 vs 15555-16555).
+	relayAlloc   *redroid.PortAllocator
 	workspaceDir string
 	devClient    *devclient.Manager
 	wallet       *devclient.WalletManager
 }
 
-func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.PortAllocator, workspaceDir string, dc *devclient.Manager, wm *devclient.WalletManager) *SessionHandler {
+func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.PortAllocator, relayAlloc *redroid.PortAllocator, workspaceDir string, dc *devclient.Manager, wm *devclient.WalletManager) *SessionHandler {
 	return &SessionHandler{
 		store:        s,
 		manager:      mgr,
 		portAlloc:    portAlloc,
+		relayAlloc:   relayAlloc,
 		workspaceDir: workspaceDir,
 		devClient:    dc,
 		wallet:       wm,
@@ -155,6 +160,23 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	metroServer, err := metro.Start(session.ID, workspaceDir, adbTarget)
 	if err != nil {
 		log.Printf("WARN: metro start failed for session %d: %v", session.ID, err)
+	}
+
+	// DV2: the phone relay — a public TCP port bridging to this session's
+	// metro, so a phone on any network can load the app. Starts only when
+	// metro did; a session without a bundler has nothing to relay. The
+	// relay dies with the session (Destroy) — a phone left loading
+	// overnight must not hold a port.
+	if metroServer != nil && h.relayAlloc != nil {
+		relayPort, err := h.relayAlloc.Allocate(session.ID)
+		if err != nil {
+			log.Printf("WARN: relay port allocation failed for session %d: %v", session.ID, err)
+		} else if _, err := relay.StartForSession(session.ID, relayPort, fmt.Sprintf("127.0.0.1:%d", metroServer.Port())); err != nil {
+			h.relayAlloc.Release(session.ID)
+			log.Printf("WARN: relay start failed for session %d: %v", session.ID, err)
+		} else {
+			log.Printf("session %d: phone relay live on public port %d", session.ID, relayPort)
+		}
 	}
 
 	// Update state to running
@@ -331,6 +353,11 @@ func (h *SessionHandler) Destroy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Stop Metro bundler
+	// DV2: the phone relay dies with the session, port released back.
+	relay.StopSession(id)
+	if h.relayAlloc != nil {
+		h.relayAlloc.Release(id)
+	}
 	metro.Stop(id)
 
 	// Destroy the Docker container
