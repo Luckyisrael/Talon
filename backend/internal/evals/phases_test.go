@@ -22,6 +22,7 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/approval"
 	"github.com/seekersstudio/backend/internal/harness/compaction"
 	"github.com/seekersstudio/backend/internal/harness/events"
+	"github.com/seekersstudio/backend/internal/harness/goals"
 	"github.com/seekersstudio/backend/internal/harness/instructions"
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
 	"github.com/seekersstudio/backend/internal/harness/promptsec"
@@ -842,4 +843,55 @@ func (r *h10Runner) RunChild(_ context.Context, s subagent.Spec) subagent.Result
 	r.live--
 	r.mu.Unlock()
 	return ans
+}
+
+// H11: durable goals. One active goal per project; CAS mutations refuse
+// stale revisions; round accounting is append-only and survives a re-read
+// (the simulated restart); blocked goals carry the explanation verbatim.
+func TestPhaseH11Goals(t *testing.T) {
+	store := goals.NewMemStore()
+	svc := goals.NewService(store)
+
+	g, err := svc.Start(1, "ship the wallet flow", 10)
+	if err != nil || g.Phase != goals.PhaseActive {
+		t.Fatalf("healthy: start failed: %v %+v", err, g)
+	}
+	// One active per project: the second supersedes.
+	g2, _ := svc.Start(1, "fix release", 10)
+	cur, _ := svc.Current(1)
+	if cur.ID != g2.ID {
+		t.Error("fault: superseded goal still current")
+	}
+
+	// CAS: a stale revision refuses. The service path re-reads internally,
+	// so the stale case is exercised through the store directly — the seam
+	// the service itself composes over.
+	r := cur.Revision
+	if _, err := svc.RecordRounds(1, 2); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if _, err := store.Apply(goals.Mutation{GoalID: cur.ID, Revision: r, AddRounds: 1}); !errors.Is(err, goals.ErrStale) {
+		t.Errorf("fault: stale mutation not refused: %v", err)
+	}
+	after, _ := svc.Current(1)
+	if after.Rounds != 2 {
+		t.Errorf("fault: rounds = %d, want 2 (append-only)", after.Rounds)
+	}
+
+	// Simulated restart: a fresh service over the same store re-reads the
+	// same goal; blocked state and explanation survive verbatim.
+	if _, err := svc.Block(1, "the device pool has no free container; waits exceeded 30m"); err != nil {
+		t.Fatalf("block: %v", err)
+	}
+	resumed := goals.NewService(store)
+	rg, err := resumed.Current(1)
+	if err != nil || rg.Phase != goals.PhaseBlocked {
+		t.Fatalf("fault: blocked state lost across restart-read: %+v %v", rg, err)
+	}
+	if !strings.Contains(goals.ChipText(rg), "no free container") {
+		t.Error("fault: blocked explanation not verbatim in the chip")
+	}
+	if !goals.CapReached(goals.Goal{Rounds: 10, MaxRounds: 10}) {
+		t.Error("cap check broken")
+	}
 }

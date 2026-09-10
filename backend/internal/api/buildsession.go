@@ -394,10 +394,42 @@ func childRunnerFor(h *PromptHandler, workspacePath string, projectID int64, adb
 			return child
 		},
 		newSession: func() *orchestrator.SessionState {
-			return orchestrator.NewSession(0, projectID, workspacePath, nil)
+			// A real emitter: the loop emits phase marks and tool calls from
+			// round one; a nil emitter panics on the first Emit. The channel
+			// is drained so the child loop never blocks on a full buffer.
+			sess := orchestrator.NewSession(0, projectID, workspacePath, events.NewSessionEmitter(0, 64))
+			go drain(sess)
+			return sess
 		},
 		systemPrompt: h.systemPrompt(),
 		orchestrator: h.orch,
 		parentTools:  nil,
+	}
+}
+
+// drain consumes a session's event stream so emitters never block their
+// loops on a full channel. The events channel is never closed by design —
+// the drain selects on the emitter's Done so the goroutine exits at Close,
+// rather than a bare for-range that would block forever (the documented
+// contract in events.go).
+func drain(sess *orchestrator.SessionState) {
+	if sess == nil || sess.Emitter == nil {
+		return
+	}
+	ch := sess.Emitter.Events()
+	done := sess.Emitter.Done()
+	for {
+		select {
+		case <-ch:
+		case <-done:
+			// Drain anything still buffered, then exit.
+			for {
+				select {
+				case <-ch:
+				default:
+					return
+				}
+			}
+		}
 	}
 }
