@@ -18,6 +18,7 @@ import (
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/metrics"
+	"github.com/seekersstudio/backend/internal/harness/approval"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/tools"
@@ -453,8 +454,24 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 	// the build_apk gate reads it. Without this, every approval looped back
 	// to another ask_user — the approval spin.
 	if orchestrator.WantsDeviceBuild(body.Answer) {
+		// H4: the grant routes through the approval seam so the decision is
+		// audited to the session log (one ApprovalDecided event per yes) —
+		// the same seam every sensitive path will use. The table write stays
+		// the binding record the guardrail reads.
 		if err := h.store.GrantApproval(prompt.ProjectID, id, store.ScopeDeviceBuild); err != nil {
 			log.Printf("WARN: could not record device-build approval for prompt %d: %v", id, err)
+		} else {
+			if lg := h.slog.get(h.store, prompt.ProjectID); lg != nil {
+				audit := approvalAudit(lg, id)
+				if audit != nil {
+					audit(approval.AuditRecord{
+						Scope:    store.ScopeDeviceBuild,
+						Action:  "user answered a device-build approval: " + firstLine(body.Answer),
+						Outcome: approval.AllowedOnce,
+						PromptID: id,
+					})
+				}
+			}
 		}
 	}
 
@@ -1634,4 +1651,12 @@ func friendlyAIError(err error) string {
 	default:
 		return msg
 	}
+}
+
+// firstLine returns the first line of s, trimmed — audit records stay compact.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }

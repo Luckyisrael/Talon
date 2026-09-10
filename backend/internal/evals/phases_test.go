@@ -18,9 +18,11 @@ import (
 	"github.com/seekersstudio/backend/internal/build"
 	"github.com/seekersstudio/backend/internal/guardrails"
 	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
+	"github.com/seekersstudio/backend/internal/harness/approval"
 	"github.com/seekersstudio/backend/internal/harness/compaction"
 	"github.com/seekersstudio/backend/internal/harness/events"
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
+	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
 	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/runtime"
@@ -532,3 +534,55 @@ func (s *h5State) LastSeenVersion(p string) int64 {
 	return s.seen[p]
 }
 func (s *h5State) CurrentVersion(p string) int64 { return s.current[p] }
+
+// H4: the sandbox + approval seams. Writes outside the workspace are denied
+// with the structured verdict; read-only mode refuses every write; the
+// approval seam resolves exactly one terminal per ask and audits each one.
+func TestPhaseH4SandboxApprovalSeams(t *testing.T) {
+	// Sandbox polarities.
+	root := t.TempDir()
+	ws := sandbox.New(sandbox.ModeWorkspace, root, []string{t.TempDir()},
+		func(op sandbox.Operation) error { return nil })
+	if d := ws.AllowsPath("write", filepath.Join(root, "ok.tsx")); !d.Allowed {
+		t.Errorf("healthy: in-workspace write refused: %s", d.Reason)
+	}
+	if d := ws.AllowsPath("write", "/elsewhere/evil"); d.Allowed {
+		t.Error("fault: outside write allowed")
+	}
+	ro := sandbox.New(sandbox.ModeReadOnly, root, nil, nil)
+	if d := ro.AllowsPath("write", filepath.Join(root, "no.tsx")); d.Allowed {
+		t.Error("fault: read-only mode allowed a write")
+	}
+	// Fail-closed: workspace mode without enforcement refuses structured.
+	noEnf := sandbox.New(sandbox.ModeWorkspace, root, nil, nil)
+	d := noEnf.AllowsPath("write", filepath.Join(root, "x"))
+	if d.Allowed || !strings.Contains(d.Reason, "SANDBOX_UNAVAILABLE") {
+		t.Errorf("fault: unenforceable mode not fail-closed: %+v", d)
+	}
+
+	// Approval polarities: ask-with-answerer grants once and audits; ask
+	// without answerer is unavailable; never is deterministic refusal.
+	var mu sync.Mutex
+	var audits []approval.AuditRecord
+	seam := approval.New(approval.PolicyAsk, func(r approval.AuditRecord) {
+		mu.Lock()
+		audits = append(audits, r)
+		mu.Unlock()
+	})
+	if out := seam.Ask(approval.Request{Scope: "s", Action: "a"}); out != approval.Unavailable {
+		t.Fatalf("fault: no answerer gave %v, want unavailable (fail-closed)", out)
+	}
+	seam.Register(func(approval.Request) (bool, error) { return true, nil })
+	if out := seam.Ask(approval.Request{Scope: "s", Action: "a"}); out != approval.AllowedOnce {
+		t.Fatalf("healthy: yes answerer gave %v, want allowed-once", out)
+	}
+	mu.Lock()
+	if len(audits) != 2 {
+		t.Errorf("fault: %d audit events for 2 asks, want exactly 2", len(audits))
+	}
+	mu.Unlock()
+	never := approval.New(approval.PolicyNever, nil)
+	if out := never.Ask(approval.Request{Scope: "s"}); out != approval.Unavailable {
+		t.Errorf("fault: never policy gave %v, want unavailable", out)
+	}
+}

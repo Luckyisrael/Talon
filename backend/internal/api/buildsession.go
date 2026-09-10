@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/events"
+	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/tools"
@@ -40,6 +43,11 @@ type buildSession struct {
 	reg  *tools.Registry
 	fs   *tools.FS
 	defs []ai.ToolDefinition
+	// sandbox is the H4 confinement capability over the workspace. Nil means
+	// the composition did not provide one — the executor then runs without
+	// the extra pass, exactly today's behavior (the per-tool checks inside
+	// the registry still apply; the capability is the uniform outer ring).
+	sandbox *sandbox.Capability
 }
 
 // newBuildSession wires the agent's tools to one project's workspace.
@@ -48,6 +56,18 @@ type buildSession struct {
 func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, adbTarget string, output io.Writer) *buildSession {
 	fs := tools.NewFS(workspacePath)
 	reg := tools.NewRegistry()
+
+	// H4: the confinement capability for this session — workspace-write by
+	// default (writes inside the project dir; the platform temp roots are
+	// scratch). The enforcement hook is trivial-allow because the outer
+	// ring's job is path-shape confinement; the per-tool registry checks
+	// (tier classification, secret patterns, timeouts) remain the inner ring.
+	// SEEKERSTUDIO_SANDBOX=read-only selects a read-only session (plan-style
+	// turns that must not mutate), danger-full-access is not selectable from
+	// the environment — only a composition change can grant it.
+	bs := &buildSession{fs: fs, reg: reg}
+	bs.sandbox = sandbox.New(sandboxModeFromEnv(), workspacePath,
+		[]string{os.TempDir()}, func(op sandbox.Operation) error { return nil })
 
 	// Reading and searching.
 	reg.Register(&tools.ListFiles{FS: fs})
@@ -217,6 +237,16 @@ func (v visionAdapter) VisionCheck(ctx context.Context, screenshot []byte, inten
 // abort underneath it.
 func (b *buildSession) executor() orchestrator.ToolExecutor {
 	return func(ctx context.Context, name string, input json.RawMessage) (string, bool) {
+		// H4 uniform outer ring: when the sandbox capability is present, the
+		// mutating tools' target paths are checked against the confinement
+		// mode before the tool runs. The per-tool checks inside the registry
+		// stay — defense in depth, not replacement; this pass is what makes
+		// confinement uniform rather than per-tool bespoke.
+		if b.sandbox != nil {
+			if refused := sandboxRefusalFor(b.sandbox, name, input); refused != "" {
+				return refused, true
+			}
+		}
 		result, err := b.reg.Execute(ctx, name, input)
 		if err != nil && result.Content == "" {
 			return fmt.Sprintf("%s failed: %v", name, err), true
@@ -237,4 +267,53 @@ func (h *PromptHandler) adbTargetFor(projectID int64) string {
 		}
 	}
 	return ""
+}
+
+// sandboxRefusalFor extracts the mutating tools' target path and checks it
+// against the capability. Returns the refusal text, or "" when the call is
+// allowed (or the tool is not a path-targeted mutation).
+func sandboxRefusalFor(c *sandbox.Capability, name string, input json.RawMessage) string {
+	path := mutatingToolPath(name, input)
+	if path == "" {
+		return ""
+	}
+	abs, err := c.ResolveWorkspace(path)
+	if err != nil {
+		return "SANDBOX: " + err.Error() + " — use a workspace-relative path."
+	}
+	if d := c.AllowsPath("write", abs); !d.Allowed {
+		return "SANDBOX: " + d.Reason
+	}
+	return ""
+}
+
+// mutatingToolPath pulls the target path from the mutating tools' inputs.
+// Read-only and command tools return "" — they are not path-targeted writes.
+func mutatingToolPath(name string, input json.RawMessage) string {
+	switch name {
+	case "write_file", "edit_file", "multi_edit", "delete_file":
+	default:
+		return ""
+	}
+	var a struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(input, &a) != nil || a.Path == "" {
+		// Malformed input: let the tool itself produce the honest error.
+		return ""
+	}
+	return a.Path
+}
+
+// sandboxModeFromEnv reads SEEKERSTUDIO_SANDBOX: "read-only" selects the
+// non-mutating mode; the default (anything else) is workspace-write. Danger
+// mode is deliberately not reachable from the environment — only a
+// composition change can grant it, and that change is auditable in code
+// review, not in a runtime flag.
+func sandboxModeFromEnv() sandbox.Mode {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SEEKERSTUDIO_SANDBOX"))) {
+	case "read-only", "ro", "readonly":
+		return sandbox.ModeReadOnly
+	}
+	return sandbox.ModeWorkspace
 }
