@@ -110,6 +110,12 @@ func main() {
 
 	orchestratorSvc := orchestrator.New(aiClient, s, knowledge)
 
+	// H12: model settings become data. The settings document rides beside
+	// the database; ROUTING_POLICY_JSON remains the env seed, and edits to
+	// the file flip routing on the next turn — no restart. A malformed file
+	// holds the last good copy and logs loudly.
+	ai.AttachSettingsFile(filepath.Join(filepath.Dir(dbPath), "settings.json"))
+
 	// H6: the multi-source skill catalog — embedded knowledge is
 	// authoritative, and each workspace's .seeker/skills merge in (winner per
 	// name: embedded). The catalog reloads lazily; workspace skills are listed

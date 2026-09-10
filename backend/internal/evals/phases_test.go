@@ -22,6 +22,7 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/approval"
 	"github.com/seekersstudio/backend/internal/harness/compaction"
 	"github.com/seekersstudio/backend/internal/harness/events"
+	"github.com/seekersstudio/backend/internal/harness/composition"
 	"github.com/seekersstudio/backend/internal/harness/goals"
 	"github.com/seekersstudio/backend/internal/harness/instructions"
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
@@ -30,6 +31,7 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
 	"github.com/seekersstudio/backend/internal/harness/subagent"
 	"github.com/seekersstudio/backend/internal/harness/workflow"
+	"github.com/seekersstudio/backend/internal/harness/settings"
 	"github.com/seekersstudio/backend/internal/harness/skills"
 	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/runtime"
@@ -893,5 +895,43 @@ func TestPhaseH11Goals(t *testing.T) {
 	}
 	if !goals.CapReached(goals.Goal{Rounds: 10, MaxRounds: 10}) {
 		t.Error("cap check broken")
+	}
+}
+
+// H12: composition as data. Overlay precedence (base < mode < preset, per
+// key, whole-value replacement); preset switch guard (no output yet);
+// settings hot-reload flips routing without a restart.
+func TestPhaseH12CompositionData(t *testing.T) {
+	ov := composition.Overlay{
+		Base:   map[string]string{"model": "base", "pool": "4"},
+		Mode:   map[string]string{"model": "mode"},
+		Preset: map[string]string{"model": "preset"},
+	}
+	got := ov.Apply()
+	if got["model"] != "preset" || got["pool"] != "4" {
+		t.Errorf("fault: overlay precedence broken: %v", got)
+	}
+
+	pol := composition.SwitchPolicy{}
+	if err := pol.CanSwitch(false); err != nil {
+		t.Errorf("healthy: fresh project cannot switch: %v", err)
+	}
+	if err := pol.CanSwitch(true); !errors.Is(err, composition.ErrNoOutputYet) {
+		t.Errorf("fault: mid-output switch allowed: %v", err)
+	}
+
+	// Settings: a write then a read serves the written routing (the
+	// harness-level document; the ai-level integration is tested in the ai
+	// package's own suite).
+	doc := settings.NewDoc(settings.Document{Routing: settings.Routing{FallbackModel: "seed"}},
+		filepath.Join(t.TempDir(), "settings.json"))
+	if s := doc.Snapshot(); s.Routing.FallbackModel != "seed" {
+		t.Errorf("healthy: seed not serving: %+v", s.Routing)
+	}
+	if err := doc.Write(settings.Document{Routing: settings.Routing{FallbackModel: "live"}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if s := doc.Snapshot(); s.Routing.FallbackModel != "live" {
+		t.Errorf("fault: live document not serving: %+v", s.Routing)
 	}
 }

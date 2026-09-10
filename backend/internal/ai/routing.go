@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"sync"
+	"time"
 	"encoding/json"
 	"log"
 	"os"
@@ -61,9 +63,89 @@ func DefaultPolicy() Policy {
 	}
 }
 
-// LoadRoutingPolicy returns the configured policy: ROUTING_POLICY_JSON merged
-// over the defaults, so a partial JSON overrides only what it names.
+// settingsFile is the H12 hot-reloadable settings document — the data side
+// of "which adapters exist is composition; which providers run is settings".
+// Empty means the env path alone (today's behavior). The file's mtime is
+// checked per load; a change flips routing on the next turn, no restart.
+var (
+	settingsMu     sync.RWMutex
+	settingsFile   string
+	settingsStamp  time.Time
+	settingsPolicy Policy
+	settingsGood   bool
+)
+
+// AttachSettingsFile wires the hot-reloadable settings document. Called once
+// at composition; empty keeps the env-only path.
+func AttachSettingsFile(path string) {
+	settingsMu.Lock()
+	settingsFile = path
+	settingsStamp = time.Time{}
+	settingsGood = false
+	settingsMu.Unlock()
+}
+
+// RoutingPolicyFromFile is the settings document's routing section — the
+// same Policy shape, so a settings file and ROUTING_POLICY_JSON are one
+// vocabulary.
+type RoutingPolicyFromFile = Policy
+
+// LoadRoutingPolicy returns the configured policy: the settings file when
+// attached and fresh (mtime-checked), else ROUTING_POLICY_JSON merged over
+// the defaults. A malformed settings file keeps the last good copy and logs
+// — routing never silently reverts.
 func LoadRoutingPolicy() Policy {
+	settingsMu.RLock()
+	path := settingsFile
+	settingsMu.RUnlock()
+	if path == "" {
+		return loadEnvPolicy()
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		// No file (yet): env serves. This is the pre-settings state.
+		return loadEnvPolicy()
+	}
+	settingsMu.Lock()
+	same := settingsGood && !fi.ModTime().After(settingsStamp)
+	cached, good := settingsPolicy, settingsGood
+	settingsMu.Unlock()
+	if same && good {
+		return cached
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if good {
+			return cached
+		}
+		return loadEnvPolicy()
+	}
+	// The settings document's routing rides the same Policy shape: parse
+	// the whole file and use its "routing" section, else the flat shape.
+	var doc struct {
+		Routing Policy `json:"routing"`
+	}
+	var over Policy
+	if err := json.Unmarshal(raw, &doc); err == nil && policyNonEmpty(doc.Routing) {
+		over = doc.Routing
+	} else if err := json.Unmarshal(raw, &over); err != nil || !policyNonEmpty(over) {
+		log.Printf("ai: settings file invalid; holding the last good routing policy: %v", err)
+		if good {
+			return cached
+		}
+		return loadEnvPolicy()
+	}
+	pol := applyOverride(DefaultPolicy(), over)
+	settingsMu.Lock()
+	settingsPolicy = pol
+	settingsGood = true
+	settingsStamp = fi.ModTime()
+	settingsMu.Unlock()
+	return pol
+}
+
+// loadEnvPolicy is the env-seeded path (ROUTING_POLICY_JSON over defaults).
+func loadEnvPolicy() Policy {
 	pol := DefaultPolicy()
 	raw := strings.TrimSpace(os.Getenv("ROUTING_POLICY_JSON"))
 	if raw == "" {
@@ -74,6 +156,12 @@ func LoadRoutingPolicy() Policy {
 		log.Printf("ai: ROUTING_POLICY_JSON invalid, using defaults: %v", err)
 		return pol
 	}
+	return applyOverride(pol, over)
+}
+
+// applyOverride merges a partial Policy over a base, so a partial JSON
+// overrides only what it names.
+func applyOverride(pol Policy, over Policy) Policy {
 	if over.PlanTier != "" {
 		pol.PlanTier = over.PlanTier
 	}
@@ -174,4 +262,11 @@ func logUnknownPrice(model string) {
 	}
 	loggedUnknownPrices[model] = true
 	log.Printf("ai: no pricing for model %q — turn cost recorded as 0; add ROUTING_PRICING_JSON to price it", model)
+}
+
+// policyNonEmpty reports whether a parsed Policy carries anything at all.
+func policyNonEmpty(p Policy) bool {
+	return p.PlanTier != "" || p.BuildTier != "" || p.SmallEditTier != "" ||
+		p.HealTier != "" || len(p.Models) > 0 || p.SmallEditMaxChars > 0 ||
+		p.FallbackModel != ""
 }
