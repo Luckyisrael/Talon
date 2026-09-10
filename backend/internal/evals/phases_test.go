@@ -31,7 +31,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"github.com/seekersstudio/backend/internal/api"
 	"github.com/seekersstudio/backend/internal/metro"
+	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/relay"
 	"github.com/seekersstudio/backend/internal/tools"
 	"github.com/seekersstudio/backend/internal/ws"
@@ -1241,5 +1243,46 @@ func TestPhaseDV3StreamNegotiation(t *testing.T) {
 	// after the device's encoder proved itself.
 	if ws.ModeJPEG == "" {
 		t.Error("fault: no jpeg fallback vocabulary")
+	}
+}
+
+// DV4: the warm pool and the idle reaper. The pool's claim rebooks its
+// port without a race; the reaper's windows are pinned; a zero pool is
+// the exact pre-DV4 flow.
+func TestPhaseDV4PoolAndReaper(t *testing.T) {
+	// The allocator rebooking: a warm port moves to the claiming session
+	// atomically — no window where a concurrent boot steals it.
+	pa := redroid.NewPortAllocator(15555, 15560)
+	port, err := pa.Allocate(-7)
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	pa.RebookForTest(42, port)
+	if got, err := pa.Allocate(43); err != nil || got == port {
+		t.Errorf("fault: rebooked port re-served (%d vs %d, %v)", got, port, err)
+	}
+
+	// The reaper's windows: money numbers, pinned.
+	if api.ReaperPauseAfter != 10*time.Minute || api.ReaperDestroyAfter != 30*time.Minute {
+		t.Errorf("fault: reaper windows drifted (%s/%s)", api.ReaperPauseAfter, api.ReaperDestroyAfter)
+	}
+
+	// The clock: a touched session leaves the idle set; the store test
+	// proves the SQL, this pins the contract from outside.
+	st, err := store.New(filepath.Join(t.TempDir(), "dv4.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	u, _ := st.CreateUser("dv4@e.test", "x")
+	p, _ := st.CreateProject(u.ID, "p", "v", "s4", "a4.b", "c4.d", "e4")
+	sess, _ := st.CreateSession(p.ID)
+	if err := st.TouchSession(sess.ID); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+	// A just-touched session is not idle for the pause window.
+	if idle, err := st.IdleSessions(10 * time.Minute); err != nil {
+		t.Fatalf("idle: %v", err)
+	} else if len(idle) != 0 {
+		t.Errorf("fault: touched session idle for pause window (%d rows)", len(idle))
 	}
 }

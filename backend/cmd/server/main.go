@@ -153,6 +153,10 @@ func main() {
 	// port can never collide with an ADB port.
 	relayAlloc := redroid.NewPortAllocator(17555, 18555)
 	maxContainers := envInt("MAX_CONTAINERS", 5)
+	// DV4: the warm pool — containers booted ahead of demand, claimed on
+	// create. One warm slot by default (a warm container holds 1GB/1CPU
+	// while idle); 0 disables (always cold, the pre-DV4 path).
+	warmPoolSize := envInt("WARM_POOL_SIZE", 1)
 
 	containerMgr, err := redroid.NewManager(portAlloc, maxContainers)
 	if err != nil {
@@ -194,12 +198,24 @@ func main() {
 	log.Printf("release export ready (keystores + submission bundles)")
 	triageHandler := api.NewTriageHandler(s)
 	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr, knowledge)
-	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, relayAlloc, workspaceDir, devClientMgr, walletMgr)
+	var warmPool *redroid.Pool
+	if warmPoolSize > 0 {
+		warmPool = redroid.NewPool(containerMgr, warmPoolSize)
+	}
+	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, relayAlloc, warmPool, workspaceDir, devClientMgr, walletMgr)
+
+	// DV4: the idle reaper. Devices nobody watches pause after 10 minutes
+	// and die after 30 — same teardown path as a user destroy, metering
+	// included. Viewer joins and agent turns reset the clock.
+	reaper := api.NewReaper(sessionHandler)
+	reaper.Start()
 	usageHandler := api.NewUsageHandler(s)
 	metricsHandler := api.NewMetricsHandler(s, containerMgr)
 	errorsHandler := api.NewErrorsHandler()
 	terminalHandler := ws.NewTerminalHandler(authSvc, s)
 	streamHandler := ws.NewStreamHandler(authSvc, s)
+	// DV4: a viewer joining a reaper-paused device wakes it.
+	streamHandler.Unpause = containerMgr.UnpauseContainer
 	inputHandler := ws.NewInputHandler(authSvc, s)
 
 	// Payment/billing (Phase 9), test-mode only. The mock provider stands in for a

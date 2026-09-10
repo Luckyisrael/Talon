@@ -60,6 +60,11 @@ func (h *InputHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID, adbTarget := device.ID, device.ADBTarget
 
+	// DV4: an input socket is activity — someone is using the device.
+	if err := h.store.TouchSession(sessionID); err != nil {
+		log.Printf("input touch failed for session %d: %v", sessionID, err)
+	}
+
 	// Initialize scrcpy control client for persistent input
 	controlClient := scrcpy.NewControlClient(adbTarget)
 	if err := controlClient.Start(); err != nil {

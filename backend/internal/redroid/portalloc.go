@@ -38,6 +38,27 @@ func (pa *PortAllocator) Allocate(sessionID int64) (int, error) {
 	return 0, fmt.Errorf("no free ADB ports available (range %d-%d exhausted)", pa.minPort, pa.maxPort)
 }
 
+// ReleaseByPort frees a specific port value regardless of which session
+// holds it — the warm pool knows its containers by port.
+func (pa *PortAllocator) ReleaseByPort(port int) {
+	pa.mu.Lock()
+	defer pa.mu.Unlock()
+	delete(pa.ports, port)
+}
+
+// RebookForTest exposes rebookTo for the phase guard — the claim-side
+// rebooking is a phase contract (no free/allocate race window).
+func (pa *PortAllocator) RebookForTest(sessionID int64, port int) { pa.rebookTo(sessionID, port) }
+
+// rebookTo moves a port's booking from whatever session held it to the
+// given one — a warm claim rebinds its pre-allocated port to the real
+// session without a release/re-allocate race.
+func (pa *PortAllocator) rebookTo(sessionID int64, port int) {
+	pa.mu.Lock()
+	defer pa.mu.Unlock()
+	pa.ports[port] = sessionID
+}
+
 // Release frees a port previously allocated to a session.
 func (pa *PortAllocator) Release(sessionID int64) {
 	pa.mu.Lock()

@@ -204,6 +204,9 @@ func (s *Store) migrate() error {
 			ended_at DATETIME,
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
+		// DV4: the idle reaper's clock. Fresh sessions default to their
+		// start time — a session never touched starts idle.
+		`ALTER TABLE sessions ADD COLUMN last_active_at DATETIME DEFAULT CURRENT_TIMESTAMP`,
 		`CREATE TABLE IF NOT EXISTS usage (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id INTEGER NOT NULL,
@@ -442,6 +445,10 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
+
+	// DV4: the idle reaper's clock. Fresh sessions default to their start
+	// time — a session never touched starts idle. Tolerated if present.
+	s.db.Exec("ALTER TABLE sessions ADD COLUMN last_active_at DATETIME DEFAULT CURRENT_TIMESTAMP")
 
 	// Migration: add template_version column if missing
 	s.db.Exec("ALTER TABLE projects ADD COLUMN template_version TEXT DEFAULT ''")
@@ -871,6 +878,43 @@ func (s *Store) CreateSession(projectID int64) (*Session, error) {
 	}
 	id, _ := res.LastInsertId()
 	return s.GetSession(id)
+}
+
+// TouchSession marks the session active — the reaper's clock. Every stream
+// viewer join and every agent prompt calls this; a session no one touches
+// is idle and the reaper's business.
+func (s *Store) TouchSession(sessionID int64) error {
+	_, err := s.db.Exec(`UPDATE sessions SET last_active_at = CURRENT_TIMESTAMP WHERE id = ? AND state != 'destroyed'`, sessionID)
+	return err
+}
+
+// IdleSessions returns non-destroyed sessions whose last activity is older
+// than the window — the reaper's candidates. A row with no last_active_at
+// (pre-DV4) falls back to its started_at: an old session is idle.
+func (s *Store) IdleSessions(olderThan time.Duration) ([]Session, error) {
+	rows, err := s.db.Query(`
+		SELECT id, project_id, state, container_id, container_name, adb_port,
+		       container_state, started_at, ended_at, last_active_at
+		FROM sessions
+		WHERE state != 'destroyed'
+		  AND COALESCE(last_active_at, started_at) < datetime('now', ?)
+	`, fmt.Sprintf("-%d seconds", int(olderThan.Seconds())))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		var sess Session
+		var lastActive sql.NullTime
+		if err := rows.Scan(&sess.ID, &sess.ProjectID, &sess.State, &sess.ContainerID,
+			&sess.ContainerName, &sess.ADBPort, &sess.ContainerState, &sess.StartedAt,
+			&sess.EndedAt, &lastActive); err != nil {
+			return nil, err
+		}
+		out = append(out, sess)
+	}
+	return out, nil
 }
 
 // LatestLiveSession returns the project's most recent non-destroyed

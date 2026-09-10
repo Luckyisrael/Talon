@@ -65,9 +65,11 @@ func originAllowed(r *http.Request) bool {
 
 // deviceSession is an authorised attachment to one project's device.
 type deviceSession struct {
-	ID        int64
-	ProjectID int64
-	ADBTarget string
+	ID             int64
+	ProjectID       int64
+	ADBTarget       string
+	ContainerID     string
+	ContainerState  string
 }
 
 // authorize is the gate every device socket goes through: it validates the token
@@ -118,9 +120,11 @@ func authorize(w http.ResponseWriter, r *http.Request, authSvc *auth.Service, s 
 	}
 
 	return &deviceSession{
-		ID:        session.ID,
-		ProjectID: session.ProjectID,
-		ADBTarget: "localhost:" + strconv.Itoa(session.ADBPort),
+		ID:            session.ID,
+		ProjectID:      session.ProjectID,
+		ADBTarget:      "localhost:" + strconv.Itoa(session.ADBPort),
+		ContainerID:    session.ContainerID,
+		ContainerState: session.ContainerState,
 	}, true
 }
 

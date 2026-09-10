@@ -29,17 +29,22 @@ type SessionHandler struct {
 	// relayAlloc hands the DV2 phone-relay its public ports — a disjoint
 	// range from the containers' (main wires 17555-18555 vs 15555-16555).
 	relayAlloc   *redroid.PortAllocator
+	// pool is the DV4 warm pool — pre-booted containers claimed on create.
+	// nil means no pool (WARM_POOL_SIZE=0): create boots cold, the pre-DV4
+	// behavior.
+	pool         *redroid.Pool
 	workspaceDir string
 	devClient    *devclient.Manager
 	wallet       *devclient.WalletManager
 }
 
-func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.PortAllocator, relayAlloc *redroid.PortAllocator, workspaceDir string, dc *devclient.Manager, wm *devclient.WalletManager) *SessionHandler {
+func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.PortAllocator, relayAlloc *redroid.PortAllocator, pool *redroid.Pool, workspaceDir string, dc *devclient.Manager, wm *devclient.WalletManager) *SessionHandler {
 	return &SessionHandler{
 		store:        s,
 		manager:      mgr,
 		portAlloc:    portAlloc,
 		relayAlloc:   relayAlloc,
+		pool:         pool,
 		workspaceDir: workspaceDir,
 		devClient:    dc,
 		wallet:       wm,
@@ -100,12 +105,24 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	containerInfo, err := h.manager.CreateContainer(session.ID)
-	if err != nil {
-		log.Printf("ERROR: container creation failed for session %d: %v", session.ID, err)
-		h.store.UpdateSessionState(session.ID, "destroyed")
-		writeError(w, http.StatusServiceUnavailable, "failed to create device container: "+err.Error())
-		return
+	// DV4: a warm container is claimed first — booted in the background
+	// minutes ago, renamed into this session's name. A pool miss is not an
+	// error: the cold path below boots fresh, exactly the pre-pool flow.
+	var containerInfo *redroid.ContainerInfo
+	if h.pool != nil {
+		containerInfo = h.pool.Claim(session.ID)
+	}
+	if containerInfo == nil {
+		var err error
+		containerInfo, err = h.manager.CreateContainer(session.ID)
+		if err != nil {
+			log.Printf("ERROR: container creation failed for session %d: %v", session.ID, err)
+			h.store.UpdateSessionState(session.ID, "destroyed")
+			writeError(w, http.StatusServiceUnavailable, "failed to create device container: "+err.Error())
+			return
+		}
+	} else {
+		log.Printf("session %d: claimed a warm container (boot was prepaid)", session.ID)
 	}
 
 	// Persist container metadata

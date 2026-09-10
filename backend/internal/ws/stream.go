@@ -46,6 +46,10 @@ const (
 type StreamHandler struct {
 	store   *store.Store
 	authSvc *auth.Service
+	// Unpause is set by main to the redroid manager's un-pause: a viewer
+	// joining a reaper-paused device wakes it. Nil (tests) = skip: waking
+	// is an optimization, never a correctness requirement.
+	Unpause func(containerID string) error
 }
 
 func NewStreamHandler(authSvc *auth.Service, s *store.Store) *StreamHandler {
@@ -84,6 +88,20 @@ func (h *StreamHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	log.Printf("stream session started for session %d (target %s)", sessionID, adbTarget)
+
+	// DV4: a viewer is activity. The reaper's clock starts over, and a
+	// reaper-paused container wakes — the user came back.
+	if err := h.store.TouchSession(sessionID); err != nil {
+		log.Printf("stream touch failed for session %d: %v", sessionID, err)
+	}
+	if device.ContainerState == "paused" && device.ContainerID != "" && h.Unpause != nil {
+		if err := h.Unpause(device.ContainerID); err != nil {
+			log.Printf("session %d: unpause failed (%v) — frames may stall until it resumes", sessionID, err)
+		} else {
+			h.store.UpdateSessionContainerState(sessionID, "running")
+			log.Printf("session %d: container woke from reaper pause", sessionID)
+		}
+	}
 
 	frameQueue := make(chan []byte, frameQueueSz)
 	var writeMu sync.Mutex

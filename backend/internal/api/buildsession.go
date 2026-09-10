@@ -189,6 +189,11 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	// Device feedback. Registered only when a device is actually attached —
 	// offering a tool that can only fail wastes rounds.
 	if adbTarget != "" {
+		// DV4: an agent turn against the device is activity. The reaper
+		// must not pause a container the agent is actively working on.
+		if live, err := h.store.LatestLiveSession(projectID); err == nil && live != nil {
+			h.store.TouchSession(live.ID)
+		}
 		// capture_screenshot verifies through the model; give it one only when we
 		// have a client, otherwise it degrades to a plain capture.
 		var vision tools.VisionChecker

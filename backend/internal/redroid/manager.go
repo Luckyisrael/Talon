@@ -95,6 +95,18 @@ func (m *Manager) CreateContainer(sessionID int64) (*ContainerInfo, error) {
 		return nil, err
 	}
 
+	info, err := m.createContainer(sessionID, port)
+	if err != nil {
+		m.portAlloc.ReleasePort(port)
+		return nil, err
+	}
+	return info, nil
+}
+
+// createContainer boots a container for the session on a pre-allocated
+// port. The body of CreateContainer, split so the warm pool can boot
+// with a port it owns — and so the failure paths release exactly once.
+func (m *Manager) createContainer(sessionID int64, port int) (*ContainerInfo, error) {
 	name := fmt.Sprintf("%s%d", containerPrefix, sessionID)
 
 	// Remove any existing container with this name (idempotent)
@@ -140,7 +152,6 @@ func (m *Manager) CreateContainer(sessionID int64) (*ContainerInfo, error) {
 	// Create
 	resp, err := m.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, name)
 	if err != nil {
-		m.portAlloc.ReleasePort(port)
 		return nil, fmt.Errorf("container create: %w", err)
 	}
 	containerID := resp.ID
@@ -148,14 +159,12 @@ func (m *Manager) CreateContainer(sessionID int64) (*ContainerInfo, error) {
 	// Start
 	if err := m.client.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
 		m.forceRemove(containerID)
-		m.portAlloc.ReleasePort(port)
 		return nil, fmt.Errorf("container start: %w", err)
 	}
 
 	// Wait for ADB readiness
 	if err := m.waitForADB(port); err != nil {
 		m.forceRemove(containerID)
-		m.portAlloc.ReleasePort(port)
 		return nil, fmt.Errorf("adb not ready: %w", err)
 	}
 
