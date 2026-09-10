@@ -20,6 +20,7 @@ import (
 	"github.com/seekersstudio/backend/internal/build"
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/guardrails"
+	"github.com/seekersstudio/backend/internal/harness/compaction"
 	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
 	"github.com/seekersstudio/backend/internal/harness/loop"
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
@@ -57,6 +58,9 @@ type Orchestrator struct {
 	// round boundary. Publish is rollback-covered: CreateSession registers
 	// only after the session is fully initialized, RemoveSession unpublishes.
 	agents *harnessagent.Registry
+	// spill is the H8 oversized-output store. Nil until the composition
+	// provides a directory; nil means outputs keep today's 32KB hard cap.
+	spill *compaction.SpillStore
 	// verifyReport is the chain report accumulator the run_gate tool reads. It is
 	// reset at the start of every verify call and populated as each gate runs.
 	// Atomic.Pointer so run_gate can read it without holding the mutex.
@@ -458,6 +462,12 @@ func (o *Orchestrator) RemoveSession(id int64) {
 	}
 }
 
+// AttachSpill provides the H8 oversized-output store. Called once by the
+// composition; nil (the default) keeps the hard-cap behavior.
+func (o *Orchestrator) AttachSpill(s *compaction.SpillStore) {
+	o.spill = s
+}
+
 // Agent returns the live H2 agent handle for a running prompt (nil when none
 // is running). The steer route is the caller; it delivers mid-turn messages
 // through the handle, which the loop drains at round boundaries.
@@ -578,6 +588,12 @@ type RunOptions struct {
 	// off — off behaves identically to today. The SEEKERSTUDIO_PATCH_BUFFER
 	// env var (1/true/on) opts in without a code change.
 	PatchBufferEnabled bool
+	// OnCompacted, when set, is called at a compaction boundary with the
+	// turn count before and after (H8): the caller (the api layer, which owns
+	// the session log) shadows the log at the same boundary so derivation
+	// and the wire stay honest with each other. Errors are the caller's to
+	// log; the loop never blocks on them.
+	OnCompacted func(before, after int)
 }
 
 // RunAgentLoop drives the agent until it stops calling tools and the code
@@ -729,6 +745,9 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			conversation = ai.Compact(conversation, maxContextTokens*3/4)
 			sess.Emitter.EmitToolCall("", "compact", "", fmt.Sprintf("Compacted context (%d → %d turns)",
 				before, len(conversation)), "completed")
+			if opts.OnCompacted != nil {
+				opts.OnCompacted(before, len(conversation))
+			}
 		}
 
 		sess.Emitter.EmitPhase(events.Phase(sess.GetPhase()), fmt.Sprintf("round %d", round))
@@ -1413,6 +1432,20 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		}
 
 		output, isError := opts.Execute(ctx, call.Name, call.Input)
+
+		// H8 context economy, in order of severity: spill moves a giant
+		// output to disk (the model re-reads by range through read_file);
+		// prune shrinks a merely-large one to head+tail with the omitted
+		// count named. Both preserve the stored transcript's full fidelity —
+		// only the wire copy shrinks.
+		if o.spill != nil {
+			if rep, spilled, err := o.spill.Spill(call.Name, output); err == nil && spilled {
+				output = rep
+			}
+		}
+		if compaction.NeedsPrune(output) {
+			output = compaction.Prune(output)
+		}
 
 		// readNote/watchNote/probeNote carry cross-turn knowledge into this result. They
 		// are set by the tracking below and appended to the tool result at the

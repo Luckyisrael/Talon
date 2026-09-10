@@ -888,6 +888,21 @@ func (h *PromptHandler) runBuild(
 				}
 			}
 		},
+		// H8: at a compaction boundary, shadow the session log to the same
+		// boundary so derivation (which replaces shadowed surface events with
+		// the summary) and the wire conversation stay honest with each other.
+		// The summary mirrors what Compact told the model.
+		OnCompacted: func(before, after int) {
+			lg := h.slog.get(h.store, projectID)
+			if lg == nil {
+				return
+			}
+			if err := lg.Shadow(lg.Seq(),
+				fmt.Sprintf("context compacted from %d to %d turns; earlier files are on disk and re-readable", before, after),
+				"wire compaction"); err != nil {
+				log.Printf("project %d: could not shadow the session log at compaction: %v", projectID, err)
+			}
+		},
 	})
 
 	// Everything below runs whether or not the loop succeeded: a failed turn

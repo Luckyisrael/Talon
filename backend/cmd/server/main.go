@@ -24,6 +24,7 @@ import (
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/gitremote"
 	"github.com/seekersstudio/backend/internal/logx"
+	"github.com/seekersstudio/backend/internal/harness/compaction"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/store"
@@ -106,6 +107,16 @@ func main() {
 	}
 
 	orchestratorSvc := orchestrator.New(aiClient, s, knowledge)
+
+	// H8: the spill store files oversized tool outputs (from run_shell,
+	// inspect_package, and friends) under a locator instead of truncating
+	// them destructively. Rooted beside the database so it shares its
+	// lifetime; a failure to create degrades to today's hard cap, logged.
+	if spillStore, err := compaction.NewSpillStore(filepath.Join(filepath.Dir(dbPath), "spill")); err != nil {
+		log.Printf("WARNING: spill store unavailable (%v) — oversized outputs keep the hard cap", err)
+	} else {
+		orchestratorSvc.AttachSpill(spillStore)
+	}
 
 	portAlloc := redroid.NewPortAllocator(15555, 16555)
 	maxContainers := envInt("MAX_CONTAINERS", 5)

@@ -2,6 +2,7 @@ package evals
 
 import (
 	"bytes"
+	"os"
 	"context"
 	"encoding/json"
 	"image"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/seekersstudio/backend/internal/build"
 	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
+	"github.com/seekersstudio/backend/internal/harness/compaction"
 	"github.com/seekersstudio/backend/internal/harness/events"
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
@@ -422,4 +424,49 @@ func (s *h3BarrierStages) BarrierHeld() bool {
 		}
 	}
 	return true
+}
+
+// H8: the context economy. Both polarities: pruning shrinks only oversized
+// results (small content passes through identical), and a spill lands the
+// body on disk verbatim under a resolvable locator while the replacement is
+// honest about what moved.
+func TestPhaseH8ContextEconomy(t *testing.T) {
+	small := "keep me intact"
+	if got := compaction.Prune(small); got != small {
+		t.Errorf("healthy: small content pruned: %q", got)
+	}
+
+	large := strings.Repeat("H", compaction.PruneHeadBytes) +
+		strings.Repeat("M", 10000) + strings.Repeat("T", compaction.PruneTailBytes)
+	pruned := compaction.Prune(large)
+	if !strings.Contains(pruned, "bytes omitted") {
+		t.Error("healthy: pruned result lacks the honest omission marker")
+	}
+	if !strings.Contains(pruned, strings.Repeat("T", compaction.PruneTailBytes)) {
+		t.Error("healthy: pruned result lost the tail")
+	}
+
+	s, err := compaction.NewSpillStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("spill store: %v", err)
+	}
+	body := strings.Repeat("x", compaction.SpillThresholdBytes+100)
+	rep, spilled, err := s.Spill("run_shell", body)
+	if err != nil || !spilled {
+		t.Fatalf("spill: %v %v", spilled, err)
+	}
+	loc := s.LocatorPath(rep)
+	if loc == "" {
+		t.Fatal("fault: locator unresolvable — the model cannot re-read its own output")
+	}
+	onDisk, err := os.ReadFile(loc)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if string(onDisk) != body {
+		t.Error("fault: spilled body is not verbatim")
+	}
+	if got := s.LocatorPath("[saved to /etc/passwd]"); got != "" {
+		t.Error("fault: locator escaped the store scope")
+	}
 }
