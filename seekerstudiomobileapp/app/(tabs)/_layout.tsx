@@ -52,7 +52,7 @@ export default function TabsLayout() {
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="ellipsis-horizontal" color={color} size={size} />
           ),
-        },
+        }}
       />
     </Tabs>
   );

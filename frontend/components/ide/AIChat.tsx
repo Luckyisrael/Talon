@@ -294,6 +294,13 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     // "plan:" — upserted from task_update events. Lifted so the centre
     // pane renders DSH-style pending/completed tasks.
     const [planTasks, setPlanTasks] = useState<PlanTask[]>([]);
+    // H13: the session token meter — the rolled per-turn ledger from the
+    // conversation endpoint, live-updated by the per-turn usage events.
+    const [sessionUsage, setSessionUsage] = useState<{
+      in: number;
+      out: number;
+      cache_read: number;
+    } | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
@@ -307,8 +314,9 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       let cancelled = false;
       conversation
         .get(projectId)
-        .then(({ turns, latest }) => {
+        .then(({ turns, latest, usage }) => {
           if (cancelled) return;
+          if (usage) setSessionUsage(usage);
           setMessages(turnsToEntries(turns, latest));
           // Offer resume only for a build turn whose last run did not finish.
           // A waiting turn is not resumable this way — its question card owns it.
@@ -756,6 +764,12 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               break;
 
             case "usage":
+              // H13: the session meter rolls live as the turn spends.
+              setSessionUsage((prev) => ({
+                in: (prev?.in ?? 0) + (d.input_tokens ?? 0),
+                out: (prev?.out ?? 0) + (d.output_tokens ?? 0),
+                cache_read: (prev?.cache_read ?? 0) + (d.cache_read_tokens ?? 0),
+              }));
               patch((prev) => ({
                 ...prev,
                 usage: {
@@ -1345,6 +1359,18 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         )}
 
         <form onSubmit={handleSubmit} className="border-t border-graphite p-2.5 sm:p-3">
+          {sessionUsage ? (
+            // H13: the session token meter — this project's rolled in/out,
+            // under the input, live during the turn. cache_read is the
+            // budget-saver; it rides the title attribute.
+            <p
+              className="gauge tnum mb-1.5 px-1 text-right text-fog"
+              title={`${sessionUsage.cache_read.toLocaleString()} cache-read tokens`}
+            >
+              session {compactTokens(sessionUsage.in)} in ·{" "}
+              {compactTokens(sessionUsage.out)} out
+            </p>
+          ) : null}
           <div
             role="presentation"
             onClick={() => textareaRef.current?.focus()}
