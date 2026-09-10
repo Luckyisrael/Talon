@@ -12,6 +12,7 @@ export default function RootLayout() {
         <Stack.Screen name="onboarding/features" options={{ headerShown: false }} />
         <Stack.Screen name="onboarding/connect" options={{ headerShown: false }} />
         <Stack.Screen name="auth/index" options={{ headerShown: false }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       </Stack>
       <StatusBar style="light" />
     </AppProviders>

@@ -316,8 +316,11 @@ func main() {
 
 		// Project knowledge and history.
 		r.Get("/v1/projects/{projectID}/memory", promptHandler.GetMemory)
-		r.Get("/v1/projects/{projectID}/conversation", promptHandler.GetConversation)
+		metroHandler := api.NewMetroHandler(promptHandler)
+
+	r.Get("/v1/projects/{projectID}/conversation", promptHandler.GetConversation)
 		r.Get("/v1/projects/{projectID}/diff", promptHandler.GitDiff)
+		r.Get("/v1/projects/{projectID}/metro", metroHandler.Serve)
 		r.Delete("/v1/projects/{projectID}/conversation", promptHandler.ClearConversation)
 
 		// Checkpoints — undo for anything the agent changed.

@@ -1,59 +1,44 @@
 import React from 'react';
-import { Tabs } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { Dimensions, StyleSheet, View } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { Stack } from 'expo-router';
 import { Colors } from '@/constants/theme';
+import { TopNav } from '@/components/nav/TopNav';
+import { Drawer } from '@/components/nav/Drawer';
 
-// Bottom tabs: Build / Plan / Device / More. Carbon bar, graphite top
-// hairline, lime 2px active indicator. UI only — tab screens land in
-// their own phases (Plan/Device/More show a placeholder until then).
-export default function TabsLayout() {
+// Tabs group shell: the content translates right by half the screen while
+// the drawer slides in from the left — shift, never squeeze, never overlay.
+// Both panes keep full width; the tab screen simply slides half off-screen.
+export default function TabsGroupLayout() {
+  const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const halfWidth = Dimensions.get('window').width / 2;
+  const shift = useSharedValue(0);
+  React.useEffect(() => {
+    shift.value = withTiming(drawerOpen ? halfWidth : 0, { duration: 280 });
+  }, [drawerOpen, halfWidth, shift]);
+  const content = useAnimatedStyle(() => ({ transform: [{ translateX: shift.value }] }));
+
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: Colors.paper,
-        tabBarInactiveTintColor: Colors.ash,
-        tabBarStyle: {
-          backgroundColor: Colors.carbon,
-          borderTopWidth: 1,
-          borderTopColor: Colors.graphite,
-          height: 64,
-          paddingBottom: 8,
-          paddingTop: 6,
-        },
-        tabBarLabelStyle: { fontSize: 12 },
-      }}
-    >
-      <Tabs.Screen
-        name="build"
-        options={{
-          title: 'Build',
-          tabBarIcon: ({ color, size }) => <Ionicons name="hammer" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="plan"
-        options={{
-          title: 'Plan',
-          tabBarIcon: ({ color, size }) => <Ionicons name="list" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="device"
-        options={{
-          title: 'Device',
-          tabBarIcon: ({ color, size }) => <Ionicons name="phone-portrait" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="more"
-        options={{
-          title: 'More',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="ellipsis-horizontal" color={color} size={size} />
-          ),
-        }}
-      />
-    </Tabs>
+    <View style={styles.root}>
+      <Drawer open={drawerOpen} width={halfWidth} onClose={() => setDrawerOpen(false)} />
+      <Animated.View style={[styles.content, content]}>
+        <TopNav onProfilePress={() => setDrawerOpen((v) => !v)} />
+        <View style={styles.body}>
+          <Stack screenOptions={{ headerShown: false, contentStyle: styles.screen }}>
+            <Stack.Screen name="build" />
+            <Stack.Screen name="plan" />
+            <Stack.Screen name="device" />
+            <Stack.Screen name="more" />
+          </Stack>
+        </View>
+      </Animated.View>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: Colors.void },
+  content: { flex: 1 },
+  body: { flex: 1 },
+  screen: { backgroundColor: Colors.void },
+});

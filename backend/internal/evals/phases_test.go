@@ -28,6 +28,10 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
 	"github.com/seekersstudio/backend/internal/harness/promptsec"
 	"github.com/seekersstudio/backend/internal/harness/ralph"
+	"fmt"
+
+	"github.com/seekersstudio/backend/internal/metro"
+	"github.com/seekersstudio/backend/internal/tools"
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
 	"github.com/seekersstudio/backend/internal/harness/subagent"
@@ -1101,4 +1105,52 @@ func (r *h14runner) RunRound(_ context.Context, _ ralph.Objective, prev ralph.Re
 	s := r.script[0]
 	r.script = r.script[1:]
 	return s.report, s.done, nil
+}
+
+// DV1: the metro event vocabulary — the classifier is the contract between
+// the bundler's raw output and everything downstream (badge, agent tool).
+func TestPhaseDV1MetroEvents(t *testing.T) {
+	cases := []struct{ line, kind string }{
+		{"Starting Metro Bundler", "bundle_start"},
+		{"Bundling index.js  45%", "bundle_progress"},
+		{"Bundled 4318ms", "bundle_done"},
+		{"Reloading app...", "reloaded"},
+		{"SyntaxError: x: Unexpected token", "error"},
+		{"Unable to resolve module ./x from /app/y.tsx", "error"},
+	}
+	for _, c := range cases {
+		if ev := metro.ClassifyLine(c.line); ev.Kind != c.kind {
+			t.Errorf("fault: classify(%q) = %q, want %q", c.line, ev.Kind, c.kind)
+		}
+	}
+	// Progress extraction is honest: no percentage means zero, not a guess.
+	if ev := metro.ClassifyLine("Bundling index.js"); ev.Progress != 0 {
+		t.Errorf("fault: fabricated progress %d", ev.Progress)
+	}
+	if ev := metro.ClassifyLine("Bundling index.js  73%"); ev.Progress != 73 {
+		t.Errorf("fault: progress = %d, want 73", ev.Progress)
+	}
+	// The emitter drops-oldest under a wedged consumer instead of stalling
+	// the bundler's stdout pump — the lifeline invariant.
+	e := metro.NewEmitter()
+	ch := e.Subscribe()
+	for i := 0; i < metro.SubscriberBuffer+10; i++ {
+		e.Emit(metro.Event{Kind: "log"})
+	}
+	saw := 0
+	for len(ch) > 0 {
+		<-ch
+		saw++
+	}
+	if saw == 0 {
+		t.Error("fault: wedged consumer lost every event including the newest")
+	}
+	// The tool's buffer keeps the newest N, bounded by construction.
+	buf := tools.NewMetroBuffer(3)
+	for i := 0; i < 10; i++ {
+		buf.Push("log", fmt.Sprintf("e%d", i), 0)
+	}
+	if recent := buf.Recent(2); len(recent) != 2 || recent[1].Text != "e9" {
+		t.Errorf("fault: buffer tail wrong: %+v", recent)
+	}
 }

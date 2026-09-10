@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { GhostButton, LimeButton, Screen, UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
 
@@ -18,7 +19,40 @@ const styles = StyleSheet.create({
   foot: { gap: Spacing.s12, marginTop: Spacing.s8 },
   cards: { gap: Spacing.s12 },
   featureRow: { gap: 2 },
+  medallion: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: Colors.carbon,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.graphite,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.s16,
+  },
+  mockCard: {
+    borderRadius: 12,
+    backgroundColor: Colors.carbon,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.graphite,
+    padding: Spacing.s12,
+    gap: Spacing.s8,
+  },
+  mockLine: { flexDirection: 'row', alignItems: 'center', gap: Spacing.s8 },
+  mockDot: { width: 6, height: 6, borderRadius: 3 },
+  mockBar: { height: 8, borderRadius: 4, backgroundColor: Colors.graphite, flex: 1 },
 });
+
+// Medallion: carbon circle, hairline border, fog glyph  the visual anchor
+// that keeps onboarding from being buttons on void.
+function Medallion({ icon }: { icon: 'compass' | 'layers' | 'wallet' }) {
+  const glyph = { compass: 'compass-outline', layers: 'layers-outline', wallet: 'wallet-outline' } as const;
+  return (
+    <View style={styles.medallion}>
+      <Ionicons name={glyph[icon]} size={30} color={Colors.fog} />
+    </View>
+  );
+}
 
 // ── Screen 1: Welcome ─────────────────────────────────────────────
 export function WelcomeScreen() {
@@ -30,13 +64,14 @@ export function WelcomeScreen() {
       </Animated.View>
       <View style={styles.body}>
         <Animated.View entering={FadeInDown.duration(450).delay(80)}>
+          <Medallion icon="compass" />
           <UIText variant="display" tone="hero">
             Build Solana apps by talking.
           </UIText>
         </Animated.View>
         <Animated.View entering={FadeInDown.duration(450).delay(160)}>
           <UIText variant="body" tone="muted">
-            Describe the app. The agent plans it, writes it, and installs it on hardware — you watch and approve.
+            Describe the app. The agent plans it, writes it, and installs it on hardware you watch and approve.
           </UIText>
         </Animated.View>
         <Animated.View entering={FadeInDown.duration(450).delay(240)} style={styles.foot}>
@@ -60,6 +95,7 @@ export function FeaturesScreen() {
     <Screen>
       <StepCaps of="2" />
       <View style={styles.body}>
+        <Medallion icon="layers" />
         <UIText variant="heading" tone="hero">
           Three moves.
         </UIText>
@@ -95,11 +131,23 @@ export function ConnectScreen() {
     <Screen>
       <StepCaps of="3" />
       <View style={styles.body}>
+        <Medallion icon="wallet" />
         <UIText variant="heading" tone="hero">
           One wallet to sign them.
         </UIText>
+        {/* Product fragment: a mini approve sheet, the thing MWA shows. */}
+        <View style={styles.mockCard}>
+          <View style={styles.mockLine}>
+            <View style={[styles.mockDot, { backgroundColor: Colors.acidLime }]} />
+            <UIText variant="monoSm" tone="muted">
+              approve · 0.42 SOL → 8x…3fQ2
+            </UIText>
+          </View>
+          <View style={[styles.mockBar, { marginRight: 60 }]} />
+          <View style={[styles.mockBar, { marginRight: 110 }]} />
+        </View>
         <UIText variant="body" tone="muted">
-          Seeker talks to the wallet app on your device through Mobile Wallet Adapter. Your keys never leave the wallet — the app only ever asks it to sign.
+          Seeker talks to the wallet app on your device through Mobile Wallet Adapter. Your keys never leave the wallet the app only ever asks it to sign.
         </UIText>
         <View style={styles.foot}>
           {/* Dummy: MWA wiring lands with the auth milestone. */}

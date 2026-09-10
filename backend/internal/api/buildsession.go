@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/seekersstudio/backend/internal/ai"
 	"github.com/seekersstudio/backend/internal/devclient"
 	"github.com/seekersstudio/backend/internal/events"
+	"github.com/seekersstudio/backend/internal/metro"
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/subagent"
 	"github.com/seekersstudio/backend/internal/harness/workflow"
@@ -196,6 +198,11 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 		reg.Register(&tools.CaptureScreenshot{ADBTarget: adbTarget, Vision: vision})
 		reg.Register(&tools.TailLogcat{ADBTarget: adbTarget})
 		reg.Register(&tools.TestWalletRoundtrip{ADBTarget: adbTarget})
+		// DV1: the bundler's voice. The buffer is pumped from the session's
+		// metro tap for the session's lifetime; the agent reads the tail.
+		if buf := h.metroBufferFor(projectID); buf != nil {
+			reg.Register(&tools.MetroStatus{Source: buf})
+		}
 	}
 
 	// Research. Both back onto public endpoints, so there is nothing to
@@ -297,6 +304,55 @@ func (b *buildSession) executor() orchestrator.ToolExecutor {
 		}
 		return result.Content, result.IsError
 	}
+}
+
+// metroBuffers holds one bundler-state buffer per project (DV1). The
+// bundler outlives turns; its tap must too. Guarded by metroMu because
+// concurrent turns (and the child-runner path) resolve the same project.
+var (
+	metroMu     sync.Mutex
+	metroBufs   = map[int64]*tools.Buffer{}
+	metroPumped = map[int64]bool{}
+)
+
+// metroBufferFor returns the project's bundler-state buffer, creating and
+// starting its pump when a live device session exists. Nil when no device
+// is attached — the tool is then not registered (offering a tool that can
+// only say "nothing" wastes the agent's round).
+func (h *PromptHandler) metroBufferFor(projectID int64) *tools.Buffer {
+	session, err := h.store.LatestLiveSession(projectID)
+	if err != nil || session == nil {
+		return nil
+	}
+	tap, unsubscribe := metro.SubscribeSession(session.ID)
+	if tap == nil {
+		return nil
+	}
+
+	metroMu.Lock()
+	defer metroMu.Unlock()
+	buf, ok := metroBufs[projectID]
+	if !ok {
+		buf = tools.NewMetroBuffer(32)
+		metroBufs[projectID] = buf
+	}
+	buf.SetLive(true)
+	if !metroPumped[projectID] {
+		metroPumped[projectID] = true
+		go func(ch chan metro.Event, stop func()) {
+			// The pump runs until the channel closes (bundler stopped) or
+			// the events channel is replaced — drop-oldest on the buffer
+			// keeps a slow agent from ever stalling the bundler's stdout.
+			for ev := range ch {
+				buf.Push(ev.Kind, ev.Text, ev.Progress)
+			}
+			buf.SetLive(false)
+			stop()
+		}(tap, unsubscribe)
+	} else {
+		unsubscribe() // an existing pump owns this project's tap
+	}
+	return buf
 }
 
 // adbTargetFor finds the device attached to a project, if any.

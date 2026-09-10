@@ -873,6 +873,20 @@ func (s *Store) CreateSession(projectID int64) (*Session, error) {
 	return s.GetSession(id)
 }
 
+// LatestLiveSession returns the project's most recent non-destroyed
+// session — the device the preview and metro bridge attach to. Absence is
+// "no device running", reported by the caller, never fabricated.
+func (s *Store) LatestLiveSession(projectID int64) (*Session, error) {
+	sess := &Session{}
+	err := s.db.QueryRow(
+		"SELECT id, project_id, state, container_id, container_name, adb_port, container_state, started_at, ended_at FROM sessions WHERE project_id = ? AND state != 'destroyed' ORDER BY id DESC LIMIT 1", projectID).
+		Scan(&sess.ID, &sess.ProjectID, &sess.State, &sess.ContainerID, &sess.ContainerName, &sess.ADBPort, &sess.ContainerState, &sess.StartedAt, &sess.EndedAt)
+	if err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
 func (s *Store) GetSession(id int64) (*Session, error) {
 	sess := &Session{}
 	err := s.db.QueryRow("SELECT id, project_id, state, container_id, container_name, adb_port, container_state, started_at, ended_at FROM sessions WHERE id = ?", id).

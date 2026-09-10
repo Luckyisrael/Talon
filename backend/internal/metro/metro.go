@@ -17,6 +17,10 @@ type Server struct {
 	ready        chan struct{}
 	workspaceDir string
 	target       string
+	// events fans classified stdout/stderr lines to subscribers (DV1): the
+	// SSE bridge to the preview badge, and the agent's metro_status tool.
+	// Nil only in tests that never start a real process.
+	events *emitter
 }
 
 var (
@@ -55,6 +59,7 @@ func Start(sessionID int64, workspaceDir string, adbTarget string) (*Server, err
 		ready:        make(chan struct{}),
 		workspaceDir: workspaceDir,
 		target:       adbTarget,
+		events:       &emitter{},
 	}
 
 	// Start Metro directly on native Linux (no WSL wrapper)
@@ -76,12 +81,18 @@ func Start(sessionID int64, workspaceDir string, adbTarget string) (*Server, err
 		return nil, fmt.Errorf("failed to start metro: %w", err)
 	}
 
-	// Monitor stdout for ready signal
+	// Monitor stdout for ready signal and classify every line (DV1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
+		// Metro lines carry paths and occasional stack dumps; the default
+		// 64KB cap is generous but a redbox error block can exceed it.
+		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			log.Printf("[metro %d] %s", sessionID, line)
+			if ev := classify(line); ev.Kind != "log" {
+				s.events.emit(ev)
+			}
 			if strings.Contains(line, "Metro waiting on") ||
 				strings.Contains(line, "ready") ||
 				strings.Contains(line, "Waiting on") {
@@ -94,11 +105,18 @@ func Start(sessionID int64, workspaceDir string, adbTarget string) (*Server, err
 		}
 	}()
 
-	// Log stderr
+	// Log stderr — and classify (DV1): metro prints bundler errors here
+	// while stdout stays chatty about progress. The ready signal never
+	// rides stderr, so this pump only feeds logs and events.
 	go func() {
 		scanner := bufio.NewScanner(stderr)
+		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 		for scanner.Scan() {
-			log.Printf("[metro %d err] %s", sessionID, scanner.Text())
+			line := scanner.Text()
+			log.Printf("[metro %d err] %s", sessionID, line)
+			if ev := classify(line); ev.Kind != "log" {
+				s.events.emit(ev)
+			}
 		}
 	}()
 
@@ -175,4 +193,24 @@ func StopAll() {
 
 func (s *Server) Port() int {
 	return s.port
+}
+
+// Subscribe receives this server's classified events until unsubscribed.
+// The caller drains or the emitter drops-oldest — never blocks metro.
+func (s *Server) Subscribe() (chan Event, func()) {
+	ch := s.events.subscribe()
+	return ch, func() { s.events.unsubscribe(ch) }
+}
+
+// SubscribeSession resolves a running metro by session id. Nil when the
+// session has no bundler (not started, or start failed) — callers report
+// that honestly instead of fabricating state.
+func SubscribeSession(sessionID int64) (chan Event, func()) {
+	sessionsMu.Lock()
+	s, exists := sessions[sessionID]
+	sessionsMu.Unlock()
+	if !exists || s.events == nil {
+		return nil, nil
+	}
+	return s.Subscribe()
 }

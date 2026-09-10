@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createAuthWebSocket, sessions as sessionsApi, exportApi } from "@/lib/api";
+import {
+  createAuthWebSocket,
+  sessions as sessionsApi,
+  exportApi,
+  openMetroStream,
+  type MetroEvent,
+} from "@/lib/api";
+import { getToken } from "@/lib/auth";
 import LoadingState from "@/components/ui/LoadingState";
 
 /**
@@ -53,9 +60,56 @@ export default function PhonePreview({
   // Bumped to re-subscribe the sockets without touching the session — the
   // stall retry path.
   const [streamEpoch, setStreamEpoch] = useState(0);
+
+  // DV1: the metro SSE tap rides the device's lifetime — subscribed while
+  // streaming, torn down with it. Events drive the badge; errors persist
+  // (the redbox is on the screen until a good bundle clears it), progress
+  // and reloads fade on their own timers.
+  useEffect(() => {
+    if (status !== "streaming" || !projectId) return;
+    const token = getToken() ?? "";
+    const close = openMetroStream(projectId, token, (ev) => {
+      if (metroTimer.current) {
+        clearTimeout(metroTimer.current);
+        metroTimer.current = null;
+      }
+      if (ev.kind === "error") {
+        setMetroBadge({ kind: ev.kind, text: ev.text, progress: 0 });
+        return; // errors persist until the next good bundle
+      }
+      setMetroBadge({ kind: ev.kind, text: ev.text, progress: ev.progress });
+      if (ev.kind === "bundle_progress" || ev.kind === "bundle_start") {
+        // Progress refreshes on every frame; a stalled one gives up quietly.
+        metroTimer.current = setTimeout(
+          () => setMetroBadge(null),
+          15_000,
+        );
+      } else {
+        // Reloads and bundle-done flash briefly, then clear.
+        metroTimer.current = setTimeout(
+          () => setMetroBadge(null),
+          2_500,
+        );
+      }
+    });
+    return () => {
+      close();
+      if (metroTimer.current) clearTimeout(metroTimer.current);
+      setMetroBadge(null);
+    };
+  }, [status, projectId, streamEpoch]);
   const [stalled, setStalled] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [captureNote, setCaptureNote] = useState<string | null>(null);
+  // DV1: the bundler's voice — bundle progress, hot reloads, redbox errors.
+  // The badge lives above the stream: bundling/reloaded are transient states
+  // with self-dismissing timers, errors persist until the next good bundle.
+  const [metroBadge, setMetroBadge] = useState<{
+    kind: MetroEvent["kind"];
+    text: string;
+    progress: number;
+  } | null>(null);
+  const metroTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameCount = useRef(0);
 
   // Zero unless frames are actually arriving. Derived rather than written back on
@@ -303,8 +357,33 @@ export default function PhonePreview({
                     {adbTarget ?? "Device"}
                   </span>
                 </div>
-                <span className="gauge tnum flex-shrink-0">{fps} fps</span>
+                <span className="gauge tnum flex-shrink-0">
+                  {metroBadge && metroBadge.kind === "bundle_progress" && metroBadge.progress > 0
+                    ? `bundling ${metroBadge.progress}%`
+                    : metroBadge && (metroBadge.kind === "bundle_start" || metroBadge.kind === "bundle_progress")
+                      ? "bundling…"
+                      : metroBadge && metroBadge.kind === "bundle_done"
+                        ? "bundle ready"
+                        : metroBadge && metroBadge.kind === "reloaded"
+                          ? "reloaded"
+                          : `${fps} fps`}
+                </span>
               </div>
+              {/* DV1: the redbox surface — a runtime/bundler error persists
+                  over the stream until the next good bundle clears it. The
+                  device screen may still show the old frame; this says why. */}
+              {metroBadge && metroBadge.kind === "error" ? (
+                <div
+                  role="status"
+                  title={metroBadge.text}
+                  className="pointer-events-none absolute inset-x-0 top-10 border-t border-coral-red/60 bg-coral-red/20 px-3 py-1.5 backdrop-blur-[2px]"
+                >
+                  <p className="gauge truncate text-coral-red">
+                    ⚠ bundler: {metroBadge.text}
+                  </p>
+                </div>
+              ) : null}
+
               {/* bottom nav keys */}
               <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent px-3 pb-2.5 pt-8">
                 <div className="pointer-events-auto flex items-center justify-center gap-1">

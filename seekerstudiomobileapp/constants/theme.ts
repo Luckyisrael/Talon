@@ -32,15 +32,17 @@ export type ColorName = keyof typeof Colors;
 
 const inter400: '400' = '400';
 const inter500: '500' = '500';
+const inter600: '600' = '600';
+const inter700: '700' = '700';
 
 // Tracking converted from web em to RN points (em × fontSize), per
 // DESIGN_MOBILE.md. Base family resolves in lib/fonts.ts (loaded Inter,
 // else system fallback — never blocks render).
 export const Type = {
-  display: { fontSize: 40, lineHeight: 42, letterSpacing: -0.88, fontWeight: inter500 },
-  heading: { fontSize: 32, lineHeight: 35, letterSpacing: -0.7, fontWeight: inter500 },
-  subheading: { fontSize: 24, lineHeight: 30, letterSpacing: -0.29, fontWeight: inter500 },
-  title: { fontSize: 20, lineHeight: 26, letterSpacing: -0.24, fontWeight: inter500 },
+  display: { fontSize: 40, lineHeight: 42, letterSpacing: -0.88, fontWeight: inter700 },
+  heading: { fontSize: 32, lineHeight: 35, letterSpacing: -0.7, fontWeight: inter700 },
+  subheading: { fontSize: 24, lineHeight: 30, letterSpacing: -0.29, fontWeight: inter600 },
+  title: { fontSize: 20, lineHeight: 26, letterSpacing: -0.24, fontWeight: inter600 },
   bodyLg: { fontSize: 17, lineHeight: 26, fontWeight: inter400 },
   body: { fontSize: 16, lineHeight: 24, fontWeight: inter400 },
   bodySm: { fontSize: 15, lineHeight: 23, letterSpacing: -0.17, fontWeight: inter400 },

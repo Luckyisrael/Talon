@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
+import { useRouter } from 'expo-router';
 import { AntDesign } from '@expo/vector-icons';
 import { GhostButton, Screen, UIText } from '@/components/ui';
 import { Colors, Layout, Radii, Spacing } from '@/constants/theme';
@@ -30,6 +31,7 @@ function ProviderButton({
 }
 
 export default function AuthScreen() {
+  const router = useRouter();
   // Dummy handlers: replaced by expo-auth-session + backend OAuth exchange.
   const dummy = (provider: string) => () => {
     // eslint-disable-next-line no-console
@@ -71,7 +73,9 @@ export default function AuthScreen() {
           </UIText>
         </Animated.View>
         <View style={styles.foot}>
-          <GhostButton title="Explore without an account" onPress={dummy('guest')} />
+          {/* Guest enters the app with no session: tabs render with dummy
+              data until auth lands. Still zero API calls. */}
+          <GhostButton title="Explore without an account" onPress={() => router.replace('/(tabs)/build')} />
         </View>
       </View>
     </Screen>

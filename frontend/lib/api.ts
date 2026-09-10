@@ -20,6 +20,43 @@ import type {
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
+/** A Metro event off the project's bundler tap (DV1): bundle progress, hot
+ *  reloads, and redbox errors for the preview badge. Mirrors metro.Event on
+ *  the backend — kind is the vocabulary, progress 0 when the line carried
+ *  no percentage. */
+export interface MetroEvent {
+  kind:
+    | "connected"
+    | "bundle_start"
+    | "bundle_progress"
+    | "bundle_done"
+    | "reloaded"
+    | "error"
+    | "unavailable";
+  text: string;
+  progress: number;
+}
+
+/** Open the project's metro SSE stream. Returns a close handle; the caller
+ *  owns the lifetime (browser close, device stop). */
+export function openMetroStream(
+  projectId: number,
+  token: string,
+  onEvent: (ev: MetroEvent) => void,
+): () => void {
+  const es = new EventSource(
+    `${BASE}/v1/projects/${projectId}/metro?token=${encodeURIComponent(token)}`,
+  );
+  es.addEventListener("metro", (e) => {
+    try {
+      onEvent(JSON.parse((e as MessageEvent).data) as MetroEvent);
+    } catch {
+      // a malformed frame is dropped; the badge keeps its last known state
+    }
+  });
+  return () => es.close();
+}
+
 export class APIError extends Error {
   constructor(
     public status: number,
