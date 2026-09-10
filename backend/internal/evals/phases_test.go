@@ -28,6 +28,7 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
 	"github.com/seekersstudio/backend/internal/harness/subagent"
+	"github.com/seekersstudio/backend/internal/harness/workflow"
 	"github.com/seekersstudio/backend/internal/harness/skills"
 	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/runtime"
@@ -761,4 +762,84 @@ type h9Runner struct {
 func (r *h9Runner) RunChild(_ context.Context, s subagent.Spec) subagent.Result {
 	r.ran = append(r.ran, s)
 	return r.result(s)
+}
+
+// H10: declarative workflow fan-out. Spec validation rejects malformed
+// specs; parallel items overlap; a failing item nulls only itself; the
+// aggregate phase sees prior results; narration flows.
+func TestPhaseH10Workflow(t *testing.T) {
+	// Validation polarities.
+	bad := workflow.Spec{Name: "x", Phases: []workflow.Phase{{Title: "t"}}}
+	if err := bad.Validate(); err == nil {
+		t.Error("fault: empty phase passed validation")
+	}
+	good := workflow.Spec{
+		Name:   "check",
+		Phases: []workflow.Phase{
+			{Title: "p", Parallel: []workflow.Item{{Prompt: "a"}, {Prompt: "b"}, {Prompt: "c"}}},
+			{Title: "agg", Prompt: "summarize"},
+		},
+	}
+	if err := good.Validate(); err != nil {
+		t.Errorf("healthy: valid spec rejected: %v", err)
+	}
+
+	// Run semantics over the H9 service.
+	peak := 0
+	runner := &h10Runner{answer: func(p string) subagent.Result {
+		if strings.Contains(p, "b") {
+			return subagent.Result{Errored: true, Err: "child b failed"}
+		}
+		return subagent.Result{FinalText: `{"ok": true}`}
+	}, onLive: func(n int) { if n > peak { peak = n } }}
+	svc := subagent.NewService(runner, 4)
+	var narrated int
+	eng := workflow.NewEngine(svc, func(string) { narrated++ })
+
+	res := eng.Run(context.Background(), good)
+	if res.Errored {
+		t.Fatalf("workflow errored: %s", res.Err)
+	}
+	if res.Phases[0].Nulls != 1 {
+		t.Errorf("fault: nulls = %d, want 1", res.Phases[0].Nulls)
+	}
+	if peak < 2 {
+		t.Errorf("fault: parallel items did not overlap (peak %d)", peak)
+	}
+	if narrated < 4 { // start+finish × 2 phases
+		t.Errorf("fault: narration incomplete: %d events", narrated)
+	}
+	// The aggregate's prompt embeds phase-1 results.
+	if !strings.Contains(runner.lastPrompt, "Prior phase results") {
+		t.Errorf("fault: aggregate did not receive prior results: %q", runner.lastPrompt)
+	}
+}
+
+// h10Runner is the workflow evals stub with overlap tracking.
+type h10Runner struct {
+	mu        sync.Mutex
+	live      int
+	peakSeen  int
+	lastPrompt string
+	answer    func(string) subagent.Result
+	onLive    func(int)
+}
+
+func (r *h10Runner) RunChild(_ context.Context, s subagent.Spec) subagent.Result {
+	r.mu.Lock()
+	r.live++
+	if r.live > r.peakSeen {
+		r.peakSeen = r.live
+		if r.onLive != nil {
+			r.onLive(r.peakSeen)
+		}
+	}
+	r.lastPrompt = s.Prompt
+	r.mu.Unlock()
+	ans := r.answer(s.Prompt)
+	time.Sleep(2 * time.Millisecond)
+	r.mu.Lock()
+	r.live--
+	r.mu.Unlock()
+	return ans
 }

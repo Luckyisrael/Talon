@@ -15,6 +15,7 @@ import (
 	"github.com/seekersstudio/backend/internal/events"
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/subagent"
+	"github.com/seekersstudio/backend/internal/harness/workflow"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/tools"
@@ -170,6 +171,17 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	if bs.children != nil {
 		reg.Register(&tools.Delegate{Service: bs.children, LabelPrefix: fmt.Sprintf("project-%d", projectID)})
 		reg.Register(&tools.ListChildren{Service: bs.children})
+		// H10: the declarative fan-out rides the same service — the engine
+		// narrates each phase into the trace so the developer sees progress
+		// live, DSH-style.
+		engine := workflow.NewEngine(bs.children, func(text string) {
+			if output != nil {
+				if w, ok := output.(interface{ WriteString(string) (int, error) }); ok {
+					_, _ = w.WriteString(text + "\n")
+				}
+			}
+		})
+		reg.Register(&tools.RunWorkflow{Engine: engine})
 	}
 
 	// Device feedback. Registered only when a device is actually attached —
