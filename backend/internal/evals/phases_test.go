@@ -27,6 +27,7 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/instructions"
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
 	"github.com/seekersstudio/backend/internal/harness/promptsec"
+	"github.com/seekersstudio/backend/internal/harness/ralph"
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
 	"github.com/seekersstudio/backend/internal/harness/subagent"
@@ -1045,4 +1046,59 @@ func titleFallbackForTest(s string) string {
 		s = "Untitled turn"
 	}
 	return s
+}
+
+// H14: the Ralph lane. Rounds are fresh (only the bounded report crosses);
+// done, blocker, and cap are all reachable terminal states.
+func TestPhaseH14Ralph(t *testing.T) {
+	runner := &h14runner{script: []h14step{
+		{report: ralph.Report{Passed: []string{"tsc"}, Remaining: []string{"lint"}}, done: false},
+		{report: ralph.Report{Passed: []string{"tsc", "lint"}}, done: true},
+	}}
+	out := ralph.NewLane(runner, 8).Run(context.Background(), "gates green")
+	if !out.Done || out.Rounds != 2 {
+		t.Fatalf("healthy: done outcome wrong: %+v", out)
+	}
+	// Freshness: round 1 saw an empty report; round 2 saw round 1's.
+	if len(runner.saw[0].Passed) != 0 {
+		t.Error("fault: round 1 got carryover")
+	}
+	if len(runner.saw[1].Passed) != 1 {
+		t.Error("fault: round 2 did not get the prior report")
+	}
+
+	// Blocker terminal.
+	blocked := ralph.NewLane(&h14runner{script: []h14step{
+		{report: ralph.Report{Blocker: "no free device in the pool"}},
+	}}, 8).Run(context.Background(), "gates green")
+	if blocked.Done || blocked.Blocker == "" {
+		t.Errorf("fault: blocker not terminal: %+v", blocked)
+	}
+
+	// Cap terminal.
+	steps := make([]h14step, 5)
+	capped := ralph.NewLane(&h14runner{script: steps}, 3).Run(context.Background(), "gates green")
+	if !capped.Capped || capped.Rounds != 3 {
+		t.Errorf("fault: cap not honest: %+v", capped)
+	}
+}
+
+type h14step struct {
+	report ralph.Report
+	done   bool
+}
+
+type h14runner struct {
+	script []h14step
+	saw    []ralph.Report
+}
+
+func (r *h14runner) RunRound(_ context.Context, _ ralph.Objective, prev ralph.Report) (ralph.Report, bool, error) {
+	r.saw = append(r.saw, prev)
+	if len(r.script) == 0 {
+		return ralph.Report{Remaining: []string{"more"}}, false, nil
+	}
+	s := r.script[0]
+	r.script = r.script[1:]
+	return s.report, s.done, nil
 }
