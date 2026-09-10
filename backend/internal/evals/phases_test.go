@@ -23,6 +23,7 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/events"
 	"github.com/seekersstudio/backend/internal/harness/instructions"
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
+	"github.com/seekersstudio/backend/internal/harness/promptsec"
 	"github.com/seekersstudio/backend/internal/harness/sandbox"
 	"github.com/seekersstudio/backend/internal/harness/sessionlog"
 	"github.com/seekersstudio/backend/internal/harness/skills"
@@ -647,4 +648,41 @@ func embeddedTestRegistry() *knowledge.Registry {
 		return nil
 	}
 	return r
+}
+
+// H7: the system prompt is a section registry. Byte-stability across
+// assemblies; fingerprint locality (a memory change moves only the memory
+// fingerprint); the head-prefix rule (changes after the head keep the
+// cached prefix).
+func TestPhaseH7PromptSections(t *testing.T) {
+	memory := "remember A"
+	r := promptsec.New()
+	r.Register(promptsec.Section{Name: "persona", Weight: promptsec.WeightPersona,
+		Render: func() string { return "You are the builder." }})
+	r.Register(promptsec.Section{Name: "rules/core", Weight: promptsec.WeightRules,
+		Render: func() string { return "Obey the rules." }})
+	r.Register(promptsec.Section{Name: "memory", Weight: promptsec.WeightMemory,
+		Render: func() string { return memory }})
+
+	// Byte stability: two assemblies are identical.
+	if r.Assemble() != r.Assemble() {
+		t.Fatal("fault: assembly is not byte-stable")
+	}
+
+	// Fingerprint locality: only memory moves.
+	before := r.Fingerprints()
+	memory = "remember B"
+	changed := promptsec.Diff(before, r.Fingerprints())
+	if len(changed) != 1 || changed[0] != "memory" {
+		t.Errorf("fault: expected [memory] changed, got %v", changed)
+	}
+	// The change sits after the rules head: prefix intact.
+	if r.HeadChanged("rules/core", changed) {
+		t.Error("fault: late-section change broke the head prefix")
+	}
+	// Suppress + Diff sees removals.
+	r.Suppress("memory")
+	if d := promptsec.Diff(before, r.Fingerprints()); len(d) == 0 {
+		t.Error("fault: suppress not detected by Diff")
+	}
 }

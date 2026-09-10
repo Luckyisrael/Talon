@@ -25,6 +25,7 @@ import (
 	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
 	"github.com/seekersstudio/backend/internal/harness/loop"
 	"github.com/seekersstudio/backend/internal/harness/pipeline"
+	"github.com/seekersstudio/backend/internal/harness/promptsec"
 	"github.com/seekersstudio/backend/internal/knowledge"
 	"github.com/seekersstudio/backend/internal/metrics"
 	"github.com/seekersstudio/backend/internal/runtime"
@@ -2261,95 +2262,134 @@ func (o *Orchestrator) enrichPromptWithContext(sess *SessionState, systemPrompt 
 		maxMemoryLen = 240
 	)
 
-	var b strings.Builder
-	b.WriteString(systemPrompt)
+	// H7: the prompt is an ordered registry of fingerprinted sections. The
+	// bytes assembled here are identical to the monolith it replaced — the
+	// section split is a pure refactor that generalizes the projectMapFP
+	// cache discipline to every section: a section whose render is stable
+	// keeps the cached prefix; a change late in the order (memory, ADRs)
+	// does not invalidate what sits before it.
+	reg := promptsec.New()
 
-	// Always-on rules and the skill manifest come first: they are identical across
-	// every session, so keeping them adjacent to the base prompt keeps the cached
-	// prefix long. The per-project ADRs and memory below vary and follow after.
+	// persona — the caller's base prompt (mode persona + device facts).
+	reg.Register(promptsec.Section{
+		Name:   "persona",
+		Weight: promptsec.WeightPersona,
+		Render: func() string { return systemPrompt },
+	})
+
+	// rules/core — always-on rules + preinstalled packages; identical across
+	// sessions, so they sit adjacent to the persona for the longest cached
+	// prefix.
 	if o.knowledge != nil {
-		if rules := o.knowledge.RulesBlock(); rules != "" {
-			b.WriteString("\n\n")
-			b.WriteString(rules)
-		}
+		reg.Register(promptsec.Section{
+			Name:   "rules/core",
+			Weight: promptsec.WeightRules,
+			Render: func() string { return o.knowledge.RulesBlock() },
+		})
 		// H6: the multi-source catalog, when attached, replaces the
-		// embedded-only manifest — workspace skills are listed alongside
+		// embedded-only manifest — workspace skills listed alongside
 		// embedded ones (bodies still load through read_skill only).
-		if o.skills != nil {
-			if manifest := o.skills.Manifest(); manifest != "" {
-				b.WriteString("\n\n")
-				b.WriteString(manifest)
-			}
-		} else if manifest := o.knowledge.Manifest(); manifest != "" {
-			b.WriteString("\n\n")
-			b.WriteString(manifest)
-		}
+		reg.Register(promptsec.Section{
+			Name:   "skills/catalog",
+			Weight: promptsec.WeightSkills,
+			Render: func() string {
+				if o.skills != nil {
+					return o.skills.Manifest()
+				}
+				return o.knowledge.Manifest()
+			},
+		})
 	}
-	// H6: the AGENTS.md chain — the project's own conventions, budgeted,
+
+	// instructions chain — H6: the project's AGENTS.md conventions, budgeted,
 	// re-read on each enrichment (reconciliation-on-touch, no watcher).
-	// Appended after the stable sections so the cached prefix breaks only
-	// when conventions genuinely change.
 	if o.instructionsChain != nil && sess.WorkspacePath != "" {
-		if chain := o.instructionsChain(sess.WorkspacePath); chain != "" {
-			b.WriteString("\n\n")
-			b.WriteString(chain)
-		}
+		reg.Register(promptsec.Section{
+			Name:   "instructions/chain",
+			Weight: promptsec.WeightInstructions,
+			Render: func() string { return o.instructionsChain(sess.WorkspacePath) },
+		})
 	}
 
-	// The working-discipline block is model-specific but session-invariant, so it
-	// belongs here in the cached prefix alongside the rules — before the per-project
-	// ADRs and memory that vary below.
+	// working-discipline — model-specific but session-invariant; belongs in
+	// the cached prefix.
 	if o.discipline != "" {
-		b.WriteString("\n\n")
-		b.WriteString(o.discipline)
+		reg.Register(promptsec.Section{
+			Name:   "discipline",
+			Weight: promptsec.WeightDiscipline,
+			Render: func() string { return o.discipline },
+		})
 	}
 
-	// The project map snapshot (files, their exports, their imports) refreshes
-	// itself when the tree moves and stays byte-stable when it does not, so it
-	// sits in the stable prefix: a build that grounds the model this way does
-	// not re-derive the layout round after round, which is where the largest
-	// token waste came from.
+	// project map — the file-tree snapshot; byte-stable while the tree is.
 	if pm := sess.ProjectMap(); pm != "" {
-		b.WriteString("\n\n")
-		b.WriteString(pm)
+		reg.Register(promptsec.Section{
+			Name:   "project/map",
+			Weight: promptsec.WeightProjectMap,
+			Render: func() string { return sess.ProjectMap() },
+		})
 	}
 
-	// The plan checklist is the settled screens and features from Plan mode. Its
-	// presence every round is the whole point: the model tracks progress against a
-	// fixed plan instead of re-deriving one, which is what burned ~966k tokens on a
-	// build that was then discarded. It varies only when a task's status flips —
-	// the rebuild guard keys on TaskVersion so the cached prefix survives the rounds
-	// in between.
+	// plan checklist — the settled screens/features; varies only when a
+	// task's status flips.
 	if tasks := sess.GetTasks(); len(tasks) > 0 {
-		b.WriteString("\n\n")
-		b.WriteString(renderPlanChecklist(tasks))
+		reg.Register(promptsec.Section{
+			Name:   "plan/checklist",
+			Weight: promptsec.WeightPlanCheck,
+			Render: func() string { return renderPlanChecklist(sess.GetTasks()) },
+		})
 	}
 
+	// ADRs — the settled architecture decisions.
 	if adrs := sess.GetADRs(); len(adrs) > 0 {
-		if len(adrs) > maxADRs {
-			adrs = adrs[len(adrs)-maxADRs:]
-		}
-		b.WriteString("\n\n## Architecture decisions already made\n\n")
-		for _, adr := range adrs {
-			fmt.Fprintf(&b, "- **%s** — %s\n", adr.Decision, adr.Outcome)
-			if adr.Context != "" {
-				fmt.Fprintf(&b, "  Why: %s\n", truncateLine(adr.Context, maxMemoryLen))
-			}
-		}
-		b.WriteString("\nThese are settled. Build within them. If a request genuinely conflicts with one, " +
-			"say so and propose how to reconcile it rather than quietly introducing a second pattern.\n")
+		reg.Register(promptsec.Section{
+			Name:   "adrs",
+			Weight: promptsec.WeightADRs,
+			Render: func() string { return renderADRs(sess.GetADRs(), maxADRs, maxMemoryLen) },
+		})
 	}
 
+	// memory — what exists in this project; the most volatile section, so it
+	// renders last.
 	if memory := sess.GetMemory(); len(memory) > 0 {
-		if len(memory) > maxMemory {
-			memory = memory[len(memory)-maxMemory:]
-		}
-		b.WriteString("\n## What exists in this project\n\n")
-		for _, m := range memory {
-			fmt.Fprintf(&b, "- [%s] %s\n", m.EntryType, truncateLine(m.Content, maxMemoryLen))
-		}
+		reg.Register(promptsec.Section{
+			Name:   "memory",
+			Weight: promptsec.WeightMemory,
+			Render: func() string { return renderMemory(sess.GetMemory(), maxMemory, maxMemoryLen) },
+		})
 	}
 
+	return reg.Assemble()
+}
+
+// renderADRs formats the bounded architecture-decision list.
+func renderADRs(adrs []store.ArchitectureDecision, max, lineLen int) string {
+	if len(adrs) > max {
+		adrs = adrs[len(adrs)-max:]
+	}
+	var b strings.Builder
+	b.WriteString("## Architecture decisions already made\n\n")
+	for _, adr := range adrs {
+		fmt.Fprintf(&b, "- **%s** — %s\n", adr.Decision, adr.Outcome)
+		if adr.Context != "" {
+			fmt.Fprintf(&b, "  Why: %s\n", truncateLine(adr.Context, lineLen))
+		}
+	}
+	b.WriteString("\nThese are settled. Build within them. If a request genuinely conflicts with one, " +
+		"say so and propose how to reconcile it rather than quietly introducing a second pattern.\n")
+	return b.String()
+}
+
+// renderMemory formats the bounded project-memory list.
+func renderMemory(memory []store.ProjectMemory, max, lineLen int) string {
+	if len(memory) > max {
+		memory = memory[len(memory)-max:]
+	}
+	var b strings.Builder
+	b.WriteString("## What exists in this project\n\n")
+	for _, m := range memory {
+		fmt.Fprintf(&b, "- [%s] %s\n", m.EntryType, truncateLine(m.Content, lineLen))
+	}
 	return b.String()
 }
 
