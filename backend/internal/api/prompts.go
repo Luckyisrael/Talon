@@ -160,7 +160,11 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prompt, err := h.store.CreatePrompt(req.ProjectID, req.Mode, req.Prompt)
+	// H13: title the turn from its own prompt. The fallback (truncated
+	// prompt) is stored synchronously — instant, no model call — and the LLM
+	// title upgrades it after the turn, so the title never consumes the
+	// turn's first model response or blocks the request.
+	prompt, err := h.store.CreateTitledPrompt(req.ProjectID, req.Mode, req.Prompt, h.SessionTitleFallback(req.Prompt))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not save the prompt")
 		return
@@ -242,7 +246,8 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prompt, err := h.store.CreatePrompt(req.ProjectID, req.Mode, req.Prompt)
+	// H13: title the turn from its own prompt — see Create.
+	prompt, err := h.store.CreateTitledPrompt(req.ProjectID, req.Mode, req.Prompt, h.SessionTitleFallback(req.Prompt))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not save the prompt")
 		return
@@ -1111,6 +1116,25 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 	// Keep the stored conversation bounded. The tail is what matters for
 	// continuity; the whole history would eventually dominate the database.
 	h.store.TrimConversation(projectID, 400)
+
+	// H13: upgrade the session title with the LLM path once the turn is
+	// fully terminal (completed or failed — never waiting/paused, whose
+	// resumes must not race a title call against the provider script) and
+	// only when the row still carries the fallback (the first upgrade wins;
+	// a resumed turn does not re-title). One bounded request, off the
+	// request path. A failure keeps the fallback: the title is decoration,
+	// never a cost center.
+	if status == "completed" || status == "failed" {
+		if p, err := h.store.GetPrompt(promptID); err == nil && p != nil && p.Title == truncateTitleForAPI(p.Prompt) {
+			go func(promptText string) {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				if title := h.SessionTitle(ctx, promptText); title != "" && title != promptText {
+					_ = h.store.UpdatePromptTitle(promptID, title)
+				}
+			}(p.Prompt)
+		}
+	}
 }
 
 // terminalStatus maps the loop's return into the run-status vocabulary the
@@ -1396,6 +1420,13 @@ func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// H13: the session token meter — the per-turn in/out the TurnFooter shows,
+	// rolled per session. The chat rail renders this once, live-updated by the
+	// per-turn usage SSE events; this is the reload restore.
+	if in, out, cacheRead, err := h.store.ProjectTokenUsage(projectID); err == nil {
+		resp["usage"] = map[string]int64{"in": in, "out": out, "cache_read": cacheRead}
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -1663,4 +1694,25 @@ func firstLine(s string) string {
 		s = s[:i]
 	}
 	return strings.TrimSpace(s)
+}
+
+// truncateTitleForAPI mirrors the store's fallback-title shape so the
+// upgrade gate can tell a fallback title from an upgraded one without
+// storing a flag column: the fallback is exactly the truncated prompt.
+func truncateTitleForAPI(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	if len(s) > 80 {
+		cut := s[:80]
+		if i := strings.LastIndex(cut, " "); i > 0 {
+			cut = cut[:i]
+		}
+		s = cut
+	}
+	if s == "" {
+		s = "Untitled turn"
+	}
+	return s
 }

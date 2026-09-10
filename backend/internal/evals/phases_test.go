@@ -935,3 +935,114 @@ func TestPhaseH12CompositionData(t *testing.T) {
 		t.Errorf("fault: live document not serving: %+v", s.Routing)
 	}
 }
+
+// H13: the Model Experience doc contract. Every harness package's README
+// carries a "What the model sees" section; the tools README carries the
+// per-group contract. Doc drift fails the merge gate — documentation is a
+// test, not a hope.
+func TestPhaseH13ModelExperienceDocs(t *testing.T) {
+	dir := filepath.Join("..", "..", "internal", "harness")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("harness dir: %v", err)
+	}
+	missing := []string{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		readme := filepath.Join(dir, e.Name(), "README.md")
+		raw, err := os.ReadFile(readme)
+		if err != nil {
+			missing = append(missing, e.Name()+" (no README)")
+			continue
+		}
+		if !strings.Contains(string(raw), "What the model sees") {
+			missing = append(missing, e.Name()+" (no 'What the model sees' section)")
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("fault: model-experience docs drifted: %s", strings.Join(missing, "; "))
+	}
+
+	// The tools registry README carries the contract.
+	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "tools", "README.md"))
+	if err != nil {
+		t.Fatalf("tools README: %v", err)
+	}
+	if !strings.Contains(string(raw), "What the model sees") {
+		t.Error("fault: tools README lacks the model-experience section")
+	}
+}
+
+// H13: session titles. The fallback truncates the first prompt honestly
+// (one line, word-boundary, 80 bytes); the store round-trips titles; the
+// session token meter rolls the per-turn ledger.
+func TestPhaseH13TitlesAndMeter(t *testing.T) {
+	fb := titleFallbackForTest("Build me a wallet screen with MWA transact()\nand a balance display")
+	if fb != "Build me a wallet screen with MWA transact()" {
+		t.Errorf("healthy: fallback title wrong: %q", fb)
+	}
+	long := strings.Repeat("word ", 40)
+	if len(titleFallbackForTest(long)) > 80 {
+		t.Error("fault: fallback title exceeds the byte cap")
+	}
+	if titleFallbackForTest("") != "Untitled turn" {
+		t.Error("fault: empty prompt title not honest")
+	}
+
+	// Store round-trip: create with a title, read it back.
+	st, err := store.New(filepath.Join(t.TempDir(), "h13.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	// FK: the project needs a real user row.
+	u, err := st.CreateUser("h13@evals.test", "x")
+	if err != nil {
+		t.Fatalf("user: %v", err)
+	}
+	proj, err := st.CreateProject(u.ID, "p", "v1", "s", "a.b.c", "d.e", "f")
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	p, err := st.CreateTitledPrompt(proj.ID, "build", "Add offline transaction history caching", "Offline tx history caching")
+	if err != nil {
+		t.Fatalf("titled prompt: %v", err)
+	}
+	if p.Title != "Offline tx history caching" {
+		t.Errorf("fault: title lost: %q", p.Title)
+	}
+	// The fallback title when none given.
+	p2, _ := st.CreateTitledPrompt(proj.ID, "build", "Second turn text", "")
+	if p2.Title == "" {
+		t.Error("fault: empty fallback title stored")
+	}
+	// The meter: after usage rows exist, the rollup sums them.
+	if err := st.RecordPromptTokens(p.ID, 1, 100, 50, 25); err != nil {
+		t.Fatalf("tokens: %v", err)
+	}
+	in, out, cr, err := st.ProjectTokenUsage(proj.ID)
+	if err != nil || in != 100 || out != 50 || cr != 25 {
+		t.Errorf("fault: meter rollup wrong: %d %d %d %v", in, out, cr, err)
+	}
+}
+
+// titleFallbackForTest mirrors the api fallback (kept local so the eval
+// asserts the shape, not the import).
+func titleFallbackForTest(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	if len(s) > 80 {
+		cut := s[:80]
+		if i := strings.LastIndex(cut, " "); i > 0 {
+			cut = cut[:i]
+		}
+		s = cut
+	}
+	if s == "" {
+		s = "Untitled turn"
+	}
+	return s
+}

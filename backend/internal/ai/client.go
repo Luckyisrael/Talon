@@ -294,6 +294,13 @@ func StripCodeBlocks(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// Chat is the one-shot non-streaming completion: a single prompt, a single
+// answer, no tools. Session titles and other one-liner calls use it; the
+// loop never does — the loop needs tools and streaming.
+func (c *Client) Chat(ctx context.Context, system string, history []PromptMessage) (string, error) {
+	return c.chat(ctx, system, history)
+}
+
 func (c *Client) chat(ctx context.Context, system string, history []PromptMessage) (string, error) {
 	if c.protocol == ProtocolOpenAI {
 		return c.chatOpenAI(ctx, system, history)

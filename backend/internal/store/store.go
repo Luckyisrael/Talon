@@ -44,6 +44,10 @@ type Prompt struct {
 	ProjectID int64  `json:"project_id"`
 	Mode      string `json:"mode"`
 	Prompt    string `json:"prompt"`
+	// Title is the H13 session title: the human-facing line history lists
+	// render — LLM-titled from the first prompt when a client answers, the
+	// honest truncated prompt otherwise.
+	Title string `json:"title,omitempty"`
 	Response  string `json:"response,omitempty"`
 	// Status is the run state of the turn this prompt drove: running while the
 	// agent loop is live, then a terminal completed | cancelled | failed, or
@@ -470,6 +474,10 @@ func (s *Store) migrate() error {
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN cost_usd REAL DEFAULT 0")
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN routed_model TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN skipped_gates TEXT DEFAULT '[]'")
+	// H13: the session title — the human-facing line history lists render.
+	// LLM-titled from the first prompt when a client answers, the honest
+	// truncated prompt otherwise; never blank.
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN title TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN route_reason TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE usage ADD COLUMN cost_usd REAL DEFAULT 0")
 
@@ -594,11 +602,20 @@ func (s *Store) DeleteProject(id int64) error {
 }
 
 func (s *Store) CreatePrompt(projectID int64, mode, prompt string) (*Prompt, error) {
+	return s.CreateTitledPrompt(projectID, mode, prompt, "")
+}
+
+// CreateTitledPrompt stores a prompt with its session title. Empty title
+// degrades to the truncated prompt — the list line is never blank.
+func (s *Store) CreateTitledPrompt(projectID int64, mode, prompt, title string) (*Prompt, error) {
+	if strings.TrimSpace(title) == "" {
+		title = truncateTitleForList(prompt)
+	}
 	// New prompts start 'running': the turn is about to drive the agent loop, and
 	// the terminal status is written when it ends. This overrides the column's
 	// backfill default of 'completed', which only ever applies to rows that
 	// predate the status column.
-	res, err := s.db.Exec("INSERT INTO prompts (project_id, mode, prompt, status) VALUES (?, ?, ?, 'running')", projectID, mode, prompt)
+	res, err := s.db.Exec("INSERT INTO prompts (project_id, mode, prompt, status, title) VALUES (?, ?, ?, 'running', ?)", projectID, mode, prompt, title)
 	if err != nil {
 		return nil, err
 	}
@@ -606,7 +623,48 @@ func (s *Store) CreatePrompt(projectID int64, mode, prompt string) (*Prompt, err
 	return s.GetPrompt(id)
 }
 
-const promptColumns = "id, project_id, mode, prompt, response, status, round, skipped_gates, updated_at, created_at"
+// ProjectTokenUsage rolls the per-turn token ledger into a session total
+// (H13's token meter): every prompt row's in/out/cache-read summed. The
+// chat rail renders it once; metrics.go keeps its own counters.
+func (s *Store) ProjectTokenUsage(projectID int64) (in, out, cacheRead int64, err error) {
+	row := s.db.QueryRow(
+		"SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0) FROM prompts WHERE project_id = ?", projectID)
+	err = row.Scan(&in, &out, &cacheRead)
+	return in, out, cacheRead, err
+}
+
+// UpdatePromptTitle upgrades a turn's session title (H13): the LLM path
+// replaces the fallback after the turn completes. Empty titles are ignored —
+// the fallback is never worse.
+func (s *Store) UpdatePromptTitle(promptID int64, title string) error {
+	if strings.TrimSpace(title) == "" {
+		return nil
+	}
+	_, err := s.db.Exec("UPDATE prompts SET title = ? WHERE id = ?", title, promptID)
+	return err
+}
+
+// truncateTitleForList is the honest fallback title: the prompt's first
+// line, word-boundary cut at 80 bytes.
+func truncateTitleForList(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	if len(s) > 80 {
+		cut := s[:80]
+		if i := strings.LastIndex(cut, " "); i > 0 {
+			cut = cut[:i]
+		}
+		s = cut
+	}
+	if s == "" {
+		s = "Untitled turn"
+	}
+	return s
+}
+
+const promptColumns = "id, project_id, mode, prompt, response, status, round, skipped_gates, updated_at, created_at, title"
 
 // scanPrompt reads one prompt row in promptColumns order, mapping the nullable
 // updated_at (existing rows predate it) onto the optional struct field.
@@ -614,7 +672,7 @@ func scanPrompt(row *sql.Row) (*Prompt, error) {
 	p := &Prompt{}
 	var updatedAt sql.NullTime
 	var skipped sql.NullString
-	if err := row.Scan(&p.ID, &p.ProjectID, &p.Mode, &p.Prompt, &p.Response, &p.Status, &p.Round, &skipped, &updatedAt, &p.CreatedAt); err != nil {
+	if err := row.Scan(&p.ID, &p.ProjectID, &p.Mode, &p.Prompt, &p.Response, &p.Status, &p.Round, &skipped, &updatedAt, &p.CreatedAt, &p.Title); err != nil {
 		return nil, err
 	}
 	if skipped.Valid && strings.TrimSpace(skipped.String) != "" {

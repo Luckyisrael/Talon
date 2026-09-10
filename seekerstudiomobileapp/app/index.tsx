@@ -1,27 +1,73 @@
-import { NetworkFeatureIndex } from '@/features/network/network-feature-index'
-import { AccountFeatureIndex } from '@/features/account/account-feature-index'
-import { AppConfig } from '@/constants/app-config'
-import { Text, View } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import React from 'react'
-import { appStyles } from '@/constants/app-styles'
+import React from 'react';
+import { StyleSheet, View } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
+import { useRouter } from 'expo-router';
+import { Screen, UIText } from '@/components/ui';
+import { Colors, Spacing } from '@/constants/theme';
 
-export default function HomeScreen() {
+// Splash: mark + floor wash, then auto-routes to onboarding. No decisions
+// here — it only covers font/splash load and hands off.
+export default function SplashScreen() {
+  const router = useRouter();
+  React.useEffect(() => {
+    const t = setTimeout(() => router.replace('/onboarding/welcome'), 1200);
+    return () => clearTimeout(t);
+  }, [router]);
+
   return (
-    <SafeAreaView style={appStyles.screen}>
-      <View style={appStyles.stack}>
-        <Text style={appStyles.title}>App Config</Text>
-        <View style={appStyles.card}>
-          <Text>
-            Name <Text style={{ fontWeight: 'bold' }}>{AppConfig.identity.name}</Text>
-          </Text>
-          <Text>
-            URL <Text style={{ fontWeight: 'bold' }}>{AppConfig.identity.uri}</Text>
-          </Text>
-        </View>
-        <AccountFeatureIndex />
-        <NetworkFeatureIndex />
+    <Screen padded={false} style={styles.center}>
+      {/* Floor wash: layered low-opacity mist (no gradient dep) */}
+      <View style={styles.floorOuter} pointerEvents="none">
+        <View style={styles.floorInner} pointerEvents="none" />
       </View>
-    </SafeAreaView>
-  )
+      <Animated.View entering={FadeIn.duration(500)} style={styles.mark}>
+        <View style={styles.dot} />
+        <UIText variant="heading" tone="hero">
+          Seeker
+        </UIText>
+      </Animated.View>
+      <Animated.View entering={FadeIn.duration(500).delay(200)}>
+        <UIText variant="caption" tone="muted">
+          midnight precision instrument
+        </UIText>
+      </Animated.View>
+    </Screen>
+  );
 }
+
+const styles = StyleSheet.create({
+  center: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.s12,
+  },
+  floorOuter: {
+    position: 'absolute',
+    bottom: -120,
+    width: 420,
+    height: 420,
+    borderRadius: 210,
+    backgroundColor: Colors.mist,
+    opacity: 0.05,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  floorInner: {
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: Colors.mist,
+    opacity: 0.5,
+  },
+  mark: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.s12,
+  },
+  dot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: Colors.acidLime,
+  },
+});
