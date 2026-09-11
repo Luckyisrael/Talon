@@ -95,3 +95,4 @@ frontend/yarn.lock
 # build-template.sh (P5). The old ignore predates that decision.
 backups/
 .tools/
+backend/server
