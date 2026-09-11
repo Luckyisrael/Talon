@@ -19,3 +19,10 @@ bench:
 	cd backend && go test -run='^$$' -bench=. -benchtime=1x ./internal/tools/ ./internal/release/ ./internal/verify/
 
 ci: evals
+
+# The live E2E of the entire core product (PLAN_CORE_PRODUCT.md phase C):
+# real stack, real model gateway, real redroid device, real template
+# project — no mocks. e2e/run-live.sh owns preflight, the scratch stack,
+# the drive, and teardown.
+e2e-live:
+	./e2e/run-live.sh
