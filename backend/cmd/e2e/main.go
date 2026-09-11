@@ -140,7 +140,9 @@ func detailSuffix(d string) string {
 // ---------------------------------------------------------------------------
 
 var (
-	httpc = &http.Client{Timeout: 30 * time.Second}
+	// Session creation claims a container from the warm pool (cold boots can
+// take minutes); the E2E waits for the claim, not a fast header.
+httpc = &http.Client{Timeout: 3 * time.Minute}
 	token string
 )
 
