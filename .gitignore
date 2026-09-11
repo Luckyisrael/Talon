@@ -96,3 +96,9 @@ frontend/yarn.lock
 backups/
 .tools/
 backend/server
+
+# E2E scratch artifacts
+backend/e2e
+backend/workspaces-e2e/
+backend/scrcpy-server.jar
+e2e/live-run*.log
