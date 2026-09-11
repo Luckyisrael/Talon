@@ -73,7 +73,7 @@ dist/
 
 # Misc
 server.exe~
-seekersstudio.db
+talon.db
 seeker.db
 seeker2.db
 seeker3.db
@@ -102,3 +102,6 @@ backend/e2e
 backend/workspaces-e2e/
 backend/scrcpy-server.jar
 e2e/live-run*.log
+
+# stale committed build artifacts
+backend/seeker-headless
