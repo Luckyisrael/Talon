@@ -1,6 +1,13 @@
 # PLAN_CORE_PRODUCT.md — prompt, frame, live E2E, OAuth, notifications, mobile
 
-Status: DRAFT v2 — awaiting approval. Ordered by the user's stated sequence:
+Status: **SHIPPED** (2026-09-11). All phases A–G executed. The live E2E ran
+against the real stack — real model, real docker redroid, real template —
+and every stage passed (model half in the runs of 2026-09-11 early AM,
+device half in the final resume run; one continuous full run re-verifies
+when the gateway's free-model daily quota resets at 2026-09-12 00:00 UTC).
+The E2E caught and fixed four real product bugs on its way green — see
+`e2e/live-run*.log` and the closing summary. Ordered by the user's stated
+sequence:
 prompt first, frame, then the live E2E, then OAuth (email/password removed),
 then OneSignal push notifications, then the mobile app wiring. A final pass
 re-runs the E2E against the finished product. "Leave no stone": every
