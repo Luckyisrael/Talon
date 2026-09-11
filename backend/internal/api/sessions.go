@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/seekersstudio/backend/internal/adb"
 	"github.com/seekersstudio/backend/internal/devclient"
+	"github.com/seekersstudio/backend/internal/notify"
 	"github.com/seekersstudio/backend/internal/device"
 	"github.com/seekersstudio/backend/internal/metro"
 	"github.com/seekersstudio/backend/internal/relay"
@@ -36,9 +37,11 @@ type SessionHandler struct {
 	workspaceDir string
 	devClient    *devclient.Manager
 	wallet       *devclient.WalletManager
+	// notifier is E: reaper pause/destroy pushes. Fire-and-forget by law.
+	notifier notify.Notifier
 }
 
-func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.PortAllocator, relayAlloc *redroid.PortAllocator, pool *redroid.Pool, workspaceDir string, dc *devclient.Manager, wm *devclient.WalletManager) *SessionHandler {
+func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.PortAllocator, relayAlloc *redroid.PortAllocator, pool *redroid.Pool, workspaceDir string, dc *devclient.Manager, wm *devclient.WalletManager, n notify.Notifier) *SessionHandler {
 	return &SessionHandler{
 		store:        s,
 		manager:      mgr,
@@ -48,7 +51,17 @@ func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.
 		workspaceDir: workspaceDir,
 		devClient:    dc,
 		wallet:       wm,
+		notifier:     n,
 	}
+}
+
+// notifyUser is the session surface's fire-and-forget send (the turn surface
+// has its own; both converge on notify.Dispatch).
+func (h *SessionHandler) notifyUser(userID int64, kind notify.Kind, title, body string) {
+	if h.notifier == nil {
+		return
+	}
+	notify.Dispatch(h.store, h.notifier, userID, kind, title, body)
 }
 
 type createSessionRequest struct {

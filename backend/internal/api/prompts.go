@@ -20,6 +20,7 @@ import (
 	"github.com/seekersstudio/backend/internal/metrics"
 	"github.com/seekersstudio/backend/internal/harness/approval"
 	"github.com/seekersstudio/backend/internal/harness/skills"
+	"github.com/seekersstudio/backend/internal/notify"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/store"
 	"github.com/seekersstudio/backend/internal/tools"
@@ -41,12 +42,15 @@ type PromptHandler struct {
 	// dual-written alongside conversation_messages until the derivation read
 	// path is flipped on everywhere.
 	slog *sessionLogCache
+	// notifier is E: the push notification surface. Fire-and-forget by law;
+	// nil disables (tests construct without it).
+	notifier notify.Notifier
 	// skillCatalog is the H6 multi-source skills catalog, when the
 	// composition attached one; read_skill resolves through it.
 	skillCatalog *skills.Catalog
 }
 
-func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *knowledge.Registry) *PromptHandler {
+func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *knowledge.Registry, n notify.Notifier) *PromptHandler {
 	var preinstalled []string
 	if knowledge != nil {
 		preinstalled = knowledge.PreinstalledList()
@@ -58,6 +62,7 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *o
 		orch:         orch,
 		devClient:    dc,
 		knowledge:    knowledge,
+		notifier:     n,
 		planPrompt:   ai.PlanSystemPrompt(preinstalled),
 		slog:         newSessionLogCache(),
 	}
@@ -268,7 +273,7 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if req.Mode == "plan" {
-		h.streamPlan(ctx, w, flusher, prompt.ID, req.ProjectID, req.Prompt)
+		h.streamPlan(ctx, w, flusher, prompt.ID, req.ProjectID, userID, req.Prompt)
 		h.store.IncrementPrompts(userID)
 		return
 	}
@@ -494,7 +499,7 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 	// so far (the question already lives in it). Metered like the original
 	// plan turn — this is the second half of one planning exchange.
 	if prompt.Mode == "plan" {
-		h.streamPlan(r.Context(), w, flusher, id, prompt.ProjectID, body.Answer)
+		h.streamPlan(r.Context(), w, flusher, id, prompt.ProjectID, userID, body.Answer)
 		return
 	}
 	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, body.Answer,
@@ -536,7 +541,7 @@ func (h *PromptHandler) Discard(w http.ResponseWriter, r *http.Request) {
 
 // streamPlan proxies the model's stream to the client, then parses the finished
 // text into a plan.
-func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID int64, userPrompt string) {
+func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID, userID int64, userPrompt string) {
 	// The system prompt was previously omitted here while the output was still
 	// parsed as a plan, so plan mode had no instructions at all.
 	stream := h.ai.ChatStream(ctx, h.planPrompt, h.planHistory(projectID, userPrompt))
@@ -609,9 +614,16 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 	if waiting {
 		writeSSE(w, "done", map[string]string{"status": "waiting"})
 		h.store.UpdatePromptStatus(promptID, "waiting", 0)
+		// E: the plan turn is holding for the user's reply — the input-needed
+		// push, plan variant.
+		h.dispatchNotification(userID, notify.KindInputNeeded,
+			"Your plan needs an answer", "The agent asked a question before settling the plan.")
 	} else {
 		writeSSE(w, "done", map[string]string{"status": "success"})
 		h.store.UpdatePromptStatus(promptID, "completed", 0)
+		// E: the plan is settled — push the moment it is ready to review.
+		h.dispatchNotification(userID, notify.KindPlanReady,
+			"Your plan is ready", "Review it and send the build when you are happy.")
 	}
 	flusher.Flush()
 }
@@ -683,6 +695,13 @@ drain:
 			return
 		case evt := <-emitter.Events():
 			h.writeBuildEvent(w, evt)
+			// E: the ask_user pause is the one moment the product needs
+			// the user mid-turn — push it (fire-and-forget; the in-app
+			// history is always recorded).
+			if evt.Type == events.QuestionEvent {
+				h.dispatchNotification(userID, notify.KindInputNeeded,
+					"Seeker needs your input", evt.Text)
+			}
 			flusher.Flush()
 		case res = <-resultCh:
 			got = true
@@ -703,7 +722,30 @@ drain:
 
 	if got {
 		h.finishBuildStream(w, flusher, res.outcome, res.err)
+		// E: the turn's terminal state is the other moment worth a push —
+		// success (with the verification verdict) or failure (with the
+		// reason). A paused turn is not terminal; the question push above
+		// already fired.
+		if res.outcome == nil || !res.outcome.Paused {
+			if res.err == nil {
+				verified := res.outcome != nil && res.outcome.Verified
+				h.dispatchNotification(userID, notify.KindBuildSuccess,
+					"Build finished", fmt.Sprintf("verified: %v", verified))
+			} else {
+				h.dispatchNotification(userID, notify.KindBuildFailed,
+					"Build failed", friendlyAIError(res.err))
+			}
+		}
 	}
+}
+
+// dispatchNotification is the one send path: dark-safe (nil notifier), and
+// fire-and-forget by law — a push must never block or fail the turn.
+func (h *PromptHandler) dispatchNotification(userID int64, kind notify.Kind, title, body string) {
+	if h.notifier == nil {
+		return
+	}
+	notify.Dispatch(h.store, h.notifier, userID, kind, title, body)
 }
 
 func (h *PromptHandler) finishBuildStream(w http.ResponseWriter, flusher http.Flusher, outcome *orchestrator.BuildOutcome, err error) {

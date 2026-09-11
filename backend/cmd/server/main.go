@@ -27,6 +27,7 @@ import (
 	"github.com/seekersstudio/backend/internal/harness/compaction"
 	"github.com/seekersstudio/backend/internal/harness/instructions"
 	"github.com/seekersstudio/backend/internal/harness/skills"
+	"github.com/seekersstudio/backend/internal/notify"
 	"github.com/seekersstudio/backend/internal/orchestrator"
 	"github.com/seekersstudio/backend/internal/redroid"
 	"github.com/seekersstudio/backend/internal/store"
@@ -218,12 +219,18 @@ func main() {
 	exportHandler := api.NewExportHandler(s, api.LoadReleaseCipher(), workspaceDir, templateDir, filepath.Join(workspaceDir, "..", "exports"))
 	log.Printf("release export ready (keystores + submission bundles)")
 	triageHandler := api.NewTriageHandler(s)
-	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr, knowledge)
+	// E: push notifications. OneSignal when fully configured, the honest
+	// Noop otherwise; the subscriber resolver is the store's push-target
+	// lookup. Dark mode is named in the log, never silent.
+	pushNotifier := notify.Get(func(ctx context.Context, userID int64) (string, error) {
+		return s.GetOneSignalID(userID)
+	})
+	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr, knowledge, pushNotifier)
 	var warmPool *redroid.Pool
 	if warmPoolSize > 0 {
 		warmPool = redroid.NewPool(containerMgr, warmPoolSize)
 	}
-	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, relayAlloc, warmPool, workspaceDir, devClientMgr, walletMgr)
+	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, relayAlloc, warmPool, workspaceDir, devClientMgr, walletMgr, pushNotifier)
 
 	// DV4: the idle reaper. Devices nobody watches pause after 10 minutes
 	// and die after 30 — same teardown path as a user destroy, metering
@@ -231,6 +238,7 @@ func main() {
 	reaper := api.NewReaper(sessionHandler)
 	reaper.Start()
 	usageHandler := api.NewUsageHandler(s)
+	notificationHandler := api.NewNotificationHandler(s)
 	metricsHandler := api.NewMetricsHandler(s, containerMgr)
 	errorsHandler := api.NewErrorsHandler()
 	terminalHandler := ws.NewTerminalHandler(authSvc, s)
@@ -396,6 +404,13 @@ func main() {
 		r.Delete("/v1/sessions/{id}", sessionHandler.Destroy)
 
 		r.Get("/v1/usage", usageHandler.Get)
+
+		// E: notifications. The in-app history (every product notification,
+		// whether or not OneSignal is configured) and the device push-token
+		// registration. List/mark-read/read-state all require identity.
+		r.Get("/v1/notifications", notificationHandler.List)
+		r.Post("/v1/notifications/{id}/read", notificationHandler.MarkRead)
+		r.Post("/v1/users/push-token", notificationHandler.RegisterToken)
 
 		// Operational metrics in Prometheus format, same auth as everything
 		// else under /v1. Gauges read live sources at scrape time.

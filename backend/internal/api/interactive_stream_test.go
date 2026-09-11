@@ -101,7 +101,7 @@ func TestAskUserPausesThenAnswerResumes(t *testing.T) {
 	}
 
 	orch := orchestrator.New(aiClient, st, nil)
-	h := NewPromptHandler(st, aiClient, t.TempDir(), orch, nil, nil)
+	h := NewPromptHandler(st, aiClient, t.TempDir(), orch, nil, nil, nil)
 
 	// ── The build turn pauses on ask_user ─────────────────
 	streamBody := fmt.Sprintf(`{"project_id":%d,"prompt":"Build me a wallet screen","mode":"build"}`, project.ID)

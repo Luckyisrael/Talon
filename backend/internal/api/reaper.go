@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/seekersstudio/backend/internal/metro"
+	"github.com/seekersstudio/backend/internal/notify"
 	"github.com/seekersstudio/backend/internal/relay"
 )
 
@@ -103,6 +104,12 @@ func (r *Reaper) reap() {
 			if err := r.h.store.UpdateSessionContainerState(s.ID, "paused"); err != nil {
 				log.Printf("reaper: state update for %d failed: %v", s.ID, err)
 			}
+			// E: the session was paused for idleness — the owner should know
+			// their device went to sleep (it resumes on the next view).
+			if project, perr := r.h.store.GetProject(s.ProjectID); perr == nil {
+				r.h.notifyUser(project.UserID, notify.KindBuildPaused,
+					"Device paused", "Your device session was idle for 10 minutes and has been paused. Open the preview to resume it.")
+			}
 		}
 	}
 }
@@ -115,6 +122,15 @@ func (h *SessionHandler) reapDestroy(id int64) {
 	// spared: TouchSession moved its clock.
 	if s, err := h.store.GetSession(id); err != nil || s.State == "destroyed" {
 		return
+	}
+
+	// E: the destroy notice fires before the teardown — the owner learns
+	// their idle device was reclaimed (metered, per the one teardown law).
+	if session, err := h.store.GetSession(id); err == nil {
+		if project, perr := h.store.GetProject(session.ProjectID); perr == nil {
+			h.notifyUser(project.UserID, notify.KindBuildDestroy,
+				"Device session ended", "Your device was idle for 30 minutes and has been reclaimed. Device time used is on your bill.")
+		}
 	}
 
 	// Metering: identical to user-triggered destroy — reaper-destroyed

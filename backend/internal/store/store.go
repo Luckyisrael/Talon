@@ -529,6 +529,21 @@ func (s *Store) migrate() error {
 		UNIQUE (provider, provider_id)
 	)`)
 
+	// E: push notifications. onesignal_id is the user's registered device
+	// (OneSignal external id) — the push target. The notifications table is
+	// the in-app history: every Dispatch records here regardless of whether
+	// OneSignal is configured, so the surface is honest in both modes.
+	s.db.Exec("ALTER TABLE users ADD COLUMN onesignal_id TEXT DEFAULT ''")
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS notifications (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL REFERENCES users(id),
+		kind TEXT NOT NULL,
+		title TEXT DEFAULT '',
+		body TEXT DEFAULT '',
+		sent_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		read_at DATETIME
+	)`)
+
 	return nil
 }
 
@@ -1353,4 +1368,74 @@ func (s *Store) CountUsers() (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// ── Notifications (E) ───────────────────────────────────────────────────────
+
+// RecordNotification writes the in-app history row. It is called before any
+// push attempt so the surface is honest even when OneSignal is dark.
+func (s *Store) RecordNotification(userID int64, kind, title, body string) error {
+	_, err := s.db.Exec(
+		"INSERT INTO notifications (user_id, kind, title, body) VALUES (?, ?, ?, ?)",
+		userID, kind, title, body)
+	return err
+}
+
+// Notification is one in-app history row.
+type Notification struct {
+	ID        int64   `json:"id"`
+	Kind      string  `json:"kind"`
+	Title     string  `json:"title"`
+	Body      string  `json:"body"`
+	SentAt    string  `json:"sent_at"`
+	ReadAt    *string `json:"read_at"`
+}
+
+// ListNotifications returns the user's most recent notifications, newest
+// first, bounded.
+func (s *Store) ListNotifications(userID int64, limit int) ([]Notification, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := s.db.Query(
+		`SELECT id, kind, title, body, sent_at, read_at FROM notifications
+		 WHERE user_id = ? ORDER BY id DESC LIMIT ?`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Notification
+	for rows.Next() {
+		var n Notification
+		if err := rows.Scan(&n.ID, &n.Kind, &n.Title, &n.Body, &n.SentAt, &n.ReadAt); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// MarkNotificationRead stamps read_at once.
+func (s *Store) MarkNotificationRead(userID, id int64) error {
+	_, err := s.db.Exec(
+		"UPDATE notifications SET read_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND read_at IS NULL",
+		id, userID)
+	return err
+}
+
+// GetOneSignalID resolves the push target for a user ('' when the user has
+// not registered a device).
+func (s *Store) GetOneSignalID(userID int64) (string, error) {
+	var id string
+	err := s.db.QueryRow("SELECT onesignal_id FROM users WHERE id = ?", userID).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// SetOneSignalID stores the device subscription id for a user.
+func (s *Store) SetOneSignalID(userID int64, extID string) error {
+	_, err := s.db.Exec("UPDATE users SET onesignal_id = ? WHERE id = ?", extID, userID)
+	return err
 }

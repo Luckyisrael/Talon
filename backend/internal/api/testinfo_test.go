@@ -62,7 +62,7 @@ func TestTestInfoHonesty(t *testing.T) {
 func fetchTestInfo(t *testing.T, st *store.Store, u *store.User, projectID int64) testInfo {
 	t.Helper()
 	t.Setenv("PUBLIC_HOST", "localhost")
-	h := NewTestInfoHandler(NewPromptHandler(st, nil, t.TempDir(), nil, nil, nil), nil)
+	h := NewTestInfoHandler(NewPromptHandler(st, nil, t.TempDir(), nil, nil, nil, nil), nil)
 	req := authedRequest(u.ID, "")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("projectID", "1")

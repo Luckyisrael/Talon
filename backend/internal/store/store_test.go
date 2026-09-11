@@ -243,3 +243,65 @@ func TestRecordPromptTokensRollsUp(t *testing.T) {
 		t.Errorf("usage rollup wrong: in=%d out=%d want 150/60", uin, uout)
 	}
 }
+
+// ── Notifications (E) ───────────────────────────────────────────────────────
+
+func TestNotificationRecordAndList(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.UpsertOAuthUser("github", "9012", "notify@example.com", "Notify Test", "")
+	if err != nil {
+		t.Fatalf("UpsertOAuthUser: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := s.RecordNotification(u.ID, "build_success", "Build finished", "verified: true"); err != nil {
+			t.Fatalf("RecordNotification %d: %v", i, err)
+		}
+	}
+	items, err := s.ListNotifications(u.ID, 10)
+	if err != nil {
+		t.Fatalf("ListNotifications: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("rows = %d (want 3)", len(items))
+	}
+	// Newest first: the last recorded is the first listed.
+	if items[0].Title != "Build finished" || items[0].Kind != "build_success" {
+		t.Fatalf("first row = %+v", items[0])
+	}
+	if items[0].ReadAt != nil {
+		t.Fatal("a fresh notification is already read")
+	}
+
+	// Mark one read — exactly once.
+	if err := s.MarkNotificationRead(u.ID, items[0].ID); err != nil {
+		t.Fatalf("MarkNotificationRead: %v", err)
+	}
+	again, _ := s.ListNotifications(u.ID, 10)
+	if again[0].ReadAt == nil {
+		t.Fatal("read_at did not stamp")
+	}
+	if again[1].ReadAt != nil || again[2].ReadAt != nil {
+		t.Fatal("mark-read leaked to other rows")
+	}
+}
+
+func TestPushTokenRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.UpsertOAuthUser("github", "9013", "push@example.com", "Push Test", "")
+	if err != nil {
+		t.Fatalf("UpsertOAuthUser: %v", err)
+	}
+
+	id, err := s.GetOneSignalID(u.ID)
+	if err != nil || id != "" {
+		t.Fatalf("fresh user push target = %q, %v (want empty)", id, err)
+	}
+	if err := s.SetOneSignalID(u.ID, "os-ext-123"); err != nil {
+		t.Fatalf("SetOneSignalID: %v", err)
+	}
+	id, err = s.GetOneSignalID(u.ID)
+	if err != nil || id != "os-ext-123" {
+		t.Fatalf("push target after set = %q, %v", id, err)
+	}
+}
