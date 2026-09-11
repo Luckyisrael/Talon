@@ -1,15 +1,43 @@
 import React from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Badge, Card, GhostButton, Screen, SubtleCard, UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
+import { useActiveProject, useMe, useNotifications, useUsage } from '@/hooks';
+import { memoryApi } from '@/lib/api';
+import { clearToken } from '@/lib/auth';
+import { useQuery } from '@tanstack/react-query';
 
-const MEMORIES = [
-  { type: 'convention', text: 'Tip presets are [0.1, 0.5, 1.0] SOL — settled in plan.' },
-  { type: 'decision', text: 'No QR flow for v1 — camera dep deferred.' },
-  { type: 'warning', text: 'Never treat MWA base64 address as base58.' },
-];
+// More tab: usage (real cents), profile tier, project memory (what the
+// agent knows), notifications (E: OneSignal-backed in-app history), and
+// sign-out. No dummy meters, no seed memories.
 
 export default function MoreScreen() {
+  const router = useRouter();
+  const project = useActiveProject();
+  const projectId = project?.id ?? null;
+  const { data: usage } = useUsage();
+  const { data: me } = useMe();
+  const { data: notifications } = useNotifications();
+  const { data: memory } = useQuery({
+    queryKey: ['memory', projectId],
+    enabled: projectId != null,
+    queryFn: () => memoryApi.get(projectId!),
+  });
+
+  const used = usage?.used_cents ?? 0;
+  const limit = usage?.limit_cents ?? 1;
+  const pct = Math.max(0, Math.min(100, Math.round((used / limit) * 100)));
+  const usedDollars = (used / 100).toFixed(2);
+  const limitDollars = (limit / 100).toFixed(2);
+
+  const memories = memory?.memories ?? [];
+
+  async function signOut() {
+    await clearToken();
+    router.replace('/auth');
+  }
+
   return (
     <Screen topInset={false}>
       <View style={styles.head}>
@@ -21,37 +49,77 @@ export default function MoreScreen() {
             More
           </UIText>
         </View>
-        <Badge label="pro" tone="info" />
+        <Badge label={me?.tier ?? 'free'} tone="info" />
       </View>
 
       <ScrollView style={styles.stream} showsVerticalScrollIndicator={false}>
         <View style={styles.stack}>
-          {/* Usage meter: prompts + device minutes, dummy values. */}
+          {/* Usage meter: real cents from /v1/usage. */}
           <Card>
             <View style={styles.meterHead}>
               <UIText variant="title" tone="hero">
                 Usage
               </UIText>
               <UIText variant="monoSm" tone="muted">
-                12 / 200 prompts
+                ${usedDollars} / ${limitDollars}
               </UIText>
             </View>
             <View style={styles.bar}>
-              <View style={[styles.fill, { flex: 12 }]} />
-              <View style={{ flex: 188 }} />
+              <View style={[styles.fill, { flex: Math.max(pct, 1) }]} />
+              <View style={{ flex: Math.max(100 - pct, 1) }} />
             </View>
             <UIText variant="caption" tone="muted">
-              38 device minutes · resets in 21 days
+              billed per prompt — device minutes included
             </UIText>
           </Card>
+
+          {/* Identity: /v1/me is the truth the settings surface reads. */}
+          <Card>
+            <UIText variant="title" tone="hero">
+              {me?.email ?? 'Signed out'}
+            </UIText>
+            <UIText variant="bodySm" tone="muted">
+              {me?.name ? me.name : 'GitHub/Google identity'}
+            </UIText>
+          </Card>
+
+          {/* Notifications: the in-app history of what OneSignal pushed. */}
+          <UIText variant="title" tone="hero">
+            Notifications
+          </UIText>
+          {(notifications ?? []).length === 0 && (
+            <UIText variant="bodySm" tone="muted" style={styles.empty}>
+              Nothing yet — input-needed pauses and build finishes land here.
+            </UIText>
+          )}
+          {(notifications ?? []).map((n) => (
+            <SubtleCard key={n.id}>
+              <UIText variant="label" tone="faint" style={styles.memType}>
+                {n.kind.toUpperCase()}
+              </UIText>
+              <UIText variant="bodySm" tone="body" numberOfLines={4}>
+                {n.payload}
+              </UIText>
+            </SubtleCard>
+          ))}
 
           <UIText variant="title" tone="hero">
             Memory
           </UIText>
-          {MEMORIES.map((m, i) => (
-            <SubtleCard key={i}>
+          {projectId == null && (
+            <UIText variant="bodySm" tone="muted" style={styles.empty}>
+              No project — memory follows the active project.
+            </UIText>
+          )}
+          {projectId != null && memories.length === 0 && (
+            <UIText variant="bodySm" tone="muted" style={styles.empty}>
+              The agent has not written any memories for this project yet.
+            </UIText>
+          )}
+          {memories.map((m) => (
+            <SubtleCard key={m.id}>
               <UIText variant="label" tone="faint" style={styles.memType}>
-                {m.type.toUpperCase()}
+                {m.kind.toUpperCase()}
               </UIText>
               <UIText variant="bodySm" tone="body">
                 {m.text}
@@ -59,22 +127,7 @@ export default function MoreScreen() {
             </SubtleCard>
           ))}
 
-          <Card>
-            <View style={styles.export}>
-              <UIText variant="title" tone="hero">
-                Release export
-              </UIText>
-              <UIText variant="bodySm" tone="muted">
-                Signed release APK plus the dApp Store submission bundle. You submit with your own publisher wallet.
-              </UIText>
-              <GhostButton title="Start release build" onPress={() => {}} />
-              <UIText variant="caption" tone="faint">
-                Publishing costs real SOL (~0.2 for fees + storage).
-              </UIText>
-            </View>
-          </Card>
-
-          <GhostButton title="Sign out" onPress={() => {}} />
+          <GhostButton title="Sign out" onPress={signOut} />
         </View>
       </ScrollView>
     </Screen>
@@ -107,5 +160,5 @@ const styles = StyleSheet.create({
   },
   fill: { backgroundColor: Colors.acidLime, borderRadius: 3 },
   memType: { marginBottom: 2 },
-  export: { gap: Spacing.s12 },
+  empty: { textAlign: 'center', paddingVertical: Spacing.s8 },
 });

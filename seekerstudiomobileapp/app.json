@@ -40,7 +40,13 @@
         }
       ],
       "expo-web-browser",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "onesignal-expo-plugin",
+        {
+          "mode": "production"
+        }
+      ]
     ],
     "experiments": {
       "reactCompiler": true,

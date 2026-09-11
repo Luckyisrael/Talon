@@ -5,139 +5,179 @@ import { TraceRow } from '@/components/build/TraceRow';
 import { PixelGrid } from '@/components/build/PixelGrid';
 import { QuestionCard } from '@/components/build/QuestionCard';
 import { Colors, Spacing } from '@/constants/theme';
+import { useActiveProject, usePromptStream } from '@/hooks';
+import type { PlanTask } from '@/lib/api';
+
+// The build tab drives the real prompt stream: send a plan/build prompt,
+// watch tool calls and task updates land live, answer ask_user pauses
+// through the product's own answer endpoint. No echoes, no seed rows.
+
+const TOOL_LABELS: Record<string, { label: string; target?: string }> = {
+  write_file: { label: 'Wrote' },
+  read_file: { label: 'Read' },
+  run_typecheck: { label: 'Checked', target: 'run_typecheck' },
+  run_lint: { label: 'Linted', target: 'run_lint' },
+  run_bundle: { label: 'Bundled', target: 'run_bundle' },
+  build_apk: { label: 'Assembling', target: 'run_gradle' },
+  run_boot: { label: 'Booted', target: 'run_boot' },
+  run_vision: { label: 'Reviewed', target: 'run_vision' },
+  run_interact: { label: 'Reached', target: 'run_interact' },
+  run_shell: { label: 'Probing' },
+  read_skill: { label: 'Consulted skill' },
+  explore: { label: 'Exploring' },
+};
+
+function toolRow(name: string) {
+  const base = name.startsWith('Reading ')
+    ? { label: 'Read', target: name.slice(8) }
+    : name.startsWith('Probing ')
+      ? { label: 'Probing', target: name.slice(8) }
+      : name.startsWith('Consulting ')
+        ? { label: 'Consulted skill', target: name.slice(11) }
+        : name.startsWith('Wrote ')
+          ? { label: 'Wrote', target: name.slice(6) }
+          : TOOL_LABELS[name.split(' ')[0]] ?? { label: name };
+  return base;
+}
 
 export default function BuildScreen() {
+  const project = useActiveProject();
+  const projectId = project?.id ?? null;
+  const { turn, send, answer, stop } = usePromptStream(projectId);
   const [draft, setDraft] = React.useState('');
-  const [echoes, setEchoes] = React.useState<string[]>([]);
+  const [mode, setMode] = React.useState<'plan' | 'build'>('build');
   const [answers, setAnswers] = React.useState<string[]>([]);
+
+  const busy = turn.phase === 'streaming';
+
+  function submit() {
+    const text = draft.trim();
+    if (!text || projectId == null) return;
+    setDraft('');
+    setAnswers([]);
+    send(mode, text);
+  }
 
   return (
     <Screen topInset={false}>
-      {/* Status header: eyebrow + project + partial-verified line */}
       <View style={styles.head}>
         <UIText variant="micro" tone="faint">
-          BUILD 42 · ROUND 7
+          {project ? `${project.name.toUpperCase()} · ${mode.toUpperCase()} MODE` : 'BUILD'}
         </UIText>
-        <UIText variant="heading" tone="hero">
-          Demo App
-        </UIText>
-        <UIText variant="bodySm" tone="faint" style={{ color: Colors.amber }}>
-          verified (static only — boot, vision could not run)
-        </UIText>
+        <View style={styles.titleRow}>
+          <UIText variant="heading" tone="hero" style={styles.title}>
+            {project ? project.name : 'No project'}
+          </UIText>
+          <View style={styles.modeSwitch}>
+            {(['plan', 'build'] as const).map((m) => (
+              <UIText
+                key={m}
+                variant="label"
+                tone={mode === m ? 'hero' : 'faint'}
+                style={[styles.modeTab, mode === m && styles.modeTabOn]}
+                onPress={() => setMode(m)}
+              >
+                {m.toUpperCase()}
+              </UIText>
+            ))}
+          </View>
+        </View>
+        {turn.phase === 'done' && (
+          <UIText variant="bodySm" tone="faint">
+            turn finished
+          </UIText>
+        )}
+        {turn.phase === 'error' && (
+          <UIText variant="bodySm" tone="faint" style={{ color: Colors.coralRed }}>
+            {turn.error}
+          </UIText>
+        )}
       </View>
 
       <ScrollView style={styles.stream} showsVerticalScrollIndicator={false}>
         <View style={styles.stack}>
-          <TraceRow
-            tool="write_file"
-            label="Wrote"
-            target="app/(tabs)/tip.tsx"
-            summary="312 lines · wallet connect + presets + history"
-            status="done"
-          />
-          <TraceRow
-            tool="run_typecheck"
-            label="Checked"
-            target="run_typecheck"
-            summary="tsc --noEmit · 0 errors"
-            status="done"
-          />
-          <TraceRow
-            tool="read_skill"
-            label="Consulted skill"
-            target="wallet-mwa"
-            status="done"
-          />
-          <TraceRow
-            tool="explore"
-            label="Probing"
-            target="@solana/kit"
-            status="running"
-          />
-          <TraceRow
-            tool="run_typecheck"
-            label="Checked"
-            target="run_typecheck"
-            summary="tsc --noEmit · 0 errors"
-            status="done"
-          />
-          <TraceRow
-            tool="run_lint"
-            label="Linted"
-            target="run_lint"
-            summary="eslint · 0 problems"
-            status="done"
-          />
-          <TraceRow
-            tool="run_bundle"
-            label="Bundled"
-            target="run_bundle"
-            summary="expo export · 182 KB in 4.1s"
-            status="done"
-          />
-          <TraceRow
-            tool="build_apk"
-            label="Assembling"
-            target="run_gradle"
-            summary=":app:assembleDebug · 45/828 tasks"
-            status="running"
-          />
-          <TraceRow
-            tool="run_boot"
-            label="Booted"
-            target="run_boot"
-            summary="pid 2780 · first log after 1.1s"
-            status="done"
-          />
-          <TraceRow
-            tool="run_vision"
-            label="Reviewed"
-            target="run_vision"
-            status="running"
-          />
-          <TraceRow
-            tool="run_interact"
-            label="Reached"
-            target="run_interact"
-            summary="/watch · tap landed"
-            status="done"
-          />
-          <QuestionCard
-            question="Gradle needs ~13 minutes cold. Build the APK and install it on the device now?"
-            choices={['Build + install', 'Code only for now']}
-            onAnswer={(a) => setAnswers((prev) => [...prev, a])}
-          />
+          {turn.phase === 'idle' && (
+            <UIText variant="body" tone="muted" style={styles.empty}>
+              {projectId == null
+                ? 'No project yet — create one to start building.'
+                : 'Describe what you want. The agent plans, writes files, and verifies on the device.'}
+            </UIText>
+          )}
+
+          {/* Live task updates — the plan shape the agent is working to. */}
+          {turn.tasks.map((t: PlanTask) => (
+            <View key={t.id} style={styles.taskRow}>
+              <View style={[styles.taskBox, t.status === 'completed' && styles.taskBoxDone]}>
+                {t.status === 'completed' && <UIText style={styles.tick}>✓</UIText>}
+              </View>
+              <View style={styles.taskText}>
+                <UIText variant="bodySm" tone={t.status === 'completed' ? 'faint' : 'hero'}>
+                  {t.description}
+                </UIText>
+                {!!t.result && (
+                  <UIText variant="caption" tone="muted" numberOfLines={3}>
+                    {t.result}
+                  </UIText>
+                )}
+              </View>
+            </View>
+          ))}
+
+          {/* The live tool trace. */}
+          {turn.toolCalls.map((c, i) => {
+            const meta = toolRow(c.name);
+            return (
+              <TraceRow
+                key={i}
+                tool={c.name.split(' ')[0]}
+                label={meta.label}
+                target={meta.target ?? c.name}
+                status={c.status === 'completed' ? 'done' : c.status === 'error' ? 'fail' : 'running'}
+              />
+            );
+          })}
+
+          {/* The ask_user pause — the negotiation-first law, mobile side. */}
+          {turn.phase === 'waiting' && turn.question && (
+            <QuestionCard
+              question={turn.question}
+              choices={['Yes, proceed', 'No, stop']}
+              onAnswer={(a) => {
+                setAnswers((prev) => [...prev, a]);
+                answer(a);
+              }}
+            />
+          )}
           {answers.map((a, i) => (
             <UIText key={i} variant="caption" tone="faint">
-              → answered: {a} (dummy)
+              → answered: {a}
             </UIText>
           ))}
-          <PixelGrid label="Working" variant="Drive" />
-          {echoes.map((e, i) => (
-            <UIText key={i} variant="body" tone="hero" style={styles.echo}>
-              {e}
+
+          {/* The assistant's streamed text. */}
+          {turn.text !== '' && (
+            <UIText variant="body" tone="hero" style={styles.echo}>
+              {turn.text}
             </UIText>
-          ))}
+          )}
+
+          {busy && <PixelGrid label="Working" variant="Drive" />}
         </View>
       </ScrollView>
 
-      {/* Composer: local echo only (no API calls in Phase 2) */}
       <View style={styles.composer}>
         <Field
           value={draft}
           onChangeText={setDraft}
-          placeholder="Tell the agent what to do…"
+          placeholder={projectId == null ? 'Create a project first…' : 'Tell the agent what to do…'}
           multiline
           style={styles.input}
         />
         <LimeButton
-          title="Send"
+          title={busy ? 'Stop' : 'Send'}
           style={styles.send}
-          disabled={!draft.trim()}
-          onPress={() => {
-            setEchoes((prev) => [...prev, draft.trim()]);
-            setDraft('');
-          }}
+          disabled={!busy && (!draft.trim() || projectId == null)}
+          onPress={busy ? stop : submit}
         />
       </View>
     </Screen>
@@ -146,8 +186,33 @@ export default function BuildScreen() {
 
 const styles = StyleSheet.create({
   head: { gap: 8, marginBottom: Spacing.s4 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  title: { flexShrink: 1 },
+  modeSwitch: { flexDirection: 'row', gap: Spacing.s8 },
+  modeTab: { paddingHorizontal: 8, paddingVertical: 4 },
+  modeTabOn: {
+    color: Colors.acidLime,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.acidLime,
+    borderRadius: 4,
+  },
   stream: { flex: 1, marginTop: Spacing.s12 },
   stack: { gap: Spacing.s12, paddingBottom: Spacing.s16 },
+  empty: { textAlign: 'center', paddingVertical: Spacing.s16 },
+  taskRow: { flexDirection: 'row', gap: Spacing.s12, minHeight: 40 },
+  taskBox: {
+    width: 20,
+    height: 20,
+    marginTop: 2,
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.graphite,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskBoxDone: { backgroundColor: Colors.acidLime, borderColor: Colors.acidLime },
+  tick: { color: Colors.acidLimeInk, fontSize: 13, fontWeight: '700', lineHeight: 16 },
+  taskText: { flex: 1 },
   echo: {
     backgroundColor: 'rgba(228,242,34,0.08)',
     borderRadius: 6,

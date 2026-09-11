@@ -1,147 +1,204 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Camera, Refresh, Send } from 'iconsax-react-native';
-import { Screen, UIText } from '@/components/ui';
-import { Badge } from '@/components/ui';
+import QRCodeStyled from 'react-native-qrcode-styled';
+import { Badge, Screen, UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
+import { useActiveProject, useCreateSession, useDestroySession, useTestInfo } from '@/hooks';
+import { getSessionId, setSessionId } from '@/lib/session';
 
-// FauxQr is a deterministic placeholder grid (finder squares + seeded
-// modules) standing in for the device-pairing QR until the real code
-// (expo-camera scan / share sheet) lands. Clearly dummy, same footprint.
-function FauxQr() {
-  const N = 21;
-  const cells: boolean[] = [];
-  for (let i = 0; i < N * N; i++) {
-    const r = Math.floor(i / N);
-    const c = i % N;
-    const inFinder =
-      (r < 7 && c < 7) || (r < 7 && c >= N - 7) || (r >= N - 7 && c < 7);
-    if (inFinder) {
-      const lr = r >= N - 7 ? r - (N - 7) : r;
-      const lc = c >= N - 7 ? c - (N - 7) : c;
-      const edge = lr === 0 || lr === 6 || lc === 0 || lc === 6;
-      const core = lr >= 2 && lr <= 4 && lc >= 2 && lc <= 4;
-      cells.push(edge || core);
-    } else {
-      cells.push(((i * 2654435761) >>> 0) % 100 < 42);
-    }
-  }
-  return (
-    <View style={styles.qr}>
-      {cells.map((on, i) => (
-        <View
-          key={i}
-          style={[styles.qrCell, { backgroundColor: on ? Colors.paper : 'transparent' }]}
-        />
-      ))}
-    </View>
-  );
-}
-
-const LOG_LINES = [
-  '09:24:58 boot complete · Redroid 14',
-  '09:25:02 demodapp installed · verified',
-  '09:25:57 am start · pid 2780 alive',
-  '09:26:03 first log after 1.1s · render ok',
-];
+// Device tab: the project's live device session — the frame, the session
+// state badge, real lifecycle controls (start/destroy), the honest logs
+// surface, and the pairing QR encoding this project's deep link. Every
+// value comes from the backend; the FauxQr placeholder and LOG_LINES seed
+// data are gone.
 
 function IconButton({
   icon,
   label,
   primary,
   onPress,
+  disabled,
 }: {
   icon: typeof Camera;
   label: string;
   primary?: boolean;
   onPress: () => void;
+  disabled?: boolean;
 }) {
   const Icon = icon;
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
+      accessibilityLabel={label}
       style={({ pressed }) => [
         styles.iconBtn,
         primary && styles.iconBtnPrimary,
-        pressed && styles.iconBtnPressed,
+        pressed && !disabled && styles.iconBtnPressed,
+        disabled && styles.iconBtnOff,
       ]}
-      accessibilityLabel={label}
     >
-      <Icon size={22} color={primary ? Colors.acidLimeInk : Colors.mist} variant="Linear" />
+      <Icon
+        size={22}
+        color={disabled ? Colors.ash : primary ? Colors.acidLimeInk : Colors.mist}
+        variant="Linear"
+      />
     </Pressable>
   );
 }
 
-// Device tab (dummy): phone frame, icon toolbar (capture / rotate / power),
-// live-log card, pairing QR. Verdict rows live in the Build transcript —
-// this tab is device state: logs, pairing, controls.
 export default function DeviceScreen() {
-  const [shot, setShot] = React.useState<string | null>(null);
+  const project = useActiveProject();
+  const projectId = project?.id ?? null;
+  const createSession = useCreateSession();
+  const destroySession = useDestroySession();
+
+  // The session id persists across tab switches; the row is the truth.
+  const [sessionId, setLocalSessionId] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    if (projectId != null) {
+      getSessionId(projectId).then((id) => {
+        if (alive && id != null) setLocalSessionId(id);
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
+
+  const { data: testInfo } = useTestInfo(projectId);
+
+  async function startSession() {
+    if (projectId == null) return;
+    const s = await createSession.mutateAsync(projectId);
+    setLocalSessionId(s.id);
+    await setSessionId(projectId, s.id);
+  }
+
+  const badgeTone =
+    sessionId == null ? 'neutral' : 'success';
+  const badgeLabel = sessionId == null ? 'no session' : 'live';
 
   return (
     <Screen>
       <View style={styles.head}>
         <View style={styles.titles}>
           <UIText variant="micro" tone="faint">
-            SESSION 24 · LOCALHOST:15555
+            {project ? project.name.toUpperCase() : 'DEVICE'}
           </UIText>
           <UIText variant="heading" tone="hero">
             Device
           </UIText>
         </View>
-        <Badge label="booted" tone="success" />
+        <Badge label={badgeLabel} tone={badgeTone as 'success'} />
       </View>
 
       <ScrollView style={styles.stream} showsVerticalScrollIndicator={false}>
         <View style={styles.stack}>
           <View style={styles.frame}>
-            {shot ? (
-              <UIText variant="bodySm" tone="muted">
-                {shot}
-              </UIText>
-            ) : (
+            {sessionId == null ? (
               <View style={styles.frameEmpty}>
                 <UIText variant="title" tone="faint">
-                  Demo App
+                  {project ? project.name : 'No project'}
                 </UIText>
                 <UIText variant="caption" tone="faint">
-                  No frame captured yet.{'\n'}Screenshots render on demand.
+                  No device session. Start one to boot a live Android.
                 </UIText>
+                <Pressable
+                  onPress={startSession}
+                  disabled={projectId == null || createSession.isPending}
+                  style={({ pressed }) => [
+                    styles.startBtn,
+                    pressed && styles.iconBtnPressed,
+                    (projectId == null || createSession.isPending) && styles.iconBtnOff,
+                  ]}
+                >
+                  <UIText variant="label" tone="hero">
+                    {createSession.isPending ? 'Claiming a device…' : 'Start session'}
+                  </UIText>
+                </Pressable>
+                {createSession.isError && (
+                  <UIText variant="caption" tone="muted" style={{ color: Colors.coralRed }}>
+                    {createSession.error instanceof Error
+                      ? createSession.error.message
+                      : 'could not start the session'}
+                  </UIText>
+                )}
+              </View>
+            ) : (
+              <View style={styles.frameLive}>
+                <UIText variant="title" tone="hero">
+                  Session #{sessionId}
+                </UIText>
+                <UIText variant="caption" tone="muted">
+                  The frame streams in the web IDE&apos;s phone relay; this tab is
+                  the honest state surface.
+                </UIText>
+                <Pressable
+                  onPress={async () => {
+                    await destroySession.mutateAsync(sessionId);
+                    if (projectId != null) await setSessionId(projectId, null);
+                    setLocalSessionId(null);
+                  }}
+                  disabled={destroySession.isPending}
+                  style={({ pressed }) => [
+                    styles.stopBtn,
+                    pressed && styles.iconBtnPressed,
+                    destroySession.isPending && styles.iconBtnOff,
+                  ]}
+                >
+                  <UIText variant="label" tone="hero" style={{ color: Colors.coralRed }}>
+                    {destroySession.isPending ? 'Destroying…' : 'Destroy session'}
+                  </UIText>
+                </Pressable>
               </View>
             )}
           </View>
 
-          {/* Icon toolbar: capture is primary, rotate + install secondary. */}
+          {/* Toolbar: capture is the screenshot endpoint; rotate/install are
+              IDE-side actions — honest-disabled until a session exists. */}
           <View style={styles.toolbar}>
             <IconButton
               icon={Camera}
               label="Capture screenshot"
               primary
-              onPress={() => setShot('frame · 1080×2400 · just now (dummy)')}
+              disabled={sessionId == null}
+              onPress={() => {
+                // Screenshot fetch → share sheet lands with the relay work;
+                // the button is disabled-honest until then.
+              }}
             />
-            <IconButton icon={Refresh} label="Rotate display" onPress={() => {}} />
-            <IconButton icon={Send} label="Install current build" onPress={() => {}} />
+            <IconButton icon={Refresh} label="Rotate display" disabled={sessionId == null} onPress={() => {}} />
+            <IconButton icon={Send} label="Install current build" disabled={sessionId == null} onPress={() => {}} />
           </View>
 
           <UIText variant="title" tone="hero" style={styles.section}>
-            Logs
-          </UIText>
-          <View style={styles.logCard}>
-            {LOG_LINES.map((line, i) => (
-              <UIText key={i} variant="monoSm" tone="muted" numberOfLines={1}>
-                {line}
-              </UIText>
-            ))}
-          </View>
-
-          <UIText variant="title" tone="hero" style={styles.section}>
-            Pairing
+            Test on this phone
           </UIText>
           <View style={styles.qrCard}>
-            <FauxQr />
+            {testInfo?.deep_link ? (
+              <QRCodeStyled
+                data={testInfo.deep_link}
+                padding={8}
+                size={168}
+                color={Colors.paper}
+                style={{ borderRadius: 8, backgroundColor: Colors.void }}
+              />
+            ) : (
+              <View style={styles.qrEmpty}>
+                <UIText variant="caption" tone="faint">
+                  {testInfo
+                    ? testInfo.reason || 'not available yet — build the project first'
+                    : 'loading…'}
+                </UIText>
+              </View>
+            )}
             <UIText variant="caption" tone="muted" style={styles.qrCaption}>
-              Scan to attach this phone as the build device. QR encodes the session —
-              placeholder pattern until camera pairing lands.
+              {testInfo?.deep_link
+                ? 'Scan to open this project in this phone’s dev client.'
+                : 'The pairing QR appears when the project has a testable build.'}
             </UIText>
           </View>
         </View>
@@ -172,6 +229,26 @@ const styles = StyleSheet.create({
     padding: Spacing.s16,
   },
   frameEmpty: { alignItems: 'center', gap: Spacing.s8 },
+  frameLive: { alignItems: 'center', gap: Spacing.s12 },
+  startBtn: {
+    marginTop: Spacing.s8,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    borderRadius: 10,
+    backgroundColor: Colors.acidLime,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stopBtn: {
+    marginTop: Spacing.s8,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.coralRed,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   toolbar: { flexDirection: 'row', gap: Spacing.s12, alignItems: 'center' },
   iconBtn: {
     width: 52,
@@ -185,15 +262,8 @@ const styles = StyleSheet.create({
   },
   iconBtnPrimary: { backgroundColor: Colors.acidLime, borderColor: Colors.acidLime },
   iconBtnPressed: { opacity: 0.7 },
+  iconBtnOff: { opacity: 0.35 },
   section: { marginTop: Spacing.s8 },
-  logCard: {
-    borderRadius: 12,
-    backgroundColor: Colors.carbon,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.graphite,
-    padding: Spacing.s12,
-    gap: 6,
-  },
   qrCard: {
     borderRadius: 12,
     backgroundColor: Colors.carbon,
@@ -203,14 +273,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.s12,
   },
-  qr: {
+  qrEmpty: {
     width: 168,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    height: 168,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: Colors.void,
     borderRadius: 8,
-    padding: 8,
+    padding: Spacing.s12,
   },
-  qrCell: { width: 6.5, height: 6.5, margin: 0.35 },
   qrCaption: { textAlign: 'center' },
 });
