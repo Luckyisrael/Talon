@@ -208,9 +208,6 @@ func (s *Store) migrate() error {
 			ended_at DATETIME,
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
-		// DV4: the idle reaper's clock. Fresh sessions default to their
-		// start time — a session never touched starts idle.
-		`ALTER TABLE sessions ADD COLUMN last_active_at DATETIME DEFAULT CURRENT_TIMESTAMP`,
 		`CREATE TABLE IF NOT EXISTS usage (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id INTEGER NOT NULL,
