@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/auth"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/auth"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // OAuthAuthHandler serves the sign-in flow. It is deliberately separate

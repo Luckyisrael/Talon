@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	gbuild "github.com/seekersstudio/backend/internal/build"
-	sdk "github.com/seekersstudio/backend/internal/sdk"
-	"github.com/seekersstudio/backend/internal/store"
+	gbuild "github.com/luckyisrael/talon/backend/internal/build"
+	sdk "github.com/luckyisrael/talon/backend/internal/sdk"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // Builder runs isolated release builds: a scratch copy of the workspace gets

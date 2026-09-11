@@ -59,7 +59,7 @@ What I verified before writing this (not assumed):
   buttons, dummy handlers) — the mobile side aligns naturally.
 - gitremote has a complete GitHub OAuth pattern to follow: env-gated
   config, state tokens, public callback route.
-- The template app's Android id is `com.seekerstudio.app`; the dev-client
+- The template app's Android id is `com.talon.app`; the dev-client
   APK (271MB, built) is the same package with expo-dev-client — the
   Maestro flow's `appId` target.
 - Mobile app state: tanstack/react-query 5.90 is installed with a
@@ -88,7 +88,7 @@ The agent has a live device loop it doesn't know about. It learns it.
     not *whether it compiled*.
   - `tail_logcat` when something crashes at runtime.
   - `run_e2e`: author short flows under `.maestro/flows/` (launch + one
-    assertion; `appId: com.seekerstudio.app`), then run them. E2E is part
+    assertion; `appId: com.talon.app`), then run them. E2E is part
     of finishing, not an extra.
   - Session facts the user experiences: the device pauses after 10 idle
     minutes and is destroyed after 30; the preview badge explains it.
@@ -137,7 +137,7 @@ prerequisites), then a repeatable harness drives the real product.
 
 **C0 — clean slate (approved): fresh project, previous 22 workspaces gone.**
 - `workspaces/` currently holds 22 project dirs (17–38, 1.3 GB, git-ignored)
-  plus the dev DB `backend/seekersstudio.db` that references them.
+  plus the dev DB `backend/talon.db` that references them.
 - Before deletion: `tar czf backups/pre-e2e-<timestamp>.tar.gz` of
   `workspaces/` + the dev DB (backups/ added to .gitignore — 1.3 GB never
   enters git). Then `rm -rf workspaces/*` and archive-move the dev DB.
@@ -188,7 +188,7 @@ template, real APKs. It walks the product exactly as a user does:
    `run_boot`, `capture_screenshot` (+ vision), `tail_logcat`,
    `test_wallet_roundtrip` (mock wallet installs at session create),
    and `run_e2e` with an **agent-authored** Maestro flow (appId
-   `com.seekerstudio.app`) — the driver asserts each verdict from the
+   `com.talon.app`) — the driver asserts each verdict from the
    trace, and asserts the *redbox path* by a deliberate broken edit
    (agent told to introduce a syntax error, watch `metro_status` classify
    it, fix it).

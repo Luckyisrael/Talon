@@ -6,12 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/build"
-	"github.com/seekersstudio/backend/internal/events"
-	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
-	"github.com/seekersstudio/backend/internal/knowledge"
-	"github.com/seekersstudio/backend/internal/runtime"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/build"
+	"github.com/luckyisrael/talon/backend/internal/events"
+	harnessagent "github.com/luckyisrael/talon/backend/internal/harness/agent"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/runtime"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 type Phase string

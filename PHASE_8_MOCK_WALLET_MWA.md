@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 8: Mock Wallet & MWA Testing Pipeline
+# Talon — Phase 8: Mock Wallet & MWA Testing Pipeline
 
 **Objective:** Every session must start with a working Mobile Wallet Adapter test wallet already installed and configured — never a manual, one-off install performed after the fact. Generated apps must be able to complete a genuine end-to-end wallet connection and signing round trip, automatically, in every session, from a clean environment.
 
@@ -45,7 +45,7 @@ Because Phase 4 already guarantees one container per session, this phase must sp
 ### 2.6 A full connect-to-sign round trip must genuinely work
 The pipeline is only considered functional when a generated app can: initiate a wallet connection, have the mock wallet present an approval prompt, and receive a valid signed transaction or signed message back in the generated app. Partial success — a connection that succeeds while signing silently fails, for example — does not count as working.
 
-The same monorepo also contains `fakedapp` (`android/fakedapp`), Solana Mobile's own reference dapp built specifically to exercise `fakewallet`'s full protocol surface. Use it as a known-good baseline when verifying this round trip — if `fakedapp` completes the connect-to-sign flow against a baked `fakewallet` instance but a SeekerStudio-generated app doesn't, that isolates the problem to the generated app or its MWA integration rather than the wallet pipeline itself.
+The same monorepo also contains `fakedapp` (`android/fakedapp`), Solana Mobile's own reference dapp built specifically to exercise `fakewallet`'s full protocol surface. Use it as a known-good baseline when verifying this round trip — if `fakedapp` completes the connect-to-sign flow against a baked `fakewallet` instance but a Talon-generated app doesn't, that isolates the problem to the generated app or its MWA integration rather than the wallet pipeline itself.
 
 ### 2.7 The AI must know Seed Vault cannot be tested here
 Because Seed Vault is real-hardware-only, this must be encoded as a fact the AI's generation context is aware of, not left to be discovered by trial and error. Generated apps should default to MWA-based flows for anything this platform can actually verify before real hardware is involved, and any Seed Vault-specific code the AI produces must be understood — by the AI and by the user — as unverified, not something this pipeline confirms works.

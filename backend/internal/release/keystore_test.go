@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/secrets"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/secrets"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 func testCipher(t *testing.T) *secrets.Cipher {

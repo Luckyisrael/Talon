@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/seekersstudio/backend/internal/identity"
+	"github.com/luckyisrael/talon/backend/internal/identity"
 )
 
 // protectedFiles are template-managed configuration files. Overwriting

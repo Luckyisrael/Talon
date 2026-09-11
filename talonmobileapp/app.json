@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "SeekerStudioMobileApp",
-    "slug": "SeekerStudioMobileApp",
+    "name": "TalonMobileApp",
+    "slug": "TalonMobileApp",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -18,7 +18,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.seeker_studio_mobile_app"
+      "package": "com.anonymous.talonmobileapp"
     },
     "web": {
       "output": "static",

@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND="$ROOT/backend"
 WORKSPACES="$BACKEND/workspaces-e2e"
-DB="$BACKEND/seekersstudio-e2e.db"
+DB="$BACKEND/talon-e2e.db"
 PORT="${E2E_PORT:-8099}"
 BASE="http://127.0.0.1:$PORT"
 MAESTRO_HOME="$(mktemp -d /tmp/maestro-home.XXXXXX)"
@@ -32,7 +32,7 @@ need() { # name, found?
   if [ "$2" = "1" ]; then echo "  ✓ $1"; else echo "  ✗ $1 — MISSING"; fail=1; fi
 }
 docker info >/dev/null 2>&1 && need "docker daemon" 1 || need "docker daemon" 0
-docker image inspect seeker-redroid:latest >/dev/null 2>&1 && need "seeker-redroid image" 1 || need "seeker-redroid image" 0
+docker image inspect talon-redroid:latest >/dev/null 2>&1 && need "talon-redroid image" 1 || need "talon-redroid image" 0
 [ -x "$ROOT/.tools/maestro/bin/maestro" ] && need "maestro (vendored 2.10.0)" 1 || need "maestro" 0
 [ -f "$BACKEND/scrcpy-server.jar" ] && need "scrcpy-server.jar (v2.1.1)" 1 || need "scrcpy-server.jar" 0
 command -v adb >/dev/null && need "adb" 1 || need "adb" 0

@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
 )
 
 // Provider is one source of skills. Load returns the source's skills; an
@@ -61,7 +61,7 @@ func (p EmbeddedProvider) Load() ([]knowledge.Skill, error) {
 }
 
 // FSProvider reads workspace-authored skills:
-// <root>/.seeker/skills/<name>/SKILL.md with the same front-matter format as
+// <root>/.talon/skills/<name>/SKILL.md with the same front-matter format as
 // embedded skills. A workspace without the directory contributes nothing —
 // absence is normal, not an error.
 type FSProvider struct {
@@ -72,7 +72,7 @@ type FSProvider struct {
 func (p FSProvider) Name() string { return "workspace" }
 
 func (p FSProvider) Load() ([]knowledge.Skill, error) {
-	dir := filepath.Join(p.Root, ".seeker", "skills")
+	dir := filepath.Join(p.Root, ".talon", "skills")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

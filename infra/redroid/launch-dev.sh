@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================
-# SeekerStudio — Launch Redroid Dev Container
+# Talon — Launch Redroid Dev Container
 #
-# Uses the pre-baked seeker-redroid image with APKs included.
+# Uses the pre-baked talon-redroid image with APKs included.
 # Installs APKs + sets PIN via ADB after boot.
 #
 # Usage: bash infra/redroid/launch-dev.sh
@@ -10,24 +10,24 @@
 
 set -euo pipefail
 
-CONTAINER_NAME="seeker-dev"
-IMAGE_NAME="seeker-redroid:latest"
+CONTAINER_NAME="talon-dev"
+IMAGE_NAME="talon-redroid:latest"
 DEVICE_PIN="1234"
 ADB_PORT=6555
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-echo "=== SeekerStudio: Launch Redroid Dev Container ==="
+echo "=== Talon: Launch Redroid Dev Container ==="
 
 # Step 1: Stop existing containers
 echo ""
 echo "--- Cleaning up existing containers ---"
-docker ps -a | grep seeker | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+docker ps -a | grep talon | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
 
 # Step 2: Build image if it doesn't exist
 if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
     echo "--- Building $IMAGE_NAME ---"
-    docker build -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Dockerfile.seeker" "$REPO_ROOT"
+    docker build -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Dockerfile.talon" "$REPO_ROOT"
 fi
 
 # Step 3: Launch container
@@ -105,7 +105,7 @@ adb -s "localhost:$ADB_PORT" shell "input keyevent 82" 2>&1
 # Step 10: Verify
 echo ""
 echo "--- Verifying installations ---"
-PACKAGES=$(adb -s "localhost:$ADB_PORT" shell "pm list packages" 2>/dev/null | grep -iE "fake|seeker" || true)
+PACKAGES=$(adb -s "localhost:$ADB_PORT" shell "pm list packages" 2>/dev/null | grep -iE "fake|talon" || true)
 if [ -n "$PACKAGES" ]; then
     echo "$PACKAGES" | sed 's/^/  /'
 else

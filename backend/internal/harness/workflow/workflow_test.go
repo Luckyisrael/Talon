@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/harness/subagent"
+	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
 )
 
 // stubRunner serves children canned results by prompt substring.

@@ -5,7 +5,7 @@ import { MarketingNav, MarketingFooter } from "@/components/marketing";
 export const metadata: Metadata = {
   title: "Terms",
   description:
-    "The terms for using SeekerStudio — accounts, acceptable use, AI-generated code, and on-chain responsibility.",
+    "The terms for using Talon — accounts, acceptable use, AI-generated code, and on-chain responsibility.",
 };
 
 const LAST_UPDATED = "August 2026";
@@ -27,7 +27,7 @@ export default function TermsPage() {
         <div className="space-y-10">
           <section>
             <p className="text-sm text-fog leading-relaxed">
-              By using SeekerStudio you agree to these terms. They are meant to be readable — the
+              By using Talon you agree to these terms. They are meant to be readable — the
               short version is: build responsibly, review what the agent writes, and you own your
               keys.
             </p>
@@ -36,7 +36,7 @@ export default function TermsPage() {
           <section>
             <h2 className="text-[15px] font-medium text-paper mb-3">The service</h2>
             <p className="text-sm text-fog leading-relaxed">
-              SeekerStudio is a browser IDE that uses an AI agent to generate React Native apps,
+              Talon is a browser IDE that uses an AI agent to generate React Native apps,
               run them on a virtual Solana Seeker device, and build installable APKs. Features and
               quotas may change as the product evolves.
             </p>
@@ -73,7 +73,7 @@ export default function TermsPage() {
           <section>
             <h2 className="text-[15px] font-medium text-paper mb-3">Wallets and on-chain actions</h2>
             <p className="text-sm text-fog leading-relaxed">
-              SeekerStudio never holds your keys. Wallet connections go through the Mobile Wallet
+              Talon never holds your keys. Wallet connections go through the Mobile Wallet
               Adapter, and your wallet or Seed Vault signs. On-chain transactions are irreversible
               and can move real funds — test on devnet, and you are responsible for anything your
               app signs in production.
@@ -83,7 +83,7 @@ export default function TermsPage() {
           <section>
             <h2 className="text-[15px] font-medium text-paper mb-3">Ownership</h2>
             <p className="text-sm text-fog leading-relaxed">
-              You own the app code you generate. SeekerStudio owns the platform — the IDE, the
+              You own the app code you generate. Talon owns the platform — the IDE, the
               agent, and the surrounding software. Using the service doesn&apos;t transfer either
               way beyond that.
             </p>
@@ -103,7 +103,7 @@ export default function TermsPage() {
             <p className="text-sm text-fog leading-relaxed">
               Questions about these terms? Reach us through our{" "}
               <Link
-                href="https://discord.gg/seekersstudio"
+                href="https://discord.gg/talon"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-paper underline underline-offset-2 hover:text-white transition-colors"

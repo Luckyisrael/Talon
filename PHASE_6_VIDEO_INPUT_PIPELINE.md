@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 6: Video & Input Pipeline Upgrade
+# Talon — Phase 6: Video & Input Pipeline Upgrade
 
 **Objective:** Replace the current slow screenshot-based preview and per-tap ADB process-spawn touch input with a faster, decoupled pipeline — raw frame capture with host-side JPEG encoding delivered as MJPEG, and a persistent input channel entirely independent of video. This phase does not attempt to fix Redroid's broken hardware encoder — it routes around it permanently.
 

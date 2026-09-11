@@ -14,9 +14,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
-	"github.com/seekersstudio/backend/internal/auth"
-	"github.com/seekersstudio/backend/internal/scrcpy"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/auth"
+	"github.com/luckyisrael/talon/backend/internal/scrcpy"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // InputMessage represents a touch/key input from the browser.

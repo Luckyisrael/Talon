@@ -10,11 +10,11 @@ import (
 
 // Baseline benchmarks for the perf plan (Phase 1). They measure wall time of
 // the verify-gate primitives on a realistic workspace so each optimization
-// must move a recorded number. SEEKER_BENCH_WS points at the workspace;
+// must move a recorded number. TALON_BENCH_WS points at the workspace;
 // default is workspaces/27 when present, else the benchmark skips (CI has no
 // workspaces checked in).
 func benchWorkspace() string {
-	if ws := os.Getenv("SEEKER_BENCH_WS"); ws != "" {
+	if ws := os.Getenv("TALON_BENCH_WS"); ws != "" {
 		return ws
 	}
 	matches, _ := filepath.Glob("../../workspaces/*/tsconfig.json")

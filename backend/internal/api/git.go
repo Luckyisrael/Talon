@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/gitremote"
-	"github.com/seekersstudio/backend/internal/store"
-	"github.com/seekersstudio/backend/internal/workspace"
+	"github.com/luckyisrael/talon/backend/internal/gitremote"
+	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/workspace"
 )
 
 // gitProvider is the only provider wired today. It is a constant rather than a
@@ -303,7 +303,7 @@ func (h *GitHandler) Push(w http.ResponseWriter, r *http.Request) {
 
 	message := strings.TrimSpace(req.Message)
 	if message == "" {
-		message = "Update " + project.Name + " from SeekerStudio"
+		message = "Update " + project.Name + " from Talon"
 	}
 
 	result, err := gitremote.Push(r.Context(), gitremote.PushOptions{
@@ -408,7 +408,7 @@ func repoName(project *store.Project) string {
 	}
 	name := strings.Trim(b.String(), "-._")
 	if name == "" {
-		name = "seekerstudio-project-" + strconv.FormatInt(project.ID, 10)
+		name = "talon-project-" + strconv.FormatInt(project.ID, 10)
 	}
 	// GitHub caps repo names at 100 chars.
 	if len(name) > 100 {

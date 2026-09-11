@@ -102,7 +102,7 @@ export default function AuthScreen() {
       <View style={styles.body}>
         <Animated.View entering={FadeInDown.duration(450)}>
           <UIText variant="heading" tone="hero">
-            Sign in to Seeker
+            Sign in to Talon
           </UIText>
         </Animated.View>
         <Animated.View entering={FadeInDown.duration(450).delay(80)}>

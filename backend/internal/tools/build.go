@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	sdk "github.com/seekersstudio/backend/internal/sdk"
+	sdk "github.com/luckyisrael/talon/backend/internal/sdk"
 )
 
 type BuildAPK struct {

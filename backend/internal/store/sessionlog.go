@@ -3,8 +3,8 @@ package store
 import (
 	"time"
 
-	"github.com/seekersstudio/backend/internal/harness/events"
-	"github.com/seekersstudio/backend/internal/harness/sessionlog"
+	"github.com/luckyisrael/talon/backend/internal/harness/events"
+	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
 )
 
 // This file is the SQLite backend for the harness session log (H1): the

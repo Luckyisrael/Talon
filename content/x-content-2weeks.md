@@ -1,11 +1,11 @@
-# SeekerStudio — 2-Week X Content Plan (Pre-Launch Awareness)
+# Talon — 2-Week X Content Plan (Pre-Launch Awareness)
 
 **Goal:** build attention and credibility *before* launch. Two accounts, two voices, one story.
 **Window:** 14 days. **Accounts:**
-- **@seekerstudio** — the product. Confident, visionary, benefit-first, clean.
+- **@talon** — the product. Confident, visionary, benefit-first, clean.
 - **@yourhandle** — you, the builder. First-person, honest, building-in-public. Amplifies the official account and adds the human story.
 
-> Replace `@seekerstudio` and `@yourhandle` with the real handles. `[asset]` notes mark where to attach a screen recording, screenshot, or brand card — visuals are what make these land. Character counts are kept ≤280 for single posts unless marked **THREAD**.
+> Replace `@talon` and `@yourhandle` with the real handles. `[asset]` notes mark where to attach a screen recording, screenshot, or brand card — visuals are what make these land. Character counts are kept ≤280 for single posts unless marked **THREAD**.
 
 ---
 
@@ -21,15 +21,15 @@
 
 ### Assets to prepare first (2–3 hours of work; reused all fortnight)
 - **A1 — 30–60s screen recording:** type a prompt → watch an app appear → run it. Your single most valuable asset.
-- **A2 — Wallet-connect clip:** a generated app doing a Mobile Wallet Adapter connect on a Seeker (or emulator).
+- **A2 — Wallet-connect clip:** a generated app doing a Mobile Wallet Adapter connect on a Talon (or emulator).
 - **A3 — 3–4 clean screenshots:** the IDE, the agent's trace/steps, a verify pass, a finished screen.
 - **A4 — A brand card:** logo + one-line tagline, for the intro and recap posts.
 - **A5 — The "it fixes its own errors" clip:** the agent hitting a typecheck error and repairing it.
 
 ### Discipline on tags & hashtags
-- Tag `@solanamobile` only on genuinely ecosystem-relevant posts (Seeker, dApp store, MWA). Don't tag them every day — it reads as begging.
-- Max **1–2 hashtags**, and only real ones: `#Solana` `#SolanaMobile` `#Seeker`. X rewards clean copy, not hashtag soup.
-- Quote-tweet Solana Mobile / Seeker news with *your* angle — that's free, relevant reach.
+- Tag `@solanamobile` only on genuinely ecosystem-relevant posts (Talon, dApp store, MWA). Don't tag them every day — it reads as begging.
+- Max **1–2 hashtags**, and only real ones: `#Solana` `#SolanaMobile` `#Talon`. X rewards clean copy, not hashtag soup.
+- Quote-tweet Solana Mobile / Talon news with *your* angle — that's free, relevant reach.
 
 ---
 
@@ -42,7 +42,7 @@
 >
 > We're building AI that ships apps for the phone that *is* your wallet.
 >
-> SeekerStudio: describe the mobile app you want → get a real Solana Seeker app. Wallet-connected, on-device, ready to run.
+> Talon: describe the mobile app you want → get a real Solana Seeker app. Wallet-connected, on-device, ready to run.
 >
 > Building in public. Follow along 👇
 
@@ -51,9 +51,9 @@
 >
 > what if building a Solana mobile app was as easy as *describing* it?
 >
-> Not a web app in a wrapper. A real Seeker app — Mobile Wallet Adapter, Seed Vault, the whole thing.
+> Not a web app in a wrapper. A real Talon app — Mobile Wallet Adapter, Seed Vault, the whole thing.
 >
-> That's @seekerstudio. I'll be sharing the whole build here.
+> That's @talon. I'll be sharing the whole build here.
 
 ---
 
@@ -64,14 +64,14 @@
 >
 > On Solana Seeker that falls apart instantly — no Mobile Wallet Adapter, no Seed Vault, no native feel.
 >
-> SeekerStudio is built for the device, not ported to it. That's the whole difference.
+> Talon is built for the device, not ported to it. That's the whole difference.
 
 **Personal** · pillar: hot-take
-> I tried building a Seeker app with a general AI coding tool.
+> I tried building a Talon app with a general AI coding tool.
 >
 > It imported a *browser* wallet library. On a phone. That has a hardware wallet built in. 🤦
 >
-> That moment is basically why @seekerstudio exists.
+> That moment is basically why @talon exists.
 
 ---
 
@@ -80,14 +80,14 @@
 **Official** · pillar: demo · `[A1 prompt→app recording]`
 > "Build me a SOL balance screen that connects my wallet."
 >
-> One sentence in. A working Seeker app out. 👇
+> One sentence in. A working Talon app out. 👇
 >
-> No boilerplate, no wallet-adapter rabbit hole. This is SeekerStudio.
+> No boilerplate, no wallet-adapter rabbit hole. This is Talon.
 >
 > (early build — more soon)
 
 **Personal** · pillar: behind-the-demo
-> That clip @seekerstudio just posted?
+> That clip @talon just posted?
 >
 > The part that still gets me: I didn't tell it *how* to connect the wallet. It already knew Mobile Wallet Adapter — the right way, the on-device way.
 >
@@ -100,12 +100,12 @@
 **Official** · pillar: trust/security
 > An AI that builds crypto apps should never see your seed phrase.
 >
-> SeekerStudio *can't* — it's structurally impossible. It only ever uses Mobile Wallet Adapter + Seed Vault, exactly like a real Seeker app.
+> Talon *can't* — it's structurally impossible. It only ever uses Mobile Wallet Adapter + Seed Vault, exactly like a real Talon app.
 >
 > Security isn't a feature we added. It's a rule we enforce in code.
 
 **Personal** · pillar: principle · `[A3 screenshot: guardrail in action]`
-> One of the first things I hard-coded into @seekerstudio:
+> One of the first things I hard-coded into @talon:
 >
 > it will refuse to import a browser wallet, and it will never touch key material. Not "we prompted it not to" — the guardrail blocks it before it runs.
 >
@@ -118,9 +118,9 @@
 **Official** · pillar: technical-moat · `[A3 screenshots]`
 > Most AI app builders have a dirty secret: they're only as good as the model behind them. Swap in a cheaper model and the output falls apart.
 >
-> We refused to accept that. Here's how SeekerStudio ships correct Seeker apps *regardless* of the model 🧵
+> We refused to accept that. Here's how Talon ships correct Talon apps *regardless* of the model 🧵
 
-> 1/ Baked-in knowledge. The builder already knows Mobile Wallet Adapter, expo-router, Reanimated, and Seeker design — pinned to exact versions. The model doesn't have to remember; the knowledge is always in the room.
+> 1/ Baked-in knowledge. The builder already knows Mobile Wallet Adapter, expo-router, Reanimated, and Talon design — pinned to exact versions. The model doesn't have to remember; the knowledge is always in the room.
 
 > 2/ Deterministic guardrails. The rules that matter aren't left to the model's judgment. It cannot import a browser wallet or handle a seed phrase — enforced in code, not in a prompt.
 
@@ -130,7 +130,7 @@
 
 > 5/ The result: quality that doesn't depend on you paying for the biggest model — and we prove it with an evals harness that scores every model on the same yardstick.
 >
-> This is the part I'm proudest of. Early access soon. Follow @seekerstudio 👀
+> This is the part I'm proudest of. Early access soon. Follow @talon 👀
 
 **Personal** · pillar: amplify + conviction (quote-tweet the thread)
 > This thread is the heart of the whole project 👇
@@ -144,16 +144,16 @@
 **Official** · pillar: capability · `[A2 wallet-connect clip]`
 > You shouldn't have to teach your AI how Solana Mobile works.
 >
-> SeekerStudio ships knowing:
+> Talon ships knowing:
 > • Mobile Wallet Adapter (connect + sign)
 > • expo-router navigation
 > • Reanimated motion
-> • Seeker screen design
+> • Talon screen design
 >
-> It builds like someone who's shipped on Seeker before.
+> It builds like someone who's shipped on Talon before.
 
 **Personal** · pillar: craft
-> Spent a week writing "skills" for @seekerstudio — little expert playbooks the builder pulls in exactly when a task needs them (wallet, navigation, animation, layout).
+> Spent a week writing "skills" for @talon — little expert playbooks the builder pulls in exactly when a task needs them (wallet, navigation, animation, layout).
 >
 > It's the difference between an AI that *guesses* and one that *knows*.
 
@@ -164,17 +164,17 @@
 **Official** · pillar: engagement/poll
 > Quick one for the Solana builders:
 >
-> what's stopped you from shipping a Seeker app?
+> what's stopped you from shipping a Talon app?
 >
 > 🔷 Wallet integration pain
 > 🔷 RN/Expo setup
 > 🔷 No time / too fiddly
 > 🔷 Didn't know where to start
 >
-> (building SeekerStudio to kill all four)
+> (building Talon to kill all four)
 
 **Personal** · pillar: week-1-recap
-> Week 1 of building @seekerstudio in public, in one line:
+> Week 1 of building @talon in public, in one line:
 >
 > an AI builder that's actually *native* to Solana Seeker — knows the wallet, won't leak your keys, and won't hand you code that doesn't run.
 >
@@ -189,7 +189,7 @@
 **Official** · pillar: agentic · `[A1 / A5 clips]`
 > "AI builder" usually means fancy autocomplete.
 >
-> SeekerStudio is an *agent*. Give it a goal and it plans, writes, tests, and iterates — like a developer, not a text box 🧵
+> Talon is an *agent*. Give it a goal and it plans, writes, tests, and iterates — like a developer, not a text box 🧵
 
 > 1/ It reads your project before it edits it. No blind overwrites.
 
@@ -197,10 +197,10 @@
 
 > 3/ It runs the checks itself and reacts to the results. A failure isn't the end of the turn — it's the start of the next fix.
 
-> 4/ You get a working app *and* a readable trail of how it got there. Follow @seekerstudio — early access is close.
+> 4/ You get a working app *and* a readable trail of how it got there. Follow @talon — early access is close.
 
 **Personal** · pillar: build-in-public
-> The unlock for @seekerstudio wasn't a bigger model.
+> The unlock for @talon wasn't a bigger model.
 >
 > It was giving the agent a real loop: plan, act, check, fix — and the discipline to not stop while something's broken.
 >
@@ -211,7 +211,7 @@
 ## Day 9 — "It won't give you code that doesn't compile"
 
 **Official** · pillar: quality/verify · `[A5 self-repair clip]`
-> Every build in SeekerStudio runs a verification ladder: typecheck → lint.
+> Every build in Talon runs a verification ladder: typecheck → lint.
 >
 > If it fails, the agent fixes it and tries again. Only verified code reaches you.
 >
@@ -229,12 +229,12 @@
 ## Day 10 — Behind the scenes (personal-heavy)
 
 **Official** · pillar: build-in-public · `[A3 screenshot: agent trace]`
-> A peek under the hood: every SeekerStudio build streams its steps live — the plan, each file it touches, each check it runs.
+> A peek under the hood: every Talon build streams its steps live — the plan, each file it touches, each check it runs.
 >
 > Because you should be able to *trust* what your builder did, not just accept the output.
 
 **Personal** · pillar: story/struggle
-> Hardest problem this week on @seekerstudio:
+> Hardest problem this week on @talon:
 >
 > making a *small* model produce a correct wallet flow. Big models fake it fine. Small ones expose every gap in your scaffolding.
 >
@@ -245,16 +245,16 @@
 ## Day 11 — Why mobile crypto, why now (vision)
 
 **Official** · pillar: vision · tag `@solanamobile`
-> The Seeker puts a wallet, a secure element, and a dApp store in your pocket.
+> The Talon puts a wallet, a secure element, and a dApp store in your pocket.
 >
 > The missing piece isn't hardware — it's making it stupidly easy to *build* for it.
 >
-> That's the gap SeekerStudio fills. Mobile is where the next million Solana users actually are. #SolanaMobile
+> That's the gap Talon fills. Mobile is where the next million Solana users actually are. #SolanaMobile
 
 **Personal** · pillar: conviction
 > I genuinely think the next wave of Solana apps won't be born on desktop.
 >
-> They'll be born on the phone people already carry their crypto on. @seekerstudio is a bet on that future — and on builders who want in without a month of setup.
+> They'll be born on the phone people already carry their crypto on. @talon is a bet on that future — and on builders who want in without a month of setup.
 
 ---
 
@@ -268,14 +268,14 @@
 **Personal** · pillar: amplify
 > Little things in this demo I care about a lot:
 >
-> it handles the *cancel* case. Real wallet UX isn't the happy path — it's what happens when the user backs out. @seekerstudio builds for that by default.
+> it handles the *cancel* case. Real wallet UX isn't the happy path — it's what happens when the user backs out. @talon builds for that by default.
 
 ---
 
 ## Day 13 — Early access / waitlist push
 
 **Official** · pillar: CTA/waitlist · `[A4 brand card]`
-> Early access to SeekerStudio is coming.
+> Early access to Talon is coming.
 >
 > If you want to build a Solana Seeker app by describing it — and skip the wallet-adapter and Expo setup entirely — get on the list.
 >
@@ -286,16 +286,16 @@
 **Personal** · pillar: personal-invite
 > If you've ever wanted to ship something on Solana Seeker but bounced off the setup —
 >
-> @seekerstudio early access is opening soon and I want *builders* in the first group.
+> @talon early access is opening soon and I want *builders* in the first group.
 >
-> Reply or DM "seeker" and I'll make sure you're on the list. 🔨
+> Reply or DM "talon" and I'll make sure you're on the list. 🔨
 
 ---
 
 ## Day 14 — The recap that converts **THREAD**
 
 **Official** · pillar: summary/CTA · `[A1 best clip]`
-> Two weeks of building SeekerStudio in public. Here's the whole thing in 6 posts 🧵
+> Two weeks of building Talon in public. Here's the whole thing in 6 posts 🧵
 
 > 1/ It's an AI builder *native* to Solana Seeker. Describe an app → get a real, wallet-connected mobile app. Not a website in a wrapper.
 
@@ -303,42 +303,42 @@
 
 > 3/ It's an agent, not autocomplete. Plans, builds, verifies, and fixes its own errors — with the whole trace visible.
 
-> 4/ It's model-agnostic. Baked-in Seeker knowledge, deterministic guardrails, and a verification ladder keep quality high no matter which model drives.
+> 4/ It's model-agnostic. Baked-in Talon knowledge, deterministic guardrails, and a verification ladder keep quality high no matter which model drives.
 
 > 5/ It won't hand you broken code. Typecheck → lint on every build, repaired until it's verified.
 
-> 6/ Early access is opening soon. If you want to build on Seeker the easy way: follow @seekerstudio and join 🔗 [waitlist link]. This is just the start.
+> 6/ Early access is opening soon. If you want to build on Talon the easy way: follow @talon and join 🔗 [waitlist link]. This is just the start.
 
 **Personal** · pillar: gratitude + forward-look
-> Two weeks ago I started sharing @seekerstudio publicly. The response from the Solana Mobile community has been unreal. 🙏
+> Two weeks ago I started sharing @talon publicly. The response from the Solana Mobile community has been unreal. 🙏
 >
 > We're just getting to the good part. Early access soon — and I'll keep building in the open the whole way.
 >
-> If you build on Seeker, come say hi.
+> If you build on Talon, come say hi.
 
 ---
 
 # Reusable banks
 
 ## Hook lines (swap into any post)
-- "Everyone's building AI that ships websites. We ship Seeker apps."
+- "Everyone's building AI that ships websites. We ship Talon apps."
 - "An AI that builds crypto apps should never see your seed phrase. Ours can't."
 - "It won't hand you code that doesn't compile."
 - "Built for the device, not ported to it."
 - "Quality that doesn't depend on you paying for the biggest model."
-- "Describe the app. Get the app. On Seeker."
+- "Describe the app. Get the app. On Talon."
 
 ## CTAs
-- "Follow @seekerstudio — building in public."
+- "Follow @talon — building in public."
 - "Early access is coming. Join the waitlist 🔗 [link]."
 - "Reply '🔨' if you'd use this."
-- "DM 'seeker' for an early-access spot."
+- "DM 'talon' for an early-access spot."
 - "What would you build first? 👇"
 
 ## Engagement playbook (do daily, costs nothing)
-- **Reply** to @solanamobile / Seeker / Solana dev posts with a genuine, on-topic take (not a plug). Visibility compounds.
-- **Quote-tweet** ecosystem news ("Seeker did X") with your builder's angle.
-- **Answer** "how do I build on Seeker?" questions in the wild — helpfully, then mention the tool only if it fits.
+- **Reply** to @solanamobile / Talon / Solana dev posts with a genuine, on-topic take (not a plug). Visibility compounds.
+- **Quote-tweet** ecosystem news ("Talon did X") with your builder's angle.
+- **Answer** "how do I build on Talon?" questions in the wild — helpfully, then mention the tool only if it fits.
 - **Repost** your own official posts from the personal account with an added line of commentary (don't just RT).
 - Reply to *your own* threads with the demo clip — threads with media in replies get re-surfaced.
 
@@ -356,7 +356,7 @@
 ---
 
 ## Notes / to-fill before posting
-- [ ] Real handles in place of `@seekerstudio` / `@yourhandle`
+- [ ] Real handles in place of `@talon` / `@yourhandle`
 - [ ] Waitlist link live (even a simple form) before Day 13
 - [ ] Assets A1–A5 recorded
 - [ ] A pinned tweet on both profiles (use Day 1 official + Day 1 personal)

@@ -20,8 +20,8 @@ const mono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "SeekerStudio",
-    template: "%s · SeekerStudio",
+    default: "Talon",
+    template: "%s · Talon",
   },
   description:
     "Describe a Solana Mobile app, watch it get written, and run it on a live Seeker device without leaving the page.",

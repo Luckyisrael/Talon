@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/harness/subagent"
+	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
 )
 
 // Spec is one workflow.

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/events"
-	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
-	"github.com/seekersstudio/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/events"
+	harnessagent "github.com/luckyisrael/talon/backend/internal/harness/agent"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
 )
 
 // The H2 steer contract, end to end: a message delivered to a running turn

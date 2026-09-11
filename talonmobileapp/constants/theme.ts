@@ -1,4 +1,4 @@
-// Seeker midnight tokens for React Native — translated from DESIGN_MOBILE.md.
+// Talon midnight tokens for React Native — translated from DESIGN_MOBILE.md.
 // Single source of truth for every color, type style, spacing step, and
 // radius in the companion app. Values are identical to the web system;
 // only the units changed (RN points, not px/em).

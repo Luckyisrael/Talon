@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// This file is the model-agnostic lever. SeekerStudio aims to produce good apps
+// This file is the model-agnostic lever. Talon aims to produce good apps
 // regardless of which model drives the build, and the knob for that is how much
 // working discipline the prompt spells out. Every tier gets the same core workflow —
 // plan, read before you write, load the skill for an unfamiliar area, work in small

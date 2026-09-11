@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 0: OS Migration & Environment Parity
+# Talon — Phase 0: OS Migration & Environment Parity
 
 **Objective:** Establish native Ubuntu as the permanent development environment, identical in distro and kernel family to the production VPS target. Remove every WSL2-specific accommodation from both the infrastructure and the codebase. This phase produces zero new features — it produces a clean, honest foundation everything else gets built on.
 
@@ -35,7 +35,7 @@ If a change would require editing files under `internal/orchestrator`, `internal
 
 ### 2.1 No WSL-specific code paths may remain
 Search the entire codebase for anything that assumes a Windows host talking into a Linux VM, and remove it — not comment it out, remove it:
-- Any invocation pattern that shells out through `wsl -d SeekerLinux -e ...` before running a Linux command. On native Ubuntu, the Go backend runs on the same OS as Redroid and Docker — there is no cross-boundary to bridge anymore. `adb`, `docker`, `npm`, `expo`, `gradlew` must be invoked directly.
+- Any invocation pattern that shells out through `wsl -d TalonLinux -e ...` before running a Linux command. On native Ubuntu, the Go backend runs on the same OS as Redroid and Docker — there is no cross-boundary to bridge anymore. `adb`, `docker`, `npm`, `expo`, `gradlew` must be invoked directly.
 - Any Windows-specific filesystem lookups: `LOCALAPPDATA` environment variable checks, hardcoded `C:\` paths, `where java`-style Windows command discovery.
 - Any dual-path logic that checks "if Windows, do X, else do Y" — collapse to the Linux-only path and delete the other branch entirely.
 

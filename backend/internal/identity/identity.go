@@ -9,14 +9,14 @@ import (
 
 const (
 	// Base package name for all projects (reverse-DNS prefix)
-	basePackage = "com.seekerstudio"
+	basePackage = "com.talon"
 )
 
 // ProjectIdentity holds the generated identity values for a project.
 type ProjectIdentity struct {
 	Name           string // Display name (from user input)
 	Slug           string // URL-safe slug (unique)
-	AndroidPackage string // e.g., com.seekerstudio.myapp
+	AndroidPackage string // e.g., com.talon.myapp
 	IOSBundleID    string // same as AndroidPackage
 	Scheme         string // deep-link scheme (unique)
 }
@@ -64,7 +64,7 @@ func generateSlug(name string) string {
 }
 
 // generatePackage creates a valid Android package name from a slug.
-// Format: com.seekerstudio.<slug> (only lowercase letters and dots).
+// Format: com.talon.<slug> (only lowercase letters and dots).
 func generatePackage(slug string) string {
 	// Sanitize slug for package: only lowercase alphanumeric and dots
 	sanitized := strings.Map(func(r rune) rune {

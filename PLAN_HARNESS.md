@@ -1,4 +1,4 @@
-# SeekerStudio — Harness Overhaul Plan (H-series)
+# Talon — Harness Overhaul Plan (H-series)
 
 **Status:** EXECUTED — all 15 phases (H1–H14 + the §7 IDE refit) landed and green.
 Each phase shipped behind its flag, eval-gated in `make evals`
@@ -48,9 +48,9 @@ principles make it work — each one is portable to Go without porting the frame
    checkpointing all preserve the log; they only change what the model *sees* next.
 10. **Document the model experience.** Every DSH package carries a "Model Experience"
     section stating exactly what the model sees and when. That is a documentation
-    discipline, not code — and SeekerStudio's whole quality story is model-facing.
+    discipline, not code — and Talon's whole quality story is model-facing.
 
-SeekerStudio already shares the deepest DSH conviction — honesty (skipped gates,
+Talon already shares the deepest DSH conviction — honesty (skipped gates,
 `Analyzed:false`, crash markers, one quota source) — but expresses it in hard-wired
 procedural code. This plan converts that procedural core into the harness shape while
 keeping every existing quality layer (verify ladder, guardrails, failure index, skills)
@@ -58,9 +58,9 @@ as first-class listeners in the new architecture.
 
 ---
 
-## 1. Architecture mapping — DSH pattern → SeekerStudio today → target
+## 1. Architecture mapping — DSH pattern → Talon today → target
 
-| # | DSH pattern | SeekerStudio today | Gap | Target (H-phase) |
+| # | DSH pattern | Talon today | Gap | Target (H-phase) |
 |---|---|---|---|---|
 | 1 | Event-sourced session log; derived messages; replay; fork | `conversation_messages` stores final messages; `TrimConversation` **deletes**; resume rebuilds from stored rows | Log is not append-only; no replay guarantee; history destructive | **H1** |
 | 2 | Durable anchors: each model call cites chunk seqs; cancelled stream appends `interrupted:true` + delivered prefix | Prompt.Status `running` crash marker; boot sweep; no mid-turn anchors | Mid-turn crash loses the partial transcript the user saw | **H1** |
@@ -90,7 +90,7 @@ as first-class listeners in the new architecture.
 | 26 | Feedback-gated telemetry; token meter | `metrics.go` counters (good) | no per-session token meter surface to the user | **H13** |
 
 **Already at parity or ahead — keep, refit only as needed:** verify ladder (DSH has
-nothing like it — it is SeekerStudio's domain crown), guardrail content checks, failure
+nothing like it — it is Talon's domain crown), guardrail content checks, failure
 index with cooldowns, `KnownFiles`/`SeenSkills` context economy, prompt-cache discipline
 (sorted tools, projectMap fingerprint), quota single-source, metrics live gauges, crash
 honesty markers, evals + phase-guard polarity tests, GO_DESLOP style law.
@@ -99,7 +99,7 @@ honesty markers, evals + phase-guard polarity tests, GO_DESLOP style law.
 
 ## 2. Target architecture (Go, idiomatic — the pattern, not the framework)
 
-DSH is TypeScript with a runtime plugin framework. SeekerStudio is Go. **We adopt the
+DSH is TypeScript with a runtime plugin framework. Talon is Go. **We adopt the
 architecture, not the machinery**: Go interfaces + one in-process event bus + a boot-time
 composition root, with compile-time safety where DSH pays runtime dynamism.
 
@@ -122,7 +122,7 @@ backend/internal/harness/
   subagent/     delegation seam + in-process provider (one-shot, continuable)
   workflow/     declarative fan-out engine (JSON spec, not JS)
   goals/        durable build objectives (CAS, rounds, blocked)
-  presets/      declarative composition (seeker.composition.yaml) + preset files
+  presets/      declarative composition (talon.composition.yaml) + preset files
 ```
 
 Existing packages keep their domains: `tools/*` tool implementations register into the
@@ -161,7 +161,7 @@ Rules carried over verbatim from DSH semantics:
 - Plugin (listener) failure closes the turn directly — extension failure never corrupts
   the loop invariants.
 
-### 2.3 Composition root (seeker.composition.yaml)
+### 2.3 Composition root (talon.composition.yaml)
 
 main.go stops wiring structs and starts *reading* a composition file — the Go analogue
 of `cordis.patch.yml`. Rows are (id, component, config); last-write-wins per id across
@@ -169,7 +169,7 @@ layers (base → mode → project preset). This is the single biggest cultural s
 architecture becomes data**.
 
 ```yaml
-# seeker.composition.yaml (base layer)
+# talon.composition.yaml (base layer)
 - id: sessionlog
   component: harness/sessionlog/sqlite
 - id: agent-registry
@@ -193,7 +193,7 @@ architecture becomes data**.
   component: harness/skills/embedded
 - id: skills-fs
   component: harness/skills/filesystem
-  config: { roots: ["$PROJECT/.seeker/skills"] }
+  config: { roots: ["$PROJECT/.talon/skills"] }
 - id: verify-ladder
   component: verify            # existing package, now a listener
 - id: guardrails
@@ -233,7 +233,7 @@ repeat' belongs to plugins listening on the event taxonomy."*
 ## 3. The H-phases
 
 Each phase: scope → concrete work → migration/flag → eval gate → risk. The flag pattern
-follows the patch-buffer precedent (`SEEKERSTUDIO_PATCH_BUFFER`): every phase ships
+follows the patch-buffer precedent (`TALONSTUDIO_PATCH_BUFFER`): every phase ships
 dark, flips on per-project, and the old path stays until the eval gate is green.
 `make evals` grows one phase-guard test per H-phase (both polarities), so the merge gate
 extends automatically.
@@ -267,7 +267,7 @@ model-visible history; make compaction shadowing; fork support; mid-turn durabil
    `conversation_messages` table is frozen (write-through only) for one release, then
    dropped behind a migration.
 
-**Migration:** `SEEKERSTUDIO_SESSIONLOG=v1|legacy` flag; v1 writes both, reads v1; flip
+**Migration:** `TALONSTUDIO_SESSIONLOG=v1|legacy` flag; v1 writes both, reads v1; flip
 default after evals; drop legacy table in a later release.
 **Eval gate:** replay determinism (same log → byte-identical derived history across two
 runs), interruption replay (append `interrupted` mid-stream → resumed request contains
@@ -301,7 +301,7 @@ add interceptable pre-step/request-error/turn-stopping; add steer/followup/injec
    listeners (routing) can answer retry-with-backoff, retry-with-cheaper-model (existing
    tier logic becomes a listener), or terminal.
 
-**Migration:** `SEEKERSTUDIO_LOOP=driver|legacy` — driver wraps the existing
+**Migration:** `TALONSTUDIO_LOOP=driver|legacy` — driver wraps the existing
 ChatWithTools first, then replaces it.
 **Eval gate:** steer lands mid-turn (a steered turn's next request contains the steer
 text; an unsteered one does not); request-error retry listener fires; legacy and driver
@@ -396,12 +396,12 @@ conventions.
 
 **Work:**
 1. `harness/skills`: provider interface; embedded provider (today's go:embed) +
-   filesystem provider (`<workspace>/.seeker/skills/*/SKILL.md` — same front-matter
+   filesystem provider (`<workspace>/.talon/skills/*/SKILL.md` — same front-matter
    format, so existing authoring knowledge transfers). Merged catalog, one winner per
    name (embedded wins ties — binary knowledge stays authoritative), load-on-demand
    body read; `MarkSkillSeen` economy unchanged.
 2. `harness/instructions`: AGENTS.md chain — user-global
-   (`$SEEKER_HOME/AGENTS.md`) + project (`<workspace>/AGENTS.md` + nested
+   (`$TALON_HOME/AGENTS.md`) + project (`<workspace>/AGENTS.md` + nested
    `app/AGENTS.md`, `features/AGENTS.md`...). Byte budget (65,536), broader files
    omitted before the most-specific is truncated; chain refreshed on next filesystem
    touch (no watcher — same reconciliation-on-touch discipline as DSH). The agent can
@@ -568,7 +568,7 @@ H1 anchors make this checkable; eval asserts no re-execution of completed rounds
 **Scope:** composition becomes data; model routing becomes runtime-tunable.
 
 **Work:**
-1. `seeker.composition.yaml` (§2.3) becomes the wiring source; main.go is a composer.
+1. `talon.composition.yaml` (§2.3) becomes the wiring source; main.go is a composer.
    Overlay layers: base → mode (server/headless/sdk) → per-tier project preset. Row
    semantics: last-write-wins per id, whole-config replacement (no merge ambiguity —
    DSH's exact rule, stated in their patch file).

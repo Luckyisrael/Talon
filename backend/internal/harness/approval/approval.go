@@ -1,7 +1,7 @@
 // Package approval is the H4 consent seam: one place where a sensitive action
 // asks the user, once, and the answer binds.
 //
-// The contract (from DSH, adapted to SeekerStudio's turn shapes):
+// The contract (from DSH, adapted to Talon's turn shapes):
 //
 //   - Every sensitive action requests approval through this seam with a
 //     scope (a stable string naming the class of action) and the exact
@@ -15,7 +15,7 @@
 //     audited to the session log. The user can see what was asked and what
 //     was allowed; nobody has to trust the agent's own summary.
 //
-// SeekerStudio already has the bones: the ask_user tool collects answers,
+// Talon already has the bones: the ask_user tool collects answers,
 // GrantApproval(ScopeDeviceBuild) records them, turn_approvals is the binding
 // table. This package names the seam those bones hang on.
 package approval

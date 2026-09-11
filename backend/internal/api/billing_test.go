@@ -26,8 +26,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/billing"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/billing"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // newBillingTestHarness builds a real store, a Free user, and a BillingHandler

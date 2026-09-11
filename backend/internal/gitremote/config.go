@@ -15,7 +15,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/seekersstudio/backend/internal/secrets"
+	"github.com/luckyisrael/talon/backend/internal/secrets"
 )
 
 // Config holds the OAuth application settings and the cipher that seals tokens.

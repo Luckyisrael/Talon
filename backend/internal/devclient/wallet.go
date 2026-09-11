@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/device"
+	"github.com/luckyisrael/talon/backend/internal/device"
 )
 
 // WalletManager handles mock wallet lifecycle: installation, configuration, verification.

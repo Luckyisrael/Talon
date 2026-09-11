@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/harness/sessionlog"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // testStore opens a throwaway SQLite store with the session_events table

@@ -2,7 +2,7 @@
 // the build agent, over the same provider client and a scoped tool registry.
 //
 // The contract (adapted from DSH's subagent service, translated to
-// SeekerStudio's loop):
+// Talon's loop):
 //
 //   - A child is one-shot (runs to completion, returns its final text as the
 //     delegate tool's result) or continuable (idles after its turn; the

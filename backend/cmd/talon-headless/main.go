@@ -1,4 +1,4 @@
-// Command seeker-headless is the H11 headless profile: the same composition
+// Command talon-headless is the H11 headless profile: the same composition
 // as the server (store, workspace, orchestrator, goals) with no HTTP/WS —
 // one scripted prompt under a scripted provider, an honest scorecard, exit
 // code from the critical checks.
@@ -10,9 +10,9 @@
 //
 // Usage:
 //
-//	SEEKERSTUDIO_HEADLESS_PROVIDER=http://127.0.0.1:PORT \
-//	SEEKERSTUDIO_HEADLESS_PROMPT='Add a hello screen' \
-//	SEEKER_HEADLESS_DB=/tmp/h.db seeker-headless
+//	TALONSTUDIO_HEADLESS_PROVIDER=http://127.0.0.1:PORT \
+//	TALONSTUDIO_HEADLESS_PROMPT='Add a hello screen' \
+//	TALON_HEADLESS_DB=/tmp/h.db talon-headless
 package main
 
 import (
@@ -27,11 +27,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/events"
-	"github.com/seekersstudio/backend/internal/harness/goals"
-	"github.com/seekersstudio/backend/internal/orchestrator"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/events"
+	"github.com/luckyisrael/talon/backend/internal/harness/goals"
+	"github.com/luckyisrael/talon/backend/internal/orchestrator"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 func main() {
@@ -53,9 +53,9 @@ func run() (string, bool) {
 	}
 
 	// 1. Boot the real composition: store over a scratch database.
-	dbPath := os.Getenv("SEEKER_HEADLESS_DB")
+	dbPath := os.Getenv("TALON_HEADLESS_DB")
 	if dbPath == "" {
-		dbPath = filepath.Join(os.TempDir(), fmt.Sprintf("seeker-headless-%d.db", time.Now().UnixNano()))
+		dbPath = filepath.Join(os.TempDir(), fmt.Sprintf("talon-headless-%d.db", time.Now().UnixNano()))
 	}
 	st, err := store.New(dbPath)
 	if err != nil {
@@ -80,9 +80,9 @@ func run() (string, bool) {
 	passed("ai-boot", "scripted provider")
 
 	// 3. The workspace: a real provision into a scratch template copy.
-	wsDir := os.Getenv("SEEKER_HEADLESS_WORKSPACE")
+	wsDir := os.Getenv("TALON_HEADLESS_WORKSPACE")
 	if wsDir == "" {
-		wsDir = filepath.Join(os.TempDir(), fmt.Sprintf("seeker-headless-ws-%d", time.Now().UnixNano()))
+		wsDir = filepath.Join(os.TempDir(), fmt.Sprintf("talon-headless-ws-%d", time.Now().UnixNano()))
 	}
 	_ = os.MkdirAll(wsDir, 0o755)
 	passed("workspace", wsDir)
@@ -147,7 +147,7 @@ func run() (string, bool) {
 
 // headlessPrompt defaults when the env var is unset.
 func headlessPrompt() string {
-	if p := os.Getenv("SEEKERSTUDIO_HEADLESS_PROMPT"); p != "" {
+	if p := os.Getenv("TALONSTUDIO_HEADLESS_PROMPT"); p != "" {
 		return p
 	}
 	return "Add a hello world screen at app/hello.tsx"
@@ -180,7 +180,7 @@ func scriptedProvider() *httptest.Server {
 
 func render(checks []string) string {
 	var b strings.Builder
-	b.WriteString("== SeekerStudio headless scorecard ==\n")
+	b.WriteString("== Talon headless scorecard ==\n")
 	for _, c := range checks {
 		b.WriteString("  ")
 		b.WriteString(c)

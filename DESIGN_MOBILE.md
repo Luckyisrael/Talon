@@ -1,4 +1,4 @@
-# Seeker — Style Reference (Companion Mobile App)
+# Talon — Style Reference (Companion Mobile App)
 > midnight precision instrument, in your pocket
 
 **Theme:** dark (only — no light mode; the system is built on darkness as substrate)
@@ -201,7 +201,7 @@ The one allowed gradient: void `#08090a` → `#d0d6e0` wash at 8% opacity behind
 
 ```
 app/
-  index.tsx              Splash: mark + `Seeker` 40px display, floor wash, auto-routes
+  index.tsx              Splash: mark + `Talon` 40px display, floor wash, auto-routes
   onboarding/
     welcome.tsx          Display headline, what the agent builds, acid-lime CTA
     features.tsx         3-row feature list (Plan / Build / Device), ghost "Skip"

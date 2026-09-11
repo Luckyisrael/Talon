@@ -73,10 +73,6 @@ dist/
 
 # Misc
 server.exe~
-talon.db
-seeker.db
-seeker2.db
-seeker3.db
 
 # Docker
 .docker/
@@ -104,4 +100,3 @@ backend/scrcpy-server.jar
 e2e/live-run*.log
 
 # stale committed build artifacts
-backend/seeker-headless

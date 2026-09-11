@@ -1,14 +1,14 @@
 ---
-name: seeker-screen-design
+name: talon-screen-design
 description: Design screens that fit the Seeker device and feel finished. Load when building UI, laying out a screen, or deciding on visual and interaction details.
 version: "react-native@0.83, react-native-safe-area-context@5.6.x"
 autoAttach: true
 triggers: [path:app/**, path:components/**]
 ---
 
-# Designing for the Seeker
+# Designing for the Talon
 
-The Seeker is a tall, narrow, very sharp phone held in one hand: a 6.36" AMOLED,
+The Talon is a tall, narrow, very sharp phone held in one hand: a 6.36" AMOLED,
 2670×1200, 460 PPI, 120Hz screen running Android. Design for that, not for a tablet
 or a browser.
 

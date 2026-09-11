@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 7: Engineering Intelligence & Project Memory
+# Talon — Phase 7: Engineering Intelligence & Project Memory
 
 **Objective:** The agent must behave like a disciplined senior developer working on a persistent codebase — not a stateless generator that treats every prompt in isolation. It must maintain real, durable awareness of the project's architecture, enforce single-source-of-truth data flow and separation of concerns, catch conflicts with prior decisions before generating, verify its own output the way a careful developer would, and carry genuine memory across turns and sessions.
 

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // W2b: the build loop enriches the system prompt once, then reuses that exact
@@ -27,7 +27,7 @@ func TestEnrichPromptIsDeterministic(t *testing.T) {
 	o := New(nil, nil, loadKnowledge(t))
 	sess := newTestSession(t)
 	sess.LoadADRs([]store.ArchitectureDecision{
-		{Decision: "Use MWA for signing", Outcome: "adopted", Context: "the Seeker holds the keys"},
+		{Decision: "Use MWA for signing", Outcome: "adopted", Context: "the Talon holds the keys"},
 	})
 	sess.LoadMemory([]store.ProjectMemory{
 		{EntryType: "screen", Content: "Home lists recent transfers"},

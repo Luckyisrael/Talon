@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/metro"
+	"github.com/luckyisrael/talon/backend/internal/metro"
 )
 
 // MetroHandler streams a project's live metro bundler events over SSE —

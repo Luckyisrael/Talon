@@ -2,7 +2,7 @@
 // project, surviving restarts, mutated only through compare-and-swap so a
 // stale view can never clobber newer state.
 //
-// The contract (from DSH's goal service, adapted to SeekerStudio's shape):
+// The contract (from DSH's goal service, adapted to Talon's shape):
 //
 //   - A goal is (objective text, phase, rounds used, revision). One goal is
 //     active per project at a time; creating a new one completes the old.

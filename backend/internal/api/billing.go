@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/billing"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/billing"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // signatureHeader carries the provider's HMAC over the raw webhook body.

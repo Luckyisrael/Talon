@@ -83,7 +83,7 @@ export default function TestOnPhone({ projectId, epoch }: TestOnPhoneProps) {
             <QRCode text={info.deep_link ?? ""} size={168} />
           </div>
           <p className="text-center text-[11px] leading-relaxed text-fog">
-            Scan with your phone camera, or open in the Seeker dev client.
+            Scan with your phone camera, or open in the Talon dev client.
           </p>
 
           {/* The deep link, copyable for typed entry. */}
@@ -101,7 +101,7 @@ export default function TestOnPhone({ projectId, epoch }: TestOnPhoneProps) {
             <a
               href={apkUrl}
               className="btn btn-sm w-full text-center text-xs"
-              title="The Seeker dev client for Android — install once, opens any project's QR"
+              title="The Talon dev client for Android — install once, opens any project's QR"
             >
               Install the dev client (APK)
             </a>

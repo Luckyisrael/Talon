@@ -2,7 +2,7 @@
 // the shared workspace toward one immutable objective, for when a single
 // context cannot finish ("all verify gates green" after a long build).
 //
-// The contract (from DSH's ralph tool, adapted to SeekerStudio's loop):
+// The contract (from DSH's ralph tool, adapted to Talon's loop):
 //
 //   - The objective is immutable for the whole run. Rounds cannot renegotiate
 //     it; if the objective is wrong, the run stops and the human decides.

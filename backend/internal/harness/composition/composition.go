@@ -1,4 +1,4 @@
-// Package composition is the H12 declarative composition: seeker.composition.yaml
+// Package composition is the H12 declarative composition: talon.composition.yaml
 // becomes the wiring source, main.go becomes a composer, and model routing
 // becomes runtime data (harness/settings) instead of boot-time env.
 //
@@ -72,7 +72,7 @@ func Resolve(name string) (Preset, error) {
 }
 
 // SwitchPolicy decides whether a preset switch is allowed. DSH's rule,
-// stated for SeekerStudio's shape: the switch is allowed only while the
+// stated for Talon's shape: the switch is allowed only while the
 // project has produced nothing — no files written, no builds run — because
 // a mid-build composition change breaks the prompt-cache discipline and the
 // verify ladder's assumptions.

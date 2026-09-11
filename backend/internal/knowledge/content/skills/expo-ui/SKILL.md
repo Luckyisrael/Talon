@@ -11,7 +11,7 @@ source: https://github.com/expo/skills (plugins/expo/skills/expo-ui)
 # Native UI with `@expo/ui`
 
 `@expo/ui` renders real native UI from React: SwiftUI on iOS, Jetpack Compose on
-Android. The Seeker is Android, so this maps straight onto its real runtime — the
+Android. The Talon is Android, so this maps straight onto its real runtime — the
 Compose side is your primary target. It also ships drop-in replacements for
 migrating off RN community UI libraries.
 
@@ -42,7 +42,7 @@ instead.** Fall back to RN built-ins only when `@expo/ui` is missing the compone
 > indicators. Each `ListItem` is a native node on the JS thread; rows are not
 > recycled. For large or unknown-length data (feeds, search, catalogs) use
 > `FlatList` (preinstalled) or install a virtualizer — see the `rn-best-practices`
-> and `seeker-screen-design` skills. `List` is right for short, fixed groups.
+> and `talon-screen-design` skills. `List` is right for short, fixed groups.
 
 **`BottomSheet` example** (use this for map-pin details, action sheets, detail
 panels — not Reanimated):
@@ -93,7 +93,7 @@ Work down this list and stop at the first layer that meets the need:
    `@expo/ui/jetpack-compose` (Android) or `@expo/ui/swift-ui` (iOS). Use **only**
    when the universal layer is missing a component or modifier, or when you need
    platform-specific behavior. **Downside:** you write a separate tree and split it
-   into `.android.tsx` / `.ios.tsx` files. Since the Seeker is Android-first, the
+   into `.android.tsx` / `.ios.tsx` files. Since the Talon is Android-first, the
    Android layer is the one that matters — see the **`expo-ui-jetpack-compose`**
    skill for its components, modifiers, `LazyColumn`, and `useNativeState`.
 

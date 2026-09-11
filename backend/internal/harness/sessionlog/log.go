@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/harness/events"
+	"github.com/luckyisrael/talon/backend/internal/harness/events"
 )
 
 // Event is one accepted, immutable log row.

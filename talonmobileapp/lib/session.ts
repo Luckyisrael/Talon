@@ -25,7 +25,7 @@ export function useSession(): 'checking' | 'authed' | 'guest' {
 // device tab survives restarts. SecureStore: it is a capability — knowing
 // it grants the session's screenshot/relay surface.
 
-const sessionKey = (projectId: number) => `seeker.session.${projectId}`;
+const sessionKey = (projectId: number) => `talon.session.${projectId}`;
 
 export async function getSessionId(projectId: number): Promise<number | null> {
   try {

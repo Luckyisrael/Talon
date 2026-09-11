@@ -11,8 +11,8 @@ describe("DV2 TestOnPhone panel", () => {
   it("renders the QR + deep link when the phone path is live", async () => {
     vi.mocked(testInfo.get).mockResolvedValue({
       available: true,
-      deep_link: "exp://seeker.example.com:17812",
-      metro_url: "http://seeker.example.com:17812",
+      deep_link: "exp://talon.example.com:17812",
+      metro_url: "http://talon.example.com:17812",
       dev_client_url: "http://localhost:8080/v1/projects/1/dev-client.apk",
     });
     render(<TestOnPhone projectId={1} />);
@@ -20,10 +20,10 @@ describe("DV2 TestOnPhone panel", () => {
     // link follows one render later (info → apkUrl effect chain).
     await waitFor(() =>
       expect(
-        screen.getByRole("img", { name: /exp:\/\/seeker\.example\.com/ }),
+        screen.getByRole("img", { name: /exp:\/\/talon\.example\.com/ }),
       ).toBeTruthy(),
     );
-    expect(screen.getByText("exp://seeker.example.com:17812")).toBeTruthy();
+    expect(screen.getByText("exp://talon.example.com:17812")).toBeTruthy();
     await waitFor(() =>
       expect(screen.getByText(/Install the dev client/i)).toBeTruthy(),
     );

@@ -3,15 +3,15 @@ package api
 import (
 	"log"
 
-	"github.com/seekersstudio/backend/internal/harness/approval"
-	"github.com/seekersstudio/backend/internal/harness/skills"
-	"github.com/seekersstudio/backend/internal/harness/events"
-	"github.com/seekersstudio/backend/internal/harness/sessionlog"
-	"github.com/seekersstudio/backend/internal/orchestrator"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/harness/approval"
+	"github.com/luckyisrael/talon/backend/internal/harness/skills"
+	"github.com/luckyisrael/talon/backend/internal/harness/events"
+	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
+	"github.com/luckyisrael/talon/backend/internal/orchestrator"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
-// The H4 approval seam, wired to SeekerStudio's existing bones: the ask_user
+// The H4 approval seam, wired to Talon's existing bones: the ask_user
 // answer flow is the answerer, the turn_approvals table is the binding
 // record, the session log (H1) is the audit. This file names the seam those
 // bones hang on so every sensitive path can route through it uniformly.

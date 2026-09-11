@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/seekersstudio/backend/internal/harness/subagent"
+	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
 )
 
 // Delegate hands a self-contained task to a child agent and returns its

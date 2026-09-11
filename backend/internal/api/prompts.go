@@ -13,17 +13,17 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/knowledge"
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/devclient"
-	"github.com/seekersstudio/backend/internal/events"
-	"github.com/seekersstudio/backend/internal/metrics"
-	"github.com/seekersstudio/backend/internal/harness/approval"
-	"github.com/seekersstudio/backend/internal/harness/skills"
-	"github.com/seekersstudio/backend/internal/notify"
-	"github.com/seekersstudio/backend/internal/orchestrator"
-	"github.com/seekersstudio/backend/internal/store"
-	"github.com/seekersstudio/backend/internal/tools"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/devclient"
+	"github.com/luckyisrael/talon/backend/internal/events"
+	"github.com/luckyisrael/talon/backend/internal/metrics"
+	"github.com/luckyisrael/talon/backend/internal/harness/approval"
+	"github.com/luckyisrael/talon/backend/internal/harness/skills"
+	"github.com/luckyisrael/talon/backend/internal/notify"
+	"github.com/luckyisrael/talon/backend/internal/orchestrator"
+	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/tools"
 )
 
 type PromptHandler struct {
@@ -700,7 +700,7 @@ drain:
 			// history is always recorded).
 			if evt.Type == events.QuestionEvent {
 				h.dispatchNotification(userID, notify.KindInputNeeded,
-					"Seeker needs your input", evt.Text)
+					"Talon needs your input", evt.Text)
 			}
 			flusher.Flush()
 		case res = <-resultCh:
@@ -1271,7 +1271,7 @@ func truncateLabel(s string, n int) string {
 // ends with an unanswered tool_use that TrimToValidHistory would drop as an
 // orphan, which is the one turn resume must keep so it can answer it.
 //
-// H1: when SEEKERSTUDIO_SESSIONLOG=derive, the read comes from the append-only
+// H1: when TALONSTUDIO_SESSIONLOG=derive, the read comes from the append-only
 // session log's projection instead of conversation_messages — the flag flip
 // the dual-write migration ends on. Off (the default) reads the legacy table
 // exactly as before; both paths were proven byte-equivalent by the bridge

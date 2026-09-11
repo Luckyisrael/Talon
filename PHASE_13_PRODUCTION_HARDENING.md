@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 13: Production Hardening
+# Talon — Phase 13: Production Hardening
 
 **Note on numbering:** this was Phase 12 in the original master roadmap, shifted by one when APK Export was split into its own phase earlier. Treat this as Phase 13.
 

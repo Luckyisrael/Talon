@@ -10,7 +10,7 @@
 //
 // The pool bound defaults to 4: the provider's shared rate limit (~8
 // requests/min) means more concurrent tool traffic than that spends itself on
-// retries, not throughput. Operators tune it with SEEKERSTUDIO_TOOL_POOL.
+// retries, not throughput. Operators tune it with TALONSTUDIO_TOOL_POOL.
 package pipeline
 
 import (
@@ -146,7 +146,7 @@ const defaultPool = 4
 
 // PoolOverride sets the concurrent-dispatch bound explicitly, clamped to
 // [1, 32] like the env path. Composition and tests use it; deployments use
-// SEEKERSTUDIO_TOOL_POOL.
+// TALONSTUDIO_TOOL_POOL.
 func (p *Pipeline) PoolOverride(n int) {
 	if n < 1 {
 		n = 1
@@ -157,11 +157,11 @@ func (p *Pipeline) PoolOverride(n int) {
 	p.pool = n
 }
 
-// poolFromEnv reads SEEKERSTUDIO_TOOL_POOL, clamped to [1, 32]: a bound below
+// poolFromEnv reads TALONSTUDIO_TOOL_POOL, clamped to [1, 32]: a bound below
 // 1 would serialize the pool name does not deserve, and one above 32 spends
 // the provider's shared rate limit on retry storms rather than throughput.
 func poolFromEnv() int {
-	v := os.Getenv("SEEKERSTUDIO_TOOL_POOL")
+	v := os.Getenv("TALONSTUDIO_TOOL_POOL")
 	if v == "" {
 		return defaultPool
 	}

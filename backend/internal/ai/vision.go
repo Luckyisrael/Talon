@@ -94,8 +94,8 @@ func (c *Client) VisionCheck(ctx context.Context, screenshot []byte, intendedScr
 		if c.protocol == ProtocolOpenAI {
 			req.Header.Set("Authorization", "Bearer "+c.apiKey)
 			if strings.Contains(c.baseURL, "openrouter") {
-				req.Header.Set("HTTP-Referer", "https://seekerstudio.dev")
-				req.Header.Set("X-Title", "Seeker Studio")
+				req.Header.Set("HTTP-Referer", "https://talon.dev")
+				req.Header.Set("X-Title", "Talon Studio")
 			}
 		} else {
 			req.Header.Set("x-api-key", c.apiKey)

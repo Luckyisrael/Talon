@@ -189,7 +189,7 @@ export default function ExportPanel({ projectId }: ExportPanelProps) {
             <p className="gauge mb-1">Release export</p>
             <p className="text-sm text-mist">
               A signed release APK plus the dApp Store submission bundle. You submit
-              with your own publisher wallet — SeekerStudio never touches it.
+              with your own publisher wallet — Talon never touches it.
             </p>
           </div>
 

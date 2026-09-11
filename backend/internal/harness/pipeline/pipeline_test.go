@@ -242,19 +242,19 @@ func TestNilClassifierSequential(t *testing.T) {
 // The env override clamps honestly: 0 and garbage fall back to the default,
 // and a giant value clamps at 32.
 func TestPoolFromEnvClamps(t *testing.T) {
-	t.Setenv("SEEKERSTUDIO_TOOL_POOL", "0")
+	t.Setenv("TALONSTUDIO_TOOL_POOL", "0")
 	if got := poolFromEnv(); got != defaultPool {
 		t.Errorf("pool 0 → %d, want default %d", got, defaultPool)
 	}
-	t.Setenv("SEEKERSTUDIO_TOOL_POOL", "garbage")
+	t.Setenv("TALONSTUDIO_TOOL_POOL", "garbage")
 	if got := poolFromEnv(); got != defaultPool {
 		t.Errorf("pool garbage → %d, want default %d", got, defaultPool)
 	}
-	t.Setenv("SEEKERSTUDIO_TOOL_POOL", "100")
+	t.Setenv("TALONSTUDIO_TOOL_POOL", "100")
 	if got := poolFromEnv(); got != 32 {
 		t.Errorf("pool 100 → %d, want clamp 32", got)
 	}
-	t.Setenv("SEEKERSTUDIO_TOOL_POOL", "8")
+	t.Setenv("TALONSTUDIO_TOOL_POOL", "8")
 	if got := poolFromEnv(); got != 8 {
 		t.Errorf("pool 8 → %d, want 8", got)
 	}

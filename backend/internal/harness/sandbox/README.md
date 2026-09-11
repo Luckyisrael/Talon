@@ -12,6 +12,6 @@ contract.
 - **Fail-closed:** when enforcement is missing the refusal is the structured
   `SANDBOX_UNAVAILABLE` — the operation is refused rather than run
   unconfined. Never a silent allow.
-- **Modes:** read-only (SEEKERSTUDIO_SANDBOX=read-only) refuses every write;
+- **Modes:** read-only (TALONSTUDIO_SANDBOX=read-only) refuses every write;
   workspace-write is the default; danger-full-access is composition-change-
   only, never env-selectable.

@@ -1,6 +1,6 @@
-# SeekerStudio — Phase 17: Companion Mobile App
+# Talon — Phase 17: Companion Mobile App
 
-**Objective:** A genuinely native Seeker companion app — not a compressed IDE port — that lets a user create projects, chat with the agent, review and approve plans, get notified of build status, authenticate via their Solana Mobile wallet, and hand off directly into live testing on the sideloaded dev client. Code viewing, the full execution trace, and terminal access stay exclusively on the web IDE, by design. This app is a strictly additive entry point alongside the existing web IDE — not everyone has a Seeker device, and not everyone who does will want it; the web experience, including Phase 16's own physical-device handoff, must remain fully capable on its own. This is built to be a standalone, winnable hackathon submission demonstrating deep, idiomatic Solana Mobile Stack integration.
+**Objective:** A genuinely native Talon companion app — not a compressed IDE port — that lets a user create projects, chat with the agent, review and approve plans, get notified of build status, authenticate via their Solana Mobile wallet, and hand off directly into live testing on the sideloaded dev client. Code viewing, the full execution trace, and terminal access stay exclusively on the web IDE, by design. This app is a strictly additive entry point alongside the existing web IDE — not everyone has a Seeker device, and not everyone who does will want it; the web experience, including Phase 16's own physical-device handoff, must remain fully capable on its own. This is built to be a standalone, winnable hackathon submission demonstrating deep, idiomatic Solana Mobile Stack integration.
 
 **Reference:** `PHASE_7_ENGINEERING_INTELLIGENCE.md` (Architecture Decision Record, event schema), `PHASE_9_PAYMENT_PROFILE_FOUNDATION.md` (existing account system this app's auth links to), `PHASE_16_PHYSICAL_DEVICE_MODE.md` (dev-client sideload and handoff mechanism)
 
@@ -89,6 +89,6 @@ Phase 16's QR-code handoff — from a web IDE session directly to any Android ph
 
 - Every item in §3 is independently confirmed through direct testing on a real Seeker device, not simulated or assumed.
 - The full demo flow has been rehearsed and proven reliable back to back, not assembled from parts tested only in isolation.
-- The app reads, visually and functionally, as a genuine native Seeker experience built specifically for this platform — not a compressed or repurposed version of the web IDE.
+- The app reads, visually and functionally, as a genuine native Talon experience built specifically for this platform — not a compressed or repurposed version of the web IDE.
 
 **This phase is built to be demoed live in front of judges. Reliability of the full flow matters more than feature breadth — a smaller set of things that work flawlessly beats a longer list of things that mostly work.**

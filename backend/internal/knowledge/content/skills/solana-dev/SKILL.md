@@ -6,7 +6,7 @@ compatibility: Requires Node.js 20.18+, Rust toolchain, Solana CLI, Anchor CLI
 metadata:
   author: Solana Foundation
   version: "2.4.0"
-# SeekerStudio routing (added on ingest; body below is byte-identical to
+# Talon routing (added on ingest; body below is byte-identical to
 # solana-foundation/solana-dev-skill — see skills-lock hash in source repo).
 autoAttach: true
 triggers: [import:@solana/kit, import:@wallet-ui, import:@solana-program, pkg:@solana/kit, pkg:@wallet-ui, pkg:@solana-program, content:sendTransactions, content:getBalance]

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // MeHandler serves the authenticated user's own profile: identity, current tier,

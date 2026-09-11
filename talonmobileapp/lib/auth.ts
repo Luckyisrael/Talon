@@ -2,7 +2,7 @@ import * as SecureStore from 'expo-secure-store';
 
 // JWT storage. SecureStore — not AsyncStorage: the token is a bearer
 // credential, and this is the one place AsyncStorage isn't honest.
-const TOKEN_KEY = 'seeker.jwt';
+const TOKEN_KEY = 'talon.jwt';
 
 export async function getToken(): Promise<string | null> {
   try {

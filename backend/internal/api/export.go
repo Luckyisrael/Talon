@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/metrics"
-	"github.com/seekersstudio/backend/internal/release"
-	"github.com/seekersstudio/backend/internal/secrets"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/metrics"
+	"github.com/luckyisrael/talon/backend/internal/release"
+	"github.com/luckyisrael/talon/backend/internal/secrets"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // ExportHandler serves the release-export flow: tier-gated APK export,

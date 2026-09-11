@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 10: Freemium Enforcement & Billing
+# Talon — Phase 10: Freemium Enforcement & Billing
 
 **Objective:** Turn usage tracking into usage *enforcement*. Free and Pro tiers must be real, hard limits — not numbers recorded for later reporting while every user effectively has unlimited access. This phase also builds the idle-pause and warm-pool lifecycle that Phase 4 deliberately deferred, and wires enforcement on top of the same metering data used for billing.
 

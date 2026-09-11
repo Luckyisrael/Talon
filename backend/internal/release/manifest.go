@@ -10,7 +10,7 @@ import (
 )
 
 // SubmissionBundle is everything a user needs to submit without fixing
-// anything SeekerStudio was responsible for. It does NOT submit: submission
+// anything Talon was responsible for. It does NOT submit: submission
 // is wallet-based (publisher keypair + portal API key) and stays entirely in
 // the user's hands, via the Publisher Portal or:
 //
@@ -52,11 +52,11 @@ type CatalogInput struct {
 
 // costsNote is the honest SOL disclosure: real publishing costs real SOL
 // (portal fees + ArDrive storage, ~0.2 SOL typically) plus KYC/KYB and a
-// 2-5 business day review. Surfaced before the user leaves SeekerStudio.
+// 2-5 business day review. Surfaced before the user leaves Talon.
 const costsNote = "Publishing to the Solana dApp Store costs real SOL: keep ~0.2 SOL in your " +
 	"publisher wallet for transaction fees and ArDrive storage. You will also need to complete " +
 	"KYC/KYB in the Publisher Portal, and review typically takes 2-5 business days. " +
-	"SeekerStudio never touches your publisher wallet — submission happens with your own " +
+	"Talon never touches your publisher wallet — submission happens with your own " +
 	"keypair via publish.solanamobile.com or the dapp-store CLI."
 
 // WriteBundle writes dapp-store.json plus a SUBMIT README with the exact
@@ -84,7 +84,7 @@ func WriteBundle(dir string, bundle SubmissionBundle) (string, error) {
 
 	var sb strings.Builder
 	sb.WriteString("# Submit this release to the Solana dApp Store\n\n")
-	sb.WriteString("SeekerStudio built and signed this APK; submission is yours, with your own wallet.\n\n")
+	sb.WriteString("Talon built and signed this APK; submission is yours, with your own wallet.\n\n")
 	sb.WriteString("## Option A — Publisher Portal (recommended for a first release)\n\n")
 	sb.WriteString("1. Sign up at https://publish.solanamobile.com and complete KYC/KYB.\n")
 	sb.WriteString("2. Create the app in the portal if it does not exist yet (the portal matches\n")

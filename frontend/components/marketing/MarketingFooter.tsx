@@ -15,7 +15,7 @@ export default function MarketingFooter() {
                 <rect x="1" y="1" width="16" height="16" rx="4" stroke="#ffffff" strokeWidth="1.5" />
                 <circle cx="9" cy="9" r="2.5" fill="#e4f222" />
               </svg>
-              <span className="text-sm font-medium text-paper">SeekerStudio</span>
+              <span className="text-sm font-medium text-paper">Talon</span>
             </div>
             <p className="text-sm text-fog leading-relaxed">
               Build Solana Mobile apps with AI. From idea to device in minutes.
@@ -60,7 +60,7 @@ export default function MarketingFooter() {
         </div>
 
         <div className="pt-8 border-t border-graphite flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="font-mono text-xs text-ash">© 2026 SeekerStudio. All rights reserved.</p>
+          <p className="font-mono text-xs text-ash">© 2026 Talon. All rights reserved.</p>
           <div className="flex items-center gap-6">
             <Link href="/privacy" className="font-mono text-xs text-ash hover:text-fog transition-colors">Privacy</Link>
             <Link href="/terms" className="font-mono text-xs text-ash hover:text-fog transition-colors">Terms</Link>

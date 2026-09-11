@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/seekersstudio/backend/internal/devclient"
-	"github.com/seekersstudio/backend/internal/relay"
+	"github.com/luckyisrael/talon/backend/internal/devclient"
+	"github.com/luckyisrael/talon/backend/internal/relay"
 )
 
 // TestInfoHandler serves the DV2 "test on your phone" surface: the deep
@@ -37,7 +37,7 @@ type testInfo struct {
 	// entry, and what a browser can probe.
 	MetroURL string `json:"metro_url,omitempty"`
 	// DevClientURL is the authenticated APK download for phones that do not
-	// have the Seeker dev client yet.
+	// have the Talon dev client yet.
 	DevClientURL string `json:"dev_client_url,omitempty"`
 }
 
@@ -107,7 +107,7 @@ func (h *TestInfoHandler) DevClientAPK(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/vnd.android.package-archive")
-	w.Header().Set("Content-Disposition", `attachment; filename="seeker-devclient.apk"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="talon-devclient.apk"`)
 	http.ServeFile(w, r, apk)
 }
 

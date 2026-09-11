@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/events"
+	"github.com/luckyisrael/talon/backend/internal/events"
 )
 
 // The guardrail path, end to end on the backend: a rejection emitted by the

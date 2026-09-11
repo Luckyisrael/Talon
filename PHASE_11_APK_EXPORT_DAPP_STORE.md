@@ -1,6 +1,6 @@
-# SeekerStudio — Phase 11: APK Export & dApp Store Bundle
+# Talon — Phase 11: APK Export & dApp Store Bundle
 
-**Objective:** A user can take a project from the dev loop to a genuinely signed, submission-ready release artifact — a real signed APK, a correctly structured dApp Store manifest, and validated store assets — without SeekerStudio ever touching the user's own publisher wallet or private keys.
+**Objective:** A user can take a project from the dev loop to a genuinely signed, submission-ready release artifact — a real signed APK, a correctly structured dApp Store manifest, and validated store assets — without Talon ever touching the user's own publisher wallet or private keys.
 
 **Reference:** Solana Mobile dApp publishing documentation (`docs.solanamobile.com/dapp-publishing`, `docs.solanamobile.com/dapp-store`), `PHASE_3_IDENTITY_CONFIGURATION.md` §2.7, `PHASE_10_FREEMIUM_BILLING.md` §2.9, `FRONTEND_UI_UX_OVERHAUL.md` §3.5 (emulator toolbar screenshot capture)
 
@@ -45,11 +45,11 @@ Manifest/config generation (structured to match what `@solana-mobile/dapp-store-
 ### 2.6 Screenshot assets are validated against Solana's real, documented requirements before use
 Per Solana Mobile's published guidelines, a screenshot used as a store asset must be validated to be **at least 1080px in both width and height**, and every screenshot in the set must share **consistent orientation** (all portrait or all landscape) — this must be checked programmatically before a captured screenshot is accepted into the project's store-asset collection, not left for the user to discover as a rejection at actual submission time. Icon (**512×512px**) and banner (**1200×600px**) are separate asset types with their own fixed-dimension requirements — they are not screenshots, must not be conflated with the emulator's screenshot capture flow, and need their own upload or generation step.
 
-### 2.7 SeekerStudio never touches the user's publisher wallet
-Solana dApp Store submission is wallet-based: the publisher's own wallet signs the actual submission transactions and pays SOL for asset storage (typically via ArDrive) and the NFT minting the listing itself requires. SeekerStudio must never request, store, transmit, or use a user's publisher wallet private key, under any circumstance. This platform's responsibility ends at producing a correctly signed APK and a correctly structured bundle ready for the user to submit themselves, through the Publisher Portal or the CLI, with their own wallet.
+### 2.7 Talon never touches the user's publisher wallet
+Solana dApp Store submission is wallet-based: the publisher's own wallet signs the actual submission transactions and pays SOL for asset storage (typically via ArDrive) and the NFT minting the listing itself requires. Talon must never request, store, transmit, or use a user's publisher wallet private key, under any circumstance. This platform's responsibility ends at producing a correctly signed APK and a correctly structured bundle ready for the user to submit themselves, through the Publisher Portal or the CLI, with their own wallet.
 
 ### 2.8 Real costs are surfaced honestly, ahead of time
-Because actual dApp Store publishing costs real SOL for storage and minting, the export flow must clearly communicate this to the user as part of the export experience — this should not be something they discover for the first time only after leaving SeekerStudio and reaching Solana's own submission flow.
+Because actual dApp Store publishing costs real SOL for storage and minting, the export flow must clearly communicate this to the user as part of the export experience — this should not be something they discover for the first time only after leaving Talon and reaching Solana's own submission flow.
 
 ### 2.9 Export never disrupts the active dev-loop session
 Triggering an export build must run as a fully separate, isolated build process — it must not block, slow, or interfere with the user's ongoing prompt/generation work in the same project's dev session.
@@ -68,7 +68,7 @@ Triggering an export build must run as a fully separate, isolated build process 
 - [ ] A set of screenshots with mixed orientation is confirmed to be flagged, not silently accepted as a valid set
 - [ ] Icon and banner assets are confirmed to be handled as their own distinct upload/generation flow, separate from the emulator screenshot tool
 - [ ] A full audit of the export code path confirms no user wallet private key is ever requested, transmitted, or stored by the platform
-- [ ] The export flow is confirmed to clearly communicate real publishing costs (SOL for storage/minting) to the user before they leave SeekerStudio for actual submission
+- [ ] The export flow is confirmed to clearly communicate real publishing costs (SOL for storage/minting) to the user before they leave Talon for actual submission
 - [ ] Triggering an export build is confirmed not to block or degrade an active, ongoing dev-loop session in the same project
 
 ---
@@ -77,6 +77,6 @@ Triggering an export build must run as a fully separate, isolated build process 
 
 - Every item in §3 is independently confirmed through direct testing — a real export, a real inspected artifact, real screenshot validation attempts with both passing and failing inputs — not by reviewing the pipeline code and assuming correctness.
 - No path exists, anywhere in the codebase, where a user's publisher wallet private key could be requested or handled by the platform — this is treated with the same severity as a credential-hygiene violation from Phase 1.
-- A user could take the artifacts and manifest this phase produces directly to Solana's Publisher Portal or `dapp-store-cli` and submit without needing to fix or regenerate anything SeekerStudio was responsible for producing.
+- A user could take the artifacts and manifest this phase produces directly to Solana's Publisher Portal or `dapp-store-cli` and submit without needing to fix or regenerate anything Talon was responsible for producing.
 
 **This phase completes the full build-to-store pipeline. Nothing further downstream depends on this except production deployment itself.**

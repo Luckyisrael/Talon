@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/notify"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/notify"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // E phase guard: the notification trigger contract. The product moments

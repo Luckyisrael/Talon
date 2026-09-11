@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 14: Testing & CI/CD
+# Talon — Phase 14: Testing & CI/CD
 
 **Note on numbering:** this was Phase 13 in the original master roadmap, shifted by one when APK Export was split into its own phase earlier. Treat this as Phase 14.
 

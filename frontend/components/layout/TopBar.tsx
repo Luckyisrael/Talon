@@ -37,7 +37,7 @@ export default function TopBar({ tier = "free" }: TopBarProps) {
           <circle cx="9" cy="9" r="2.5" fill="#e4f222" />
         </svg>
         <span className="text-base font-medium tracking-tight text-paper">
-          SeekerStudio
+          Talon
         </span>
       </Link>
 

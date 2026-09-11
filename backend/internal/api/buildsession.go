@@ -11,16 +11,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/devclient"
-	"github.com/seekersstudio/backend/internal/events"
-	"github.com/seekersstudio/backend/internal/metro"
-	"github.com/seekersstudio/backend/internal/harness/sandbox"
-	"github.com/seekersstudio/backend/internal/harness/subagent"
-	"github.com/seekersstudio/backend/internal/harness/workflow"
-	"github.com/seekersstudio/backend/internal/orchestrator"
-	"github.com/seekersstudio/backend/internal/store"
-	"github.com/seekersstudio/backend/internal/tools"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/devclient"
+	"github.com/luckyisrael/talon/backend/internal/events"
+	"github.com/luckyisrael/talon/backend/internal/metro"
+	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
+	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
+	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
+	"github.com/luckyisrael/talon/backend/internal/orchestrator"
+	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/tools"
 )
 
 // commandOutputWriter adapts a session emitter into an io.Writer so tools can
@@ -54,7 +54,7 @@ type buildSession struct {
 	sandbox *sandbox.Capability
 	// children is the H9 delegation service bound to this session: delegate
 	// spawns scoped child loops; list_children reports them. Nil (default)
-	// keeps the tools unregistered — the flag SEEKERSTUDIO_SUBAGENTS=1 opts
+	// keeps the tools unregistered — the flag TALONSTUDIO_SUBAGENTS=1 opts
 	// a deployment in.
 	children *subagent.Service
 }
@@ -71,7 +71,7 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	// scratch). The enforcement hook is trivial-allow because the outer
 	// ring's job is path-shape confinement; the per-tool registry checks
 	// (tier classification, secret patterns, timeouts) remain the inner ring.
-	// SEEKERSTUDIO_SANDBOX=read-only selects a read-only session (plan-style
+	// TALONSTUDIO_SANDBOX=read-only selects a read-only session (plan-style
 	// turns that must not mutate), danger-full-access is not selectable from
 	// the environment — only a composition change can grant it.
 	bs := &buildSession{fs: fs, reg: reg}
@@ -413,23 +413,23 @@ func mutatingToolPath(name string, input json.RawMessage) string {
 	return a.Path
 }
 
-// sandboxModeFromEnv reads SEEKERSTUDIO_SANDBOX: "read-only" selects the
+// sandboxModeFromEnv reads TALONSTUDIO_SANDBOX: "read-only" selects the
 // non-mutating mode; the default (anything else) is workspace-write. Danger
 // mode is deliberately not reachable from the environment — only a
 // composition change can grant it, and that change is auditable in code
 // review, not in a runtime flag.
 func sandboxModeFromEnv() sandbox.Mode {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("SEEKERSTUDIO_SANDBOX"))) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TALONSTUDIO_SANDBOX"))) {
 	case "read-only", "ro", "readonly":
 		return sandbox.ModeReadOnly
 	}
 	return sandbox.ModeWorkspace
 }
 
-// subagentsEnabled reads SEEKERSTUDIO_SUBAGENTS: delegation ships dark (off
+// subagentsEnabled reads TALONSTUDIO_SUBAGENTS: delegation ships dark (off
 // by default) — it multiplies context and cost, so a deployment opts in.
 func subagentsEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("SEEKERSTUDIO_SUBAGENTS"))) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TALONSTUDIO_SUBAGENTS"))) {
 	case "1", "true", "on", "v1":
 		return true
 	}

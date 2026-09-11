@@ -1,4 +1,4 @@
-# Bake Plan: Seeker Companion App (`seekerstudiomobileapp/`)
+# Bake Plan: Talon Companion App (`talonmobileapp/`)
 
 Status: APPROVED — not yet started. Sources of truth: `DESIGN_MOBILE.md`
 (tokens/components/screens), web `frontend/components/ide/` (behavior),

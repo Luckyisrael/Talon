@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/relay"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/relay"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // The phone surface is honest: available=false carries the reason, and the

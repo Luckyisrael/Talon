@@ -7,8 +7,8 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/notify"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/notify"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // NotificationHandler serves the in-app notification history and the

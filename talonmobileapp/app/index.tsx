@@ -23,7 +23,7 @@ export default function SplashScreen() {
       <Animated.View entering={FadeIn.duration(500)} style={styles.mark}>
         <View style={styles.dot} />
         <UIText variant="heading" tone="hero">
-          Seeker
+          Talon
         </UIText>
       </Animated.View>
       <Animated.View entering={FadeIn.duration(500).delay(200)}>

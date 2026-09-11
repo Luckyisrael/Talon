@@ -7,7 +7,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // Reconcile compares DB session state against actual Docker container state.
@@ -23,7 +23,7 @@ func (m *Manager) Reconcile(s *store.Store) error {
 		return err
 	}
 
-	// 2. List all seeker-redroid-* containers from Docker
+	// 2. List all talon-redroid-* containers from Docker
 	dockerContainers, err := m.ListContainers()
 	if err != nil {
 		log.Printf("reconciler: failed to list docker containers: %v", err)
@@ -92,12 +92,12 @@ func (m *Manager) Reconcile(s *store.Store) error {
 func (m *Manager) removeLegacyContainer() {
 	ctx := context.Background()
 	opts := container.RemoveOptions{Force: true}
-	if err := m.client.ContainerRemove(ctx, "redroid-seeker-dev", opts); err != nil {
+	if err := m.client.ContainerRemove(ctx, "redroid-talon-dev", opts); err != nil {
 		if !client.IsErrNotFound(err) {
 			log.Printf("reconciler: failed to remove legacy container: %v", err)
 		}
 	} else {
-		log.Println("reconciler: removed legacy container redroid-seeker-dev")
+		log.Println("reconciler: removed legacy container redroid-talon-dev")
 	}
 }
 

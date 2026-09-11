@@ -162,8 +162,8 @@ func initGitBaseline(dir string) error {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=seeker", "GIT_AUTHOR_EMAIL=seeker@local",
-			"GIT_COMMITTER_NAME=seeker", "GIT_COMMITTER_EMAIL=seeker@local")
+			"GIT_AUTHOR_NAME=talon", "GIT_AUTHOR_EMAIL=talon@local",
+			"GIT_COMMITTER_NAME=talon", "GIT_COMMITTER_EMAIL=talon@local")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("git %v: %w (%s)", args[:1], err, strings.TrimSpace(string(out)))
 		}

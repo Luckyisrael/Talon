@@ -16,38 +16,38 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/build"
-	"github.com/seekersstudio/backend/internal/guardrails"
-	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
-	"github.com/seekersstudio/backend/internal/harness/approval"
-	"github.com/seekersstudio/backend/internal/harness/compaction"
-	"github.com/seekersstudio/backend/internal/harness/events"
-	"github.com/seekersstudio/backend/internal/harness/composition"
-	"github.com/seekersstudio/backend/internal/harness/goals"
-	"github.com/seekersstudio/backend/internal/harness/instructions"
-	"github.com/seekersstudio/backend/internal/harness/pipeline"
-	"github.com/seekersstudio/backend/internal/harness/promptsec"
-	"github.com/seekersstudio/backend/internal/harness/ralph"
+	"github.com/luckyisrael/talon/backend/internal/build"
+	"github.com/luckyisrael/talon/backend/internal/guardrails"
+	harnessagent "github.com/luckyisrael/talon/backend/internal/harness/agent"
+	"github.com/luckyisrael/talon/backend/internal/harness/approval"
+	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
+	"github.com/luckyisrael/talon/backend/internal/harness/events"
+	"github.com/luckyisrael/talon/backend/internal/harness/composition"
+	"github.com/luckyisrael/talon/backend/internal/harness/goals"
+	"github.com/luckyisrael/talon/backend/internal/harness/instructions"
+	"github.com/luckyisrael/talon/backend/internal/harness/pipeline"
+	"github.com/luckyisrael/talon/backend/internal/harness/promptsec"
+	"github.com/luckyisrael/talon/backend/internal/harness/ralph"
 	"fmt"
 	"io"
 	"net"
-	"github.com/seekersstudio/backend/internal/api"
-	"github.com/seekersstudio/backend/internal/metro"
-	"github.com/seekersstudio/backend/internal/orchestrator"
-	"github.com/seekersstudio/backend/internal/redroid"
-	"github.com/seekersstudio/backend/internal/relay"
-	"github.com/seekersstudio/backend/internal/tools"
-	"github.com/seekersstudio/backend/internal/ws"
-	"github.com/seekersstudio/backend/internal/harness/sandbox"
-	"github.com/seekersstudio/backend/internal/harness/sessionlog"
-	"github.com/seekersstudio/backend/internal/harness/subagent"
-	"github.com/seekersstudio/backend/internal/harness/workflow"
-	"github.com/seekersstudio/backend/internal/harness/settings"
-	"github.com/seekersstudio/backend/internal/harness/skills"
-	"github.com/seekersstudio/backend/internal/knowledge"
-	"github.com/seekersstudio/backend/internal/runtime"
-	"github.com/seekersstudio/backend/internal/store"
-	"github.com/seekersstudio/backend/internal/verify"
+	"github.com/luckyisrael/talon/backend/internal/api"
+	"github.com/luckyisrael/talon/backend/internal/metro"
+	"github.com/luckyisrael/talon/backend/internal/orchestrator"
+	"github.com/luckyisrael/talon/backend/internal/redroid"
+	"github.com/luckyisrael/talon/backend/internal/relay"
+	"github.com/luckyisrael/talon/backend/internal/tools"
+	"github.com/luckyisrael/talon/backend/internal/ws"
+	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
+	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
+	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
+	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
+	"github.com/luckyisrael/talon/backend/internal/harness/settings"
+	"github.com/luckyisrael/talon/backend/internal/harness/skills"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/runtime"
+	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/verify"
 )
 
 // The phase-guard set: one eval per PLAN.md phase. Each case asserts both
@@ -614,11 +614,11 @@ func TestPhaseH4SandboxApprovalSeams(t *testing.T) {
 func TestPhaseH6SkillsAndInstructions(t *testing.T) {
 	// Catalog: workspace skill merges; embedded wins the clash.
 	ws := t.TempDir()
-	skillDir := filepath.Join(ws, ".seeker", "skills", "local-flows")
+	skillDir := filepath.Join(ws, ".talon", "skills", "local-flows")
 	_ = os.MkdirAll(skillDir, 0o755)
 	_ = os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(
 		"---\nname: local-flows\ndescription: this project's flow conventions\n---\n\nUse the local flow."), 0o600)
-	clashDir := filepath.Join(ws, ".seeker", "skills", "solana-dev")
+	clashDir := filepath.Join(ws, ".talon", "skills", "solana-dev")
 	_ = os.MkdirAll(clashDir, 0o755)
 	_ = os.WriteFile(filepath.Join(clashDir, "SKILL.md"), []byte(
 		"---\nname: solana-dev\ndescription: hijack attempt\n---\n\nHijacked."), 0o600)

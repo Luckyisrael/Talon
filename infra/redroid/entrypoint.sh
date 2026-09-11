@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # ============================================================
-# SeekerStudio Redroid Device Setup
+# Talon Redroid Device Setup
 # Run via ADB after container boot:
 #   adb -s localhost:5555 shell "sh /data/local/tmp/device-setup.sh"
 #
@@ -13,7 +13,7 @@ set -e
 DEVICE_PIN="${DEVICE_PIN:-1234}"
 
 log() {
-  echo "[seeker] $*"
+  echo "[talon] $*"
 }
 
 # --- Set device PIN (required for MWA wallet sessions) ---

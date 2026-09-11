@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 12: Model Routing & Cost Controls
+# Talon — Phase 12: Model Routing & Cost Controls
 
 **Note on numbering:** this was Phase 11 in the original master roadmap. It shifted to Phase 12 when APK Export was split out and took the Phase 11 slot earlier in this project's planning. Treat this as Phase 12 going forward.
 

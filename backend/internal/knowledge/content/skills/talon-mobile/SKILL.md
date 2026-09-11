@@ -1,23 +1,23 @@
 ---
-name: seeker-mobile
-description: Solana Mobile Seeker platform facts that the model is expected to know — hardware, software, network, dApp Store rules, Seed Vault constraints, and the SCL. Load when the build touches anything Seeker-specific.
-version: "Seeker (Seeker 1, Gen 1), Android 14/15, Solana Mobile dApp Store 2025+, SCL 0.5.x"
+name: talon-mobile
+description: Solana Mobile Talon platform facts that the model is expected to know — hardware, software, network, dApp Store rules, Seed Vault constraints, and the SCL. Load when the build touches anything Talon-specific.
+version: "Talon (Talon 1, Gen 1), Android 14/15, Solana Mobile dApp Store 2025+, SCL 0.5.x"
 autoAttach: true
 triggers: [path:app.json, path:android/app/src/main/AndroidManifest.xml, import:expo-constants, pkg:@solana-mobile, pkg:@solana/spl, pkg:@coral-xyz]
 ---
 
-# Seeker — platform facts the model must not get wrong
+# Talon — platform facts the model must not get wrong
 
-The build target is the **Solana Mobile Seeker** — a phone, not a browser, not a
+The build target is the **Solana Mobile Talon** — a phone, not a browser, not a
 desktop, not the prior Saga. Facts here are the ones training data gets wrong or
 omits. Where a fact is version-pinned, the version line in the front matter is
 the source of truth; if it disagrees with what you see in `app.json` /
 `android/app/build.gradle`, the live project wins.
 
-## Hardware (Seeker 1 / Gen 1)
+## Hardware (Talon 1 / Gen 1)
 
 - **AMOLED**, 6.36", 2670×1200, **460 PPI**, **120 Hz**. Design for a sharp,
-  tall, one-hand-held panel, not a tablet. (See `seeker-screen-design`.)
+  tall, one-hand-held panel, not a tablet. (See `talon-screen-design`.)
 - **Snapdragon**-class SoC. Mid-tier GPU. Avoid heavy WebGL on load; use
   `expo-image` for everything visual and `FlatList` / `FlashList` for lists.
 - **8 GB RAM, 128 GB storage** baseline. Your APK should stay well under
@@ -120,7 +120,7 @@ publisher docs before you finalise a release.
 
 ## When this skill is wrong
 
-The Seeker evolves. If a fact here disagrees with your installed
+The Talon evolves. If a fact here disagrees with your installed
 `node_modules/@solana-mobile/*` types, with the live publisher docs, or
 with `app.json` / `build.gradle` in the project, **the live project wins**.
 Open an issue, but in the meantime, follow the live code.

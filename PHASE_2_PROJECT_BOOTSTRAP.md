@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 2: Project Bootstrap Overhaul
+# Talon — Phase 2: Project Bootstrap Overhaul
 
 **Objective:** Eliminate per-project `npm install`/clone latency entirely by replacing it with a baked, versioned template mounted per session. Project creation should be near-instant, dependency state should be shared and consistent across every project, and the scaffold layer should be structurally invisible to the file tree until the AI actually generates something.
 
@@ -28,7 +28,7 @@ If a change would touch `android.package`, `expo.scheme`, container lifecycle, o
 ## 2. Non-Negotiable Rules
 
 ### 2.1 Source of truth is a separate, versioned template repository
-The Seeker/Expo template lives in its own git repository, independently versioned — not a folder shuffled around inside the main monorepo, and not something that gets hand-edited in place per project.
+The Talon/Expo template lives in its own git repository, independently versioned — not a folder shuffled around inside the main monorepo, and not something that gets hand-edited in place per project.
 
 ### 2.2 All expensive work happens offline, never at request time
 Cloning, `npm install`, and any dependency resolution happen in a CI/offline build step triggered by changes to the template repository — never triggered by a user creating a project. If any code path still runs `npm install` in response to a project-creation request, this phase is not done, regardless of anything else that's working.

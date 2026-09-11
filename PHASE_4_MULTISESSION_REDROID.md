@@ -1,6 +1,6 @@
-# SeekerStudio — Phase 4: Multi-Session Redroid Orchestration
+# Talon — Phase 4: Multi-Session Redroid Orchestration
 
-**Objective:** Replace the current single, shared Redroid container with fully isolated, dynamically managed containers — one per active session. This is the foundational gap that makes SeekerStudio a genuinely multi-user platform rather than a single-user prototype. Nothing built after this phase (billing, load testing, production hardening) is meaningful until this is solid.
+**Objective:** Replace the current single, shared Redroid container with fully isolated, dynamically managed containers — one per active session. This is the foundational gap that makes Talon a genuinely multi-user platform rather than a single-user prototype. Nothing built after this phase (billing, load testing, production hardening) is meaningful until this is solid.
 
 **Reference:** `PROJECT_DOCUMENTATION.md` §14 (current single-container state), original `IMPLEMENTATION_ROADMAP.md` cross-cutting risks table (host capacity model)
 
@@ -29,7 +29,7 @@ If a change would touch streaming/input code, dev-client build tooling, or billi
 ## 2. Non-Negotiable Rules
 
 ### 2.1 One container per active session, without exception
-No two sessions may ever be assigned the same Redroid container or the same ADB target simultaneously. The current single shared container (`redroid-seeker-dev`, static `localhost:5555`) must be fully replaced — not run alongside the new system as a fallback.
+No two sessions may ever be assigned the same Redroid container or the same ADB target simultaneously. The current single shared container (`redroid-talon-dev`, static `localhost:5555`) must be fully replaced — not run alongside the new system as a fallback.
 
 ### 2.2 Full lifecycle ownership by the backend
 Container creation, health tracking, and destruction must be entirely owned and automated by the Go backend. No manual container management (starting or stopping containers by hand) should be required for the system to function correctly during normal operation.
@@ -53,7 +53,7 @@ Any container running on the host with no corresponding active session record mu
 Destroying a session must actually stop and remove its container — verified at the container-runtime level, not just by marking a database record inactive. A session that appears "destroyed" in the database while its container is still running and consuming resources is a failure of this phase, not an acceptable simplification.
 
 ### 2.9 No regression on known-good boot configuration
-Every dynamically created container must boot with the same validated configuration already established in earlier phases — Seeker resolution and DPI (1080×2400 @ 420), the `androidboot.use_memfd=1` flag, and any other boot parameter already confirmed working. Multi-session support must not come at the cost of quietly reintroducing boot issues already solved.
+Every dynamically created container must boot with the same validated configuration already established in earlier phases — Talon resolution and DPI (1080×2400 @ 420), the `androidboot.use_memfd=1` flag, and any other boot parameter already confirmed working. Multi-session support must not come at the cost of quietly reintroducing boot issues already solved.
 
 ### 2.10 No hardcoded single-container assumptions remain anywhere
 Every code path that currently assumes a single, fixed container (streaming, terminal proxy, ADB command execution) must be updated to route to the correct session-specific container and port. A search of the codebase for the old fixed port or container name should return nothing once this phase is complete.
@@ -77,7 +77,7 @@ The orchestrator must track how many concurrent containers the host can reasonab
 - [ ] A reconciliation sweep correctly identifies and removes containers with no corresponding active session
 - [ ] A full repository search confirms no remaining hardcoded reference to the old single-container port or name
 - [ ] Exceeding the configured host capacity produces a clear, graceful response to the requesting client — not a silently overloaded host or an unhandled failure
-- [ ] Every newly created container is confirmed to boot at the correct Seeker resolution, DPI, and boot-flag configuration — spot-checked, not assumed from a single earlier validation
+- [ ] Every newly created container is confirmed to boot at the correct Talon resolution, DPI, and boot-flag configuration — spot-checked, not assumed from a single earlier validation
 
 ---
 

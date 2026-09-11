@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/harness/subagent"
-	"github.com/seekersstudio/backend/internal/orchestrator"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
+	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 )
 
 // childRunner is the H9 in-process subagent backend: a child runs a second

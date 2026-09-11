@@ -1,6 +1,6 @@
 ---
 name: core
-description: Non-negotiable platform invariants for every Seeker build. Always in effect.
+description: Non-negotiable platform invariants for every Talon build. Always in effect.
 alwaysApply: true
 ---
 

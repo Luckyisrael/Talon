@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 5: Native Module / Dev-Client Baking
+# Talon — Phase 5: Native Module / Dev-Client Baking
 
 **Objective:** Build one shared, pre-compiled Expo Dev Client per template version — containing MWA and other common native modules — so the vast majority of AI-generated changes never trigger a native rebuild. A native rebuild should be the rare exception, triggered only by a genuinely new native dependency, and must never block the session while it happens.
 

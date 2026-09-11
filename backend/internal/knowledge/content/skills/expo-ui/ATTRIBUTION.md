@@ -13,7 +13,7 @@ or `scripts/`, so this copy was rewritten to be self-contained: the dangling
 `references/*.md` and `scripts/list-components.js` pointers, the `allowed-tools`
 front-matter field, and the "Submitting Feedback" section were removed; the front
 matter was flattened to our parser's schema (single-line `description`, `version`,
-`autoAttach`, `triggers`); Seeker/Android framing and a cross-reference to the
+`autoAttach`, `triggers`); Talon/Android framing and a cross-reference to the
 `expo-ui-jetpack-compose` skill were added. The substance (the "use @expo/ui by
 default" guidance, the `List`-is-not-virtualized note, the `BottomSheet` example,
 and the layer-selection guidance) is Expo's.

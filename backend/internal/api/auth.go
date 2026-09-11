@@ -5,7 +5,7 @@ package api
 // This file keeps only the shared response shape the OAuth exchange uses.
 
 import (
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 type authResponse struct {

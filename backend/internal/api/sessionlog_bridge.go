@@ -8,9 +8,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/harness/events"
-	"github.com/seekersstudio/backend/internal/harness/sessionlog"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/harness/events"
+	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
 )
 
 // The H1 session-log bridge: every conversation write the prompt paths make
@@ -174,12 +174,12 @@ func deriveToAIMessages(derived []sessionlog.DerivedMessage) []ai.Message {
 }
 
 // deriveFromLog returns the project's conversation derived from the session
-// log when SEEKERSTUDIO_SESSIONLOG=derive selects the new read path, and nil
+// log when TALONSTUDIO_SESSIONLOG=derive selects the new read path, and nil
 // otherwise (the caller falls back to the legacy table). A log that fails to
 // open also returns nil — a read-path failure falls back, it never kills a
 // build turn.
 func (h *PromptHandler) deriveFromLog(projectID int64) []ai.Message {
-	if strings.ToLower(strings.TrimSpace(os.Getenv("SEEKERSTUDIO_SESSIONLOG"))) != "derive" {
+	if strings.ToLower(strings.TrimSpace(os.Getenv("TALONSTUDIO_SESSIONLOG"))) != "derive" {
 		return nil
 	}
 	lg := h.slog.get(h.store, projectID)

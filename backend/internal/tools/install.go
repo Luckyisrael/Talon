@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/seekersstudio/backend/internal/devclient"
+	"github.com/luckyisrael/talon/backend/internal/devclient"
 )
 
 type InstallPackage struct {

@@ -23,7 +23,7 @@ func TestPhaseA_DeviceAwarePrompt(t *testing.T) {
 		"tail_logcat",
 		"run_e2e",
 		".maestro/flows/",
-		"com.seekerstudio.app",
+		"com.talon.app",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(prompt, want) {

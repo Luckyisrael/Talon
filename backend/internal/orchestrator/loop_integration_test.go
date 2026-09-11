@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/ai"
 )
 
 // The full generate → verify → heal → verify loop against a scripted fake

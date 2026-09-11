@@ -1,4 +1,4 @@
-module github.com/seekersstudio/backend
+module github.com/luckyisrael/talon/backend
 
 go 1.25.2
 

@@ -1,14 +1,14 @@
 ---
 name: seed-vault
-description: How Seed Vault (the TEE-backed key store on the Seeker) constrains what an app is allowed to do with keys. Load when the build touches signing, custody, or anything key-shaped.
-version: "Seed Vault 1.x (Seeker 1); MWA via @wallet-ui/react-native-kit 4.x"
+description: How Seed Vault (the TEE-backed key store on the Talon) constrains what an app is allowed to do with keys. Load when the build touches signing, custody, or anything key-shaped.
+version: "Seed Vault 1.x (Talon 1); MWA via @wallet-ui/react-native-kit 4.x"
 autoAttach: false
 triggers: [import:@solana-mobile/mobile-wallet-adapter, pkg:@solana-mobile, content:tweetnacl, content:ed25519, content:Keypair]
 ---
 
 # Seed Vault — what your app is allowed to do
 
-Seed Vault is a **TEE-backed key custody layer** in the Seeker. It is
+Seed Vault is a **TEE-backed key custody layer** in the Talon. It is
 hosted by the system, accessed only through Mobile Wallet Adapter (MWA),
 and **your app does not see key material** — ever. This skill is the
 "keys never leave the device" side, written as a separate document from

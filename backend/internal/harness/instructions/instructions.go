@@ -7,7 +7,7 @@
 //
 //	<workspace>/AGENTS.md        — the project's conventions
 //	<workspace>/app/AGENTS.md …  — nested per-area conventions
-//	$SEEKER_HOME/AGENTS.md      — the user's global conventions
+//	$TALON_HOME/AGENTS.md      — the user's global conventions
 //
 // The budget law (from DSH): 65,536 bytes total. When the chain overflows,
 // broader files are omitted whole before the most specific file is
@@ -57,7 +57,7 @@ type Chain struct {
 type Loader struct {
 	// WorkspaceRoot is the project directory.
 	WorkspaceRoot string
-	// GlobalPath is the user-global AGENTS.md ($SEEKER_HOME/AGENTS.md);
+	// GlobalPath is the user-global AGENTS.md ($TALON_HOME/AGENTS.md);
 	// empty disables it.
 	GlobalPath string
 }

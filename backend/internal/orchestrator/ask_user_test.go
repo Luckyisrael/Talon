@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/ai"
 )
 
 // askUserRequest is what makes the loop pause: it recognises an ask_user call

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
+	harnessagent "github.com/luckyisrael/talon/backend/internal/harness/agent"
 )
 
 // The H2 steer route: deliver a mid-turn message to a running build. The

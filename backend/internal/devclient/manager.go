@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	sdk "github.com/seekersstudio/backend/internal/sdk"
+	sdk "github.com/luckyisrael/talon/backend/internal/sdk"
 )
 
 // Manager handles dev-client lifecycle: installation, rebuild detection, and async rebuilds.
@@ -127,7 +127,7 @@ func (m *Manager) InstallDevClient(ctx context.Context, adbTarget string) error 
 // IsInstalledOnDevice checks if the dev-client is already installed on the device.
 func (m *Manager) IsInstalledOnDevice(adbTarget string) bool {
 	cmd := exec.Command("adb", "-s", adbTarget, "shell",
-		"pm", "list", "packages", "com.seekerstudio.devclient")
+		"pm", "list", "packages", "com.talon.devclient")
 	output, err := cmd.CombinedOutput()
 	return err == nil && len(output) > 0
 }

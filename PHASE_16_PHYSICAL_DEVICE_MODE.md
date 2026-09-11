@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 16: Physical Device Development Mode
+# Talon — Phase 16: Physical Device Development Mode
 
 **Objective:** Let a user run agent-generated code on their own physical Android device — including a real Seeker device — by sideloading the project's dev client and connecting to a live Metro session via QR code, as a complement to the Redroid emulator preview. This trades some of the agent's automated self-verification capability for real hardware fidelity, and is the first point in the product where Seed Vault-dependent code becomes genuinely testable.
 

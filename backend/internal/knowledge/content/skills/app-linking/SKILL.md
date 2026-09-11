@@ -1,14 +1,14 @@
 ---
 name: app-linking
-description: Verified deep links and URL schemes for Seeker apps — assetlinks.json, scheme registration, expo-linking, and the difference between "scheme link" and "verified app link". Load when the build needs to open from a URL or be linked from another app.
+description: Verified deep links and URL schemes for Talon apps — assetlinks.json, scheme registration, expo-linking, and the difference between "scheme link" and "verified app link". Load when the build needs to open from a URL or be linked from another app.
 version: "Android App Links 2025+; expo-linking@55"
 autoAttach: false
 triggers: [content:linking, content:deep.?link, content:scheme, content:universal.?link, content:assetlinks, import:expo-linking, import:react-native-app-link]
 ---
 
-# App linking on the Seeker
+# App linking on the Talon
 
-A Seeker app can be opened from a URL in **two** ways, and they are
+A Talon app can be opened from a URL in **two** ways, and they are
 not the same:
 
 - **Custom scheme link** — `myapp://path`. Trivial to set up. No

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/ai"
 )
 
 // The H3 migration gate: with the same scripted provider, legacy dispatch and
@@ -84,11 +84,11 @@ func TestPipelineTranscriptParity(t *testing.T) {
 	}
 
 	// Legacy: flag off — sequential dispatch.
-	t.Setenv("SEEKERSTUDIO_PIPELINE", "")
+	t.Setenv("TALONSTUDIO_PIPELINE", "")
 	legacy := run()
 
 	// Pipeline: flag on — bounded pool dispatch.
-	t.Setenv("SEEKERSTUDIO_PIPELINE", "v1")
+	t.Setenv("TALONSTUDIO_PIPELINE", "v1")
 	piped := run()
 
 	lj, _ := json.Marshal(legacy)

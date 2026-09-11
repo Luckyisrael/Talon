@@ -15,7 +15,7 @@ Front matter was authored to our parser's schema. The upstream
 `node <skill-root>/scripts/list-components.js` invocation was dropped (the script is
 not vendored); its intent — "confirm the real API against the installed version" — is
 preserved by pointing at the installed `.d.ts` type files in `node_modules`. Docs
-URLs were kept as optional pointers. Seeker/Android-first framing, the SDK 55-vs-56
+URLs were kept as optional pointers. Talon/Android-first framing, the SDK 55-vs-56
 version note, and a cross-reference to `rn-best-practices` (for large-list guidance)
 were added. The substance — the Android-only warning, Expo Router file placement,
 `Host` usage, `LazyColumn`/`Icon`/`useNativeState` notes — is Expo's.

@@ -21,7 +21,7 @@ const pushTimeout = 120 * time.Second
 // push cannot accidentally commit the node_modules symlink (which points into a
 // shared template) or build output. It is intentionally minimal and only
 // created when absent — a project that ships its own .gitignore is left alone.
-const gitignoreContents = `# Written by SeekerStudio on first push.
+const gitignoreContents = `# Written by Talon on first push.
 node_modules/
 .expo/
 dist/
@@ -76,15 +76,15 @@ func Push(ctx context.Context, opts PushOptions) (PushResult, error) {
 	}
 	message := strings.TrimSpace(opts.Message)
 	if message == "" {
-		message = "Update from SeekerStudio"
+		message = "Update from Talon"
 	}
 	author := strings.TrimSpace(opts.AuthorName)
 	if author == "" {
-		author = "SeekerStudio"
+		author = "Talon"
 	}
 	email := strings.TrimSpace(opts.AuthorEmail)
 	if email == "" {
-		email = "noreply@seekerstudio.app"
+		email = "noreply@talon.app"
 	}
 
 	// Build the tokenized push URL from the clean one. The token lives only in

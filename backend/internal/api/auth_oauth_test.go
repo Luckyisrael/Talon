@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/auth"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/auth"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // The OAuth sign-in flow is tested against a stub provider: a local

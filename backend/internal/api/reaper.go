@@ -4,9 +4,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/metro"
-	"github.com/seekersstudio/backend/internal/notify"
-	"github.com/seekersstudio/backend/internal/relay"
+	"github.com/luckyisrael/talon/backend/internal/metro"
+	"github.com/luckyisrael/talon/backend/internal/notify"
+	"github.com/luckyisrael/talon/backend/internal/relay"
 )
 
 // The DV4 idle reaper: devices nobody is watching are money burning.

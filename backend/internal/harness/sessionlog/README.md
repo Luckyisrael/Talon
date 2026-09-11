@@ -5,7 +5,7 @@ derives from. See `log.go` for the full contract.
 
 ## What the model sees
 
-- **Derived history, when SEEKERSTUDIO_SESSIONLOG=derive**: the
+- **Derived history, when TALONSTUDIO_SESSIONLOG=derive**: the
   model-visible conversation is derived from the log — same turns, plus
   shadowed regions replaced by their honest summaries.
 - **What changes caches:** nothing — the log stores what happened;

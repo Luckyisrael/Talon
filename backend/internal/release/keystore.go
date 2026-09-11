@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/secrets"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/secrets"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // KeystoreDir holds one <project-id>.jks per project, mode 0600. Overridable
@@ -83,7 +83,7 @@ func (k *Keystore) Ensure(ctx context.Context, projectID int64) (*store.Keystore
 		"-keystore", path, "-storepass:file", pwPath,
 		"-alias", alias, "-keypass:file", pwPath,
 		"-keyalg", "RSA", "-keysize", "2048", "-validity", "10950",
-		"-dname", fmt.Sprintf("CN=SeekerStudio Project %d, OU=SeekerStudio, O=SeekerStudio", projectID),
+		"-dname", fmt.Sprintf("CN=Talon Project %d, OU=Talon, O=Talon", projectID),
 	)
 	if out, err := gen.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("keytool failed: %v: %s", err, truncate(string(out), 300))

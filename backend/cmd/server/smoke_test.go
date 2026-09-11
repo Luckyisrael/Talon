@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
 )
 
 // TestBootKnowledgeLoads reproduces the exact path resolution main() uses at

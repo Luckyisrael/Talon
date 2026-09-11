@@ -13,9 +13,9 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/orchestrator"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/orchestrator"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // The ask_user pause/resume flow, end to end on the backend. This is the

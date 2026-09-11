@@ -1,6 +1,6 @@
 // Package compaction is the H8 context-economy toolkit: the tool-result
 // pruner and the spill store, extracted from DSH's compaction contracts and
-// adapted to SeekerStudio's turn shapes.
+// adapted to Talon's turn shapes.
 //
 // Two distinct disciplines live here:
 //

@@ -10,13 +10,13 @@ source: https://github.com/expo/skills (plugins/expo/skills/expo-ui/references/j
 
 # Android-native UI with `@expo/ui/jetpack-compose`
 
-The Seeker is an Android device, so this layer targets its real runtime directly —
+The Talon is an Android device, so this layer targets its real runtime directly —
 real Jetpack Compose driven from React. Reach for it when the universal `@expo/ui`
 components don't cover what you need on Android; start from the **`expo-ui`** skill
 (the universal layer) first, and drop to this one only for the gap.
 
 > **Android only.** Code importing from `@expo/ui/jetpack-compose` crashes on iOS
-> with "Unable to get view config". Since the Seeker is Android-first this is a mild
+> with "Unable to get view config". Since the Talon is Android-first this is a mild
 > constraint, not a real cost — but still isolate it: put the tree in an
 > `.android.tsx` component file, or guard with `Platform.OS === 'android'`. `Host`
 > must be imported from `@expo/ui` (the universal root), **not** from

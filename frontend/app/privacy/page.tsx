@@ -5,7 +5,7 @@ import { MarketingNav, MarketingFooter } from "@/components/marketing";
 export const metadata: Metadata = {
   title: "Privacy",
   description:
-    "What SeekerStudio collects, how it is used, and what it never touches — including your keys.",
+    "What Talon collects, how it is used, and what it never touches — including your keys.",
 };
 
 const LAST_UPDATED = "August 2026";
@@ -27,7 +27,7 @@ export default function PrivacyPage() {
         <div className="space-y-10">
           <section>
             <p className="text-sm text-fog leading-relaxed">
-              This policy explains what SeekerStudio collects when you build with it, why, and
+              This policy explains what Talon collects when you build with it, why, and
               what it deliberately never touches. It is written plainly on purpose — if anything
               here is unclear, ask us before you rely on it.
             </p>
@@ -76,7 +76,7 @@ export default function PrivacyPage() {
           <section>
             <h2 className="text-[15px] font-medium text-paper mb-3">What we never collect</h2>
             <p className="text-sm text-fog leading-relaxed">
-              SeekerStudio never asks for, stores, or generates a seed phrase or private key.
+              Talon never asks for, stores, or generates a seed phrase or private key.
               Wallet connections run through the Mobile Wallet Adapter, and the device&apos;s Seed
               Vault or wallet app holds all key material. Key custody never reaches our servers.
             </p>
@@ -96,7 +96,7 @@ export default function PrivacyPage() {
             <p className="text-sm text-fog leading-relaxed">
               Questions about privacy? Reach us through our{" "}
               <Link
-                href="https://discord.gg/seekersstudio"
+                href="https://discord.gg/talon"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-paper underline underline-offset-2 hover:text-white transition-colors"

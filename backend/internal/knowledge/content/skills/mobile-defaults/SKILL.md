@@ -1,6 +1,6 @@
 ---
 name: mobile-defaults
-description: Mobile-first defaults every Seeker app should have — safe areas, keyboard handling, network loss, slow CPU, low-data mode, status bar. Load when the build is producing a screen and "happy path only" is the default, because the user will hit every other path on a real phone.
+description: Mobile-first defaults every Talon app should have — safe areas, keyboard handling, network loss, slow CPU, low-data mode, status bar. Load when the build is producing a screen and "happy path only" is the default, because the user will hit every other path on a real phone.
 version: "RN 0.83, react-native-safe-area-context 5.6.x, expo-status-bar 3.x, NetInfo 7.x"
 autoAttach: true
 triggers: [path:app/**, path:components/**, content:SafeAreaView, content:KeyboardAvoidingView, content:NetInfo, content:useSafeAreaInsets, content:StatusBar, content:AppState]
@@ -8,7 +8,7 @@ triggers: [path:app/**, path:components/**, content:SafeAreaView, content:Keyboa
 
 # Mobile defaults — the paths you only find on a real phone
 
-Every screen in a Seeker app has to survive these by default. None
+Every screen in a Talon app has to survive these by default. None
 of them are on the happy path; all of them happen on a real device
 the first week.
 
@@ -17,8 +17,8 @@ the first week.
 - Wrap every screen in `SafeAreaView` (from
   `react-native-safe-area-context`, preinstalled) **or** apply
   `useSafeAreaInsets()` padding. Do not hardcode top/bottom
-  padding. (See `seeker-screen-design`.)
-- The Seeker has both a status bar and a gesture area. Both count.
+  padding. (See `talon-screen-design`.)
+- The Talon has both a status bar and a gesture area. Both count.
 - A modal sheet (e.g. `@expo/ui` `BottomSheet`) needs its own
   safe-area handling on the bottom edge.
 

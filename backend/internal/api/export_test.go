@@ -15,8 +15,8 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/release"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/release"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 func testSolidPNG(f *os.File, w, h int) error {

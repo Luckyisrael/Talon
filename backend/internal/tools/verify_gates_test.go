@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
 )
 
 // All G4 gate tools must report "unavailable" rather than fail when the

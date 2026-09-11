@@ -1,4 +1,4 @@
-# SeekerStudio — Performance Plan (build, test, infra)
+# Talon — Performance Plan (build, test, infra)
 
 Diagnosis date: 2026-09-05
 Scope: APK build, Redroid testing, general infra speed
@@ -37,14 +37,14 @@ Fix:
 - Add metrics: pool size, wait time, hit/miss, cold-start count.
 
 ## 2. Bake APKs into a pre-baked Redroid image
-File: `infra/redroid/Dockerfile.seeker:7-9`, `infra/redroid/launch-dev.sh:88-91`
+File: `infra/redroid/Dockerfile.talon:7-9`, `infra/redroid/launch-dev.sh:88-91`
 Gap: APKs are `COPY`ed into the image but not installed (Redroid has no shell during build). Each cold container pays ~10-30s × 3 for sequential `adb install -r`.
 Fix:
-- New `infra/redroid/Dockerfile.seeker-prebaked` that:
+- New `infra/redroid/Dockerfile.talon-prebaked` that:
   1. Starts a temp Redroid with the stock image
   2. `adb install` the three APKs
   3. `adb shell pm grant` runtime perms
-  4. Commits the userdata into a new image tag `seeker-redroid-prebaked:latest`
+  4. Commits the userdata into a new image tag `talon-redroid-prebaked:latest`
 - `launch-dev.sh` selects the pre-baked image by default; falls back to stock + install if missing.
 - One-time cost to bake; saves ~30s per cold container thereafter.
 

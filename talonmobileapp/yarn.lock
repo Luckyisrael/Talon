@@ -5538,9 +5538,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"SeekerStudioMobileApp@workspace:.":
+"TalonMobileApp@workspace:.":
   version: 0.0.0-use.local
-  resolution: "SeekerStudioMobileApp@workspace:."
+  resolution: "TalonMobileApp@workspace:."
   dependencies:
     "@expo-google-fonts/inter": "npm:^0.4.2"
     "@expo-google-fonts/jetbrains-mono": "npm:^0.4.1"

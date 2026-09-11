@@ -1,4 +1,4 @@
-// Package evals measures whether SeekerStudio produces good apps regardless of the
+// Package evals measures whether Talon produces good apps regardless of the
 // model driving the build — the whole point of the knowledge, guardrail, and
 // verification layers. It runs a fixed suite of build prompts and grades each
 // result with deterministic checks, so the same build always earns the same score

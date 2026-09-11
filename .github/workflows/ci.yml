@@ -1,4 +1,4 @@
-# SeekerStudio CI — gates every push and pull request.
+# Talon CI — gates every push and pull request.
 #
 # Deliberately secret-free: unit, integration (faked providers/devices), and
 # static checks only. No AI keys, no payment keys, no database access. A

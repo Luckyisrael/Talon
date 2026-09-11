@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/knowledge"
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/events"
-	"github.com/seekersstudio/backend/internal/runtime"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/events"
+	"github.com/luckyisrael/talon/backend/internal/runtime"
 )
 
 // The loop consults the failure index before re-asking: a known error gets a

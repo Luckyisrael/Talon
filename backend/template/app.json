@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "SeekerApp",
-    "slug": "seeker-app",
+    "name": "TalonApp",
+    "slug": "talon-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "seekerapp",
+    "scheme": "talonapp",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true
@@ -18,7 +18,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.seekerstudio.app"
+      "package": "com.talon.app"
     },
     "web": {
       "output": "static",

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/ai"
 )
 
 // A model that fails must not kill the turn when a fallback is configured:

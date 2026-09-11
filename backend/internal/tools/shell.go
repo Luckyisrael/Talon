@@ -101,7 +101,7 @@ var blockedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`>\s*/dev/(sda|nvme|mmcblk)`),         // block devices
 	regexp.MustCompile(`(?i)\b(rm\s+-rf?\s+/( |$)|rm\s+-rf?\s+~)`), // root/home wipe
 	regexp.MustCompile(`(?i)\.env(\.|$|["'\s])`),             // server secrets
-	regexp.MustCompile(`(?i)(id_rsa|id_ed25519|\.pem\b|\.key\b|credentials\.json|seekersstudio\.db\b)`),
+	regexp.MustCompile(`(?i)(id_rsa|id_ed25519|\.pem\b|\.key\b|credentials\.json|talon\.db\b)`),
 	regexp.MustCompile(`~\/\.ssh|/etc/(passwd|shadow|ssh)|/root/`),
 	regexp.MustCompile(`(^|[\s'"])\.\.(/|$|["'\s])`),         // workspace escape
 	regexp.MustCompile(`(^|[\s'"])/(etc|root|proc|sys|dev|var|usr|bin|sbin|home)(/|$|["'\s])`),

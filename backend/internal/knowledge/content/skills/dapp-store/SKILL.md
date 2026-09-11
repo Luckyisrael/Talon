@@ -9,7 +9,7 @@ triggers: [path:app.json, content:icon, content:banner, content:slug, content:da
 # Solana Mobile dApp Store — what gets submissions rejected
 
 The dApp Store is the **only** first-party distribution channel for
-the Seeker. Browser-side, this is a real submission with real SOL
+the Talon. Browser-side, this is a real submission with real SOL
 cost, real asset rules, and a real review queue. Get the assets
 right the first time.
 

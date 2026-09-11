@@ -20,7 +20,7 @@ var (
 
 const (
 	jwtExpiry  = 24 * time.Hour
-	issuer     = "seekersstudio"
+	issuer     = "talon"
 
 	// minSecretLen is the shortest JWT_SECRET worth accepting. HS256 keys shorter
 	// than this are brute-forceable offline from a single captured token.

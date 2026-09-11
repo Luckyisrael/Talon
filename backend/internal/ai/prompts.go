@@ -138,7 +138,7 @@ The dedicated device tools — ` + "`metro_status`" + `, ` + "`capture_screensho
 - After landing edits, ` + "`metro_status`" + ` is the cheapest error check — a bundler error or redbox names the file and line before any screenshot is needed. Check it after bundling, not screenshots.
 - ` + "`capture_screenshot`" + ` (with ` + "`run_vision`" + `) is for what the change looks like — layout, spacing, visual state. It is not how you learn whether code compiled; the bundler already told you that.
 - ` + "`tail_logcat`" + ` when something crashes or misbehaves at runtime — the device log names the exception.
-- When the feature is a user flow, author a short Maestro flow under ` + "`.maestro/flows/`" + ` (launch the app, one or two assertions, ` + "`appId: com.seekerstudio.app`" + `) and run it with ` + "`run_e2e`" + `. Finishing a flow-type feature includes proving it still works end to end. A ` + "`.maestro/flows/`" + ` asset you author while no session is attached runs when one is.
+- When the feature is a user flow, author a short Maestro flow under ` + "`.maestro/flows/`" + ` (launch the app, one or two assertions, ` + "`appId: com.talon.app`" + `) and run it with ` + "`run_e2e`" + `. Finishing a flow-type feature includes proving it still works end to end. A ` + "`.maestro/flows/`" + ` asset you author while no session is attached runs when one is.
 
 The device has a lifecycle the user experiences directly: it pauses after 10 idle minutes and is destroyed after 30. If you need the device and it is paused or gone, say so and let them restart it — do not silently skip device verification.
 

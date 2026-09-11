@@ -15,7 +15,7 @@ import (
 // Like mark_task_done, this is orchestrator-owned: the loop intercepts the
 // call because only the loop owns both the session's patch buffer and the
 // verify path. Execute is only the honest fallback for a bypassed call.
-// Behind the SEEKERSTUDIO_PATCH_BUFFER flag the interception is off and a
+// Behind the TALONSTUDIO_PATCH_BUFFER flag the interception is off and a
 // try_edit call behaves as the plain underlying edit.
 type TryEdit struct{}
 

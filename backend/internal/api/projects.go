@@ -11,9 +11,9 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/identity"
-	"github.com/seekersstudio/backend/internal/store"
-	"github.com/seekersstudio/backend/internal/workspace"
+	"github.com/luckyisrael/talon/backend/internal/identity"
+	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/workspace"
 )
 
 type ProjectHandler struct {

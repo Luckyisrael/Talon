@@ -9,7 +9,7 @@ plan must move one of these numbers.
 |---|---|---|
 | Typecheck (`tsc --noEmit`, ws27) | **2.29 s/op** (hot cache; ~9 s cold) | Full project, parse-bound on the Expo SDK graph. `tsc --build` measured **no faster** (9.0 s vs 9.2 s warm) — buildinfo doesn't skip on this workload, so verify stays on `--noEmit`. Template keeps `incremental`+`noEmit` for future adoption. Baseline is cache-sensitive: compare runs back-to-back. |
 
-## Kit template re-baseline (Phase 3 migration, SEEKER_BENCH_WS=template)
+## Kit template re-baseline (Phase 3 migration, TALON_BENCH_WS=template)
 
 New template (kit v6, 600 packages) vs old (web3.js, ws27 workspaces):
 
@@ -38,7 +38,7 @@ device lane reopens.
   up-to-date (daemon+cache engaged). Prior unflagged run was killed at
   ~10 min without finishing — not a clean A/B, but caching demonstrably
   works now.
-- **Boot verified on device**: SolMate (com.seekerstudio.e2echeck)
+- **Boot verified on device**: SolMate (com.talon.e2echeck)
   installed, `am start` → PID alive, app-code log lines present
   (G5 seen-boot + first-launch proof). Note: `monkey -p` exited -5 without
   launching despite a valid LAUNCHER activity — prefer `am start` in

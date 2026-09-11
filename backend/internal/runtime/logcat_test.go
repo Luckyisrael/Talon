@@ -8,7 +8,7 @@ import (
 
 const fixture = `09-05 14:22:30.100   500   500 I boot_progress: boot complete
 09-05 14:22:31.123  1234  1234 I com.test.app: Application onCreate
-09-05 14:22:31.400  1234  1234 D ReactNativeJS: Running "SeekerApp"
+09-05 14:22:31.400  1234  1234 D ReactNativeJS: Running "TalonApp"
 09-05 14:22:33.000  1234  1234 E AndroidRuntime: FATAL EXCEPTION: main
 09-05 14:22:33.001  1234  1234 E AndroidRuntime: java.lang.NullPointerException
 not a timestamped line

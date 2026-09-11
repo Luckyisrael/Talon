@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/seekersstudio/backend/internal/harness/workflow"
+	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
 )
 
 // RunWorkflow executes a declarative fan-out spec: parallel child checks,

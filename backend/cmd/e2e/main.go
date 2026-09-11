@@ -1,4 +1,4 @@
-// Command e2e drives SeekerStudio's entire core product against a live
+// Command e2e drives Talon's entire core product against a live
 // stack: real HTTP server, real model gateway, real docker redroid device,
 // real template — no smoke, no dummies. It speaks the exact client surface
 // (REST, SSE) the web frontend uses, asserting every stage of the product
@@ -74,7 +74,7 @@ func startStubProvider(addr string) error {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"id": 42000, "login": "e2e-live", "name": "E2E Live Run",
-			"email": "e2e@seekerstudio.test", "avatar_url": "",
+			"email": "e2e@talon.test", "avatar_url": "",
 		})
 	})
 	ln, err := net.Listen("tcp", addr)

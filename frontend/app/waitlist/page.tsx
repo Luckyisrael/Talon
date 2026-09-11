@@ -6,7 +6,7 @@ import { MarketingNav, MarketingFooter, socials } from "@/components/marketing";
 export const metadata: Metadata = {
   title: "Early access",
   description:
-    "SeekerStudio is in early access. The Free tier is open now — no queue, no card. Pro raises the limits and opens gradually.",
+    "Talon is in early access. The Free tier is open now — no queue, no card. Pro raises the limits and opens gradually.",
 };
 
 // The honest core of this page: there is no waitlist submit endpoint, and the
@@ -35,7 +35,7 @@ const freePoints = [
 // that exists in the build — the same pillars the product is pitched on.
 const pillars = [
   {
-    title: "Native to Seeker",
+    title: "Native to Talon",
     body: "A real React Native app for the device — Mobile Wallet Adapter and Seed Vault, not a website in a wrapper.",
   },
   {
@@ -66,7 +66,7 @@ export default function WaitlistPage() {
             The waitlist is for Pro. Building is open now.
           </h1>
           <p className="t-body-sm text-fog">
-            SeekerStudio is in early access. The Free tier is live today — a real allowance, no
+            Talon is in early access. The Free tier is live today — a real allowance, no
             card, no queue. Pro raises the limits, and we&apos;re opening it gradually.
           </p>
           <div className="mt-8">

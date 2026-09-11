@@ -13,14 +13,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/seekersstudio/backend/internal/adb"
-	"github.com/seekersstudio/backend/internal/devclient"
-	"github.com/seekersstudio/backend/internal/notify"
-	"github.com/seekersstudio/backend/internal/device"
-	"github.com/seekersstudio/backend/internal/metro"
-	"github.com/seekersstudio/backend/internal/relay"
-	"github.com/seekersstudio/backend/internal/redroid"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/adb"
+	"github.com/luckyisrael/talon/backend/internal/devclient"
+	"github.com/luckyisrael/talon/backend/internal/notify"
+	"github.com/luckyisrael/talon/backend/internal/device"
+	"github.com/luckyisrael/talon/backend/internal/metro"
+	"github.com/luckyisrael/talon/backend/internal/relay"
+	"github.com/luckyisrael/talon/backend/internal/redroid"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 type SessionHandler struct {

@@ -12,7 +12,7 @@ source: https://github.com/vercel-labs/agent-skills (skills/react-native-skills)
 
 A checklist of high-impact RN/Expo practices, ordered by how much they matter on a
 120Hz device. This condenses Vercel Labs' React Native rules; where their advice and
-this project's `seeker-screen-design` skill differ, the reconciled Seeker guidance is
+this project's `talon-screen-design` skill differ, the reconciled Talon guidance is
 below. For the full per-rule examples, see `ATTRIBUTION.md` (upstream repo).
 
 ## List performance (CRITICAL)
@@ -20,7 +20,7 @@ below. For the full per-rule examples, see `ATTRIBUTION.md` (upstream repo).
 - **Never render a list as `ScrollView` + `.map()`.** It mounts every child upfront.
   Use a virtualized list, which mounts only what's visible.
 - **The ladder:** `FlatList` (preinstalled, already virtualized) is the baseline and
-  the right default for most Seeker screens. For **large, unbounded, or heavy** lists
+  the right default for most Talon screens. For **large, unbounded, or heavy** lists
   (infinite feeds, big catalogs), go one step further and install a recycling
   virtualizer — **FlashList** (`@shopify/flash-list`) or **LegendList**
   (`@legendapp/list`) — which recycles item views for lower memory and faster scroll.
@@ -62,7 +62,7 @@ below. For the full per-rule examples, see `ATTRIBUTION.md` (upstream repo).
 - Handle safe areas in scroll views; use `contentInset`/`contentInsetAdjustmentBehavior`
   for content under headers. Use `onLayout` to measure, not the imperative `measure()`.
 - Style with `StyleSheet.create` (or Nativewind if installed) — never rebuild inline
-  style objects every render. This matches `seeker-screen-design`.
+  style objects every render. This matches `talon-screen-design`.
 
 ## State & rendering (MEDIUM)
 

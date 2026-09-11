@@ -256,8 +256,8 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 
 	respBody, err := c.doWithEnvelopeRetry(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-		req.Header.Set("HTTP-Referer", "https://seekerstudio.app")
-		req.Header.Set("X-Title", "SeekerStudio")
+		req.Header.Set("HTTP-Referer", "https://talon.app")
+		req.Header.Set("X-Title", "Talon")
 	}, "ChatWithTools(OpenAI)")
 	if err != nil {
 		return nil, err
@@ -418,7 +418,7 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 	respBody, err := c.doWithEnvelopeRetry(ctx, c.baseURL+"/v1/messages", body, func(req *http.Request) {
 		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Set("User-Agent", "SeekerStudio/1.0")
+		req.Header.Set("User-Agent", "Talon/1.0")
 	}, "ChatWithTools(Anthropic)")
 	if err != nil {
 		return nil, err

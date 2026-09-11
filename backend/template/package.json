@@ -1,5 +1,5 @@
 {
-  "name": "SeekerStudioMobileApp",
+  "name": "TalonMobileApp",
   "scripts": {
     "android": "expo run:android",
     "android:build": "expo prebuild -p android",

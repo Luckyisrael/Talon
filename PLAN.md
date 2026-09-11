@@ -1,4 +1,4 @@
-# SeekerStudio — Plan (live, reflects repo state 2026-09-04)
+# Talon — Plan (live, reflects repo state 2026-09-04)
 
 This plan supersedes earlier drafts. It is written against the **actual** state of the
 repo at this commit, not against a prior session's memory.
@@ -23,8 +23,8 @@ repo at this commit, not against a prior session's memory.
 
 ## What is already shipped (do not re-do)
 
-- **Skill bundle (9 skills):** `seeker-mobile` (SKILL.md, seed-vault, scl,
-  dapp-store, app-linking, mobile-defaults), `wallet-mwa`, `seeker-screen-design`,
+- **Skill bundle (9 skills):** `talon-mobile` (SKILL.md, seed-vault, scl,
+  dapp-store, app-linking, mobile-defaults), `wallet-mwa`, `talon-screen-design`,
   `rn-best-practices`, `expo-router-nav`, `expo-ui`, `expo-ui-jetpack-compose`,
   `reanimated-v4`, `failure-patterns`. Curated, version-pinned, MIT-licensed
   where applicable (Vercel Labs, Expo), with ATTRIBUTION.md.
@@ -166,7 +166,7 @@ existing patterns, and verifiable by `go build ./... && go vet ./... && go test
      it fails, auto-revert to pre-image and emit `Reverted: <reason>` on the
      tool_result so the model sees the rollback.
    - New `keep_edit` tool — explicitly accept and clear.
-   - Feature flag `SEEKERSTUDIO_PATCH_BUFFER=off` (default off, opt-in per
+   - Feature flag `TALONSTUDIO_PATCH_BUFFER=off` (default off, opt-in per
      session via `RunOptions.PatchBufferEnabled`).
    **DoD (off):** all existing tests pass; a session with the flag off
    behaves identically to today. **(on):** a model attempt that breaks types

@@ -32,7 +32,7 @@ type Block struct {
 	Content   string `json:"content,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
 
-	// plan (SeekerStudio plan-mode reply). Carries the structured app plan as
+	// plan (Talon plan-mode reply). Carries the structured app plan as
 	// raw JSON so a reload can rebuild the plan card. Deliberately not sent to
 	// the provider — the accompanying text block carries the replayable message,
 	// and the model does not need its own plan echoed back.

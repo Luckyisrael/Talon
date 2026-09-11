@@ -23,22 +23,22 @@ Vercel ships each rule as its own skill with a full incorrect-vs-correct code ex
 Our loader reads one `SKILL.md` per directory, so those ~30 rules were **condensed into
 a single checklist**, grouped by their priority tiers, with the per-rule long-form
 examples intentionally **not** vendored (they remain upstream). The guidance was then
-**reconciled with Seeker reality**, which changed two things materially:
+**reconciled with Talon reality**, which changed two things materially:
 
 - **Lists.** Upstream leads with "use a virtualizer (LegendList/FlashList) over
   `ScrollView`+`.map()`." We keep that but reframe it as a ladder that matches what is
   actually installed here: `FlatList` (preinstalled, already virtualized) is the
   baseline default, and `@shopify/flash-list` / `@legendapp/list` are opt-in installs
   for large/heavy lists. This keeps it consistent with the project's own
-  `seeker-screen-design` skill rather than contradicting it.
+  `talon-screen-design` skill rather than contradicting it.
 - **Cross-references.** Pointers to this project's `reanimated-v4`, `expo-router-nav`,
-  `expo-ui`, and `seeker-screen-design` skills were added so the checklist composes
+  `expo-ui`, and `talon-screen-design` skills were added so the checklist composes
   with the rest of the skill set instead of duplicating it.
 
 Package names (`@shopify/flash-list`, `@legendapp/list`, `expo-image`), the "wrap
 strings in `<Text>`", "no falsy `&&`", GPU-only-animation, native-navigator, and
 `Pressable`-over-`TouchableOpacity` guidance are Vercel's; the preinstalled-vs-install
-framing and the Seeker cross-references are ours.
+framing and the Talon cross-references are ours.
 
 ## MIT License
 

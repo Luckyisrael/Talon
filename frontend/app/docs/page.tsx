@@ -5,7 +5,7 @@ import { MarketingNav, MarketingFooter } from "@/components/marketing";
 export const metadata: Metadata = {
   title: "Docs",
   description:
-    "How SeekerStudio turns a prompt into a running Solana Mobile app — getting started, the Solana Mobile stack, and your quotas.",
+    "How Talon turns a prompt into a running Solana Mobile app — getting started, the Solana Mobile stack, and your quotas.",
 };
 
 // Section ids are the anchor targets the footer links to (#getting-started,
@@ -29,7 +29,7 @@ export default function DocsPage() {
             Build a Solana Mobile app from a prompt
           </h1>
           <p className="t-body-sm text-fog max-w-2xl">
-            SeekerStudio is a browser IDE with an agent that writes React Native, runs it on a
+            Talon is a browser IDE with an agent that writes React Native, runs it on a
             live virtual Seeker device, and installs the build — no local Android toolchain.
           </p>
         </header>
@@ -103,7 +103,7 @@ export default function DocsPage() {
               <div className="card-subtle p-5!">
                 <h3 className="text-sm font-medium text-paper mb-2">On keys and security</h3>
                 <p className="text-sm text-fog leading-relaxed">
-                  SeekerStudio never asks for, stores, or generates a seed phrase or private key.
+                  Talon never asks for, stores, or generates a seed phrase or private key.
                   Wallet connections go through the Mobile Wallet Adapter, and the device&apos;s
                   Seed Vault or wallet app holds all key material. Your app requests a signature;
                   the wallet decides. Key custody never touches the builder.

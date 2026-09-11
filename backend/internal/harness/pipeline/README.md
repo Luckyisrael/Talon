@@ -10,7 +10,7 @@ contract.
   Transcript parity between legacy and pipeline modes is a tested invariant
   (TestPipelineTranscriptParity); the model cannot tell which ran.
 - **Budgets:** the pool is bounded (default 4, clamped [1,32] via
-  SEEKERSTUDIO_TOOL_POOL); an exclusive call drains the pool and runs alone
+  TALONSTUDIO_TOOL_POOL); an exclusive call drains the pool and runs alone
   — its result order stays the batch order.
 - **Failure shapes:** a panicked stage is recovered into a structured
   tool_result naming the crash; a refusal is synthesized in place, never a

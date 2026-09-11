@@ -1,4 +1,4 @@
-# SeekerStudio
+# Talon
 
 A browser-based "Vibe Coding" IDE for the Solana Mobile ecosystem. Users describe their app in natural language, AI plans screens/features, generates React Native/Expo code, builds APK, deploys to an Android emulator, and streams live preview to the browser.
 
@@ -59,7 +59,7 @@ A browser-based "Vibe Coding" IDE for the Solana Mobile ecosystem. Users describ
 ## Project Structure
 
 ```
-SeekerStudio/
+Talon/
 ├── backend/                     # Go API server
 │   ├── cmd/server/              # Entrypoint
 │   ├── internal/
@@ -87,7 +87,7 @@ SeekerStudio/
 ├── contracts/                   # API endpoint definitions
 ├── docs/                        # Guides and specs
 ├── infra/                       # Infrastructure (Redroid, Docker)
-└── seeker-studio-example/       # Reference Expo project
+└── talon-studio-example/       # Reference Expo project
 ```
 
 ## Prerequisites
@@ -104,14 +104,14 @@ SeekerStudio/
 ### 1. Clone the repository
 
 ```bash
-git clone git@github.com:Luckyisrael/SeekerStudio.git
-cd SeekerStudio
+git clone git@github.com:Luckyisrael/Talon.git
+cd Talon
 ```
 
 ### 2. Start Redroid (Android emulator)
 
 ```bash
-docker run -d --name redroid-seeker-dev \
+docker run -d --name redroid-talon-dev \
   --privileged \
   -p 5555:5555 \
   -v redroid-data:/data \
@@ -158,7 +158,7 @@ ANTHROPIC_MODEL=claude-opus-5
 
 # Optional
 PORT=9191                    # Default: 9191
-DB_PATH=./seekersstudio.db   # SQLite database path
+DB_PATH=./talon.db   # SQLite database path
 WORKSPACE_DIR=./workspaces   # Project workspaces
 TEMPLATE_DIR=./backend/template
 ```

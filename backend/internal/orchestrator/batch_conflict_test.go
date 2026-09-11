@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/ai"
 )
 
 func call(name, path string) ai.ToolUseBlock {

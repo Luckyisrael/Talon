@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 func TestIsPaidTier(t *testing.T) {
@@ -30,7 +30,7 @@ func TestRepoName(t *testing.T) {
 		{"slug preferred", store.Project{Slug: "cool-app", Name: "Cool App"}, "cool-app"},
 		{"name fallback with spaces", store.Project{Name: "My Great App"}, "my-great-app"},
 		{"strips illegal chars", store.Project{Name: "Hello, World! (v2)"}, "hello-world-v2"},
-		{"id fallback when empty", store.Project{ID: 42}, "seekerstudio-project-42"},
+		{"id fallback when empty", store.Project{ID: 42}, "talon-project-42"},
 		{"trims leading/trailing separators", store.Project{Slug: "--edge--"}, "edge"},
 	}
 	for _, tc := range cases {

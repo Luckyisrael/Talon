@@ -148,7 +148,7 @@ export function ConnectScreen() {
           <View style={[styles.mockBar, { marginRight: 110 }]} />
         </View>
         <UIText variant="body" tone="muted">
-          Seeker talks to the wallet app on your device through Mobile Wallet Adapter. Your keys never leave the wallet the app only ever asks it to sign.
+          Talon talks to the wallet app on your device through Mobile Wallet Adapter. Your keys never leave the wallet the app only ever asks it to sign.
         </UIText>
         <View style={styles.foot}>
           {/* Dummy: MWA wiring lands with the auth milestone. */}

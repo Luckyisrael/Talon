@@ -16,23 +16,23 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/joho/godotenv"
-	"github.com/seekersstudio/backend/internal/knowledge"
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/api"
-	"github.com/seekersstudio/backend/internal/auth"
-	"github.com/seekersstudio/backend/internal/billing"
-	"github.com/seekersstudio/backend/internal/devclient"
-	"github.com/seekersstudio/backend/internal/gitremote"
-	"github.com/seekersstudio/backend/internal/logx"
-	"github.com/seekersstudio/backend/internal/harness/compaction"
-	"github.com/seekersstudio/backend/internal/harness/instructions"
-	"github.com/seekersstudio/backend/internal/harness/skills"
-	"github.com/seekersstudio/backend/internal/notify"
-	"github.com/seekersstudio/backend/internal/orchestrator"
-	"github.com/seekersstudio/backend/internal/redroid"
-	"github.com/seekersstudio/backend/internal/store"
-	"github.com/seekersstudio/backend/internal/workspace"
-	"github.com/seekersstudio/backend/internal/ws"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/api"
+	"github.com/luckyisrael/talon/backend/internal/auth"
+	"github.com/luckyisrael/talon/backend/internal/billing"
+	"github.com/luckyisrael/talon/backend/internal/devclient"
+	"github.com/luckyisrael/talon/backend/internal/gitremote"
+	"github.com/luckyisrael/talon/backend/internal/logx"
+	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
+	"github.com/luckyisrael/talon/backend/internal/harness/instructions"
+	"github.com/luckyisrael/talon/backend/internal/harness/skills"
+	"github.com/luckyisrael/talon/backend/internal/notify"
+	"github.com/luckyisrael/talon/backend/internal/orchestrator"
+	"github.com/luckyisrael/talon/backend/internal/redroid"
+	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/workspace"
+	"github.com/luckyisrael/talon/backend/internal/ws"
 
 	_ "modernc.org/sqlite"
 )
@@ -47,7 +47,7 @@ func main() {
 
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
-		dbPath = "./seekersstudio.db"
+		dbPath = "./talon.db"
 	}
 
 	projectRoot := findProjectRoot()
@@ -118,22 +118,22 @@ func main() {
 	ai.AttachSettingsFile(filepath.Join(filepath.Dir(dbPath), "settings.json"))
 
 	// H6: the multi-source skill catalog — embedded knowledge is
-	// authoritative, and each workspace's .seeker/skills merge in (winner per
+	// authoritative, and each workspace's .talon/skills merge in (winner per
 	// name: embedded). The catalog reloads lazily; workspace skills are listed
 	// to the model but their bodies load only through read_skill, same trust
 	// boundary as today.
 	skillCatalog := skills.NewCatalog(skills.EmbeddedProvider{Registry: knowledge})
 
 	// H6: the AGENTS.md instructions chain factory — the user's global
-	// conventions ($SEEKER_HOME/AGENTS.md or ~/.seeker/AGENTS.md) plus each
+	// conventions ($TALON_HOME/AGENTS.md or ~/.talon/AGENTS.md) plus each
 	// project's own AGENTS.md files, budgeted, re-read on every enrichment.
-	seekerHome := os.Getenv("SEEKER_HOME")
-	if seekerHome == "" {
+	talonHome := os.Getenv("TALON_HOME")
+	if talonHome == "" {
 		if home, err := os.UserHomeDir(); err == nil {
-			seekerHome = filepath.Join(home, ".seeker")
+			talonHome = filepath.Join(home, ".talon")
 		}
 	}
-	globalAGENTS := filepath.Join(seekerHome, "AGENTS.md")
+	globalAGENTS := filepath.Join(talonHome, "AGENTS.md")
 	orchestratorSvc.AttachInstructions(func(workspacePath string) string {
 		return instructions.Loader{WorkspaceRoot: workspacePath, GlobalPath: globalAGENTS}.Load().Text()
 	})
@@ -481,7 +481,7 @@ func main() {
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("seekersstudio backend listening on :%s", port)
+		log.Printf("talon backend listening on :%s", port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server stopped: %v", err)
 		}

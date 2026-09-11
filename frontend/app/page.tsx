@@ -29,7 +29,7 @@ const features = [
   {
     icon: ShieldSecurity,
     title: "Solana native",
-    body: "MWA wallet integration, keypair management, and Solana RPC — everything a Seeker app needs, pre-configured.",
+    body: "MWA wallet integration, keypair management, and Solana RPC — everything a Talon app needs, pre-configured.",
   },
   {
     icon: Flash,
@@ -53,7 +53,7 @@ export default function Home() {
       <main className="flex-1 flex flex-col items-center">
         {/* ── Hero: left-aligned oversized headline + link CTA ── */}
         <section className="w-full max-w-[1200px] mx-auto px-6 pt-24 pb-16">
-          <div className="pill mb-6">Seeker-native AI coding platform</div>
+          <div className="pill mb-6">Talon-native AI coding platform</div>
           <h1 className="t-heading-lg max-w-[880px]">
             Build Solana Mobile apps at the speed of thought
           </h1>

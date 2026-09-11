@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 9: Payment Provider & Account Foundation
+# Talon — Phase 9: Payment Provider & Account Foundation
 
 **Objective:** Before any tier limit can be meaningfully enforced, the platform needs a real payment provider wired in and a genuine account/profile layer — customer records, payment method collection, subscription lifecycle, and a place for users to see and manage their own billing state. This phase builds that foundation. Usage enforcement (Phase 10) is built on top of it, not alongside it.
 

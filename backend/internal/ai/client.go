@@ -415,7 +415,7 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Set("User-Agent", "SeekerStudio/1.0")
+		req.Header.Set("User-Agent", "Talon/1.0")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -552,8 +552,8 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-		req.Header.Set("HTTP-Referer", "https://seekerstudio.app")
-		req.Header.Set("X-Title", "SeekerStudio")
+		req.Header.Set("HTTP-Referer", "https://talon.app")
+		req.Header.Set("X-Title", "Talon")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -745,8 +745,8 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, history []Prom
 	respBody, err := c.openStream(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		if strings.Contains(c.baseURL, "openrouter") {
-			req.Header.Set("HTTP-Referer", "https://seekerstudio.dev")
-			req.Header.Set("X-Title", "Seeker Studio")
+			req.Header.Set("HTTP-Referer", "https://talon.dev")
+			req.Header.Set("X-Title", "Talon Studio")
 		}
 	})
 	if err != nil {

@@ -53,7 +53,7 @@ await connect();
 // Send: build kit Instructions, hand them over. No manual transact,
 // no base64 juggling, no PublicKey — addresses are kit `Address` strings.
 const instructions: Instruction[] = [
-  getAddMemoInstruction({ memo: 'hello seeker' }),
+  getAddMemoInstruction({ memo: 'hello talon' }),
 ];
 const signature = await sendTransactions(instructions);
 ```

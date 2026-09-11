@@ -1,4 +1,4 @@
-# SeekerStudio — Harness Week: 7 days of content
+# Talon — Harness Week: 7 days of content
 
 **What this is:** a ready-to-post content calendar covering the harness
 overhaul (PLAN_HARNESS.md, now EXECUTED). Every post below is written to
@@ -284,7 +284,7 @@ or the session token meter under the composer.
 
 ## FAQ answers (expected replies, drafted)
 
-**"What is SeekerStudio?"**
+**"What is Talon?"**
 An AI app builder: describe a mobile app, the agent builds a real
 Expo/Solana project you can run on a device — with a verify ladder that
 checks the work, an emulator in the IDE, and billing when you export.

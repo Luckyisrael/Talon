@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/seekersstudio/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/ai"
 )
 
 // SessionTitleFallback is the synchronous title: the honest truncated

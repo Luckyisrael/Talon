@@ -22,7 +22,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/seekersstudio/backend/internal/metrics"
+	"github.com/luckyisrael/talon/backend/internal/metrics"
 )
 
 // Fields carries the correlation identity. Zero values are omitted, so

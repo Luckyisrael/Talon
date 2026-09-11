@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	gbuild "github.com/seekersstudio/backend/internal/build"
-	"github.com/seekersstudio/backend/internal/runtime"
-	sdk "github.com/seekersstudio/backend/internal/sdk"
-	"github.com/seekersstudio/backend/internal/verify"
+	gbuild "github.com/luckyisrael/talon/backend/internal/build"
+	"github.com/luckyisrael/talon/backend/internal/runtime"
+	sdk "github.com/luckyisrael/talon/backend/internal/sdk"
+	"github.com/luckyisrael/talon/backend/internal/verify"
 )
 
 // VerifyResult is the shape both verification tools return. Passed is the only

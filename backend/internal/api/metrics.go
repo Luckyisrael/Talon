@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/seekersstudio/backend/internal/metrics"
-	"github.com/seekersstudio/backend/internal/redroid"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/metrics"
+	"github.com/luckyisrael/talon/backend/internal/redroid"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // MetricsHandler serves operational metrics in Prometheus text format:
@@ -30,9 +30,9 @@ func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if list, err := h.store.GetActiveSessions(); err == nil {
 		sessions = len(list)
 	}
-	fmt.Fprintf(w, "# HELP seeker_sessions_active Sessions not destroyed.\n")
-	fmt.Fprintf(w, "# TYPE seeker_sessions_active gauge\n")
-	fmt.Fprintf(w, "seeker_sessions_active %d\n", sessions)
+	fmt.Fprintf(w, "# HELP talon_sessions_active Sessions not destroyed.\n")
+	fmt.Fprintf(w, "# TYPE talon_sessions_active gauge\n")
+	fmt.Fprintf(w, "talon_sessions_active %d\n", sessions)
 
 	containers := -1
 	if h.manager != nil {
@@ -41,15 +41,15 @@ func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if containers >= 0 {
-		fmt.Fprintf(w, "# HELP seeker_containers_running Docker containers under management.\n")
-		fmt.Fprintf(w, "# TYPE seeker_containers_running gauge\n")
-		fmt.Fprintf(w, "seeker_containers_running %d\n", containers)
+		fmt.Fprintf(w, "# HELP talon_containers_running Docker containers under management.\n")
+		fmt.Fprintf(w, "# TYPE talon_containers_running gauge\n")
+		fmt.Fprintf(w, "talon_containers_running %d\n", containers)
 	}
 
 	spend, err := h.store.UsageCostTotal()
 	if err == nil {
-		fmt.Fprintf(w, "# HELP seeker_spend_usd_total Model spend across all usage rows.\n")
-		fmt.Fprintf(w, "# TYPE seeker_spend_usd_total counter\n")
-		fmt.Fprintf(w, "seeker_spend_usd_total %.4f\n", spend)
+		fmt.Fprintf(w, "# HELP talon_spend_usd_total Model spend across all usage rows.\n")
+		fmt.Fprintf(w, "# TYPE talon_spend_usd_total counter\n")
+		fmt.Fprintf(w, "talon_spend_usd_total %.4f\n", spend)
 	}
 }

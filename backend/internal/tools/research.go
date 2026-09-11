@@ -66,7 +66,7 @@ func (t *WebSearch) Execute(ctx context.Context, args json.RawMessage) (ToolResu
 	if err != nil {
 		return ToolResult{Content: fmt.Sprintf("search failed: %v", err), IsError: true}, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; SeekerStudio/1.0)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Talon/1.0)")
 	req.Header.Set("Accept", "text/html")
 
 	client := t.HTTPClient
@@ -243,7 +243,7 @@ func (t *GitHubSearch) Execute(ctx context.Context, args json.RawMessage) (ToolR
 		return ToolResult{Content: fmt.Sprintf("GitHub search failed: %v", err), IsError: true}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "SeekerStudio/1.0")
+	req.Header.Set("User-Agent", "Talon/1.0")
 
 	// Use GitHub token if available
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {

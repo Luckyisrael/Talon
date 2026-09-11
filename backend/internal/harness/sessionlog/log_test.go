@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/harness/events"
+	"github.com/luckyisrael/talon/backend/internal/harness/events"
 )
 
 // memStore is an in-memory sessionlog.Store for tests: ordered rows per key,

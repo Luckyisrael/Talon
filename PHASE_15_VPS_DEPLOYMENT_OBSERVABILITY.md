@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 15: VPS Deployment & Observability
+# Talon — Phase 15: VPS Deployment & Observability
 
 **Note on numbering:** this was Phase 14 (originally Phase 8 in the very first roadmap draft) in the master plan, shifted by one when APK Export was split into its own phase earlier. Treat this as Phase 15 — the final phase.
 
@@ -56,7 +56,7 @@ If load testing, the smoke test, or the burn-rate dashboard reveals that an earl
 
 ## 3. Verification Checklist
 
-- [ ] A fresh VPS is confirmed to reach a fully running SeekerStudio deployment using only the provisioning script and Compose definition — no undocumented manual step required
+- [ ] A fresh VPS is confirmed to reach a fully running Talon deployment using only the provisioning script and Compose definition — no undocumented manual step required
 - [ ] The staging smoke test sequence is confirmed to pass against the real, actually deployed environment
 - [ ] A genuine concurrent-session load test is confirmed to have been run against the real host, with Phase 4's capacity gating and Phase 9/10's warm pool observed behaving correctly under that real load
 - [ ] The burn-rate dashboard is confirmed to reflect real, combined AI and host costs when checked against actual known spend
@@ -72,4 +72,4 @@ If load testing, the smoke test, or the burn-rate dashboard reveals that an earl
 - The full platform is confirmed functioning as one integrated system under real, concurrent, production-like conditions.
 - This is the final gate before the platform can genuinely be called production-ready.
 
-**This is the last phase in the roadmap. Once every box above is genuinely checked, SeekerStudio is ready to be presented as a real, production platform — not a demo that happens to work when nobody else is using it.**
+**This is the last phase in the roadmap. Once every box above is genuinely checked, Talon is ready to be presented as a real, production platform — not a demo that happens to work when nobody else is using it.**

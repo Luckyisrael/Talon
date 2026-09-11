@@ -34,11 +34,11 @@ func TestObserveAndRender(t *testing.T) {
 	r.WritePrometheus(&b)
 	out := b.String()
 	for _, want := range []string{
-		"seeker_http_requests_total 3",
-		"seeker_http_errors_total 1",
-		"seeker_ai_turns_total 2",
-		"seeker_ai_cost_usd_total 0.0040",
-		"seeker_verify_failures_total 1",
+		"talon_http_requests_total 3",
+		"talon_http_errors_total 1",
+		"talon_ai_turns_total 2",
+		"talon_ai_cost_usd_total 0.0040",
+		"talon_verify_failures_total 1",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in output", want)

@@ -218,13 +218,13 @@ describe("vendored QR encoder (proven by independent decode)", () => {
   const corpus = [
     "exp://localhost:17555",
     "exp://192.168.1.20:17901",
-    "exp://seeker.example.com:17812",
+    "exp://talon.example.com:17812",
     "http://localhost:17555",
     "exp://10.0.0.5:17555?platform=android",
-    "exp://my-server.seekerstudio.dev:18342",
+    "exp://my-server.talon.dev:18342",
     "http://192.168.68.114:17600/index.bundle?platform=android&dev=true",
     // A 120-char link — exercises padding and larger versions.
-    "exp://seeker-studio.example.internal:17777?project=42&session=1000&platform=android&dev=true&hotreload=true",
+    "exp://talon-studio.example.internal:17777?project=42&session=1000&platform=android&dev=true&hotreload=true",
   ];
 
   it("round-trips every realistic deep link", () => {

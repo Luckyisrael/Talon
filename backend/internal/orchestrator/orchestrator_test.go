@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/knowledge"
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/events"
-	"github.com/seekersstudio/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/events"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 func newTestSession(t *testing.T) *SessionState {
@@ -51,7 +51,7 @@ func TestAutoAttachSkillsDedup(t *testing.T) {
 
 // A skill the model read for itself must not then be auto-injected on a later
 // trigger — MarkSkillSeen is the shared gate for both paths. The new
-// seeker-mobile skill bundle fires on the same install trigger; this test
+// talon-mobile skill bundle fires on the same install trigger; this test
 // marks every skill that would fire as seen, then asserts the report is empty.
 // That is the contract: read skills do not re-inject, regardless of which
 // skill the trigger fan-out reaches.
@@ -59,7 +59,7 @@ func TestAutoAttachSkipsExplicitlyReadSkill(t *testing.T) {
 	o := New(nil, nil, loadKnowledge(t))
 	sess := newTestSession(t)
 	sess.MarkSkillSeen("wallet-mwa")
-	sess.MarkSkillSeen("seeker-mobile")
+	sess.MarkSkillSeen("talon-mobile")
 
 	call := toolCall("install_package", `{"name":"@solana-mobile/mobile-wallet-adapter-protocol-web3js"}`)
 	if got := o.autoAttachSkills(sess, call); got != "" {

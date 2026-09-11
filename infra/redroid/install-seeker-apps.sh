@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# SeekerStudio Redroid — Boot-time App Installer
+# Talon Redroid — Boot-time App Installer
 #
 # This script:
 # 1. Starts Redroid (Android) in the background
@@ -12,8 +12,8 @@
 
 set -e
 
-SEEKER_DIR="/opt/seeker"
-LOG_PREFIX="[seeker-preboot]"
+TALON_DIR="/opt/talon"
+LOG_PREFIX="[talon-preboot]"
 
 log() {
     echo "$LOG_PREFIX $*"
@@ -85,9 +85,9 @@ install_apk() {
     fi
 }
 
-install_apk "$SEEKER_DIR/demowallet.apk"
-install_apk "$SEEKER_DIR/demodapp.apk"
-install_apk "$SEEKER_DIR/devclient.apk"
+install_apk "$TALON_DIR/demowallet.apk"
+install_apk "$TALON_DIR/demodapp.apk"
+install_apk "$TALON_DIR/devclient.apk"
 
 # Set device PIN (required for MWA wallet signing)
 log "Setting device PIN to 1234..."
@@ -96,9 +96,9 @@ adb shell locksettings set-pin 1234 2>/dev/null || log "  PIN may already be set
 # Verify installations
 log "Verifying installations..."
 log "  Installed packages:"
-adb shell pm list packages 2>/dev/null | grep -E "fake|seeker" | sed 's/^/    /' || true
+adb shell pm list packages 2>/dev/null | grep -E "fake|talon" | sed 's/^/    /' || true
 
-log "=== SeekerStudio device ready ==="
+log "=== Seeker device ready ==="
 
 # Keep the container running by waiting on the init process
 wait $INIT_PID

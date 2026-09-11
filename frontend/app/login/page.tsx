@@ -58,7 +58,7 @@ export default function LoginPage() {
               <rect x="1" y="1" width="16" height="16" rx="4" stroke="#ffffff" strokeWidth="1.5" />
               <circle cx="9" cy="9" r="2.5" fill="#e4f222" />
             </svg>
-            <span className="text-base font-medium tracking-tight text-paper">SeekerStudio</span>
+            <span className="text-base font-medium tracking-tight text-paper">Talon</span>
           </Link>
         </div>
 

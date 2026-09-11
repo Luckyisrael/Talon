@@ -16,21 +16,21 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/seekersstudio/backend/internal/ai"
-	"github.com/seekersstudio/backend/internal/build"
-	"github.com/seekersstudio/backend/internal/events"
-	"github.com/seekersstudio/backend/internal/guardrails"
-	"github.com/seekersstudio/backend/internal/harness/compaction"
-	"github.com/seekersstudio/backend/internal/harness/skills"
-	harnessagent "github.com/seekersstudio/backend/internal/harness/agent"
-	"github.com/seekersstudio/backend/internal/harness/loop"
-	"github.com/seekersstudio/backend/internal/harness/pipeline"
-	"github.com/seekersstudio/backend/internal/harness/promptsec"
-	"github.com/seekersstudio/backend/internal/knowledge"
-	"github.com/seekersstudio/backend/internal/metrics"
-	"github.com/seekersstudio/backend/internal/runtime"
-	"github.com/seekersstudio/backend/internal/store"
-	"github.com/seekersstudio/backend/internal/tools"
+	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/build"
+	"github.com/luckyisrael/talon/backend/internal/events"
+	"github.com/luckyisrael/talon/backend/internal/guardrails"
+	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
+	"github.com/luckyisrael/talon/backend/internal/harness/skills"
+	harnessagent "github.com/luckyisrael/talon/backend/internal/harness/agent"
+	"github.com/luckyisrael/talon/backend/internal/harness/loop"
+	"github.com/luckyisrael/talon/backend/internal/harness/pipeline"
+	"github.com/luckyisrael/talon/backend/internal/harness/promptsec"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/metrics"
+	"github.com/luckyisrael/talon/backend/internal/runtime"
+	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/tools"
 )
 
 // maxContextTokens is when the conversation gets compacted. Sized to leave room
@@ -526,7 +526,7 @@ func (o *Orchestrator) requestErrorListener(round int, model string, err error, 
 // opts in per deployment. Flip the default only after the same-script
 // transcript-parity eval has run green on both modes.
 func pipelineEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("SEEKERSTUDIO_PIPELINE"))) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TALONSTUDIO_PIPELINE"))) {
 	case "v1", "1", "true", "on":
 		return true
 	}
@@ -617,7 +617,7 @@ type RunOptions struct {
 	Persist func(msgs []ai.Message)
 	// PatchBufferEnabled opts one session into the try_edit lane: edits are
 	// staged with pre-images and type-breaking changes auto-revert. Default
-	// off — off behaves identically to today. The SEEKERSTUDIO_PATCH_BUFFER
+	// off — off behaves identically to today. The TALONSTUDIO_PATCH_BUFFER
 	// env var (1/true/on) opts in without a code change.
 	PatchBufferEnabled bool
 	// OnCompacted, when set, is called at a compaction boundary with the
@@ -1164,13 +1164,13 @@ func (o *Orchestrator) applyMarkTaskDone(sess *SessionState, uses []ai.ToolUseBl
 }
 
 // patchBufferOn resolves the G6 lane: per-session opt-in, or the
-// SEEKERSTUDIO_PATCH_BUFFER env var for fleet-wide experiments. Both default
+// TALONSTUDIO_PATCH_BUFFER env var for fleet-wide experiments. Both default
 // off — off behaves identically to today.
 func patchBufferOn(opts RunOptions) bool {
 	if opts.PatchBufferEnabled {
 		return true
 	}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("SEEKERSTUDIO_PATCH_BUFFER"))) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TALONSTUDIO_PATCH_BUFFER"))) {
 	case "1", "true", "on":
 		return true
 	}
@@ -1653,7 +1653,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		}
 	}
 
-	// H3: SEEKERSTUDIO_PIPELINE=v1 selects the bounded harness pipeline for
+	// H3: TALONSTUDIO_PIPELINE=v1 selects the bounded harness pipeline for
 	// batch dispatch. runCall — guardrails, emission, result notes — is the
 	// single body in both modes; the pipeline replaces only the scheduling:
 	// read-only runs overlap in a bounded rolling pool (legacy peaks at one

@@ -1,4 +1,4 @@
-# SeekerStudio — Phase 1: Security & Hygiene Triage
+# Talon — Phase 1: Security & Hygiene Triage
 
 **Objective:** Close every security gap that exists purely because the project moved fast during early development — leaked credentials, unverified sandbox boundaries, unaudited dependencies, unscoped network exposure. This phase produces no new features. It produces a codebase that is safe to keep building on and safe to eventually expose to real users.
 

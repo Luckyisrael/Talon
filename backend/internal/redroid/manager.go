@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	containerPrefix = "seeker-redroid-"
+	containerPrefix = "talon-redroid-"
 	imageRef        = "redroid/redroid:14.0.0_64only-latest"
 	adbWaitTimeout  = 45 * time.Second
 )
@@ -58,8 +58,8 @@ func NewManager(portAlloc *PortAllocator, maxContainers int) (*Manager, error) {
 
 	// Initialize shared build caches
 	homeDir, _ := os.UserHomeDir()
-	gradleCache := filepath.Join(homeDir, ".seeker-studio", "gradle-cache")
-	androidCache := filepath.Join(homeDir, ".seeker-studio", "android-cache")
+	gradleCache := filepath.Join(homeDir, ".talon-studio", "gradle-cache")
+	androidCache := filepath.Join(homeDir, ".talon-studio", "android-cache")
 	os.MkdirAll(gradleCache, 0755)
 	os.MkdirAll(androidCache, 0755)
 
@@ -279,7 +279,7 @@ func (m *Manager) HealthCheck(containerID string) (bool, error) {
 	return info.State != nil && info.State.Running, nil
 }
 
-// ListContainers returns all seeker-redroid-* containers managed by this system.
+// ListContainers returns all talon-redroid-* containers managed by this system.
 func (m *Manager) ListContainers() ([]ContainerInfo, error) {
 	ctx := context.Background()
 	filter := filters.NewArgs()

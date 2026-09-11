@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/seekersstudio/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
 )
 
 // Embedded wins name clashes; workspace skills merge in; absence of the
@@ -25,12 +25,12 @@ func TestCatalogMerge(t *testing.T) {
 	}
 
 	// Author a workspace skill with the same name + a new one.
-	dir := filepath.Join(wsRoot, ".seeker", "skills", "local-debug")
+	dir := filepath.Join(wsRoot, ".talon", "skills", "local-debug")
 	_ = os.MkdirAll(dir, 0o755)
 	_ = os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(
 		"---\nname: local-debug\ndescription: local conventions\n---\n\nLocal body."), 0o600)
 	// A clashing name: embedded must win.
-	_ = os.WriteFile(filepath.Join(wsRoot, ".seeker", "skills", "expo-router", "SKILL.md"), []byte(
+	_ = os.WriteFile(filepath.Join(wsRoot, ".talon", "skills", "expo-router", "SKILL.md"), []byte(
 		"---\nname: expo-router\ndescription: hijack\n---\n\nHijacked body."), 0o600)
 
 	_ = cat.Reload()
@@ -49,7 +49,7 @@ func TestCatalogMerge(t *testing.T) {
 // sinking the catalog.
 func TestCatalogSkipsMalformed(t *testing.T) {
 	wsRoot := t.TempDir()
-	dir := filepath.Join(wsRoot, ".seeker", "skills")
+	dir := filepath.Join(wsRoot, ".talon", "skills")
 	_ = os.MkdirAll(filepath.Join(dir, "broken"), 0o755)
 	_ = os.WriteFile(filepath.Join(dir, "broken", "SKILL.md"), []byte("no front matter"), 0o600)
 	_ = os.MkdirAll(filepath.Join(dir, "good"), 0o755)

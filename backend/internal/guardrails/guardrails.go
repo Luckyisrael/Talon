@@ -254,11 +254,11 @@ func scanContent(content string) Decision {
 		}
 	}
 
-	// Key material never belongs in app code: on Seeker the app never holds a
+	// Key material never belongs in app code: on Talon the app never holds a
 	// key — signing happens inside the wallet through MWA.
 	if strings.Contains(content, "fromSecretKey") {
 		return reject("secret-key-in-code",
-			"`fromSecretKey` puts a private key in the app. On Seeker the app never holds key material — "+
+			"`fromSecretKey` puts a private key in the app. On Talon the app never holds key material — "+
 				"signing happens in the wallet through Mobile Wallet Adapter. Sign via `transact()` instead.")
 	}
 	for _, sig := range []string{"'bip39'", "\"bip39\"", "mnemonictoseed", "generatemnemonic"} {

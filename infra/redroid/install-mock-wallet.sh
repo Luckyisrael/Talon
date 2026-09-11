@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# SeekerStudio — Install Mock MWA Wallet on Redroid
+# Talon — Install Mock MWA Wallet on Redroid
 #
 # The Solana Mobile Mock Wallet lets generated apps test:
 #   - Wallet connection (MWA protocol)
@@ -22,7 +22,7 @@ REPO_URL="https://github.com/solana-mobile/mock-mwa-wallet.git"
 CLONE_DIR="/tmp/mock-mwa-wallet"
 ADB_TARGET="localhost:5555"
 
-echo "=== SeekerStudio: Install Mock MWA Wallet ==="
+echo "=== Talon: Install Mock MWA Wallet ==="
 
 # Step 1: Check prerequisites
 echo ""

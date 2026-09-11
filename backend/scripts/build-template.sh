@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# SeekerStudio — Build Template Artifact
+# Talon — Build Template Artifact
 #
 # Pre-bakes node_modules into the template directory so that
 # project creation is instant (no npm install at request time).
@@ -13,7 +13,7 @@ set -euo pipefail
 TEMPLATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../template" && pwd)"
 TEMPLATE_VERSION="${1:-1.0.0}"
 
-echo "=== SeekerStudio: Build Template Artifact ==="
+echo "=== Talon: Build Template Artifact ==="
 echo "Template dir: $TEMPLATE_DIR"
 echo "Version: $TEMPLATE_VERSION"
 

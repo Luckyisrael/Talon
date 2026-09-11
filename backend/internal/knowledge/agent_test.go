@@ -37,7 +37,7 @@ func TestLoadEmbeddedContent(t *testing.T) {
 	}
 
 	// Every skill we ship: the Phase-A internal ones plus the WS3-vendored
-	// Expo/Vercel skills, plus the curated Seeker bundle (Phase 1) and the
+	// Expo/Vercel skills, plus the curated Talon bundle (Phase 1) and the
 	// failure-pattern index. If one is renamed, update this list deliberately —
 	// the manifest and triggers depend on these names.
 	want := []string{
@@ -51,8 +51,8 @@ func TestLoadEmbeddedContent(t *testing.T) {
 		"reanimated-v4",
 		"rn-best-practices",
 		"scl",
-		"seeker-mobile",
-		"seeker-screen-design",
+		"talon-mobile",
+		"talon-screen-design",
 		"seed-vault",
 		"wallet-mwa",
 	}
@@ -98,7 +98,7 @@ func TestAutoAttachFor(t *testing.T) {
 		tool       string
 		input      string
 		want       string // skill expected in the result, or "" for none
-		wantDesign bool   // seeker-screen-design auto-attaches on app/** and components/** writes
+		wantDesign bool   // talon-screen-design auto-attaches on app/** and components/** writes
 	}{
 		{
 			name:       "reanimated import in written file",
@@ -130,7 +130,7 @@ func TestAutoAttachFor(t *testing.T) {
 			name:       "screen file pulls the design skill",
 			tool:       "write_file",
 			input:      `{"path":"app/home.tsx","content":"// SafeAreaView AMOLED FlatList touch target"}`,
-			want:       "seeker-screen-design", // now autoAttach:true on app/**; expo-router-nav co-attaches
+			want:       "talon-screen-design", // now autoAttach:true on app/**; expo-router-nav co-attaches
 			wantDesign: true,
 		},
 		{
@@ -195,11 +195,11 @@ func TestAutoAttachFor(t *testing.T) {
 			if tc.want != "" && !names[tc.want] {
 				t.Errorf("expected skill %q, got %v", tc.want, keys(names))
 			}
-			// seeker-screen-design auto-attaches on app/** and components/** writes
+			// talon-screen-design auto-attaches on app/** and components/** writes
 			// and must stay out everywhere else (lib/ files, package installs).
-			if names["seeker-screen-design"] != tc.wantDesign {
-				t.Errorf("seeker-screen-design auto-attach = %v, want %v (got %v)",
-					names["seeker-screen-design"], tc.wantDesign, keys(names))
+			if names["talon-screen-design"] != tc.wantDesign {
+				t.Errorf("talon-screen-design auto-attach = %v, want %v (got %v)",
+					names["talon-screen-design"], tc.wantDesign, keys(names))
 			}
 		})
 	}

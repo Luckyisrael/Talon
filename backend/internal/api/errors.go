@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/seekersstudio/backend/internal/logx"
+	"github.com/luckyisrael/talon/backend/internal/logx"
 )
 
 // ErrorsHandler serves captured errors and ingests client-side reports.
