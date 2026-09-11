@@ -516,6 +516,38 @@ func main() {
 	}
 	pass("build", detail)
 
+	// G: the notification law — the finished turn produced exactly one
+	// build_success in-app row (and one input_needed per answered question,
+	// zero when none paused). Duplicates are reminder spam; absence is a
+	// trigger bug. Both are named, not hidden.
+	begin("notifications")
+	var notifs struct {
+		Items []struct {
+			Kind string `json:"kind"`
+		} `json:"notifications"`
+	}
+	if err := call("GET", "/v1/notifications", nil, &notifs); err != nil {
+		skip("notifications", fmt.Sprintf("history list: %v (law unverified, not passed)", err))
+	} else {
+		builds := 0
+		inputs := 0
+		for _, n := range notifs.Items {
+			switch n.Kind {
+			case "build_success":
+				builds++
+			case "input_needed":
+				inputs++
+			}
+		}
+		if builds == 1 && inputs == answers {
+			pass("notifications", fmt.Sprintf("exactly 1 build_success, %d input_needed (matches %d answered questions)", inputs, answers))
+		} else {
+			fail("notifications", "build_success=%d (want 1), input_needed=%d (want %d) — duplicate or missing triggers", builds, inputs, answers)
+			report(started)
+			return
+		}
+	}
+
 
 	deviceStages(started, projectID)
 }
@@ -533,7 +565,7 @@ func deviceStages(started time.Time, projectID int64) {
 		report(started)
 		return
 	}
-	if err := waitSession(sessID, "live", 8*time.Minute); err != nil {
+	if err := waitSession(sessID, "running", 8*time.Minute); err != nil {
 		fail("device-session", "session %d: %v", sessID, err)
 		report(started)
 		return
@@ -571,7 +603,9 @@ func deviceStages(started time.Time, projectID int64) {
 		var st struct {
 			State string `json:"state"`
 		}
-		if err := call("GET", fmt.Sprintf("/v1/sessions/%d", sessID), nil, &st); err == nil && st.State != "live" {
+		// Destroy's terminal vocabulary is "destroyed"; a transition out of
+		// "running" (to destroyed or errored) means the teardown completed.
+		if err := call("GET", fmt.Sprintf("/v1/sessions/%d", sessID), nil, &st); err == nil && st.State != "running" {
 			ended = true
 			break
 		}
@@ -592,7 +626,7 @@ func deviceStages(started time.Time, projectID int64) {
 		report(started)
 		return
 	}
-	if err := waitSession(sess2, "live", 8*time.Minute); err != nil {
+	if err := waitSession(sess2, "running", 8*time.Minute); err != nil {
 		fail("start-again", "session %d: %v", sess2, err)
 		report(started)
 		return
