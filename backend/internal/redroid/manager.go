@@ -1,6 +1,7 @@
 package redroid
 
 import (
+	"net"
 	"context"
 	"fmt"
 	"log"
@@ -196,6 +197,30 @@ func (m *Manager) StopContainer(containerID string) error {
 
 	log.Printf("container %s stopped and removed", containerID[:12])
 	return nil
+}
+
+// WaitForPortFree blocks until a TCP port is actually bindable again.
+//
+// ContainerRemove returning does not mean the daemon has finished tearing
+// down the port binding — a destroy→create pair can race the release and
+// hand the freed port to a new container that then fails with "address
+// already in use" (the live E2E caught exactly this on the kill/restart
+// stage). Bounded: callers pass the budget; a false return names the wait
+// as over, the caller decides what to do.
+func (m *Manager) WaitForPortFree(port int, budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	for {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			_ = ln.Close()
+			return true // bindable: the daemon released it
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // ForceRemove removes a container regardless of state.

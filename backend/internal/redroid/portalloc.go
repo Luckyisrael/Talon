@@ -59,6 +59,19 @@ func (pa *PortAllocator) rebookTo(sessionID int64, port int) {
 	pa.ports[port] = sessionID
 }
 
+// PortOf reports the port a session holds (0 when it holds none) — the
+// destroy path waits on it before returning it to the pool.
+func (pa *PortAllocator) PortOf(sessionID int64) int {
+	pa.mu.Lock()
+	defer pa.mu.Unlock()
+	for port, sid := range pa.ports {
+		if sid == sessionID {
+			return port
+		}
+	}
+	return 0
+}
+
 // Release frees a port previously allocated to a session.
 func (pa *PortAllocator) Release(sessionID int64) {
 	pa.mu.Lock()

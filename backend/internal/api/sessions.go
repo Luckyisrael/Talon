@@ -395,6 +395,16 @@ func (h *SessionHandler) Destroy(w http.ResponseWriter, r *http.Request) {
 		if err := h.manager.StopContainer(session.ContainerID); err != nil {
 			log.Printf("WARN: container destroy failed for session %d: %v", id, err)
 		}
+		// ContainerRemove returns before the daemon releases the port
+		// binding; handing the port straight back to the pool races a
+		// destroy→create pair into "address already in use" (caught live).
+		// Wait bounded for the bind, then release either way — the next
+		// claim retries its own bind and the reconciler sweeps stragglers.
+		if port := h.portAlloc.PortOf(id); port != 0 {
+			if !h.manager.WaitForPortFree(port, 15*time.Second) {
+				log.Printf("WARN: session %d port %d still bound 15s after destroy — releasing anyway; reconciler will sweep", id, port)
+			}
+		}
 		// Release the port
 		h.portAlloc.Release(id)
 		// Clear container metadata
