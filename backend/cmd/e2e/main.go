@@ -438,10 +438,12 @@ func main() {
 				_ = json.Unmarshal([]byte(ev.Data), &buildDone)
 			}
 		}
-		if pendingQuestion > 0 && !sawDone {
-			// Answer the question — the product's ask_user loop — and keep
-			// reading. The answer is permissive within the run's purpose:
-			// the E2E already granted the model the workspace.
+		if pendingQuestion > 0 {
+			// A question ends this stream (done status "waiting"), and the
+			// answer endpoint resumes the turn — the product's ask_user
+			// loop, not a failure. The answer is permissive within the
+			// run's purpose: the E2E already granted the model the
+			// workspace and the device.
 			answers++
 			if answers > 4 {
 				fail("build", "ask_user loop exceeded 4 rounds — the model is stuck asking")
@@ -463,7 +465,15 @@ func main() {
 		}
 		break
 	}
-	if st, _ := buildDone["status"].(string); st != "success" {
+	st, _ := buildDone["status"].(string)
+	if st == "waiting" {
+		// The stream ended waiting on a question we failed to parse — that
+		// is a driver bug, and it is named, not hidden.
+		fail("build", "turn ended waiting on a question the driver could not parse")
+		report(started)
+		return
+	}
+	if st != "success" {
 		fail("build", "turn status %q (files %v)", st, buildDone["files_touched"])
 		report(started)
 		return
