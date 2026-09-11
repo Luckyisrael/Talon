@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"log"
 	"net/mail"
 	"os"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -21,7 +19,6 @@ var (
 )
 
 const (
-	bcryptCost = 12
 	jwtExpiry  = 24 * time.Hour
 	issuer     = "seekersstudio"
 
@@ -114,74 +111,6 @@ func ValidateEmail(email string) (string, error) {
 	// Addresses are compared case-insensitively, so store them one way.
 	return strings.ToLower(email), nil
 }
-
-// ValidatePassword enforces a length floor and rejects the handful of passwords
-// that show up first in every credential-stuffing list.
-func ValidatePassword(password string) error {
-	if len(password) < MinPasswordLength {
-		return fmt.Errorf("use at least %d characters", MinPasswordLength)
-	}
-	// bcrypt silently ignores everything past 72 bytes, so a longer password is
-	// not the extra security it looks like. Reject rather than truncate.
-	if len(password) > MaxPasswordLength {
-		return fmt.Errorf("use at most %d characters", MaxPasswordLength)
-	}
-	if commonPasswords[strings.ToLower(password)] {
-		return errors.New("that password is too common — pick something else")
-	}
-	return nil
-}
-
-var commonPasswords = map[string]bool{
-	"password":     true,
-	"password1":    true,
-	"password123":  true,
-	"passw0rd":     true,
-	"1234567890":   true,
-	"12345678901":  true,
-	"123456789012": true,
-	"qwertyuiop":   true,
-	"letmein123":   true,
-	"iloveyou123":  true,
-	"welcome123":   true,
-	"admin123456":  true,
-	"changeme123":  true,
-}
-
-func (s *Service) HashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
-	return string(bytes), err
-}
-
-func (s *Service) CheckPassword(password, hash string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	return err == nil
-}
-
-// BurnCheckTime does the work of a password comparison and throws the answer
-// away. Login calls it when the address is unknown: returning straight away made
-// an unregistered email answer measurably faster than a wrong password, which is
-// all an attacker needs to enumerate who has an account here.
-func (s *Service) BurnCheckTime(password string) {
-	bcrypt.CompareHashAndPassword(decoyHash, []byte(password))
-}
-
-// decoyHash is generated once at startup so it is guaranteed to be a valid hash
-// at the same cost the real ones use — a hard-coded string could drift from
-// bcryptCost and make the two paths distinguishable again.
-var decoyHash = func() []byte {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		buf = []byte("seekersstudio-decoy-password-value")
-	}
-	hash, err := bcrypt.GenerateFromPassword(buf, bcryptCost)
-	if err != nil {
-		// Unreachable for a 32-byte input, but a nil hash would make the compare
-		// return early and defeat the point.
-		log.Printf("WARNING: could not prepare the login timing decoy: %v", err)
-	}
-	return hash
-}()
 
 func (s *Service) GenerateToken(userID int64, email string) (string, error) {
 	claims := &Claims{

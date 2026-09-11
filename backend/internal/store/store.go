@@ -16,6 +16,10 @@ import (
 // so the handler can tell that apart from a database failure.
 var ErrDuplicateEmail = errors.New("email already registered")
 
+// ErrUserNotFound is the sentinel for lookups that miss: the OAuth flow
+// distinguishes "no such identity yet" (create the user) from a store fault.
+var ErrUserNotFound = errors.New("user not found")
+
 type User struct {
 	ID           int64     `json:"id"`
 	Email        string    `json:"email"`
@@ -506,6 +510,25 @@ func (s *Store) migrate() error {
 	// NULL. Billing state (tier, renewal, last-4) lives in subscriptions, not here.
 	s.db.Exec("ALTER TABLE users ADD COLUMN display_name TEXT DEFAULT ''")
 
+	// Migration: OAuth identity (PLAN_CORE_PRODUCT.md D). Sign-in is GitHub +
+	// Google; email/password is gone. password_hash stays as a column — legacy
+	// rows keep their value, new rows write '' — because SQLite cannot drop a
+	// column's NOT NULL without a table rebuild, and the value is dead either
+	// way: no code path reads it anymore. The users_oauth_identity table is the
+	// new identity: (provider, provider_id) is unique, and rows link to users.
+	s.db.Exec("ALTER TABLE users ADD COLUMN provider TEXT DEFAULT ''")
+	s.db.Exec("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''")
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS users_oauth_identity (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL REFERENCES users(id),
+		provider TEXT NOT NULL,
+		provider_id TEXT NOT NULL,
+		email TEXT DEFAULT '',
+		name TEXT DEFAULT '',
+		avatar_url TEXT DEFAULT '',
+		UNIQUE (provider, provider_id)
+	)`)
+
 	return nil
 }
 
@@ -524,11 +547,97 @@ func (s *Store) CreateUser(email, passwordHash string) (*User, error) {
 	return s.GetUserByID(id)
 }
 
+// UpsertOAuthUser is the sign-in primitive of the OAuth world: find the
+// user bound to (provider, provider_id), or create one. The same provider
+// account signing in twice is one user; profile drift (a new avatar, a
+// changed name) refreshes the cached fields. A provider identity whose
+// email collides with an existing user links to that user — the email was
+// already verified by the provider, so it is the same human.
+func (s *Store) UpsertOAuthUser(provider, providerID, email, name, avatarURL string) (*User, error) {
+	// 1) The bound path: this provider account already exists.
+	if u, err := s.GetUserByProvider(provider, providerID); err == nil {
+		if _, err := s.db.Exec(
+			`UPDATE users_oauth_identity SET email = ?, name = ?, avatar_url = ? WHERE provider = ? AND provider_id = ?`,
+			email, name, avatarURL, provider, providerID,
+		); err == nil {
+			if avatarURL != "" {
+				s.db.Exec("UPDATE users SET avatar_url = ? WHERE id = ?", avatarURL, u.ID)
+			}
+			refreshed, err := s.GetUserByID(u.ID)
+			if err != nil {
+				return nil, err
+			}
+			return refreshed, nil
+		}
+		return nil, err
+	} else if !errors.Is(err, ErrUserNotFound) {
+		return nil, err
+	}
+
+	// 2) The email path: the same human, already known. Link the provider
+	// identity to the existing account.
+	if existing, err := s.GetUserByEmail(email); err == nil {
+		if _, err := s.db.Exec(
+			`INSERT INTO users_oauth_identity (user_id, provider, provider_id, email, name, avatar_url) VALUES (?, ?, ?, ?, ?, ?)`,
+			existing.ID, provider, providerID, email, name, avatarURL,
+		); err != nil {
+			return nil, err
+		}
+		if _, err := s.db.Exec("UPDATE users SET provider = ?, avatar_url = ? WHERE id = ?", provider, avatarURL, existing.ID); err != nil {
+			return nil, err
+		}
+		return s.GetUserByID(existing.ID)
+	} else if !errors.Is(err, ErrUserNotFound) && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
+	// 3) A brand-new human: users row + identity row.
+	res, err := s.db.Exec("INSERT INTO users (email, password_hash, provider, avatar_url) VALUES (?, '', ?, ?)", email, provider, avatarURL)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			// Raced between the email check and here — treat as the bound path.
+			return s.UpsertOAuthUser(provider, providerID, email, name, avatarURL)
+		}
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	if name != "" {
+		s.db.Exec("UPDATE users SET display_name = ? WHERE id = ?", name, id)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO users_oauth_identity (user_id, provider, provider_id, email, name, avatar_url) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, provider, providerID, email, name, avatarURL,
+	); err != nil {
+		return nil, err
+	}
+	return s.GetUserByID(id)
+}
+
+// GetUserByProvider resolves the users row bound to a provider identity.
+func (s *Store) GetUserByProvider(provider, providerID string) (*User, error) {
+	u := &User{}
+	err := s.db.QueryRow(`
+		SELECT u.id, u.email, u.password_hash, u.tier, u.display_name, u.created_at
+		FROM users u JOIN users_oauth_identity i ON i.user_id = u.id
+		WHERE i.provider = ? AND i.provider_id = ?`, provider, providerID).
+		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Tier, &u.DisplayName, &u.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return u, nil
+}
+
 func (s *Store) GetUserByEmail(email string) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRow("SELECT id, email, password_hash, tier, display_name, created_at FROM users WHERE email = ?", email).
 		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Tier, &u.DisplayName, &u.CreatedAt)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
 		return nil, err
 	}
 	return u, nil
@@ -1234,4 +1343,14 @@ func (s *Store) FormatADRsForPrompt(projectID int64) string {
 		result += fmt.Sprintf("Status: %s\n\n", adr.Status)
 	}
 	return result
+}
+
+// CountUsers is the honest row count for tests that assert "one account,
+// not two".
+func (s *Store) CountUsers() (int, error) {
+	var n int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }

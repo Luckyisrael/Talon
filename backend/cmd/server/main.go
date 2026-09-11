@@ -192,7 +192,28 @@ func main() {
 		log.Fatalf("could not create the workspace directory %s: %v", workspaceDir, err)
 	}
 
-	authHandler := api.NewAuthHandler(s, authSvc)
+	// OAuth sign-in (D): providers are dark until credentials exist, exactly
+	// like gitremote. The callback base follows the public origin so a phone
+	// on the LAN goes through the same flow as the browser.
+	oauthBase := os.Getenv("AUTH_CALLBACK_BASE")
+	if oauthBase == "" {
+		if host := os.Getenv("PUBLIC_HOST"); host != "" {
+			oauthBase = "http://" + host + ":8080"
+		} else {
+			oauthBase = "http://localhost:8080"
+		}
+	}
+	oauthProviders := auth.OAuthProviderConfig(oauthBase)
+	if len(oauthProviders) > 0 {
+		names := make([]string, 0, len(oauthProviders))
+		for p := range oauthProviders {
+			names = append(names, string(p))
+		}
+		log.Printf("auth: OAuth sign-in enabled for %s", strings.Join(names, ", "))
+	} else {
+		log.Print("auth: no OAuth providers configured — set AUTH_GITHUB_CLIENT_ID/SECRET or AUTH_GOOGLE_CLIENT_ID/SECRET to enable sign-in")
+	}
+	oauthHandler := api.NewOAuthAuthHandler(s, authSvc, oauthProviders)
 	projectHandler := api.NewProjectHandler(s, wsMgr, workspaceDir)
 	exportHandler := api.NewExportHandler(s, api.LoadReleaseCipher(), workspaceDir, templateDir, filepath.Join(workspaceDir, "..", "exports"))
 	log.Printf("release export ready (keystores + submission bundles)")
@@ -295,11 +316,18 @@ func main() {
 	authLimiter := api.AuthRateLimiter()
 	promptLimiter := api.PromptRateLimiter()
 
+	// Sign-in routes. The provider list and the exchange are cheap local
+	// operations inside the auth limiter; start/callback are browser
+	// navigations to and from the provider and stay unthrottled public
+	// routes (the state and code tokens are single-use, the flow is
+	// bounded by them).
 	r.Group(func(r chi.Router) {
 		r.Use(authLimiter.Middleware)
-		r.Post("/v1/auth/register", authHandler.Register)
-		r.Post("/v1/auth/login", authHandler.Login)
+		r.Get("/v1/auth/providers", oauthHandler.Providers)
+		r.Post("/v1/auth/exchange", oauthHandler.Exchange)
 	})
+	r.Get("/v1/auth/{provider}/start", oauthHandler.Start)
+	r.Get("/v1/auth/{provider}/callback", oauthHandler.Callback)
 
 	r.Group(func(r chi.Router) {
 		r.Use(authMiddleware(authSvc))
