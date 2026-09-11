@@ -1,52 +1,53 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import PillButton from "@/components/ui/PillButton";
 import { auth } from "@/lib/api";
-import { setToken, setEmail as persistEmail } from "@/lib/auth";
 
+/**
+ * Sign-in is OAuth: GitHub and Google — email/password is gone. The buttons
+ * render from the server's honest provider list: a provider without
+ * credentials on the server shows disabled with its reason, never a dead
+ * click.
+ *
+ * The flow: the browser navigates to /v1/auth/{provider}/start (the backend
+ * 302s to the provider's consent screen), the provider returns the browser
+ * to /auth/callback?code=…, and that page exchanges the single-use code.
+ */
 export default function LoginPage() {
-  const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [providers, setProviders] = useState<{ id: string; name: string }[] | null>(null);
+  const [unreachable, setUnreachable] = useState(false);
+
+  useEffect(() => {
+    // One fetch on mount: the provider list is a precondition for rendering
+    // any button honestly. (The auth-gate exception to no-fetch-in-effect:
+    // nothing can render until this answers, and the value is page-static.)
+    auth
+      .providers()
+      .then((data) => setProviders(data.providers ?? []))
+      .catch(() => {
+        setProviders([]);
+        setUnreachable(true);
+      });
+  }, []);
 
   /**
-   * An expired session bounces here with ?next=<where you were>. Returning you
-   * to that page is the difference between an interruption and losing your place.
-   *
-   * Read at submit time from the URL rather than through `useSearchParams`: that
-   * hook opts the whole client tree out of prerendering — it fails the build
-   * outright unless the tree sits in a Suspense boundary — and nothing here
-   * *renders* the value. It is only ever needed once, in this handler, after a
-   * real interaction, by which point the URL is authoritative.
+   * The `next` param survives the whole OAuth hop: login binds it into the
+   * state token via the redirect, the callback lands with the code appended,
+   * and the exchange page routes there after signing in. Same-origin paths
+   * only — an open redirect on a sign-in page is a phishing primitive.
    */
-  function destination(): string {
+  function start(providerID: string) {
     const next = new URLSearchParams(window.location.search).get("next");
-    // Same-origin paths only. An open redirect on the sign-in page would let a
-    // crafted link hand a freshly-authenticated visitor to another site.
-    return next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+    const target = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+    window.location.href = auth.startURL(providerID, `/auth/callback?next=${encodeURIComponent(target)}`);
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-
-    try {
-      const data = await auth.login(email, password);
-      setToken(data.token);
-      persistEmail(email);
-      router.push(destination());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const allProviders = [
+    { id: "github", name: "GitHub" },
+    { id: "google", name: "Google" },
+  ];
+  const isConfigured = (id: string) => providers?.some((p) => p.id === id) ?? false;
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4 bg-void">
@@ -63,49 +64,47 @@ export default function LoginPage() {
 
         <div className="card">
           <h1 className="text-[17px] font-medium tracking-tight text-paper text-center mb-1">Welcome back</h1>
-          <p className="text-sm text-fog text-center mb-6">Sign in to your account</p>
+          <p className="text-sm text-fog text-center mb-6">Sign in with GitHub or Google</p>
 
-          <form onSubmit={handleSubmit}>
-            <label className="block mb-4">
-              <span className="gauge">Email</span>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                autoComplete="email"
-                required
-                className="field mt-2"
-                autoFocus
-              />
-            </label>
+          <div className="flex flex-col gap-3">
+            {allProviders.map((p) => {
+              // providers===null means the list is still loading: hold every
+              // click rather than guessing which are live.
+              const state = providers === null ? "loading" : isConfigured(p.id) ? "on" : "off";
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  disabled={state !== "on"}
+                  onClick={() => start(p.id)}
+                  className={
+                    state === "off"
+                      ? "h-11 w-full rounded-lg border border-smoke/50 bg-ash/20 px-4 text-sm text-fog cursor-not-allowed"
+                      : state === "loading"
+                        ? "h-11 w-full rounded-lg border border-smoke bg-ash/10 px-4 text-sm text-fog/60 cursor-wait"
+                        : "h-11 w-full rounded-lg border border-smoke bg-gradient-to-b from-carbon to-void px-4 text-sm text-paper transition-colors hover:border-mist/40 hover:from-ash/10"
+                  }
+                >
+                  Continue with {p.name}
+                  {state === "off" && (
+                    <span className="block text-xs font-normal text-fog/70">not configured on this server</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
 
-            <label className="block mb-4">
-              <span className="gauge">Password</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                autoComplete="current-password"
-                required
-                className="field mt-2"
-              />
-            </label>
-
-            {error && <p className="text-sm text-coral-red mb-4">{error}</p>}
-
-            <PillButton type="submit" disabled={loading} className="w-full">
-              {loading ? "Signing in…" : "Sign in"}
-            </PillButton>
-          </form>
+          {providers !== null && providers.length === 0 && (
+            <p className="text-sm text-coral-red mt-4">
+              {unreachable
+                ? "Could not reach the sign-in service — check your connection and reload."
+                : "No sign-in providers are configured on this server. An operator must set AUTH_GITHUB_CLIENT_ID/SECRET or AUTH_GOOGLE_CLIENT_ID/SECRET."}
+            </p>
+          )}
         </div>
 
-        <p className="text-sm text-fog text-center mt-6">
-          Don&apos;t have an account?{" "}
-          <Link href="/register" className="text-mist underline underline-offset-2 hover:text-paper transition-colors">
-            Sign up
-          </Link>
+        <p className="text-xs text-fog/60 text-center mt-6">
+          Your provider identity is your account — no passwords to keep, lose, or leak.
         </p>
       </div>
     </div>

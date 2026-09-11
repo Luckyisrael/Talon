@@ -62,7 +62,7 @@ export default function Home() {
             deploy to Solana Seeker — all without leaving your browser.
           </p>
           <div className="flex items-center gap-6 mt-8">
-            <Link href="/register" className="btn-go h-10 px-4 inline-flex items-center gap-2 rounded-md text-sm">
+            <Link href="/login" className="btn-go h-10 px-4 inline-flex items-center gap-2 rounded-md text-sm">
               Start building
               <ArrowRight size="15" variant="Linear" />
             </Link>
@@ -129,7 +129,7 @@ export default function Home() {
             No credit card required.
           </p>
           <Link
-            href="/register"
+            href="/login"
             className="btn-go h-10 px-4 inline-flex items-center gap-2 rounded-md text-sm mt-8"
           >
             Get started free

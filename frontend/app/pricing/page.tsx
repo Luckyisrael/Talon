@@ -27,7 +27,7 @@ const tiers = [
       "Live Seeker device preview",
       "Solana Mobile (MWA) scaffolding built in",
     ],
-    cta: { label: "Start building", href: "/register" },
+    cta: { label: "Start building", href: "/login" },
     primary: true,
   },
   {

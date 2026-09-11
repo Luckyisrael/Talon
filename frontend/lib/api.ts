@@ -90,7 +90,7 @@ function handleExpiredSession() {
   if (typeof window === "undefined") return;
   clearToken();
   const here = window.location.pathname;
-  if (here === "/login" || here === "/register") return;
+  if (here === "/login" || here === "/auth/callback") return;
   // A hard navigation on purpose, and not reachable by the alternatives the lint
   // rule suggests: this is a module-level function, so there is no `useRouter`,
   // and `redirect()` is server-side. A client-side push would also *keep* the
@@ -128,22 +128,28 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 // ── Auth ──────────────────────────────────────────────
+// Sign-in is OAuth (GitHub + Google); email/password is gone. The browser is
+// sent to the provider's consent screen and lands on /auth/callback with a
+// single-use code, which this client exchanges for the JWT — the token never
+// rides a URL.
 
 export const auth = {
-  login(email: string, password: string) {
-    return request<AuthResponse>("/v1/auth/login", {
+  /** Which providers are configured on this server — the honest list. */
+  providers() {
+    return request<{ providers: { id: string; name: string }[] }>("/v1/auth/providers");
+  },
+
+  /** The single-use code from the callback becomes the session JWT. */
+  exchange(code: string) {
+    return request<AuthResponse>("/v1/auth/exchange", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ code }),
     });
   },
 
-  // The API takes an address and a password. It has never stored a name, and
-  // sending one made the sign-up form ask for something nothing would use.
-  register(email: string, password: string) {
-    return request<AuthResponse>("/v1/auth/register", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    });
+  /** Where the browser goes to start a provider flow. Server derives origin. */
+  startURL(provider: string, redirect: string) {
+    return `/v1/auth/${provider}/start?redirect=${encodeURIComponent(redirect)}`;
   },
 };
 

@@ -71,7 +71,7 @@ export default function WaitlistPage() {
           </p>
           <div className="mt-8">
             <Link
-              href="/register"
+              href="/login"
               className="btn-go h-11 px-6 rounded-md text-sm inline-flex items-center gap-2"
             >
               Start building free
@@ -104,7 +104,7 @@ export default function WaitlistPage() {
               ))}
             </ul>
             <Link
-              href="/register"
+              href="/login"
               className="btn-go mt-auto h-10 px-5 rounded-md text-sm inline-flex items-center justify-center gap-2"
             >
               Create your account
