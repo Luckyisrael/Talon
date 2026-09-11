@@ -374,17 +374,15 @@ func main() {
 		skip("build", "resume mode: build already turned by the live model in the prior run (verified=true in run 7)")
 		// The scratch DB holds exactly one project; find it through the
 		// public surface.
-		var list struct {
-			Projects []struct {
-				ID int64 `json:"id"`
-			} `json:"projects"`
+		var list []struct {
+			ID int64 `json:"id"`
 		}
-		if err := call("GET", "/v1/projects", nil, &list); err != nil || len(list.Projects) == 0 {
-			fail("project", "resume mode needs the prior run's project: %v (len %d)", err, len(list.Projects))
+		if err := call("GET", "/v1/projects", nil, &list); err != nil || len(list) == 0 {
+			fail("project", "resume mode needs the prior run's project: %v (len %d)", err, len(list))
 			report(started)
 			return
 		}
-		projectID = list.Projects[0].ID
+		projectID = list[0].ID
 		deviceStages(started, projectID)
 		return
 	}
