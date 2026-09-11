@@ -400,29 +400,66 @@ func main() {
 	pass("plan", fmt.Sprintf("%d events", len(planEvents)))
 
 	// 4 — build turn (agentic loop; the model writes real files and verifies).
+	// A question mid-turn is the negotiation-first law in action, not a
+	// failure: the driver answers it (the ask_user flow is part of the
+	// product) and the loop continues until done.
 	begin("build")
-	buildEvents, buildErr := readSSE(sseReq{method: "POST", path: "/v1/prompts/stream",
-		body: map[string]interface{}{"project_id": projectID, "mode": "build", "prompt": *prompt2}},
-		20*time.Minute, func(ev sseEvent) bool { return ev.Kind == "done" })
-	var buildDone map[string]interface{}
-	sawDone = false
+	answers := 0
 	toolCalls := 0
 	verifyCalls := 0
-	for _, ev := range buildEvents {
-		switch ev.Kind {
-		case "tool_call":
-			toolCalls++
-		case "verify":
-			verifyCalls++
-		case "done":
-			sawDone = true
-			_ = json.Unmarshal([]byte(ev.Data), &buildDone)
+	var buildDone map[string]interface{}
+	var buildEvents []sseEvent
+	var buildErr error
+	buildEvents, buildErr = readSSE(sseReq{method: "POST", path: "/v1/prompts/stream",
+		body: map[string]interface{}{"project_id": projectID, "mode": "build", "prompt": *prompt2}},
+		20*time.Minute, func(ev sseEvent) bool { return ev.Kind == "done" })
+	for {
+		pendingQuestion := int64(0)
+		toolCalls = 0
+		verifyCalls = 0
+		sawDone = false
+		for _, ev := range buildEvents {
+			switch ev.Kind {
+			case "tool_call":
+				toolCalls++
+			case "verify":
+				verifyCalls++
+			case "question":
+				q := struct {
+					PromptID float64 `json:"prompt_id"`
+				}{}
+				if json.Unmarshal([]byte(ev.Data), &q) == nil && q.PromptID > 0 {
+					pendingQuestion = int64(q.PromptID)
+				}
+			case "done":
+				sawDone = true
+				_ = json.Unmarshal([]byte(ev.Data), &buildDone)
+			}
 		}
-	}
-	if buildErr != nil || !sawDone {
-		fail("build", "stream: %v (done seen: %v, %d events)", buildErr, sawDone, len(buildEvents))
-		report(started)
-		return
+		if pendingQuestion > 0 && !sawDone {
+			// Answer the question — the product's ask_user loop — and keep
+			// reading. The answer is permissive within the run's purpose:
+			// the E2E already granted the model the workspace.
+			answers++
+			if answers > 4 {
+				fail("build", "ask_user loop exceeded 4 rounds — the model is stuck asking")
+				report(started)
+				return
+			}
+			fmt.Printf("  → answering question on prompt %d (round %d)\n", pendingQuestion, answers)
+			buildEvents, buildErr = readSSE(sseReq{method: "POST",
+				path: fmt.Sprintf("/v1/prompts/%d/answer", pendingQuestion),
+				body:   map[string]interface{}{"answer": "Yes, proceed — this E2E run approves workspace writes and device probes."}},
+				20*time.Minute,
+				func(ev sseEvent) bool { return ev.Kind == "done" })
+			continue
+		}
+		if buildErr != nil || !sawDone {
+			fail("build", "stream: %v (done seen: %v, %d events)", buildErr, sawDone, len(buildEvents))
+			report(started)
+			return
+		}
+		break
 	}
 	if st, _ := buildDone["status"].(string); st != "success" {
 		fail("build", "turn status %q (files %v)", st, buildDone["files_touched"])
@@ -431,13 +468,14 @@ func main() {
 	}
 	files, _ := buildDone["files_touched"].(float64)
 	verified, _ := buildDone["verified"].(bool)
-	detail := fmt.Sprintf("%d tool calls, %d verify, %.0f files, verified=%v", toolCalls, verifyCalls, files, verified)
+	detail := fmt.Sprintf("%d tool calls, %d verify, %.0f files, verified=%v, %d ask_user answered", toolCalls, verifyCalls, files, verified, answers)
 	if !verified {
 		// Verified=false is honest information, not a failure: the turn
 		// finished but the ladder did not fully pass. The report names it.
 		detail += " (verification incomplete — named, not hidden)"
 	}
 	pass("build", detail)
+
 
 	// 5 — device session (the warm pool claims a container).
 	begin("device-session")
