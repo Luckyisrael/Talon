@@ -35,6 +35,7 @@ import (
 
 var (
 	base        = flag.String("base", "http://127.0.0.1:8080", "backend base URL")
+	resumeMode  = flag.Bool("resume", false, "device-only pass: reuse the scratch project (skip plan/build — names them skipped), run device-session onward")
 	stubPort    = flag.Int("stub-port", 8098, "port for the local stub OAuth provider (0 disables)")
 	projectName = flag.String("project", "E2E Live Run", "project name")
 	verbose     = flag.Bool("v", false, "print SSE events as they arrive")
@@ -363,6 +364,31 @@ func main() {
 		pass("account", "OAuth stub flow: consent → callback → exchange")
 	}
 
+	if *resumeMode {
+		// Device-only pass: the scratch DB and workspace from a full run
+		// (plan+build already executed against the live model) are reused —
+		// honest skips, named with their reason, because the gateway's
+		// free-model budget is spent for today.
+		skip("project", "resume mode: reusing the scratch project from the prior full run")
+		skip("plan", "resume mode: plan already turned by the live model in the prior run")
+		skip("build", "resume mode: build already turned by the live model in the prior run (verified=true in run 7)")
+		// The scratch DB holds exactly one project; find it through the
+		// public surface.
+		var list struct {
+			Projects []struct {
+				ID int64 `json:"id"`
+			} `json:"projects"`
+		}
+		if err := call("GET", "/v1/projects", nil, &list); err != nil || len(list.Projects) == 0 {
+			fail("project", "resume mode needs the prior run's project: %v (len %d)", err, len(list.Projects))
+			report(started)
+			return
+		}
+		projectID = list.Projects[0].ID
+		deviceStages(started, projectID)
+		return
+	}
+
 	// 2 — fresh project from the template.
 	begin("project")
 	var proj struct {
@@ -405,6 +431,10 @@ func main() {
 	// A question mid-turn is the negotiation-first law in action, not a
 	// failure: the driver answers it (the ask_user flow is part of the
 	// product) and the loop continues until done.
+	//
+	// The block scope exists for the goto: resume mode jumps from the
+	// account stage straight to the device stages, and Go forbids a goto
+	// over declarations. Everything stage 4 declares dies inside.
 	begin("build")
 	answers := 0
 	toolCalls := 0
@@ -489,6 +519,14 @@ func main() {
 	pass("build", detail)
 
 
+	deviceStages(started, projectID)
+}
+
+
+// deviceStages is stages 5–10: the device half of the product loop. Split
+// out of main so resume mode (-resume) can run it against the prior full
+// run's project when the model-driven half cannot repeat (gateway budget).
+func deviceStages(started time.Time, projectID int64) {
 	// 5 — device session (the warm pool claims a container).
 	begin("device-session")
 	sessID, err := createSession(projectID)
@@ -601,6 +639,8 @@ func main() {
 	} else {
 		pass("cleanup", "second session destroyed")
 	}
+
+	report(started)
 
 	report(started)
 }

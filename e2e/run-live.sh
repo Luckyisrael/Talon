@@ -41,7 +41,9 @@ grep -q '^AI_API_KEY=' "$BACKEND/.env" && need "AI gateway key" 1 || need "AI ga
 
 echo "── stack"
 mkdir -p "$WORKSPACES"
-rm -f "$DB"
+# Resume mode keeps the prior run's scratch DB + workspace (the whole point:
+# the project the live model built). Fresh mode wipes both.
+if [ "${E2E_RESUME:-0}" != "1" ]; then rm -f "$DB"; fi
 
 # The scratch env: every real dependency, zero shared state. The pacer
 # keeps the gateway under its requests/minute budget across the whole run.
@@ -73,7 +75,11 @@ echo "  ✓ backend on :$PORT (scratch DB, scratch workspaces)"
 
 echo "── drive"
 cd "$BACKEND"
-GOCACHE=/tmp/gocache GOPATH=/tmp/gopath go run ./cmd/e2e -base "$BASE" -v
+if [ "${E2E_RESUME:-0}" = "1" ]; then
+  GOCACHE=/tmp/gocache GOPATH=/tmp/gopath go run ./cmd/e2e -base "$BASE" -v -resume
+else
+  GOCACHE=/tmp/gocache GOPATH=/tmp/gopath go run ./cmd/e2e -base "$BASE" -v
+fi
 rc=$?
 
 echo "── done (rc=$rc)"
