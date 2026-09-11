@@ -1,6 +1,9 @@
 # PLAN_RENAME_TALON.md — SeekerStudio → Talon, everywhere, nothing left behind
 
-Status: READY — awaiting go-ahead. One pass, ordered so the tree is never
+Status: **EXECUTING** (2026-09-11). User's decisions locked in:
+module → `github.com/luckyisrael/talon/backend`; existing dev workspaces
+(30, 31) → **wiped** (archived in backups/); both binaries (talon-redroid
+image + dev-client APK) → **rebuilt now**. Ordered so the tree is never
 broken mid-rename; every step ends green before the next begins.
 
 ## The one carve-out (read first)
