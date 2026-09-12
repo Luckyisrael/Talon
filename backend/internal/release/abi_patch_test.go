@@ -8,57 +8,57 @@ import (
 )
 
 func TestEnsureAbiFilters(t *testing.T) {
-	t.Run("inserts when absent", func(t *testing.T) {
+	write := func(dir, name, content string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	t.Run("pins gradle.properties and normalizes stale ndk block", func(t *testing.T) {
 		dir := t.TempDir()
-		p := filepath.Join(dir, "build.gradle")
-		os.WriteFile(p, []byte(`
-    defaultConfig {
-        applicationId 'com.talon.app'
-        versionCode 1
-    }
-`), 0o644)
-		if err := ensureAbiFilters(p); err != nil {
+		props := write(dir, "gradle.properties", "hermesEngine=true\nreactNativeArchitectures=armeabi-v7a,arm64-v8a,x86,x86_64\n")
+		gradle := write(dir, "build.gradle", "android {\n  defaultConfig {\n    applicationId 'com.x'\n    ndk { abiFilters \"armeabi-v7a\", \"x86\" }\n  }\n}\n")
+		if err := ensureAbiFilters(props, gradle); err != nil {
 			t.Fatal(err)
 		}
-		out, _ := os.ReadFile(p)
-		s := string(out)
-		if !strings.Contains(s, `abiFilters "x86_64", "arm64-v8a"`) || !strings.Contains(s, "ndk {") {
-			t.Fatalf("filters not inserted:\n%s", s)
-		}
-		// defaultConfig structure preserved.
-		if strings.Count(s, "defaultConfig {") != 1 {
-			t.Fatalf("defaultConfig count changed:\n%s", s)
-		}
-	})
-	t.Run("idempotent and normalizes existing", func(t *testing.T) {
-		dir := t.TempDir()
-		p := filepath.Join(dir, "build.gradle")
-		os.WriteFile(p, []byte(`
-    defaultConfig {
-        applicationId 'com.talon.app'
-        ndk { abiFilters "armeabi-v7a", "x86" }
-    }
-`), 0o644)
-		if err := ensureAbiFilters(p); err != nil {
+		if err := ensureAbiFilters(props, gradle); err != nil { // idempotent
 			t.Fatal(err)
 		}
-		if err := ensureAbiFilters(p); err != nil { // second run: no-op
-			t.Fatal(err)
+		out, _ := os.ReadFile(props)
+		if !strings.Contains(string(out), "reactNativeArchitectures=x86_64,arm64-v8a\n") {
+			t.Fatalf("architectures not pinned:\n%s", out)
 		}
-		out, _ := os.ReadFile(p)
 		if strings.Contains(string(out), "armeabi") {
-			t.Fatalf("stale ABIs survived:\n%s", string(out))
+			t.Fatalf("stale architectures survived:\n%s", out)
 		}
-		if strings.Count(string(out), "ndk {") != 1 {
-			t.Fatalf("duplicated ndk block:\n%s", string(out))
+		g, _ := os.ReadFile(gradle)
+		if strings.Contains(string(g), "armeabi") {
+			t.Fatalf("stale ndk block survived:\n%s", g)
+		}
+		if strings.Count(string(g), "ndk {") != 1 {
+			t.Fatalf("ndk block duplicated:\n%s", g)
 		}
 	})
-	t.Run("fails loudly without applicationId", func(t *testing.T) {
+	t.Run("appends when the property is absent", func(t *testing.T) {
 		dir := t.TempDir()
-		p := filepath.Join(dir, "build.gradle")
-		os.WriteFile(p, []byte("android {\n}\n"), 0o644)
-		if err := ensureAbiFilters(p); err == nil {
-			t.Fatal("want error for tree without applicationId")
+		props := write(dir, "gradle.properties", "newArchEnabled=true\n")
+		gradle := write(dir, "build.gradle", "android {\n}\n")
+		if err := ensureAbiFilters(props, gradle); err != nil {
+			t.Fatal(err)
+		}
+		out, _ := os.ReadFile(props)
+		if !strings.Contains(string(out), "reactNativeArchitectures=x86_64,arm64-v8a") {
+			t.Fatalf("architectures not appended:\n%s", out)
+		}
+	})
+	t.Run("fails loudly when gradle.properties is unreadable", func(t *testing.T) {
+		dir := t.TempDir()
+		gradle := write(dir, "build.gradle", "android {\n}\n")
+		if err := ensureAbiFilters(filepath.Join(dir, "missing.properties"), gradle); err == nil {
+			t.Fatal("want error for missing gradle.properties")
 		}
 	})
 }

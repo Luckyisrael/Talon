@@ -127,10 +127,12 @@ func (b *Builder) Build(ctx context.Context, projectID int64) (string, error) {
 	}
 	// The 2-ABI law: the redroid container is x86_64, the real Seeker
 	// phone arm64-v8a. armeabi-v7a and x86 (32-bit) serve neither — they
-	// double the APK and every ADB install. Patched here (not only in the
-	// template's tracked build.gradle) so it holds for every project
-	// regardless of when its android/ tree was last regenerated.
-	if err := ensureAbiFilters(filepath.Join(scratch, "android", "app", "build.gradle")); err != nil {
+	// double the APK and every ADB install. The operative knob is
+	// reactNativeArchitectures in gradle.properties: the RN gradle plugin
+	// reads it and overrides defaultConfig.ndk.abiFilters (learned the hard
+	// way — a defaultConfig block alone still packaged four ABIs). The ndk
+	// block is normalized too, for trees that carry a stale one.
+	if err := ensureAbiFilters(filepath.Join(scratch, "android", "gradle.properties"), filepath.Join(scratch, "android", "app", "build.gradle")); err != nil {
 		return "", err
 	}
 
@@ -282,38 +284,39 @@ func patchApplicationID(gradlePath, androidPackage string) error {
 	return nil
 }
 
-// ensureAbiFilters pins the 2-ABI build in a prebuilt android/ tree. Idempotent:
-// an existing ndk { abiFilters … } block is normalized; a tree without one
-// gains it inside defaultConfig (located by its applicationId line — the
-// identity patch has already run, so the line is present and unique).
-func ensureAbiFilters(gradlePath string) error {
-	raw, err := os.ReadFile(gradlePath)
+// ensureAbiFilters pins the 2-ABI build in a prebuilt android/ tree.
+// Idempotent. The operative knob is reactNativeArchitectures in
+// gradle.properties (the RN gradle plugin's word overrides
+// defaultConfig.ndk.abiFilters); any stale ndk block in app/build.gradle
+// is normalized too so the two can never disagree.
+func ensureAbiFilters(gradlePropsPath, gradleBuildPath string) error {
+	raw, err := os.ReadFile(gradlePropsPath)
 	if err != nil {
-		return fmt.Errorf("read build.gradle: %w", err)
+		return fmt.Errorf("read gradle.properties: %w", err)
 	}
 	out := string(raw)
-	const block = "\n        // Two ABIs, not four: the redroid container is x86_64 and the real\n" +
-		"        // Seeker phone is arm64-v8a. armeabi-v7a and x86 (32-bit) served\n" +
-		"        // neither — half the APK, half the ADB install time.\n" +
-		"        ndk {\n            abiFilters \"x86_64\", \"arm64-v8a\"\n        }"
-
-	// Normalize an existing ndk block first.
-	ndkRe := regexp.MustCompile(`(?s)ndk\s*\{[^}]*\}`)
-	if ndkRe.MatchString(out) {
-		out = ndkRe.ReplaceAllString(out, "ndk {\n            abiFilters \"x86_64\", \"arm64-v8a\"\n        }")
+	const want = "reactNativeArchitectures=x86_64,arm64-v8a"
+	re := regexp.MustCompile(`(?m)^reactNativeArchitectures=.*$`)
+	if re.MatchString(out) {
+		out = re.ReplaceAllString(out, want)
 	} else {
-		// Insert after the applicationId line, inside defaultConfig.
-		appRe := regexp.MustCompile(`(?m)^(\s*applicationId\s+'[^']*'\s*)$`)
-		if !appRe.MatchString(out) {
-			return fmt.Errorf("build.gradle lacks an applicationId line — refusing to guess where defaultConfig is")
+		out += want + "\n"
+	}
+	if out != string(raw) {
+		if err := os.WriteFile(gradlePropsPath, []byte(out), 0o644); err != nil {
+			return fmt.Errorf("write gradle.properties: %w", err)
 		}
-		out = appRe.ReplaceAllString(out, "${1}"+block)
 	}
-	if out == string(raw) {
-		return nil // already pinned
-	}
-	if err := os.WriteFile(gradlePath, []byte(out), 0o644); err != nil {
-		return fmt.Errorf("write build.gradle: %w", err)
+
+	// Normalize any ndk block in build.gradle to agree.
+	if raw, err := os.ReadFile(gradleBuildPath); err == nil {
+		ndkRe := regexp.MustCompile(`(?s)ndk\s*\{[^}]*\}`)
+		if s := string(raw); ndkRe.MatchString(s) && !strings.Contains(s, `abiFilters "x86_64", "arm64-v8a"`) {
+			normalized := ndkRe.ReplaceAllString(s, "ndk {\n            abiFilters \"x86_64\", \"arm64-v8a\"\n        }")
+			if err := os.WriteFile(gradleBuildPath, []byte(normalized), 0o644); err != nil {
+				return fmt.Errorf("write build.gradle: %w", err)
+			}
+		}
 	}
 	return nil
 }
