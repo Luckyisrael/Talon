@@ -125,6 +125,14 @@ func (b *Builder) Build(ctx context.Context, projectID int64) (string, error) {
 	if err := patchApplicationID(filepath.Join(scratch, "android", "app", "build.gradle"), project.AndroidPackage); err != nil {
 		return "", err
 	}
+	// The 2-ABI law: the redroid container is x86_64, the real Seeker
+	// phone arm64-v8a. armeabi-v7a and x86 (32-bit) serve neither — they
+	// double the APK and every ADB install. Patched here (not only in the
+	// template's tracked build.gradle) so it holds for every project
+	// regardless of when its android/ tree was last regenerated.
+	if err := ensureAbiFilters(filepath.Join(scratch, "android", "app", "build.gradle")); err != nil {
+		return "", err
+	}
 
 	b.phase("assembleRelease")
 	androidDir := filepath.Join(scratch, "android")
@@ -267,6 +275,42 @@ func patchApplicationID(gradlePath, androidPackage string) error {
 	}
 	if changed != 2 {
 		return fmt.Errorf("build.gradle lacks namespace/applicationId lines — refusing to guess identity")
+	}
+	if err := os.WriteFile(gradlePath, []byte(out), 0o644); err != nil {
+		return fmt.Errorf("write build.gradle: %w", err)
+	}
+	return nil
+}
+
+// ensureAbiFilters pins the 2-ABI build in a prebuilt android/ tree. Idempotent:
+// an existing ndk { abiFilters … } block is normalized; a tree without one
+// gains it inside defaultConfig (located by its applicationId line — the
+// identity patch has already run, so the line is present and unique).
+func ensureAbiFilters(gradlePath string) error {
+	raw, err := os.ReadFile(gradlePath)
+	if err != nil {
+		return fmt.Errorf("read build.gradle: %w", err)
+	}
+	out := string(raw)
+	const block = "\n        // Two ABIs, not four: the redroid container is x86_64 and the real\n" +
+		"        // Seeker phone is arm64-v8a. armeabi-v7a and x86 (32-bit) served\n" +
+		"        // neither — half the APK, half the ADB install time.\n" +
+		"        ndk {\n            abiFilters \"x86_64\", \"arm64-v8a\"\n        }"
+
+	// Normalize an existing ndk block first.
+	ndkRe := regexp.MustCompile(`(?s)ndk\s*\{[^}]*\}`)
+	if ndkRe.MatchString(out) {
+		out = ndkRe.ReplaceAllString(out, "ndk {\n            abiFilters \"x86_64\", \"arm64-v8a\"\n        }")
+	} else {
+		// Insert after the applicationId line, inside defaultConfig.
+		appRe := regexp.MustCompile(`(?m)^(\s*applicationId\s+'[^']*'\s*)$`)
+		if !appRe.MatchString(out) {
+			return fmt.Errorf("build.gradle lacks an applicationId line — refusing to guess where defaultConfig is")
+		}
+		out = appRe.ReplaceAllString(out, "${1}"+block)
+	}
+	if out == string(raw) {
+		return nil // already pinned
 	}
 	if err := os.WriteFile(gradlePath, []byte(out), 0o644); err != nil {
 		return fmt.Errorf("write build.gradle: %w", err)
