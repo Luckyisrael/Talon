@@ -11,6 +11,7 @@
 import { useEffect, useState } from "react";
 import QRCode from "@/components/ui/QRCode";
 import { testInfo } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 
 interface TestOnPhoneProps {
   projectId: number;
@@ -54,12 +55,10 @@ export default function TestOnPhone({ projectId, epoch }: TestOnPhoneProps) {
 
   const copy = async () => {
     if (!info?.deep_link) return;
-    try {
-      await navigator.clipboard.writeText(info.deep_link);
+    // Works in insecure contexts too — the Clipboard API alone does not.
+    if (await copyText(info.deep_link)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard API denied: the link stays selectable text.
     }
   };
 

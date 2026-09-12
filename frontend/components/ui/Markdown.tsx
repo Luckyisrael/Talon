@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, memo, useCallback, useState, type ReactNode } from "react";
+import { copyText } from "@/lib/clipboard";
 
 /**
  * A small Markdown renderer for the agent's prose.
@@ -239,13 +240,11 @@ function CodeBlock({ lang, body }: { lang: string; body: string }) {
   const [copied, setCopied] = useState(false);
 
   const copy = useCallback(() => {
-    navigator.clipboard?.writeText(body).then(
-      () => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1400);
-      },
-      () => setCopied(false),
-    );
+    // Works in insecure contexts too — the Clipboard API alone does not.
+    void copyText(body).then((ok) => {
+      setCopied(ok);
+      if (ok) window.setTimeout(() => setCopied(false), 1400);
+    });
   }, [body]);
 
   return (

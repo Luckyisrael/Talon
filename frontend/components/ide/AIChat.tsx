@@ -20,6 +20,7 @@ import {
   type StreamEvent,
 } from "@/lib/api";
 import { useIDEStore } from "@/lib/store";
+import { uuid } from "@/lib/uuid";
 import type { ChatMessage, PlanData, PlanTask, StreamMessage, TraceRow } from "@/lib/types";
 import AgentTrace, { getToolLabel } from "./AgentTrace";
 import LoadingState from "@/components/ui/LoadingState";
@@ -902,10 +903,10 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         filesReadRef.current = new Set();
         pinnedRef.current = true;
 
-        const streamId = crypto.randomUUID();
+        const streamId = uuid();
         setMessages((prev) => [
           ...prev,
-          { id: crypto.randomUUID(), role: "user", content: prompt, timestamp: Date.now() },
+          { id: uuid(), role: "user", content: prompt, timestamp: Date.now() },
           { id: streamId, role: "assistant", traceRows: [], isStreaming: true },
         ]);
 
@@ -940,7 +941,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         filesReadRef.current = new Set();
         pinnedRef.current = true;
 
-        const streamId = crypto.randomUUID();
+        const streamId = uuid();
       setMessages((prev) => [
         ...prev,
         { id: streamId, role: "assistant", traceRows: [], isStreaming: true },
@@ -996,7 +997,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         filesReadRef.current = new Set();
         pinnedRef.current = true;
 
-        const streamId = crypto.randomUUID();
+        const streamId = uuid();
         setMessages((prev) => [
           ...prev,
           { id: streamId, role: "assistant", traceRows: [], isStreaming: true },
@@ -1033,7 +1034,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         setMessages((prev) => [
           ...prev,
           {
-            id: crypto.randomUUID(),
+            id: uuid(),
             role: "user",
             content: message,
             timestamp: Date.now(),
