@@ -224,25 +224,166 @@ what exists):**
 
 ---
 
+## Workstream 4 — The nine UI bugs (root-caused, file:line evidence)
+
+Every bug below was traced to source before entering this plan. None is a
+guess. Items are ordered by fix cost (cheapest first) — items 6/7/8 are three
+symptoms of one bug and land together.
+
+### B1. Git diff fails to load — one-line backend path bug
+`backend/internal/api/gitdiff.go:28` joins `workspaceDir/project.Slug`, but
+workspaces live in **numeric-id directories**: `workspace.go:81` is
+`filepath.Join(m.workspacesDir, strconv.FormatInt(projectID, 10))` and
+`ls backend/workspaces/` shows `1`, `2`. The handler runs `git diff` in a
+directory that never exists → error every time.
+**Fix:** `filepath.Join(h.workspaceDir, strconv.FormatInt(project.ID, 10))`.
+Add a handler test with a real temp workspace asserting the diff renders.
+
+### B2. 30-minute simple build — three compounding causes, honest expectations
+The wallet-app prompt ran against an 8 req/min gateway with **8s pacing between
+every model call** (client.go pacer, `AI_MIN_REQUEST_INTERVAL`), a
+**60-round default budget** (orchestrator.go:94 `defaultMaxRounds = 60`), and
+the model narrating each verify gate as a separate round. 30 min ≈ 200+ gateway
+calls × 8s of pure pacing = most of the wall-clock is the pacer, not the model.
+What is actually fixable:
+- **Register the five missing verify tools** (see B5) — the ladder currently
+  burns rounds calling tools that don't exist, then the model re-narrates the
+  failure, doubling the waste.
+- **Batch the verify narration:** the gate sweep already emits one `verify`
+  event per stage (7 stages); the model then narrates each one again. Collapse
+  per-stage narration so a full clean pass is ONE model turn, not seven.
+- **Parallelize the pacer where safe:** the 8 req/min limit is the user's
+  gateway tier — NOT negotiable, NOT worked around. What we can do: stop
+  wasting calls on (a) nonexistent tools, (b) re-narration, (c) the
+  plan-then-build double pass where the plan fits one turn.
+- **Set expectations honestly in the UI:** a badge/line in the chat header
+  showing "turn budget: N rounds · paced 8s/call at your gateway tier" so 30
+  minutes reads as the pacing it is, not a hang.
+**Not a fix:** raising the gateway tier. That's the user's account.
+
+### B3. Chat section looks disorganized — structure audit, then layout pass
+Verified the render: user messages are right-aligned bubbles (AIChat.tsx:1277),
+assistant turns are full-width `AgentTrace` stacks + plan/question cards + a
+TurnFooter, all in one `gap-4` column. The disorganization the user sees is
+real and comes from: (a) trace rows (tools/narration/thinking) and cards
+sharing one flat column with equal visual weight, (b) no turn boundary —
+nothing visually separates one assistant turn from the next, (c) user bubbles
+at `max-w-[88%]` next to full-width assistant blocks read as misaligned.
+**Fix (layout pass, no data changes):**
+- A subtle turn divider (timestamp + rule) between conversation turns.
+- Assistant blocks get a consistent left indent aligned with the user bubble's
+  right edge family — one visual rhythm, not two.
+- Trace rows tighten: `gap-4` → contextual spacing; card/plan/question blocks
+  get a uniform container (same padding, same border language).
+- Files under `frontend/components/ide/` only; no API changes.
+
+### B4. Device section looks off when QR appears — layout constraint bug
+Verified: the device rail (IDELayout.tsx:562-583) is a `flex-col` with
+PhonePreview `flex-1` and TestOnPhone `flex-shrink-0 overflow-y-auto` below
+it. When a session starts, the QR block (168px + caption + deep-link row +
+APK link) **stacks under the video and squeezes the phone preview**, and in a
+narrow rail (min 220px) the 168px QR + link row overflow visually.
+**Fix:**
+- QR panel becomes a **collapsible drawer** inside the device rail: collapsed
+  to a single "Test on your phone →" row by default; expands over (not below)
+  the preview. The QR is a setup-time action, not a watch-time one.
+- Deep-link row truncates harder (`min-w-0` + `truncate` on the code chip —
+  already partly there) and the whole panel obeys the rail min-width.
+- PhonePreview keeps its full height in every state.
+
+### B5. "Checked X" twice + five "No tool named run_*" — the verify ladder is broken
+**Two distinct defects, both verified in source:**
+1. **Missing registrations:** `buildsession.go:114-118` registers only
+   run_command, run_shell, run_typecheck, run_lint, run_checks — but the
+   orchestrator's gate ladder (`orchestrator.go:2037-2042`) drives
+   `run_bundle`, `run_gradle`, `run_boot`, `run_vision`, `run_interact`.
+   Those five tools **exist** (`tools/verify.go:282,326,383,492`+interact)
+   but are never `reg.Register`ed. The agent dutifully calls them, gets
+   "No tool named …", and the transcript shows the ladder limping.
+   **Fix:** register the five tools in buildsession.go with the same
+   gating discipline as the device tools (bundle/gradle when the template
+   toolchain exists; boot/vision/interact only when a session is attached).
+   Add a registry test asserting every ladder stage's tool resolves.
+2. **Double "Checked typecheck" rows:** the gate sweep emits one `verify`
+   trace row per stage (AIChat.tsx:649-663), and the model ALSO narrates
+   each check as its own narration row — so a clean pass shows 14 rows for
+   7 checks. **Fix:** suppress the model's per-gate narration (prompt-side:
+   "the verify sweep is already shown to the user; do not narrate it
+   line-by-line — narrate the verdict") AND/OR dedupe trace-side when a
+   narration text matches a just-emitted verify row's label. Prompt-side
+   first (cheaper, no renderer surgery); keep the honest full output in the
+   Output pane either way.
+3. **"verified (static only …)" — already honest and correct.** Keep.
+
+### B6. Shimmer keeps animating after the turn ends — leftover streaming flag
+Verified: the `done` handler (AIChat.tsx:846-865) clears `status:"running"`
+rows but **never clears `streaming:true`** on narration/thinking rows. The
+shimmer (AgentTrace.tsx:389, `animation: shimmer-text infinite`) is driven by
+`row.streaming`, so any row that never got its `text.end`/`thinking.end`
+frame (error paths, aborted streams) shimmers forever.
+**Fix:** in the `done` case, map every row to also clear `streaming`.
+Same one-line sweep for the error/abort paths in the stream teardown.
+
+### B7. Thinking caret should be collapsed by default — one character
+`AgentTrace.tsx:361` — `const expanded = manualExpanded ?? !!streaming;`.
+While streaming, thinking auto-expands. User wants collapsed default.
+**Fix:** `manualExpanded ?? false` — expanded only on explicit click.
+(Keep the caret; only the auto-expand changes.)
+
+### B8. Blinking cursor under every decision/thinking — same streaming flag
+The lime caret with `breathe` animation (AgentTrace.tsx:425-433) renders when
+`streaming` is true on the thinking row — same stale flag as B6. After the
+turn ends it keeps blinking under settled text. **Fixed by B6's sweep** —
+no separate change; listed because it's a distinct symptom.
+
+### B9. Blank dot + "0 calls" under tool rows — GroupRow summary glitch
+Verified: `GroupRow` (AgentTrace.tsx:655+) renders `{count} {calls}` from
+`row.children?.length`. The "0 calls" appears when a group row is emitted
+with an **empty children array** — reachable when the group is created from
+a run flushed at exactly the wrong moment (a read-only row still `running`
+with no children committed), and the blank dot is `Glyph` returning the
+default `<span className="h-1 w-1 rounded-full bg-ash" />` for
+`status === undefined`.
+**Fix:** (a) `groupRows` never emits a group with `children.length === 0`
+— flush as plain rows instead; (b) group rows always carry an explicit
+status (`running`/`done`/`fail`), never undefined; (c) defensive render:
+if a group somehow arrives with 0 children, render nothing, not "0 calls".
+**Plus history-rehydration check:** verify the same glitch can't come from
+`/conversation` replay (rows arrive without the group wrapper) — if it can,
+regroup on the client for display.
+
+---
+
 ## Execution order & safety
 
 ```
-1. W1 session-resume fix (small, live bug, testable immediately)
-2. S1 image deletion + launch-dev.sh rewrite (frees 2.75GB, zero risk)
-3. S4 cache deletion (frees 5.9GB from repo)
-4. S2 ABI trim → ONE background gradle rebuild → verify in session
-5. W2 Phase 16 items: token-gated relay spike (30min, decides the path),
-   TestOnPhone disclosure sentence
-6. W2 Phase 17 items: wallet-auth backend sub-plan (own workstream),
-   device-tab deep-link button
-7. S3 export-scratch verification (one export run)
-8. S6 housekeeping (docker prune + du record)
+ 0. Push everything to github.com/Luckyisrael/Talon (done before any change)
+ 1. B1 diff path fix + test (one line, immediate user-visible win)
+ 2. B6+B7+B8 streaming-flag sweep (one edit in the done handler + collapse default)
+ 3. B9 group zero-children guard
+ 4. B5 register 5 verify tools + registry test + prompt dedupe (biggest behavior win)
+ 5. B2 verify-narration batching + honest pacing badge in chat header
+ 6. B3 chat layout pass (visual rhythm: turn dividers, indent, card containers)
+ 7. B4 QR drawer collapse in device rail
+ 8. W1 session-resume fix (route + mount effect + guard test)
+ 9. S1 image deletion + launch-dev.sh rewrite (frees 2.75GB, zero risk)
+10. S4 cache deletion (frees 5.9GB from repo)
+11. S2 ABI trim → ONE background gradle rebuild → verify in session
+12. W2 Phase 16: token-gated relay spike (30min, decides path), disclosure sentence
+13. W2 Phase 17: wallet-auth backend sub-plan, device-tab deep-link button
+14. S3 export-scratch verification (one export run)
+15. S6 housekeeping (docker prune + du record)
 ```
 
-Rules carried through all of it: 8 req/min AI gateway (no AI calls needed for
-W1/S1/S4/S6; S2's rebuild is gradle-only; W2's relay spike is code-only),
-honest-empty-states law, no rebuild of the dev client except the single S2
-pass, and `make e2e-live` stays green throughout (it's the smoke gate).
+Bugs before infrastructure: the user sees bugs daily; disk space doesn't leak
+into their day. B5 and B2 together also cut the AI spend per build turn
+(fewer wasted rounds), which compounds with the 8 req/min reality.
+
+Rules carried through all of it: 8 req/min AI gateway (B-batch fixes need NO
+AI calls to implement; B5/B2 verification uses local backend tests only),
+honest-empty-states law, no dev-client rebuild except the single S2 pass,
+`make e2e-live` green throughout, every fix lands with its own test where a
+test can pin it.
 
 ## What is deliberately NOT in this plan
 - Any Phase 15 machinery (provisioning, load tests, dashboards) — no VPS chosen.
@@ -251,3 +392,5 @@ pass, and `make e2e-live` stays green throughout (it's the smoke gate).
 - The "connect account" settings feature (different-email provider linking) —
   separate backlog item.
 - Maestro-on-redroid E2E assertion — backlog.
+- Raising the AI gateway tier — the user's account decision, not ours; the
+  pacer honors it, the plan works within it.
