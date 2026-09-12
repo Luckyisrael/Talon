@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -52,9 +53,14 @@ func TestTestInfoHonesty(t *testing.T) {
 	if !info.Available {
 		t.Fatalf("fault: live session + relay reported unavailable (%s)", info.Reason)
 	}
-	want := "exp://" + publicHost() + ":17999"
-	if info.DeepLink != want {
-		t.Errorf("fault: deep link %q, want %q", info.DeepLink, want)
+	// §2.4: the deep link names the relay port AND carries the relay's
+	// session token — a bare location is an open door.
+	wantPrefix := "exp://" + publicHost() + ":17999?token="
+	if !strings.HasPrefix(info.DeepLink, wantPrefix) || len(info.DeepLink) <= len(wantPrefix) {
+		t.Errorf("fault: deep link %q, want %q<relay token>", info.DeepLink, wantPrefix)
+	}
+	if got := metro.Token(); got == "" || !strings.HasSuffix(info.DeepLink, got) {
+		t.Errorf("fault: deep link token does not match the relay's (%q)", got)
 	}
 	_ = metro
 }

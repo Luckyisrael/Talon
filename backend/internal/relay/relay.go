@@ -14,9 +14,15 @@
 //     idle connection is dropped after idleTimeout so sockets can't pool.
 //   - Bytes pass through unmodified: the relay is transport, not
 //     middleware — metro's protocol (HTTP + WS + HMR) is untouched.
+//     The one inspection point is §2.4's first-request token check: the
+//     connection's opening bytes must carry the session credential, and
+//     the validated bytes are replayed whole so passthrough stays byte-
+//     exact.
 package relay
 
 import (
+	"bytes"
+	"crypto/rand"
 	"io"
 	"log"
 	"net"
@@ -42,7 +48,11 @@ const (
 type Relay struct {
 	publicPort int
 	metroAddr   string
-	listener    net.Listener
+	listener   net.Listener
+	// token, when set, is the credential the deep link carries (§2.4):
+	// connections must present it on their first request. Empty means the
+	// relay is open — the shape used by tests and any pre-token caller.
+	token string
 
 	mu       sync.Mutex
 	conns    map[net.Conn]struct{}
@@ -52,6 +62,17 @@ type Relay struct {
 // Start opens the public listener. The port must already be allocated by
 // the caller (the session's port range) — the relay owns it from here.
 func Start(publicPort int, metroAddr string) (*Relay, error) {
+	return startRelay(publicPort, metroAddr, "")
+}
+
+// StartWithToken is Start plus the §2.4 credential: every connection must
+// carry this token in its first request's URL (query param), or it is
+// refused before a byte reaches metro.
+func StartWithToken(publicPort int, metroAddr, token string) (*Relay, error) {
+	return startRelay(publicPort, metroAddr, token)
+}
+
+func startRelay(publicPort int, metroAddr, token string) (*Relay, error) {
 	l, err := net.Listen("tcp", net.JoinHostPort("0.0.0.0", itoa(publicPort)))
 	if err != nil {
 		return nil, err
@@ -61,14 +82,24 @@ func Start(publicPort int, metroAddr string) (*Relay, error) {
 		metroAddr:   metroAddr,
 		listener:    l,
 		conns:        make(map[net.Conn]struct{}),
+		token:        token,
 	}
 	go r.acceptLoop()
-	log.Printf("relay: public :%d -> %s (session metro)", publicPort, metroAddr)
+	if token != "" {
+		log.Printf("relay: public :%d -> %s (session metro, token-gated)", publicPort, metroAddr)
+	} else {
+		log.Printf("relay: public :%d -> %s (session metro)", publicPort, metroAddr)
+	}
 	return r, nil
 }
 
 // Port reports the public port (for the exp:// URL).
 func (r *Relay) Port() int { return r.publicPort }
+
+// Token reports the relay's credential — the caller embeds it in the deep
+// link (exp://host:port?token=…) and the QR/deep-link surface reads it from
+// here, so the credential is minted where it is enforced.
+func (r *Relay) Token() string { return r.token }
 
 // Addr is the public dial address (host:port).
 func (r *Relay) Addr() string { return r.listener.Addr().String() }
@@ -107,6 +138,30 @@ func (r *Relay) serveConn(public net.Conn) {
 		r.mu.Unlock()
 		public.Close()
 	}()
+
+	// §2.4: the QR embeds authentication, not just a location. When this
+	// relay carries a token, the first bytes on the connection must be an
+	// HTTP request whose URL carries it (?token=…). The Expo dev client
+	// preserves query params from the exp:// deep link onto the requests it
+	// makes, so a legitimate phone presents the credential on its very
+	// first line — and a connection that never speaks a token is refused
+	// without ever reaching metro. Peek bounded: the request line fits well
+	// under 4KiB; a client that opens a socket and says nothing is dropped
+	// at the read deadline, not held.
+	if r.token != "" {
+		buf := make([]byte, 4096)
+		public.SetReadDeadline(time.Now().Add(10 * time.Second))
+		n, err := public.Read(buf)
+		public.SetReadDeadline(time.Time{})
+		if err != nil || n == 0 || !bytes.Contains(buf[:n], []byte("token="+r.token)) {
+			log.Printf("relay %d: refused unauthenticated connection", r.publicPort)
+			return
+		}
+		// Splice the peeked bytes back: the copy loops below must see the
+		// whole request, not just its tail.
+		spliced := newSpliceConn(public, buf[:n])
+		public = spliced
+	}
 
 	// The upstream dial is per-connection: metro's protocol expects each
 	// socket to be its own client, and a shared upstream would tangle
@@ -153,14 +208,17 @@ var (
 	registry = map[int64]*Relay{}
 )
 
-// StartForSession starts (or returns) the session's relay.
+// StartForSession starts (or returns) the session's relay — token-gated per
+// §2.4: the credential is minted here, where it is enforced, and lives exactly
+// as long as the relay (the session). Restarting a session mints a new one;
+// an old QR dies with the old relay.
 func StartForSession(sessionID int64, publicPort int, metroAddr string) (*Relay, error) {
 	regMu.Lock()
 	defer regMu.Unlock()
 	if existing, ok := registry[sessionID]; ok {
 		return existing, nil
 	}
-	r, err := Start(publicPort, metroAddr)
+	r, err := StartWithToken(publicPort, metroAddr, mintToken())
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +242,43 @@ func GetSession(sessionID int64) *Relay {
 	regMu.Lock()
 	defer regMu.Unlock()
 	return registry[sessionID]
+}
+
+// mintToken produces the relay's credential: 16 bytes of crypto/rand,
+// hex-encoded — unguessable over the LAN, no pretense of being anything but
+// a session-scoped bearer.
+func mintToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// The crypto source failing is a host-level emergency; an empty
+		// token would open the relay, so refuse to start instead.
+		panic("relay: crypto/rand unavailable: " + err.Error())
+	}
+	const hexdigits = "0123456789abcdef"
+	out := make([]byte, 0, 32)
+	for _, v := range b {
+		out = append(out, hexdigits[v>>4], hexdigits[v&0xf])
+	}
+	return string(out)
+}
+
+// spliceConn replays the bytes peeked during token validation ahead of the
+// underlying connection's stream, so the copy loops see the full first
+// request. Only Read replays; everything else passes through.
+type spliceConn struct {
+	net.Conn
+	head []byte
+}
+
+func newSpliceConn(c net.Conn, head []byte) *spliceConn { return &spliceConn{Conn: c, head: head} }
+
+func (s *spliceConn) Read(p []byte) (int, error) {
+	if len(s.head) > 0 {
+		n := copy(p, s.head)
+		s.head = s.head[n:]
+		return n, nil
+	}
+	return s.Conn.Read(p)
 }
 
 func itoa(n int) string {

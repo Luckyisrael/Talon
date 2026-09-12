@@ -68,9 +68,17 @@ func (h *TestInfoHandler) Info(w http.ResponseWriter, r *http.Request) {
 	}
 
 	host := publicHost()
+	// §2.4: the QR embeds authentication, not just a location. The relay
+	// mints a session-scoped token at start; it rides the deep link as a
+	// query param (the Expo dev client preserves it onto its bundle/HMR
+	// requests, where the relay checks it) and dies with the relay.
+	deepLink := "exp://" + host + ":" + strconv.Itoa(rl.Port())
+	if tok := rl.Token(); tok != "" {
+		deepLink += "?token=" + tok
+	}
 	info := testInfo{
 		Available: true,
-		DeepLink:  "exp://" + host + ":" + strconv.Itoa(rl.Port()),
+		DeepLink:  deepLink,
 		MetroURL:  "http://" + host + ":" + strconv.Itoa(rl.Port()),
 	}
 	// The APK link is only offered when the build actually exists on this

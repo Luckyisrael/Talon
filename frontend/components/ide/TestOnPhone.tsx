@@ -119,6 +119,11 @@ export default function TestOnPhone({ projectId, epoch }: TestOnPhoneProps) {
               <p className="text-center text-[11px] leading-relaxed text-fog">
                 Scan with your phone camera, or open in the Talon dev client.
               </p>
+              <p className="text-center text-[10.5px] leading-relaxed text-ash">
+                On your own device the agent can&rsquo;t see the screen or
+                logs — changes you test here are yours to verify, and the
+                emulator preview stays its source of truth.
+              </p>
 
               {/* The deep link, copyable for typed entry. */}
               <div className="flex items-center gap-1.5">

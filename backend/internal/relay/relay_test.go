@@ -197,3 +197,117 @@ func freePort(t *testing.T) int {
 	l.Close()
 	return l.Addr().(*net.TCPAddr).Port
 }
+
+// ── §2.4: the relay is a door with a key, not an open port ──
+
+// tokenRelayFixture starts an echo "metro" plus a token-gated relay against it.
+func tokenRelayFixture(t *testing.T) (*Relay, string) {
+	t.Helper()
+	metro, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("metro listen: %v", err)
+	}
+	t.Cleanup(func() { metro.Close() })
+	go func() {
+		for {
+			c, err := metro.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) { defer c.Close(); io.Copy(c, c) }(c)
+		}
+	}()
+	r, err := StartWithToken(freePort(t), metro.Addr().String(), "deadbeefcafebabe")
+	if err != nil {
+		t.Fatalf("relay start: %v", err)
+	}
+	t.Cleanup(r.Stop)
+	return r, r.listener.Addr().String()
+}
+
+func TestTokenGateAcceptsValidAndRefusesBad(t *testing.T) {
+	_, addr := tokenRelayFixture(t)
+
+	// A request carrying the token passes and is answered (echo proves the
+	// full first request survived the peek+splice).
+	phone, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer phone.Close()
+	req := "GET /index.bundle?platform=android&token=deadbeefcafebabe HTTP/1.1\r\n\r\n"
+	if _, err := phone.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	phone.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, len(req))
+	if _, err := io.ReadFull(phone, buf); err != nil {
+		t.Fatalf("token-carrying request got no answer: %v", err)
+	}
+	if string(buf) != req {
+		t.Errorf("spliced request mangled: %q", buf)
+	}
+
+	// A request without the token is refused: no answer, connection dead.
+	sneak, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sneak.Close()
+	if _, err := sneak.Write([]byte("GET /index.bundle?platform=android HTTP/1.1\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	sneak.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := sneak.Read(make([]byte, 64)); err == nil {
+		t.Error("tokenless request reached metro — the gate is open")
+	}
+
+	// A tampered token is refused too.
+	tamper, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tamper.Close()
+	if _, err := tamper.Write([]byte("GET /x?token=deadbeefcafebabf HTTP/1.1\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	tamper.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := tamper.Read(make([]byte, 64)); err == nil {
+		t.Error("tampered token reached metro")
+	}
+}
+
+// The token dies with the relay: StopSession then a fresh StartForSession
+// mints a new credential — an old QR must not open a new session's door.
+func TestTokenDiesWithRelay(t *testing.T) {
+	metro, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { metro.Close() })
+	go func() {
+		for {
+			c, err := metro.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) { defer c.Close(); io.Copy(c, c) }(c)
+		}
+	}()
+
+	r1, err := StartForSession(901, freePort(t), metro.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := r1.Token()
+	StopSession(901)
+
+	r2, err := StartForSession(901, freePort(t), metro.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer StopSession(901)
+	if r2.Token() == "" || r2.Token() == old {
+		t.Fatalf("token reuse across relay restarts: old=%q new=%q", old, r2.Token())
+	}
+}
