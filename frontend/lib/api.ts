@@ -18,7 +18,13 @@ import type {
   Usage,
 } from "./types";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+// The API base. In a browser the default is the same host the page is on —
+// the common deployment shape (both behind one host) and the LAN dev shape
+// (phone or second machine browsing to the dev box) both work without any
+// env file. NEXT_PUBLIC_API_URL overrides for split-origin deployments.
+const BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8080` : "http://localhost:8080");
 
 /** A Metro event off the project's bundler tap (DV1): bundle progress, hot
  *  reloads, and redbox errors for the preview badge. Mirrors metro.Event on
