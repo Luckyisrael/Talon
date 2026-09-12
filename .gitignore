@@ -100,3 +100,8 @@ backend/scrcpy-server.jar
 e2e/live-run*.log
 
 # stale committed build artifacts
+
+# tool caches (session-local)
+.gocache/
+.gopath/
+.gradle-tmp/
