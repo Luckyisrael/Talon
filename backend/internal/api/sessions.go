@@ -259,6 +259,53 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+// LiveForProject serves GET /v1/projects/{projectID}/live-session: the
+// project's most recent non-destroyed session, or 204 when none exists.
+// This is the refresh lifeline — a page reload must re-attach to the device
+// the user already has instead of silently starting a new one. Ownership is
+// the project row's user id; a foreign project is 404, never a row.
+func (h *SessionHandler) LiveForProject(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	project, err := h.store.GetProject(projectID)
+	if err != nil || project.UserID != GetUserID(r.Context()) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	session, err := h.store.LatestLiveSession(projectID)
+	if err != nil || session == nil {
+		// No live session is the common case, not an error — the honest
+		// empty is 204 with no body, so the frontend shows "idle" rather
+		// than parsing an error.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// A page load is user activity — the same signal a stream join sends
+	// (ws/stream.go). Without it, a user who refreshes every few minutes
+	// would have their session reaped as idle despite watching it.
+	_ = h.store.TouchSession(session.ID)
+
+	response := map[string]interface{}{
+		"id":              session.ID,
+		"project_id":      session.ProjectID,
+		"state":           session.State,
+		"started_at":      session.StartedAt,
+		"adb_port":        session.ADBPort,
+		"container_id":    session.ContainerID,
+		"container_state": session.ContainerState,
+	}
+	if port, ok := metro.GetPort(session.ID); ok {
+		response["metro_port"] = port
+	}
+
+	writeJSON(w, http.StatusOK, response)
+}
+
 // Screenshot captures one PNG frame from the session's device for download
 // or store-asset use. Same ownership posture as Get: session ids route here,
 // and the adb target comes from the session row, never the request.

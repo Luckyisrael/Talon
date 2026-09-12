@@ -116,6 +116,44 @@ export default function IDELayout({
     }
   }, [projectId]);
 
+  // The refresh lifeline: on mount, ask the server whether this project
+  // already has a live device before anything shows "idle". A session id
+  // lives only in memory (by design — the stream state dies with the tab),
+  // so a reload used to amnesia the device and the user started a second
+  // one. Running → re-attach and stream; paused → re-attach and un-pause
+  // (the user just came back to it); none → idle, as before.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const live = await sessions.liveFor(projectId);
+        if (cancelled || !live) return;
+        const state = useIDEStore.getState();
+        state.setSessionId(live.id);
+        state.setAdbTarget(live.adb_port ? `localhost:${live.adb_port}` : null);
+        state.setPreviewStatus("streaming");
+        if (live.state === "paused") {
+          // The user came back; the reaper paused it for being unwatched.
+          // Un-pause so the stream has something to show.
+          try {
+            await sessions.resume(live.id);
+          } catch {
+            // The container may have been reaped between the row read and
+            // the resume — the stream error state will say so honestly.
+          }
+        }
+      } catch {
+        // Unreachable live-session is not fatal: the panel simply starts
+        // in its honest idle, the same state as a fresh project.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Mount-only: a project switch remounts the layout (keyed route).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
   const stopSession = useCallback(async () => {
     const state = useIDEStore.getState();
     const id = state.sessionId;

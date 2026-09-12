@@ -374,7 +374,8 @@ func main() {
 		metroHandler := api.NewMetroHandler(promptHandler)
 	testInfoHandler := api.NewTestInfoHandler(promptHandler, devClientMgr)
 
-	r.Get("/v1/projects/{projectID}/conversation", promptHandler.GetConversation)
+		r.Get("/v1/projects/{projectID}/conversation", promptHandler.GetConversation)
+		r.Get("/v1/projects/{projectID}/live-session", sessionHandler.LiveForProject)
 		r.Get("/v1/projects/{projectID}/diff", promptHandler.GitDiff)
 		r.Get("/v1/projects/{projectID}/metro", metroHandler.Serve)
 		r.Get("/v1/projects/{projectID}/test-info", testInfoHandler.Info)

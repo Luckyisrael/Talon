@@ -630,8 +630,22 @@ export const sessions = {
     return request<Session>(`/v1/sessions/${id}`);
   },
 
+  /** The project's live session, or null when none exists (204 → undefined
+   *  from request()'s empty-body handling). This is the refresh lifeline: a
+   *  page reload re-attaches to the device the user already has instead of
+   *  silently starting a new one. */
+  async liveFor(projectId: number): Promise<Session | null> {
+    return (await request<Session | undefined>(`/v1/projects/${projectId}/live-session`)) ?? null;
+  },
+
   destroy(id: number) {
     return request<void>(`/v1/sessions/${id}`, { method: "DELETE" });
+  },
+
+  /** Un-pause a paused session — the container keeps its state; the stream
+   *  re-attaches on the next viewer join. */
+  resume(id: number) {
+    return request<Session>(`/v1/sessions/${id}/resume`, { method: "POST" });
   },
 
   // One PNG frame for download or store-asset use. Fetched as a blob because
