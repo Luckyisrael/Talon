@@ -537,13 +537,20 @@ func writeStatus(w http.ResponseWriter, body map[string]string) {
 }
 
 // allowedOrigins is the CORS allowlist. Development hosts are built in;
-// CORS_ALLOWED_ORIGINS adds a comma-separated list for anywhere else.
+// WEB_ORIGIN (the web app the OAuth hand-off targets) is allowed by the
+// same fact; CORS_ALLOWED_ORIGINS adds a comma-separated list for anywhere
+// else.
 func allowedOrigins() map[string]bool {
 	origins := map[string]bool{
 		"http://localhost:3000": true,
 		"http://localhost:3001": true,
 		"http://127.0.0.1:3000": true,
 		"http://127.0.0.1:3001": true,
+	}
+	// The web origin is where the browser UI lives — the OAuth hand-off
+	// sends it there, so it is an allowed caller by the same fact.
+	if web := strings.TrimSpace(os.Getenv("WEB_ORIGIN")); web != "" {
+		origins[strings.TrimRight(web, "/")] = true
 	}
 	for _, key := range []string{"CORS_ALLOWED_ORIGIN", "CORS_ALLOWED_ORIGINS"} {
 		for _, origin := range strings.Split(os.Getenv(key), ",") {
