@@ -129,6 +129,19 @@ func skip(name, detail string) {
 	fmt.Printf("− %s: %s\n", name, detail)
 }
 
+// tokenFromDeepLink extracts the §2.4 credential the exp:// link carries
+// (?token=…) so the e2e driver presents it like a real dev client.
+func tokenFromDeepLink(link string) string {
+	if i := strings.Index(link, "token="); i >= 0 {
+		tok := link[i+len("token="):]
+		if j := strings.IndexAny(tok, "&#"); j >= 0 {
+			tok = tok[:j]
+		}
+		return tok
+	}
+	return ""
+}
+
 func detailSuffix(d string) string {
 	if d == "" {
 		return ""
@@ -634,10 +647,14 @@ func deviceStages(started time.Time, projectID int64) {
 	pass("start-again", fmt.Sprintf("session #%d live", sess2))
 
 	// 9 — phone relay: test-info reports the relay, and metro answers through it.
+	// §2.4: the relay is token-gated — a bare metro_url fetch is refused by
+	// design. The deep link carries the credential (?token=…); present it
+	// exactly as the dev client does.
 	begin("phone-relay")
 	var info struct {
 		Available bool   `json:"available"`
 		MetroURL  string `json:"metro_url"`
+		DeepLink  string `json:"deep_link"`
 	}
 	if err := call("GET", fmt.Sprintf("/v1/projects/%d/test-info", projectID), nil, &info); err != nil {
 		fail("phone-relay", "test-info: %v", err)
@@ -647,7 +664,11 @@ func deviceStages(started time.Time, projectID int64) {
 	if !info.Available || info.MetroURL == "" {
 		skip("phone-relay", "relay not available (honest state from the backend)")
 	} else {
-		resp, err := httpc.Get(info.MetroURL)
+		fetchURL := info.MetroURL
+		if tok := tokenFromDeepLink(info.DeepLink); tok != "" {
+			fetchURL += "?token=" + tok
+		}
+		resp, err := httpc.Get(fetchURL)
 		if err != nil {
 			fail("phone-relay", "relay fetch: %v", err)
 			report(started)
@@ -660,7 +681,7 @@ func deviceStages(started time.Time, projectID int64) {
 			report(started)
 			return
 		}
-		pass("phone-relay", "metro answers through the relay")
+		pass("phone-relay", "metro answers through the relay (token honored)")
 	}
 
 	// 10 — cleanup: leave no device behind (the reaper would catch it in

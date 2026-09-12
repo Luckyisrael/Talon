@@ -59,6 +59,17 @@ echo "=== Step 1: expo prebuild ==="
 cd "$TEMPLATE_DIR"
 npx expo prebuild -p android --no-install
 
+# The 2-ABI law: redroid is x86_64, the Seeker phone arm64-v8a. The RN
+# gradle plugin reads reactNativeArchitectures and overrides any
+# defaultConfig.ndk.abiFilters — this property is the operative knob.
+# Prebuild may have regenerated gradle.properties from its own template;
+# pin it AFTER prebuild, before gradle.
+echo ""
+echo "=== Pinning reactNativeArchitectures=x86_64,arm64-v8a ==="
+sed -i 's/^reactNativeArchitectures=.*/reactNativeArchitectures=x86_64,arm64-v8a/' "$TEMPLATE_DIR/android/gradle.properties"
+grep -q '^reactNativeArchitectures=x86_64,arm64-v8a$' "$TEMPLATE_DIR/android/gradle.properties" \
+  || echo 'reactNativeArchitectures=x86_64,arm64-v8a' >> "$TEMPLATE_DIR/android/gradle.properties"
+
 # Step 2: gradle assembleDebug
 echo ""
 echo "=== Step 2: gradle assembleDebug ==="
