@@ -2,6 +2,7 @@
 
 import {
   forwardRef,
+  Fragment,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -1339,21 +1340,38 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             </div>
           )}
 
-          <div className="flex min-w-0 flex-col gap-4">
-            {messages.map((msg) =>
-              isAssistant(msg) ? (
+          <div className="flex min-w-0 flex-col gap-3">
+            {messages.map((msg, i) => {
+              // A turn divider before every assistant entry that follows
+              // another turn — the transcript reads as turns, not as one
+              // undifferentiated stack of rows. First entry needs no rule.
+              const divider =
+                isAssistant(msg) && i > 0 ? (
+                  <div
+                    key={`d-${msg.id}`}
+                    className="my-1 flex items-center gap-2"
+                    aria-hidden
+                  >
+                    <span className="h-px flex-1 bg-graphite/70" />
+                    <span className="gauge text-ash">new turn</span>
+                    <span className="h-px flex-1 bg-graphite/70" />
+                  </div>
+                ) : null;
+              return (
+                <Fragment key={msg.id}>
+                  {divider}
+                  {isAssistant(msg) ? (
                 <AssistantEntry
-                  key={msg.id}
                   msg={msg}
                   onApprove={approvePlan}
                   onAnswer={answerQuestion}
                   busy={isStreaming}
                 />
               ) : (
-                <div key={msg.id} className="flex min-w-0 justify-end">
+                <div className="flex min-w-0 justify-end">
                   <div
                     className={[
-                      "max-w-[88%] whitespace-pre-wrap break-words rounded-xl px-3 py-1.5 text-xs leading-relaxed",
+                      "max-w-[85%] whitespace-pre-wrap break-words rounded-xl px-3 py-1.5 text-xs leading-relaxed",
                       msg.steer
                         ? "border border-acid-lime/20 bg-acid-lime/[0.04] text-fog"
                         : "bg-white/5 text-mist",
@@ -1370,8 +1388,10 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                     ) : null}
                   </div>
                 </div>
-              ),
-            )}
+              )}
+                </Fragment>
+              );
+            })}
           </div>
 
           <div ref={endRef} />

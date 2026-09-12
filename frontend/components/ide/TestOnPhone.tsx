@@ -24,6 +24,10 @@ export default function TestOnPhone({ projectId, epoch }: TestOnPhoneProps) {
   const [info, setInfo] = useState<Awaited<ReturnType<typeof testInfo.get>> | null>(null);
   const [copied, setCopied] = useState(false);
   const [apkUrl, setApkUrl] = useState<string | null>(null);
+  // Collapsed by default: the QR is a setup-time action (scan once), not a
+  // watch-time one — expanded, it crowded the live preview in the device
+  // rail. The header row carries the affordance; one click opens it.
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,53 +67,86 @@ export default function TestOnPhone({ projectId, epoch }: TestOnPhoneProps) {
   };
 
   return (
-    <section className="border-t border-graphite px-3 py-3">
-      <div className="flex items-baseline justify-between gap-2">
+    <section className="border-t border-graphite px-3 py-2.5">
+      <button
+        type="button"
+        onClick={() => info?.available && setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-baseline justify-between gap-2 disabled:cursor-default"
+        disabled={!info?.available}
+      >
         <span className="gauge">Test on your phone</span>
         {info?.available ? (
-          <span className="lamp" data-state="ready" aria-hidden />
+          <span className="flex items-center gap-1.5">
+            <span className="lamp" data-state="ready" aria-hidden />
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={`text-ash transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+              aria-hidden
+            >
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </span>
         ) : null}
-      </div>
+      </button>
 
       {!info ? (
         <p className="mt-1.5 text-xs text-fog">Checking the phone link…</p>
       ) : !info.available ? (
         <p className="mt-1.5 text-xs text-fog">{info.reason}</p>
       ) : (
-        <div className="mt-2.5 flex flex-col gap-2.5">
-          {/* The QR the phone camera (or the installed dev client) reads. */}
-          <div className="flex justify-center rounded-lg border border-graphite bg-white p-2.5">
-            <QRCode text={info.deep_link ?? ""} size={168} />
-          </div>
-          <p className="text-center text-[11px] leading-relaxed text-fog">
-            Scan with your phone camera, or open in the Talon dev client.
-          </p>
+        <div
+          className="grid transition-[grid-template-rows,opacity] duration-300"
+          style={{
+            gridTemplateRows: open ? "1fr" : "0fr",
+            opacity: open ? 1 : 0,
+            transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)",
+          }}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <div className="mt-2.5 flex flex-col gap-2.5">
+              {/* The QR the phone camera (or the installed dev client) reads. */}
+              <div className="flex justify-center rounded-lg border border-graphite bg-white p-2.5">
+                <QRCode text={info.deep_link ?? ""} size={168} />
+              </div>
+              <p className="text-center text-[11px] leading-relaxed text-fog">
+                Scan with your phone camera, or open in the Talon dev client.
+              </p>
 
-          {/* The deep link, copyable for typed entry. */}
-          <div className="flex items-center gap-1.5">
-            <code className="flex-1 truncate rounded border border-graphite bg-ink/40 px-2 py-1 font-mono text-[11px] text-mist">
-              {info.deep_link}
-            </code>
-            <button type="button" onClick={copy} className="btn btn-ghost h-7 px-2 text-xs">
-              {copied ? "copied" : "copy"}
-            </button>
-          </div>
+              {/* The deep link, copyable for typed entry. */}
+              <div className="flex items-center gap-1.5">
+                <code className="min-w-0 flex-1 truncate rounded border border-graphite bg-ink/40 px-2 py-1 font-mono text-[11px] text-mist">
+                  {info.deep_link}
+                </code>
+                <button type="button" onClick={copy} className="btn btn-ghost h-7 px-2 text-xs">
+                  {copied ? "copied" : "copy"}
+                </button>
+              </div>
 
-          {/* First-time phones: the dev client itself. */}
-          {apkUrl ? (
-            <a
-              href={apkUrl}
-              className="btn btn-sm w-full text-center text-xs"
-              title="The Talon dev client for Android — install once, opens any project's QR"
-            >
-              Install the dev client (APK)
-            </a>
-          ) : (
-            <p className="text-[11px] text-fog">
-              Dev client APK not built on this server — the QR needs the
-              installed app.
-            </p>
-          )}
+              {/* First-time phones: the dev client itself. */}
+              {apkUrl ? (
+                <a
+                  href={apkUrl}
+                  className="btn btn-sm w-full text-center text-xs"
+                  title="The Talon dev client for Android — install once, opens any project's QR"
+                >
+                  Install the dev client (APK)
+                </a>
+              ) : (
+                <p className="text-[11px] text-fog">
+                  Dev client APK not built on this server — the QR needs the
+                  installed app.
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </section>
