@@ -4,15 +4,17 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/luckyisrael/talon/backend/internal/ai"
 	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 type UsageHandler struct {
 	store *store.Store
+	ai    *ai.Client
 }
 
-func NewUsageHandler(s *store.Store) *UsageHandler {
-	return &UsageHandler{store: s}
+func NewUsageHandler(s *store.Store, a *ai.Client) *UsageHandler {
+	return &UsageHandler{store: s, ai: a}
 }
 
 type usageResponse struct {
@@ -22,6 +24,10 @@ type usageResponse struct {
 	DeviceLimit   int     `json:"device_limit"`
 	CostUSD       float64 `json:"cost_usd"`
 	Tier          string  `json:"tier"`
+	// PacingSeconds is the enforced minimum interval between AI gateway
+	// calls. A turn's wall-clock is dominated by this when it is set —
+	// the frontend shows it so a long build reads as pacing, not a hang.
+	PacingSeconds int `json:"pacing_seconds"`
 }
 
 func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +57,7 @@ func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
 		DeviceLimit:   quota.DeviceMinutes,
 		CostUSD:       usage.CostUSD,
 		Tier:          user.Tier,
+		PacingSeconds: int(h.ai.PacingInterval().Seconds()),
 	}
 
 	writeJSON(w, http.StatusOK, resp)

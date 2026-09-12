@@ -15,6 +15,7 @@ import {
   prompts,
   rowStatus,
   streamPrompt,
+  usage,
   type ConversationTurn,
   type LatestPrompt,
   type StreamEvent,
@@ -324,6 +325,26 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       out: number;
       cache_read: number;
     } | null>(null);
+
+    // The gateway's enforced pacing, fetched once per project so a long,
+    // quiet stretch during a turn reads as what it is — the rate limit —
+    // instead of a hang. 0/undefined means no pacing is configured.
+    const [pacingSeconds, setPacingSeconds] = useState(0);
+    useEffect(() => {
+      let cancelled = false;
+      usage
+        .get()
+        .then((u) => {
+          if (!cancelled) setPacingSeconds(u.pacing_seconds ?? 0);
+        })
+        .catch(() => {
+          // Unreachable usage is not worth a banner; the badge simply
+          // stays hidden.
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, []);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
@@ -1425,6 +1446,14 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             >
               session {compactTokens(sessionUsage.in)} in ·{" "}
               {compactTokens(sessionUsage.out)} out
+            </p>
+          ) : null}
+          {isStreaming && pacingSeconds > 0 ? (
+            // The honest clock: a long quiet stretch in a paced turn is
+            // the gateway interval, not a hang. Say so while it happens.
+            <p className="gauge mb-1.5 px-1 text-right text-fog/70">
+              paced {pacingSeconds}s between model calls — long pauses are the
+              rate limit, not a stall
             </p>
           ) : null}
           <div

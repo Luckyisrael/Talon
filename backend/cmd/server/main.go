@@ -237,7 +237,7 @@ func main() {
 	// included. Viewer joins and agent turns reset the clock.
 	reaper := api.NewReaper(sessionHandler)
 	reaper.Start()
-	usageHandler := api.NewUsageHandler(s)
+	usageHandler := api.NewUsageHandler(s, aiClient)
 	notificationHandler := api.NewNotificationHandler(s)
 	metricsHandler := api.NewMetricsHandler(s, containerMgr)
 	errorsHandler := api.NewErrorsHandler()

@@ -25,6 +25,10 @@ export interface Usage {
   device_limit: number;
   cost_usd?: number;
   tier: "free" | "pro";
+  // The enforced minimum interval between AI gateway calls (seconds, 0 when
+  // unset). A long turn is mostly this — showing it keeps a paced build from
+  // reading as a hang.
+  pacing_seconds?: number;
 }
 
 export interface FileEntry {

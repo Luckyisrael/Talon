@@ -114,7 +114,9 @@ describe("settle-on-stream-end law (B6/B8): no row shimmers after the turn", () 
     // (grid-template-rows: 0fr) — the content node stays mounted so the
     // expand transition can play, but its container clips it shut.
     expect(screen.getByText("Thinking")).toBeInTheDocument();
-    const clip = screen.getByText("weighing layout options for the balance card").closest("div.grid");
+    const clip = screen
+      .getByText("weighing layout options for the balance card")
+      .closest("div.grid") as HTMLElement | null;
     expect(clip).not.toBeNull();
     expect(clip?.style.gridTemplateRows).toBe("0fr");
     expect(clip?.style.opacity).toBe("0");

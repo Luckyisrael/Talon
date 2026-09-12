@@ -199,6 +199,16 @@ func New() (*Client, error) {
 // Model reports the configured model id, for logging and usage accounting.
 func (c *Client) Model() string { return c.model }
 
+// PacingInterval reports the enforced minimum interval between gateway calls
+// (0 when unset). The usage endpoint surfaces it so a long turn reads as
+// pacing, not a hang.
+func (c *Client) PacingInterval() time.Duration {
+	if c == nil || c.pacer == nil {
+		return 0
+	}
+	return c.pacer.interval
+}
+
 // WithModel returns a client pointed at a different model on the same
 // endpoint with the same credentials. Routing picks models per turn; the copy
 // shares only the (read-only) http client. Constructed field-by-field, never
