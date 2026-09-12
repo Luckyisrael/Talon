@@ -1183,11 +1183,13 @@ func TestPhaseDV2PhoneRelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("relay: %v", err)
 	}
+	// §2.4: the phone presents the relay's token on its first request —
+	// the same credential the deep link carries.
 	phone, err := net.DialTimeout("tcp", r.Addr(), 2*time.Second)
 	if err != nil {
 		t.Fatalf("phone: %v", err)
 	}
-	msg := []byte("GET /index.bundle HTTP/1.1\r\n\r\n")
+	msg := []byte("GET /index.bundle?token=" + r.Token() + " HTTP/1.1\r\n\r\n")
 	phone.Write(msg)
 	buf := make([]byte, len(msg))
 	phone.SetReadDeadline(time.Now().Add(3 * time.Second))
