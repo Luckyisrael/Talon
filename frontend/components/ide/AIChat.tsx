@@ -53,6 +53,28 @@ type Entry = ChatMessage | StreamMessage;
 
 const isAssistant = (m: Entry): m is StreamMessage => "isStreaming" in m;
 
+/**
+ * Settles a turn's trace rows the moment its stream ends — done frame or
+ * error path alike. Running rows become done; streaming flags drop. A
+ * narration/thinking row that never received its end frame (aborted stream,
+ * gateway error) must not shimmer or blink forever after the turn is over.
+ */
+function settleRows(rows: StreamMessage["traceRows"]): StreamMessage["traceRows"] {
+  let changed = false;
+  const settled = rows.map((r): TraceRow => {
+    if (r.status === "running") {
+      changed = true;
+      return { ...r, status: "done", streaming: false };
+    }
+    if (r.streaming) {
+      changed = true;
+      return { ...r, streaming: false };
+    }
+    return r;
+  });
+  return changed ? settled : rows;
+}
+
 // What the agent is doing, in words that describe the work rather than the
 // internal state machine. STAGE_WRITE and PROMOTE used to be listed here; both
 // phases were removed when writes started landing in the workspace directly.
@@ -861,9 +883,15 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                 verified: d.verified,
                 skippedGates: skipped,
                 rounds: d.rounds,
-                traceRows: prev.traceRows.map((r) =>
-                  r.status === "running" ? { ...r, status: "done" } : r,
-                ),
+                traceRows: prev.traceRows.map((r) => {
+                  // The turn is over: running rows settle, and every
+                  // streaming flag drops — a narration/thinking row that
+                  // never received its end frame (error paths, aborted
+                  // streams) must not shimmer or blink forever after.
+                  if (r.status === "running") return { ...r, status: "done", streaming: false };
+                  if (r.streaming) return { ...r, streaming: false };
+                  return r;
+                }),
               }));
               // Refetch rather than trusting the paths: the old code inserted
               // each path with empty content, so opening a file the agent had
@@ -912,7 +940,16 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 
         const patch = (fn: (prev: StreamMessage) => StreamMessage) =>
           setMessages((prev) =>
-            prev.map((m) => (m.id === streamId && isAssistant(m) ? fn(m) : m)),
+            prev.map((m) => {
+              if (m.id !== streamId || !isAssistant(m)) return m;
+              const next = fn(m);
+              // Stream over (done frame or error path): settle the rows.
+              if (!next.isStreaming) {
+                const settled = settleRows(next.traceRows);
+                if (settled !== next.traceRows) return { ...next, traceRows: settled };
+              }
+              return next;
+            }),
           );
 
         abortRef.current = streamPrompt(
@@ -949,7 +986,16 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 
       const patch = (fn: (prev: StreamMessage) => StreamMessage) =>
         setMessages((prev) =>
-          prev.map((m) => (m.id === streamId && isAssistant(m) ? fn(m) : m)),
+          prev.map((m) => {
+            if (m.id !== streamId || !isAssistant(m)) return m;
+            const next = fn(m);
+            // Stream over (done frame or error path): settle the rows.
+            if (!next.isStreaming) {
+              const settled = settleRows(next.traceRows);
+              if (settled !== next.traceRows) return { ...next, traceRows: settled };
+            }
+            return next;
+          }),
         );
 
       abortRef.current = prompts.resume(
@@ -1005,7 +1051,16 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 
         const patch = (fn: (prev: StreamMessage) => StreamMessage) =>
           setMessages((prev) =>
-            prev.map((m) => (m.id === streamId && isAssistant(m) ? fn(m) : m)),
+            prev.map((m) => {
+              if (m.id !== streamId || !isAssistant(m)) return m;
+              const next = fn(m);
+              // Stream over (done frame or error path): settle the rows.
+              if (!next.isStreaming) {
+                const settled = settleRows(next.traceRows);
+                if (settled !== next.traceRows) return { ...next, traceRows: settled };
+              }
+              return next;
+            }),
           );
 
         abortRef.current = prompts.answer(

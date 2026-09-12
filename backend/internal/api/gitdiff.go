@@ -23,9 +23,10 @@ func (h *PromptHandler) GitDiff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "workspaces are not configured on this server")
 		return
 	}
-	// The workspace manager's directory is <workspaceDir>/<slug>; the
-	// provision-time git baseline is what HEAD points at.
-	dir := filepath.Join(h.workspaceDir, project.Slug)
+	// The workspace manager's directory is <workspaceDir>/<projectID> —
+	// numeric, matching workspace.go's provision convention (the slug is
+	// display-only); the provision-time git baseline is what HEAD points at.
+	dir := filepath.Join(h.workspaceDir, strconv.FormatInt(project.ID, 10))
 	if dir == "" {
 		writeError(w, http.StatusNotFound, "project not found")
 		return

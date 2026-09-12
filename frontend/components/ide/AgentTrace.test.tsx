@@ -103,3 +103,30 @@ describe("PlanProgress checklist", () => {
     expect(screen.getByText("1/3 done")).toBeInTheDocument();
   });
 });
+
+describe("settle-on-stream-end law (B6/B8): no row shimmers after the turn", () => {
+  it("keeps a streaming thinking row visually collapsed by default", () => {
+    const rows: TraceRow[] = [
+      { id: "t1", kind: "thinking", text: "weighing layout options for the balance card", streaming: true },
+    ];
+    render(<AgentTrace rows={rows} />);
+    // The header affordance exists; the body is collapsed to zero height
+    // (grid-template-rows: 0fr) — the content node stays mounted so the
+    // expand transition can play, but its container clips it shut.
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    const clip = screen.getByText("weighing layout options for the balance card").closest("div.grid");
+    expect(clip).not.toBeNull();
+    expect(clip?.style.gridTemplateRows).toBe("0fr");
+    expect(clip?.style.opacity).toBe("0");
+  });
+
+  it("renders zero-call groups as nothing, never a '0 calls' chip", () => {
+    const rows: TraceRow[] = [
+      { id: "g0", kind: "group", status: "done", summary: "Looked through the project", children: [] },
+    ];
+    render(<AgentTrace rows={rows} />);
+    // No group summary, no calls chip — the artifact row vanishes.
+    expect(screen.queryByText(/0 calls/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Looked through the project/i)).not.toBeInTheDocument();
+  });
+});

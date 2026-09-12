@@ -103,6 +103,7 @@ function groupRows(rows: TraceRow[]): TraceRow[] {
       out.push({
         id: `group-${run[0].id}`,
         kind: "group",
+        // Explicit always — an undefined status renders as a blank glyph.
         status: running ? "running" : failed ? "fail" : "done",
         summary: running ? "Looking through the project" : "Looked through the project",
         children: run,
@@ -360,7 +361,9 @@ function ThinkingRow({ text, streaming }: { text: string; streaming?: boolean })
 
   // Expandable only when there is something to reveal beyond the cap.
   const clampable = text.length > 160;
-  const expanded = manualExpanded ?? !!streaming;
+  // Collapsed by default, streaming or not — the header ("Thinking…") is
+  // the affordance; the body opens only on an explicit click.
+  const expanded = manualExpanded ?? false;
   const settledLabel =
     settledSecs === null
       ? "Thought"
@@ -655,6 +658,12 @@ function DecisionRow({ decision }: { decision: DecisionCard }) {
 function GroupRow({ row }: { row: TraceRow }) {
   const [expanded, setExpanded] = useState(false);
   const count = row.children?.length ?? 0;
+
+  // A group with nothing in it is a wire artifact, not an act — render
+  // nothing rather than a blank dot and a "0 calls" chip that reads as
+  // broken. groupRows never emits one; this is the backstop for restored
+  // or hand-shaped rows.
+  if (count === 0) return null;
 
   return (
     <div>
