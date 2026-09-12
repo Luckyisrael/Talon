@@ -1,9 +1,0 @@
-FROM redroid/redroid:14.0.0_64only-latest
-
-LABEL description="Talon Redroid — pre-baked with mock wallet + dev-client"
-
-# Copy pre-built APKs (installed at runtime via ADB from host)
-# Redroid has no shell — /init is the only entrypoint
-COPY backend/template/mock-wallet/v1.0.0/demowallet-debug.apk /opt/talon/demowallet.apk
-COPY backend/template/mock-wallet/v1.0.0/demodapp-debug.apk /opt/talon/demodapp.apk
-COPY backend/template/dev-client/v1.0.0/app-debug.apk /opt/talon/devclient.apk

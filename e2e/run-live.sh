@@ -32,7 +32,7 @@ need() { # name, found?
   if [ "$2" = "1" ]; then echo "  ✓ $1"; else echo "  ✗ $1 — MISSING"; fail=1; fi
 }
 docker info >/dev/null 2>&1 && need "docker daemon" 1 || need "docker daemon" 0
-docker image inspect talon-redroid:latest >/dev/null 2>&1 && need "talon-redroid image" 1 || need "talon-redroid image" 0
+docker image inspect redroid/redroid:14.0.0_64only-latest >/dev/null 2>&1 && need "stock redroid image (sessions run it)" 1 || need "stock redroid image" 0
 [ -x "$ROOT/.tools/maestro/bin/maestro" ] && need "maestro (vendored 2.10.0)" 1 || need "maestro" 0
 [ -f "$BACKEND/scrcpy-server.jar" ] && need "scrcpy-server.jar (v2.1.1)" 1 || need "scrcpy-server.jar" 0
 command -v adb >/dev/null && need "adb" 1 || need "adb" 0
