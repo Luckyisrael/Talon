@@ -149,7 +149,7 @@ export const auth = {
 
   /** Where the browser goes to start a provider flow. Server derives origin. */
   startURL(provider: string, redirect: string) {
-    return `/v1/auth/${provider}/start?redirect=${encodeURIComponent(redirect)}`;
+    return `${BASE}/v1/auth/${provider}/start?redirect=${encodeURIComponent(redirect)}`;
   },
 };
 

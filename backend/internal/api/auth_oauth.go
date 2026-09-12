@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,12 @@ type OAuthAuthHandler struct {
 	auth      *auth.Service
 	providers map[auth.Provider]auth.OAuthConfig
 
+	// webOrigin is where the browser UI lives (the Next.js app). When the
+	// API and the web are different origins — always, in development — the
+	// post-consent hand-off must land on the web's /auth/callback, not the
+	// API's own root. Empty means same-origin (API serves the web itself).
+	webOrigin string
+
 	// states binds an in-flight flow to the redirect the client asked for
 	// (web path or expokit:// mobile scheme). Single-use, short-lived —
 	// the gitremote law, restated for sign-in.
@@ -42,9 +49,23 @@ type OAuthAuthHandler struct {
 func NewOAuthAuthHandler(s *store.Store, a *auth.Service, providers map[auth.Provider]auth.OAuthConfig) *OAuthAuthHandler {
 	return &OAuthAuthHandler{
 		store: s, auth: a, providers: providers,
-		states: newOAuthFlowStore(),
-		codes:  newOAuthFlowStore(),
+		states:    newOAuthFlowStore(),
+		codes:     newOAuthFlowStore(),
+		webOrigin: strings.TrimRight(strings.TrimSpace(os.Getenv("WEB_ORIGIN")), "/"),
 	}
+}
+
+// webTarget resolves a sanitized redirect to the URL the browser should
+// land on: web paths gain the web origin (the API and the Next.js app are
+// separate origins in development); the mobile scheme and absolute URLs
+// pass through untouched.
+func (h *OAuthAuthHandler) webTarget(redirect string) string {
+	if h.webOrigin == "" ||
+		strings.HasPrefix(redirect, "expokit://") ||
+		!strings.HasPrefix(redirect, "/") {
+		return redirect
+	}
+	return h.webOrigin + redirect
 }
 
 // oauthFlowStore is the single-use token store for both ends of the flow:
@@ -198,7 +219,7 @@ func (h *OAuthAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		// The user refused consent, or the provider errored. Say so plainly,
 		// pointed back at the sign-in page they came from.
 		entry, _ := h.states.take(state)
-		http.Redirect(w, r, appendCode(entry.payload, "denied"), http.StatusFound)
+		http.Redirect(w, r, h.appendWebCode(entry.payload, "denied"), http.StatusFound)
 		return
 	}
 	if state == "" || code == "" {
@@ -215,34 +236,40 @@ func (h *OAuthAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	accessToken, err := cfg.ExchangeCode(r.Context(), code)
 	if err != nil {
 		log.Printf("oauth %s: exchange failed: %v", providerName, err)
-		http.Redirect(w, r, appendCode(entry.payload, "provider-unavailable"), http.StatusFound)
+		http.Redirect(w, r, h.appendWebCode(entry.payload, "provider-unavailable"), http.StatusFound)
 		return
 	}
 
 	ident, err := cfg.FetchProfile(r.Context(), accessToken)
 	if err != nil {
 		log.Printf("oauth %s: profile fetch failed: %v", providerName, err)
-		http.Redirect(w, r, appendCode(entry.payload, "provider-unavailable"), http.StatusFound)
+		http.Redirect(w, r, h.appendWebCode(entry.payload, "provider-unavailable"), http.StatusFound)
 		return
 	}
 
 	user, err := h.store.UpsertOAuthUser(providerName, ident.ProviderID, ident.Email, ident.Name, ident.AvatarURL)
 	if err != nil {
 		log.Printf("oauth %s: upsert failed: %v", providerName, err)
-		http.Redirect(w, r, appendCode(entry.payload, "server-error"), http.StatusFound)
+		http.Redirect(w, r, h.appendWebCode(entry.payload, "server-error"), http.StatusFound)
 		return
 	}
 
 	// The single-use session ticket: 60 seconds to cross the client boundary.
 	ticket, err := newFlowToken()
 	if err != nil {
-		http.Redirect(w, r, appendCode(entry.payload, "server-error"), http.StatusFound)
+		http.Redirect(w, r, h.appendWebCode(entry.payload, "server-error"), http.StatusFound)
 		return
 	}
 	h.codes.put(ticket, strconv.FormatInt(user.ID, 10), providerName)
 	// The codes store outlives 60s by design margin; the exchange checks the
 	// tighter deadline itself.
-	http.Redirect(w, r, appendCode(entry.payload, ticket), http.StatusFound)
+	http.Redirect(w, r, h.appendWebCode(entry.payload, ticket), http.StatusFound)
+}
+
+// appendWebCode is appendCode with the web-origin prefix applied first —
+// every browser hand-off in the flow goes through here.
+func (h *OAuthAuthHandler) appendWebCode(target, code string) string {
+	return appendCode(h.webTarget(target), code)
 }
 
 // appendCode adds ?code=… (or overwrites it) on a redirect target.
