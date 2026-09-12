@@ -37,8 +37,21 @@ export default function AuthCallbackPage() {
       return;
     }
 
-    auth
-      .exchange(code)
+    // A bounded exchange: the single-use code lives 60s, and a fetch that
+    // can neither succeed nor fail (unreachable API, hung socket) must not
+    // freeze the page forever. 20s is honest — long past any real exchange,
+    // short enough to name the problem while the user is still looking.
+    const exchangeWithTimeout = Promise.race([
+      auth.exchange(code),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("The sign-in exchange timed out — the API did not answer. Check that the backend is running, then sign in again.")),
+          20000,
+        ),
+      ),
+    ]);
+
+    exchangeWithTimeout
       .then((data) => {
         setToken(data.token);
         // The email cache is what the top bar reads instantly on load; /me
