@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -116,6 +118,13 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	reg.Register(&tools.RunTypecheck{WorkspacePath: workspacePath, Output: output})
 	reg.Register(&tools.RunLint{WorkspacePath: workspacePath, Output: output})
 	reg.Register(&tools.RunChecks{WorkspacePath: workspacePath, Output: output})
+	// The G4 static gates the orchestrator's verify ladder walks. run_bundle
+	// and run_gradle degrade to honest "unavailable" verdicts on hosts
+	// without the JS/Android toolchain — registering them unconditionally
+	// keeps the ladder's rungs intact instead of the model discovering
+	// "No tool named run_bundle" mid-build.
+	reg.Register(&tools.RunBundle{WorkspacePath: workspacePath, Output: output})
+	reg.Register(&tools.RunGradle{WorkspacePath: workspacePath, Output: output})
 
 	var allowlist *devclient.Allowlist
 	if h.devClient != nil {
@@ -211,6 +220,35 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 		if buf := h.metroBufferFor(projectID); buf != nil {
 			reg.Register(&tools.MetroStatus{Source: buf})
 		}
+
+		// G4 device gates. The verify ladder walks run_boot, run_vision,
+		// and run_interact; before this block they resolved to "No tool
+		// named …" and the ladder limped. Each degrades honestly when its
+		// inputs are missing (no built APK, no capture path) — registered
+		// whenever a device exists so the rungs are never absent.
+		adbClient := &tools.ADBRunner{Target: adbTarget}
+		// boot installs the project's APK and polls pidof. The package name
+		// is the project's identity; the APK path is build_apk's standard
+		// output, which exists only after a build — until then the gate
+		// reports its honest "no apk/pkg supplied — boot skipped".
+		pkgName := ""
+		apkPath := ""
+		if proj, err := h.store.GetProject(projectID); err == nil {
+			pkgName = proj.AndroidPackage
+		}
+		if st, err := os.Stat(filepath.Join(workspacePath, "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk")); err == nil && !st.IsDir() {
+			apkPath = filepath.Join(workspacePath, "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk")
+		}
+		reg.Register(&tools.RunBoot{WorkspacePath: workspacePath, APKPath: apkPath, PkgName: pkgName, ADBClient: adbClient})
+		// vision and interact verify through the model's eyes; wire them
+		// only when a client exists (a plain capture otherwise is not a
+		// vision verdict, and the gates would claim verification they
+		// never performed).
+		if h.ai != nil {
+			gate := &gateVision{c: h.ai, target: adbTarget}
+			reg.Register(&tools.RunVision{WorkspacePath: workspacePath, Capture: gate, Vision: gate, ADBClient: adbClient})
+			reg.Register(&tools.RunInteract{WorkspacePath: workspacePath, Capture: gate, Vision: gate, ADBClient: adbClient})
+		}
 	}
 
 	// Research. Both back onto public endpoints, so there is nothing to
@@ -283,6 +321,41 @@ func (v visionAdapter) VisionCheck(ctx context.Context, screenshot []byte, inten
 		return nil, err
 	}
 	return &tools.VisionVerdict{
+		Matches:  r.Matches,
+		Reason:   r.Reason,
+		HasError: r.HasError,
+		ErrorMsg: r.ErrorMsg,
+	}, nil
+}
+
+// gateVision wires the G4 device gates (run_vision, run_interact) to the real
+// things: the screenshot comes off the device over adb screencap, the verdict
+// from the model. One adapter satisfies both narrow gate interfaces so the
+// gates never import the ai package.
+type gateVision struct {
+	c      *ai.Client
+	target string
+}
+
+// CaptureScreenshot satisfies tools.ScreenshotCapturer — the same adb
+// exec-out screencap the capture_screenshot tool uses.
+func (g gateVision) CaptureScreenshot(ctx context.Context, _, _ string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "adb", "-s", g.target, "exec-out", "screencap", "-p")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("screencap failed: %v, output: %s", err, string(out))
+	}
+	return out, nil
+}
+
+// VisionCheck satisfies tools.VisionGateChecker — the model's eyes, mapped
+// onto the gate's verdict shape.
+func (g gateVision) VisionCheck(ctx context.Context, png []byte, intended string) (tools.VisionGateResult, error) {
+	r, err := g.c.VisionCheck(ctx, png, intended)
+	if err != nil {
+		return tools.VisionGateResult{}, err
+	}
+	return tools.VisionGateResult{
 		Matches:  r.Matches,
 		Reason:   r.Reason,
 		HasError: r.HasError,

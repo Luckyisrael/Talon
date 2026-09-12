@@ -107,6 +107,8 @@ Finish the job. Work until the feature actually runs: files written, imports res
 
 Verify per unit, not per edit. Group the related edits for one coherent change, then verify once with ` + "`run_checks`" + ` (typecheck plus lint in a single call) — do not alternate edits with verification calls. Twenty verification runs for twenty edits wastes the round budget; one check per finished unit catches the same errors.
 
+The gate sweep narrates itself. The verify ladder (typecheck, lint, bundle, gradle, boot, vision, interact) already streams one "Checked <stage>" line per stage to the user as it runs — do not re-narrate each stage in your own words afterward. When the sweep finishes, give one sentence on the verdict (what passed, what was unavailable and why), not a stage-by-stage recap.
+
 Inspect, don't scaffold. Never write scratch, dump, or exploration scripts into the workspace to learn something — that litters the project and burns rounds creating and deleting files. Read with ` + "`read_file`" + `/` + "`grep_codebase`" + `, probe live state with ` + "`run_shell`" + ` (curl against localhost, adb against the device, node -e one-liners), then write only the real code.
 
 Probe once, remember the answer. Confirming an API shape from node_modules is good — confirming the same package six times is not. When a probe answers your question, proceed to write code; never re-probe what you already confirmed this turn. ` + "`run_shell`" + ` is for live state you cannot read from files (device, localhost, command output) — for file contents, prefer ` + "`read_file`" + ` and ` + "`grep_codebase`" + `, which are tracked and parallel.
