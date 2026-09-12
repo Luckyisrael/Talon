@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,6 +20,12 @@ var ErrDuplicateEmail = errors.New("email already registered")
 // ErrUserNotFound is the sentinel for lookups that miss: the OAuth flow
 // distinguishes "no such identity yet" (create the user) from a store fault.
 var ErrUserNotFound = errors.New("user not found")
+
+// ErrChallengeNotFound is the wallet-auth miss: the challenge was never
+// issued, was already used (single-use by construction — the read deletes),
+// or expired and was swept. All three look identical to the caller, on
+// purpose: never tell a forger which.
+var ErrChallengeNotFound = errors.New("challenge not found")
 
 type User struct {
 	ID           int64     `json:"id"`
@@ -526,6 +533,16 @@ func (s *Store) migrate() error {
 		UNIQUE (provider, provider_id)
 	)`)
 
+	// P17: wallet auth challenges. One row per issued challenge, single-use
+	// by construction — ConsumeWalletChallenge deletes on read — and swept
+	// by TTL so an abandoned QR can't pile up. The nonce is the address of
+	// the challenge; the wallet signs its exact bytes.
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS wallet_challenges (
+		nonce TEXT PRIMARY KEY,
+		message TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+	)`)
+
 	// E: push notifications. onesignal_id is the user's registered device
 	// (OneSignal external id) — the push target. The notifications table is
 	// the in-app history: every Dispatch records here regardless of whether
@@ -640,6 +657,48 @@ func (s *Store) GetUserByProvider(provider, providerID string) (*User, error) {
 		return nil, err
 	}
 	return u, nil
+}
+
+// ── P17: wallet-auth challenges ──
+//
+// The wallet signs one server-issued message, once. StoreWalletChallenge
+// records it keyed by nonce; ConsumeWalletChallenge returns the message and
+// deletes the row in the same breath — a replayed challenge is a miss by
+// the time the second attempt arrives. SweepWalletChallenges drops stale
+// rows; the issuer runs it opportunistically.
+
+// StoreWalletChallenge records a single-use challenge.
+func (s *Store) StoreWalletChallenge(nonce, message string) error {
+	_, err := s.db.Exec(`INSERT INTO wallet_challenges (nonce, message) VALUES (?, ?)`, nonce, message)
+	return err
+}
+
+// ConsumeWalletChallenge returns the challenge's message, deleting it —
+// single-use enforced at the read.
+func (s *Store) ConsumeWalletChallenge(nonce string) (string, error) {
+	var message string
+	err := s.db.QueryRow(`DELETE FROM wallet_challenges WHERE nonce = ? RETURNING message`, nonce).Scan(&message)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrChallengeNotFound
+		}
+		return "", err
+	}
+	return message, nil
+}
+
+// SweepWalletChallenges drops challenges older than the TTL. Returns rows
+// removed — callers log it, they don't act on it.
+func (s *Store) SweepWalletChallenges(olderThan time.Duration) (int64, error) {
+	res, err := s.db.Exec(
+		`DELETE FROM wallet_challenges WHERE created_at < datetime('now', ?)`,
+		"-"+strconv.Itoa(int(olderThan.Minutes()))+" minutes",
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 func (s *Store) GetUserByEmail(email string) (*User, error) {

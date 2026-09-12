@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Camera, Refresh, Send } from 'iconsax-react-native';
 import QRCodeStyled from 'react-native-qrcode-styled';
 import { Badge, Screen, UIText } from '@/components/ui';
@@ -179,13 +179,30 @@ export default function DeviceScreen() {
           </UIText>
           <View style={styles.qrCard}>
             {testInfo?.deep_link ? (
-              <QRCodeStyled
-                data={testInfo.deep_link}
-                padding={8}
-                size={168}
-                color={Colors.paper}
-                style={{ borderRadius: 8, backgroundColor: Colors.void }}
-              />
+              <>
+                <QRCodeStyled
+                  data={testInfo.deep_link}
+                  padding={8}
+                  size={168}
+                  color={Colors.paper}
+                  style={{ borderRadius: 8, backgroundColor: Colors.void }}
+                />
+                {/* P17: the deep-link handoff. This phone has the app — the
+                    QR is for OTHER phones. Pressing opens the exp:// link
+                    straight into the dev client: same credential, no
+                    camera dance. */}
+                <Pressable
+                  onPress={() => void Linking.openURL(testInfo.deep_link!)}
+                  style={({ pressed }) => [
+                    styles.openBtn,
+                    pressed && styles.iconBtnPressed,
+                  ]}
+                >
+                  <UIText variant="label" tone="hero">
+                    Open on this phone
+                  </UIText>
+                </Pressable>
+              </>
             ) : (
               <View style={styles.qrEmpty}>
                 <UIText variant="caption" tone="faint">
@@ -281,6 +298,14 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.void,
     borderRadius: 8,
     padding: Spacing.s12,
+  },
+  openBtn: {
+    minHeight: 44,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    backgroundColor: Colors.acidLime,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   qrCaption: { textAlign: 'center' },
 });

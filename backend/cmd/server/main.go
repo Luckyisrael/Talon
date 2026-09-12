@@ -333,6 +333,11 @@ func main() {
 		r.Use(authLimiter.Middleware)
 		r.Get("/v1/auth/providers", oauthHandler.Providers)
 		r.Post("/v1/auth/exchange", oauthHandler.Exchange)
+		// P17: wallet sign-in — challenge/verify, same account-linking law
+		// as the OAuth exchange, same auth limiter.
+		walletHandler := api.NewWalletAuthHandler(s, authSvc)
+		r.Post("/v1/auth/wallet/challenge", walletHandler.Challenge)
+		r.Post("/v1/auth/wallet/verify", walletHandler.Verify)
 	})
 	r.Get("/v1/auth/{provider}/start", oauthHandler.Start)
 	r.Get("/v1/auth/{provider}/callback", oauthHandler.Callback)
