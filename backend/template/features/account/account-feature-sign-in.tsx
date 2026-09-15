@@ -1,24 +1,31 @@
-import { Button, View } from 'react-native'
-import { appStyles } from '@/constants/app-styles'
+import { useState } from 'react'
+import { ActionButton } from '@/components/action-button'
 import { Account, useMobileWallet } from '@wallet-ui/react-native-kit'
 
 export function AccountFeatureSignIn({ account }: { account?: Account }) {
   const { chain, identity, signIn } = useMobileWallet()
+  const [pending, setPending] = useState(false)
+
   async function submit() {
+    setPending(true)
     try {
       await signIn({
         address: account?.address.toString(),
         chainId: chain,
         uri: identity.uri,
       })
-      console.log('Signed in!')
-    } catch (e) {
-      console.log(`Error signing in: ${e}`)
+    } catch {
+      // A cancelled sign-in is a normal wallet outcome, not an error screen.
+    } finally {
+      setPending(false)
     }
   }
+
   return (
-    <View style={appStyles.stack}>
-      <Button onPress={submit} title={`Sign In ${account ? `with ${account.label}` : 'and connect'}`} />
-    </View>
+    <ActionButton
+      label={account ? `Sign in with ${account.label}` : 'Sign in and connect'}
+      loading={pending}
+      onPress={submit}
+    />
   )
 }

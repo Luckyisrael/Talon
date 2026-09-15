@@ -1,12 +1,17 @@
 ---
 name: talon-screen-design
-description: Design screens that fit the Seeker device and feel finished. Load when building UI, laying out a screen, or deciding on visual and interaction details.
+description: Design screens that fit the Seeker device and feel finished — geometry, reach, legibility, and every interaction's full state cycle. This is the device half of the design bar; mobile-craft is the craft half. Load when building UI, laying out a screen, or deciding on visual and interaction details.
 version: "react-native@0.83, react-native-safe-area-context@5.6.x"
 autoAttach: true
 triggers: [path:app/**, path:components/**]
 ---
 
 # Designing for the Talon
+
+This skill is the **device** half of the design bar: geometry, reach, and the
+physical screen. `mobile-craft` is the **craft** half — one accent, one grey
+family, shape lock, typography, iconography, and the anti-slop counts. They
+fire together on `app/**`; read both.
 
 The Talon is a tall, narrow, very sharp phone held in one hand: a 6.36" AMOLED,
 2670×1200, 460 PPI, 120Hz screen running Android. Design for that, not for a tablet
@@ -42,6 +47,10 @@ or a browser.
 ## Rules
 
 - Style with `StyleSheet.create`, not inline object literals rebuilt every render.
+- Resolve every colour through `@/constants/theme` — never an inline hex, never a
+  fifth accent invented for one screen (see `mobile-craft`).
+- Icons come from `@expo/vector-icons` only, one glyph family per app (see
+  `mobile-craft`).
 - Use `FlatList` for anything scrollable and list-shaped — not `ScrollView` with a
   `.map()`. It matters on a 120Hz screen.
 - Test the layout at the top and bottom of the screen, not just the middle.

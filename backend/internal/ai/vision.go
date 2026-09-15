@@ -25,13 +25,18 @@ Report what you actually see:
 1. Does the screen match that description?
 2. Is anything visibly broken — a red error screen, a stack trace, a blank white or black screen, "Unable to resolve module", a stuck loading spinner?
 3. Does the layout hold up on a tall phone screen — nothing clipped off the edges, no text overlapping, nothing hidden behind the status bar or the navigation bar?
-
-Be strict. A screen that renders but shows placeholder text, an empty list where data was expected, or an unstyled default layout does not match.
+4. Design craft — be strict, this is what separates a finished screen from a generated one:
+   - Hierarchy: is the most important thing on the screen the most prominent?
+   - Spacing: is there a consistent rhythm, or do gaps and margins look arbitrary or cramped?
+   - Colour discipline: one accent colour (multiple competing hues is a failure), one grey family, contrast readable in the theme shown.
+   - Typography: a coherent type scale with clear size/weight steps, no orphaned bold words, no tiny text.
+   - Iconography: vector icons from one consistent family — no emoji standing in for icons, no mismatched icon styles on one screen.
+   - Surfaces: separation by tone and elevation, not a stack of hairline borders on every nested box.
 
 Reply with JSON only:
 {
   "matches": true or false,
-  "reason": "what you see, specifically",
+  "reason": "what you see, specifically — name the craft problems you found, not only the broken ones",
   "has_error": true or false,
   "error_msg": "the error text if one is visible"
 }`

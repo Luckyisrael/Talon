@@ -1,25 +1,35 @@
 import { useState } from 'react'
-import { Button, View } from 'react-native'
-import { appStyles } from '@/constants/app-styles'
+import { ActionButton } from '@/components/action-button'
 import { useMobileWallet } from '@wallet-ui/react-native-kit'
 import { Address } from '@solana/kit'
 
 export function AccountFeatureSignMessage({ address }: { address: Address }) {
   const { signMessages } = useMobileWallet()
-  const [title, setTitle] = useState('Sign Message')
+  const [pending, setPending] = useState(false)
+  const [outcome, setOutcome] = useState<'idle' | 'signed' | 'failed'>('idle')
+
   async function submit() {
+    setPending(true)
+    setOutcome('idle')
     try {
       await signMessages(new TextEncoder().encode(`Signing a message with ${address}`))
-      setTitle('Message Signed!')
-      console.log('Message signed!')
-    } catch (e) {
-      setTitle('Sign Message Failed')
-      console.log(`Error signing message: ${e}`)
+      setOutcome('signed')
+    } catch {
+      // A rejected signature is the user's choice; the button says so and stays usable.
+      setOutcome('failed')
+    } finally {
+      setPending(false)
     }
   }
+
+  const label = outcome === 'signed' ? 'Message signed' : outcome === 'failed' ? 'Signature rejected — retry' : 'Sign message'
+
   return (
-    <View style={appStyles.stack}>
-      <Button onPress={submit} title={title} />
-    </View>
+    <ActionButton
+      label={label}
+      loading={pending}
+      variant={outcome === 'failed' ? 'danger' : 'ghost'}
+      onPress={submit}
+    />
   )
 }
