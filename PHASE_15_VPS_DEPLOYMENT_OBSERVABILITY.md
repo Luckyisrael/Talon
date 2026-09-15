@@ -4,7 +4,7 @@
 
 **Objective:** Bring every prior phase's work together into one real, reproducibly deployed environment on production infrastructure — proven under real concurrent load, with real cost visibility, a tested backup/restore procedure, and a working rollback path. This is the integration point where isolated, individually-verified pieces either genuinely work together, or reveal that they don't.
 
-**Reference:** All prior phase docs — this phase is where `PHASE_4_MULTISESSION_REDROID.md`'s isolation, `PHASE_9`/`PHASE_10`'s billing, `PHASE_12`'s cost tracking, and `PHASE_13`'s hardening must all function together for real.
+**Reference:** This phase is where the redroid session isolation, the billing rules, the cost tracking, and the production hardening must all function together for real.
 
 ---
 

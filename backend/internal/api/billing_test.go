@@ -5,7 +5,7 @@ package api
 // handlers around it — against a real store and the mock provider, so the
 // guarantees are demonstrated at runtime rather than asserted from reading code.
 //
-// Coverage map to PHASE_9_PAYMENT_PROFILE_FOUNDATION.md §3:
+// Coverage map to the Phase 9 payment-profile rules (§3):
 //   #2  one customer per user ......... TestBillingOneCustomerPerUser
 //   #3  grant only after webhook ...... TestBillingUpgradeGrantsTierOnlyThroughVerifiedWebhook
 //   #4  forged/unsigned rejected ...... TestBillingForgedWebhookRejected
