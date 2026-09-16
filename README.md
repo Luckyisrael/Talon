@@ -127,10 +127,10 @@ cp backend/.env.example backend/.env
 Then edit `backend/.env` and set the four things that matter:
 
 ```bash
-AI_MODEL=stealth/union-alpha        # any OpenRouter model slug
-AI_API_KEY=sk-or-v1-...             # your OpenRouter key
-PUBLIC_HOST=192.168.1.6             # your LAN IP — phones and LAN browsers
-                                    # reach the studio here
+AI_MODEL=nvidia/nemotron-3.5-lightning:free  # any OpenRouter model slug
+AI_API_KEY=sk-or-v1-...                       # your OpenRouter key
+PUBLIC_HOST=192.168.1.6                       # your LAN IP — phones and LAN
+                                              # browsers reach the studio here
 ```
 
 The model is swappable in those two lines. Anthropic's native API works too:
@@ -145,14 +145,14 @@ The model is swappable in those two lines. Anthropic's native API works too:
 That is it. Both servers come up from `backend/.env`:
 
 ```
-▸ backend  :8080  (model: stealth/union-alpha)
+▸ backend  :8080  (model: nvidia/nemotron-3.5-lightning:free)
 ▸ frontend :3000  → API at http://192.168.1.6:8080
 
 Talon is up:
   web     http://localhost:3000
   web LAN http://192.168.1.6:3000
   api     http://localhost:8080
-  model   stealth/union-alpha via https://openrouter.ai/api/v1
+  model   nvidia/nemotron-3.5-lightning:free via https://openrouter.ai/api/v1
   logs    .dev-logs/{backend,frontend}.log
 ```
 

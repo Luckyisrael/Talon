@@ -701,28 +701,53 @@ func emitStreamError(ctx context.Context, events chan<- StreamEvent, format stri
 // openStream issues the request and hands back the body for SSE reading. The
 // caller closes it.
 func (c *Client) openStream(ctx context.Context, url string, body []byte, setHeaders func(*http.Request)) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("could not build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	setHeaders(req)
+	// The streaming path is the one the plan and build turns take, so a
+	// single flaky 502 from a free-tier route kills the whole turn — the
+	// non-streaming callers below retry, and this used to not. Retry the
+	// same transient codes they do, on the same backoff, so a gateway
+	// hiccup costs one retry instead of the turn.
+	const maxRetries = 3
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("openStream: retry attempt %d/%d after %v", attempt+1, maxRetries, lastErr)
+			time.Sleep(time.Duration(attempt*3) * time.Second)
+		}
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("could not build request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		setHeaders(req)
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		err = fmt.Errorf("could not reach the AI service: %w", err)
-		c.noteFailure(err)
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			// A dead connection is transient on every gateway.
+			lastErr = fmt.Errorf("could not reach the AI service: %w", err)
+			c.noteFailure(lastErr)
+			continue
+		}
+		if resp.StatusCode == http.StatusOK {
+			return resp.Body, nil
+		}
+		// 200 with an error body arrives as an SSE frame and is handled by
+		// the reader; a non-200 here is a hard rejection. Only the codes a
+		// gateway recovers from on their own are worth another attempt.
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		err := fmt.Errorf("AI service returned HTTP %d: %s", resp.StatusCode, truncate(string(detail), 500))
-		c.noteFailure(err)
-		return nil, err
+		switch resp.StatusCode {
+		case 429, 502, 503, 504:
+			lastErr = fmt.Errorf("AI service returned HTTP %d: %s", resp.StatusCode, truncate(string(detail), 500))
+			c.noteFailure(lastErr)
+			continue
+		default:
+			err := fmt.Errorf("AI service returned HTTP %d: %s", resp.StatusCode, truncate(string(detail), 500))
+			c.noteFailure(err)
+			return nil, err
+		}
 	}
-	return resp.Body, nil
+	return nil, lastErr
 }
 
 // ── OpenAI-compatible streaming ───────────────────────
