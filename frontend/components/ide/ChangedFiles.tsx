@@ -64,9 +64,19 @@ export default function ChangedFiles({ projectId, filesTouched }: ChangedFilesPr
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  // The identity of the touched set, not its size. A file deleted and a file
+  // written both leave the count at 1, so keying on length would silently skip
+  // the refetch exactly when the workspace changed shape. The joined path
+  // string changes whenever the set does.
+  const touchedKey = filesTouched.join("|");
+
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    // Only the loading spinner on the first load; a mid-build refetch is a
+    // background refresh and the list should not flash to "loading" each time
+    // a file lands.
+    const firstLoad = diff === "" && note === null;
+    if (firstLoad) setLoading(true);
     conversation
       .diff(projectId)
       .then((res) => {
@@ -81,12 +91,25 @@ export default function ChangedFiles({ projectId, filesTouched }: ChangedFilesPr
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && firstLoad) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [projectId, filesTouched.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, touchedKey]);
+
+  // A file appearing in the diff for the first time opens itself — the row
+  // you would reach for is already open when the change lands.
+  useEffect(() => {
+    if (!diff || !filesTouched.length) return;
+    const last = filesTouched[filesTouched.length - 1];
+    if (!last) return;
+    if (diff.includes(`+++ b/${last}`) && expanded !== last) {
+      setExpanded(last);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [touchedKey, diff]);
 
   // Per-file hunks, each classified. Memoised because the diff can be large.
   const fileMap = useMemo(() => (diff ? splitByFile(diff) : new Map()), [diff]);

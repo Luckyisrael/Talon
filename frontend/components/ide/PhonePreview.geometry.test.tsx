@@ -37,10 +37,13 @@ describe("PhonePreview frame geometry", () => {
     const frame = container.querySelector(".relative.max-h-full");
     expect(frame).not.toBeNull();
     const style = (frame as HTMLElement).getAttribute("style") || "";
-    expect(style).toContain("width: 180px");
-    expect(style).toContain("height: 390px");
+    // Before the first frame the device still has a shape: the Seeker's own
+    // 1080×2400 ratio, drawn at full size. The boot state is a device that
+    // has not finished booting, not a small placeholder box.
+    expect(style).toContain("aspect-ratio: 1080 / 2400");
+    expect(style).toContain("width: 100%");
     // The fallback keeps phone proportions so the transition to the live
     // frame is a resize, not a reshaping.
-    expect(180 / 390).toBeCloseTo(9 / 19.5, 2);
+    expect(1080 / 2400).toBeCloseTo(9 / 20, 2);
   });
 });

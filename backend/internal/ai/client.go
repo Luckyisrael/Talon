@@ -229,11 +229,24 @@ type PlanResponse struct {
 	Plan    *AppPlan `json:"plan,omitempty"`
 }
 
+// PlanStructure states what the plan does with the project template: which
+// shipped parts survive, which are demo scaffolding to remove, and what gets
+// written fresh. The template is guidance, not a scaffold — a plan that writes
+// its screens and leaves the demo home behind produces a broken app, and this
+// field is how the planner commits to the decision instead of forgetting it.
+type PlanStructure struct {
+	Keep    []string `json:"keep"`
+	Prune   []string `json:"prune"`
+	Write   []string `json:"write"`
+	Folders string   `json:"folders"`
+}
+
 type AppPlan struct {
-	Screens    []Screen `json:"screens"`
-	Features   []string `json:"features"`
-	Navigation string   `json:"navigation"`
-	Packages   []string `json:"packages"`
+	Screens    []Screen       `json:"screens"`
+	Features   []string       `json:"features"`
+	Navigation string         `json:"navigation"`
+	Packages   []string       `json:"packages"`
+	Structure  *PlanStructure `json:"structure,omitempty"`
 }
 
 type Screen struct {

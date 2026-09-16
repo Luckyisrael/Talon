@@ -438,6 +438,14 @@ export default function PhonePreview({
           : "idle";
 
   const landscape = frame !== null && frame.w > frame.h;
+  // Before the first frame, the device still has a shape — the Seeker's own
+  // 1080×2400. A booting or idle phone is not a 240px-wide text box: the frame
+  // is drawn at full size with the status living inside the screen, so the
+  // panel reads as a device that hasn't finished booting rather than as
+  // nothing at all.
+  const aspect = frame
+    ? `${frame.w} / ${frame.h}`
+    : "1080 / 2400";
 
   return (
     <section className="relative flex h-full min-h-0 flex-col overflow-hidden bg-void">
@@ -448,23 +456,22 @@ export default function PhonePreview({
         // the stage's own aspect ratio.
         style={{ containerType: "size" } as React.CSSProperties}
       >
-        {status === "streaming" ? (
-          <div
-            className="relative max-h-full w-full"
-            // Largest true-aspect box that fits the stage in BOTH dimensions.
-            // Width-driven with a max-height cap: an explicit height plus a
-            // clamped max-width distorts the aspect exactly when the rail is
-            // narrower than the device's own ratio, which most rails are.
-            // The device's reported ratio always wins — never an assumed
-            // phone shape.
-            style={
-              frame
-                ? landscape
-                  ? { aspectRatio: `${frame.w} / ${frame.h}`, height: "100%", maxWidth: "100%" }
-                  : { aspectRatio: `${frame.w} / ${frame.h}`, width: "100%", maxHeight: "100%" }
-                : { width: 180, height: 390 }
-            }
-          >
+        <div
+          className="relative max-h-full w-full"
+          // Largest true-aspect box that fits the stage in BOTH dimensions.
+          // Width-driven with a max-height cap: an explicit height plus a
+          // clamped max-width distorts the aspect exactly when the rail is
+          // narrower than the device's own ratio, which most rails are.
+          // The device's reported ratio always wins — never an assumed
+          // phone shape. Before the first frame the Seeker's own ratio is
+          // used so the frame is drawn at full size from the moment a
+          // session starts, not as a small placeholder.
+          style={
+            landscape
+              ? { aspectRatio: aspect, height: "100%", maxWidth: "100%" }
+              : { aspectRatio: aspect, width: "100%", maxHeight: "100%" }
+          }
+        >
             {/* ── Device frame ──
                 Slim uniform bezel (4px), concentric corner radii (outer minus
                 the bezel — the premium tell), a hairline metallic edge with a
@@ -492,143 +499,155 @@ export default function PhonePreview({
 
             {/* screen */}
             <div className="absolute inset-[4px] overflow-hidden rounded-[28px] bg-black">
-              <canvas
-                ref={canvasRef}
-                onPointerDown={onPointerDown}
-                onPointerUp={onPointerUp}
-                onPointerCancel={() => (touchRef.current = null)}
-                aria-label="The device screen. Click to tap, drag to swipe."
-                className={`h-full w-full touch-none select-none ${
-                  inputReady ? "cursor-pointer" : "cursor-default"
-                }`}
-              />
+              {status === "streaming" ? (
+                <canvas
+                  ref={canvasRef}
+                  onPointerDown={onPointerDown}
+                  onPointerUp={onPointerUp}
+                  onPointerCancel={() => (touchRef.current = null)}
+                  aria-label="The device screen. Click to tap, drag to swipe."
+                  className={`h-full w-full touch-none select-none ${
+                    inputReady ? "cursor-pointer" : "cursor-default"
+                  }`}
+                />
+              ) : (
+                // The device exists but has no frames yet: booting, idle, or
+                // an error reaching the container. Rendered inside the screen
+                // rather than replacing the phone — the frame is the device,
+                // and this is what its screen is doing right now.
+                <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
+                  {status === "connecting" ? (
+                    <>
+                      <LoadingState variant="Orbit" label="Booting the device" />
+                      <p className="text-sm text-fog">
+                        Attaching takes a moment the first time.
+                      </p>
+                    </>
+                  ) : status === "error" ? (
+                    <>
+                      <p className="text-sm text-coral-red">Could not reach a device.</p>
+                      <p className="font-mono text-xs text-fog">
+                        The container may still be starting, or adb lost the target.
+                      </p>
+                      {onStartSession && (
+                        <button type="button" onClick={onStartSession} className="btn mt-1">
+                          Try again
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm text-mist">No device attached.</p>
+                      <p className="font-mono text-xs text-fog">
+                        Start one to run the app, tap through it, and let the
+                        agent see what it looks like.
+                      </p>
+                      {onStartSession && (
+                        <button type="button" onClick={onStartSession} className="btn btn-go mt-1">
+                          Start a device
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
               {/* punch-hole camera over the screen top */}
               <span
                 aria-hidden
                 className="pointer-events-none absolute left-1/2 top-[8px] size-2 -translate-x-1/2 rounded-full bg-black"
                 style={{ boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08), 0 0 0 3px rgba(0,0,0,0.55)" }}
               />
-              {/* top strip — target and frame rate over a scrim */}
-              <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/50 via-black/25 to-transparent px-3 pb-6 pt-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="lamp" data-state={lampState} />
-                  <span className="gauge truncate" title={adbTarget ?? undefined}>
-                    {adbTarget ?? "Device"}
-                  </span>
-                </div>
-                <span className="gauge tnum flex-shrink-0">
-                  {metroBadge && metroBadge.kind === "bundle_progress" && metroBadge.progress > 0
-                    ? `bundling ${metroBadge.progress}%`
-                    : metroBadge && (metroBadge.kind === "bundle_start" || metroBadge.kind === "bundle_progress")
-                      ? "bundling…"
-                      : metroBadge && metroBadge.kind === "bundle_done"
-                        ? "bundle ready"
-                        : metroBadge && metroBadge.kind === "reloaded"
-                          ? "reloaded"
-                          : `${fps} fps`}
-                </span>
-              </div>
-              {/* DV1: the redbox surface — a runtime/bundler error persists
-                  over the stream until the next good bundle clears it. The
-                  device screen may still show the old frame; this says why. */}
-              {metroBadge && metroBadge.kind === "error" ? (
-                <div
-                  role="status"
-                  title={metroBadge.text}
-                  className="pointer-events-none absolute inset-x-0 top-10 border-t border-coral-red/60 bg-coral-red/20 px-3 py-1.5 backdrop-blur-[2px]"
-                >
-                  <p className="gauge truncate text-coral-red">
-                    ⚠ bundler: {metroBadge.text}
-                  </p>
-                </div>
-              ) : null}
-
-              {/* bottom nav keys */}
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/50 via-black/25 to-transparent px-3 pb-2 pt-6">
-                <div className="pointer-events-auto flex items-center justify-center gap-1">
-                  {NAV_KEYS.map((key) => (
-                    <button
-                      key={key.keycode}
-                      type="button"
-                      disabled={!inputReady}
-                      onClick={() => sendInput({ type: "key", keycode: key.keycode })}
-                      title={key.label}
-                      aria-label={key.label}
-                      className="btn btn-ghost h-7 w-10 text-fog"
-                    >
-                      <span aria-hidden className="text-sm leading-none">
-                        {key.glyph}
+              {/* Live overlays — only meaningful while frames are flowing.
+                  The boot/idle screen above already carries its own status;
+                  these would report 0 fps and a detached input over it. */}
+              {status === "streaming" && (
+                <>
+                  {/* top strip — target and frame rate over a scrim */}
+                  <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/50 via-black/25 to-transparent px-3 pb-6 pt-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="lamp" data-state={lampState} />
+                      <span className="gauge truncate" title={adbTarget ?? undefined}>
+                        {adbTarget ?? "Device"}
                       </span>
-                    </button>
-                  ))}
-                </div>
-                <div className="mt-2 flex items-center justify-center gap-2 font-mono text-xs tabular-nums text-ash">
-                  <span>{frame ? `${frame.w}×${frame.h}` : "—"}</span>
-                  <span className="text-smoke">·</span>
-                  <span>{sessionId ? `#${sessionId}` : "—"}</span>
-                  <span className="text-smoke">·</span>
-                  <span className={inputReady ? "text-[#4cc069]" : "text-fog"}>
-                    {inputReady ? "input attached" : "input detached"}
-                  </span>
-                </div>
-              </div>
-              {!frame && (
-                <p className="gauge absolute inset-0 flex items-center justify-center">
-                  Waiting for the first frame
-                </p>
-              )}
-              {stalled && frame && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-void/80 px-6 text-center">
-                  <p className="text-sm text-mist">Signal lost — no frames for a while.</p>
-                  <p className="font-mono text-xs text-fog">The session may still be alive.</p>
-                  <button
-                    type="button"
-                    onClick={() => setStreamEpoch((e) => e + 1)}
-                    className="btn mt-1"
-                  >
-                    Reconnect stream
-                  </button>
-                </div>
+                    </div>
+                    <span className="gauge tnum flex-shrink-0">
+                      {metroBadge && metroBadge.kind === "bundle_progress" && metroBadge.progress > 0
+                        ? `bundling ${metroBadge.progress}%`
+                        : metroBadge && (metroBadge.kind === "bundle_start" || metroBadge.kind === "bundle_progress")
+                          ? "bundling…"
+                          : metroBadge && metroBadge.kind === "bundle_done"
+                            ? "bundle ready"
+                            : metroBadge && metroBadge.kind === "reloaded"
+                              ? "reloaded"
+                              : `${fps} fps`}
+                    </span>
+                  </div>
+                  {/* DV1: the redbox surface — a runtime/bundler error persists
+                      over the stream until the next good bundle clears it. The
+                      device screen may still show the old frame; this says why. */}
+                  {metroBadge && metroBadge.kind === "error" ? (
+                    <div
+                      role="status"
+                      title={metroBadge.text}
+                      className="pointer-events-none absolute inset-x-0 top-10 border-t border-coral-red/60 bg-coral-red/20 px-3 py-1.5 backdrop-blur-[2px]"
+                    >
+                      <p className="gauge truncate text-coral-red">
+                        ⚠ bundler: {metroBadge.text}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {/* bottom nav keys */}
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/50 via-black/25 to-transparent px-3 pb-2 pt-6">
+                    <div className="pointer-events-auto flex items-center justify-center gap-1">
+                      {NAV_KEYS.map((key) => (
+                        <button
+                          key={key.keycode}
+                          type="button"
+                          disabled={!inputReady}
+                          onClick={() => sendInput({ type: "key", keycode: key.keycode })}
+                          title={key.label}
+                          aria-label={key.label}
+                          className="btn btn-ghost h-7 w-10 text-fog"
+                        >
+                          <span aria-hidden className="text-sm leading-none">
+                            {key.glyph}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-2 flex items-center justify-center gap-2 font-mono text-xs tabular-nums text-ash">
+                      <span>{frame ? `${frame.w}×${frame.h}` : "—"}</span>
+                      <span className="text-smoke">·</span>
+                      <span>{sessionId ? `#${sessionId}` : "—"}</span>
+                      <span className="text-smoke">·</span>
+                      <span className={inputReady ? "text-[#4cc069]" : "text-fog"}>
+                        {inputReady ? "input attached" : "input detached"}
+                      </span>
+                    </div>
+                  </div>
+                  {!frame && (
+                    <p className="gauge absolute inset-0 flex items-center justify-center">
+                      Waiting for the first frame
+                    </p>
+                  )}
+                  {stalled && frame && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-void/80 px-6 text-center">
+                      <p className="text-sm text-mist">Signal lost — no frames for a while.</p>
+                      <p className="font-mono text-xs text-fog">The session may still be alive.</p>
+                      <button
+                        type="button"
+                        onClick={() => setStreamEpoch((e) => e + 1)}
+                        className="btn mt-1"
+                      >
+                        Reconnect stream
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
-        ) : (
-          <div className="flex max-w-[240px] flex-col items-center text-center">
-            {status === "connecting" ? (
-              <>
-                <LoadingState label="Booting a device" />
-                <p className="text-sm text-fog mt-3">
-                  Attaching takes a moment the first time.
-                </p>
-              </>
-            ) : status === "error" ? (
-              <>
-                <p className="text-sm text-coral-red">Could not reach a device.</p>
-                <p className="mt-1 font-mono text-xs text-fog">
-                  The container may still be starting, or adb lost the target.
-                </p>
-                {onStartSession && (
-                  <button type="button" onClick={onStartSession} className="btn mt-3">
-                    Try again
-                  </button>
-                )}
-              </>
-            ) : (
-              <>
-                <p className="text-sm text-mist">No device attached.</p>
-                <p className="mt-1 font-mono text-xs text-fog">
-                  Start one to run the app, tap through it, and let the agent see
-                  what it looks like.
-                </p>
-                {onStartSession && (
-                  <button type="button" onClick={onStartSession} className="btn btn-go mt-3">
-                    Start a device
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        )}
       </div>
 
       {/* ── Device toolbar — outside the frame, never over the screen ── */}

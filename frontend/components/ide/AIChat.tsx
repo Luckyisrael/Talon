@@ -24,7 +24,7 @@ import {
 import { useIDEStore } from "@/lib/store";
 import { uuid } from "@/lib/uuid";
 import type { ChatMessage, PlanData, PlanTask, StreamMessage, TraceRow } from "@/lib/types";
-import AgentTrace, { getToolLabel } from "./AgentTrace";
+import AgentTrace, { getToolLabel, PlanProgress } from "./AgentTrace";
 import LoadingState from "@/components/ui/LoadingState";
 
 interface AIChatProps {
@@ -1325,6 +1325,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                           onApprove={approvePlan}
                           onAnswer={answerQuestion}
                           busy={isStreaming}
+                          planTasks={planTasks}
                         />
                       </div>
                     </div>
@@ -1365,7 +1366,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         {isStreaming && (
           <div className="px-7 pb-2">
             <div className="mx-auto flex max-w-[760px] items-center gap-2.5 rounded-xl bg-[var(--panel-2)] px-3 py-2">
-              <LoadingState label={phaseLabel(liveMessage?.phase) || "Working"} />
+              <LoadingState variant="Dots" label={phaseLabel(liveMessage?.phase) || "Working"} />
               {liveMessage?.round && liveMessage.round > 1 ? (
                 <span className="gauge flex-shrink-0">round {liveMessage.round}</span>
               ) : null}
@@ -1715,11 +1716,15 @@ function AssistantEntry({
   onApprove,
   onAnswer,
   busy,
+  planTasks,
 }: {
   msg: StreamMessage;
   onApprove: (plan: PlanData) => void;
   onAnswer: (promptId: number, reply: string) => void;
   busy: boolean;
+  /** The live build checklist. Only the message that is streaming right now
+      shows it — a finished turn's plan is settled, its tasks are history. */
+  planTasks?: PlanTask[];
 }) {
   const waiting = msg.isStreaming && msg.traceRows.length === 0 && !msg.error;
   // A const, not msg.question inline, so the closure below keeps the narrowing.
@@ -1731,7 +1736,13 @@ function AssistantEntry({
 
       {waiting && <p className="gauge py-1">Thinking</p>}
 
-      {msg.plan && <PlanCard plan={msg.plan} onApprove={onApprove} />}
+      {msg.plan && (
+        <PlanCard
+          plan={msg.plan}
+          onApprove={onApprove}
+          tasks={msg.isStreaming ? planTasks : undefined}
+        />
+      )}
 
       {question && (
         <QuestionCard
@@ -1783,17 +1794,38 @@ function TurnFooter({ msg }: { msg: StreamMessage }) {
 function PlanCard({
   plan,
   onApprove,
+  tasks,
 }: {
   plan: PlanData;
   onApprove: (plan: PlanData) => void;
+  /** Live task ticks. Present while the plan's turn is building — the
+      checklist replaces the static screen list, so you watch each item
+      go pending → in_progress → completed as the backend reports it. */
+  tasks?: PlanTask[];
 }) {
   const screens = plan.screens ?? [];
   const features = plan.features ?? [];
   const packages = plan.packages ?? [];
+  const structure = plan.structure;
+  const live = tasks && tasks.length > 0;
+  const done = tasks?.filter((t) => t.status === "completed").length ?? 0;
 
   return (
     <div className="card !p-0 overflow-hidden">
-      {screens.length > 0 && (
+      {/* While the turn builds, the static screen list becomes a live
+          checklist: each item ticks pending → in_progress → completed as
+          the backend reports it. The count is the honest progress bar. */}
+      {live ? (
+        <div className="border-b border-graphite p-3">
+          <p className="gauge mb-2 flex items-baseline justify-between">
+            <span>Building the plan</span>
+            <span className="tnum">
+              {done}/{tasks!.length} done
+            </span>
+          </p>
+          <PlanProgress tasks={tasks} />
+        </div>
+      ) : screens.length > 0 ? (
         <div className="border-b border-graphite p-3">
           <p className="gauge mb-2">
             {screens.length} {screens.length === 1 ? "screen" : "screens"}
@@ -1813,6 +1845,29 @@ function PlanCard({
               </li>
             ))}
           </ul>
+        </div>
+      ) : null}
+
+      {structure && (structure.prune.length > 0 || structure.write.length > 0) && (
+        <div className="border-b border-graphite p-3">
+          <p className="gauge mb-2">Structure — from the template manifest</p>
+          <ul className="flex flex-col gap-1.5 font-mono text-xs">
+            {structure.prune.map((p, i) => (
+              <li key={`prune-${i}`} className="flex items-center gap-2 text-fog">
+                <span className="text-coral-red/80">−</span>
+                <span className="min-w-0 truncate" title={p}>{p}</span>
+              </li>
+            ))}
+            {structure.write.map((p, i) => (
+              <li key={`write-${i}`} className="flex items-center gap-2 text-fog">
+                <span className="text-pulse-green/80">+</span>
+                <span className="min-w-0 truncate" title={p}>{p}</span>
+              </li>
+            ))}
+          </ul>
+          {structure.folders && (
+            <p className="mt-2 text-ash">{structure.folders}</p>
+          )}
         </div>
       )}
 

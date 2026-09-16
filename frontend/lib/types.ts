@@ -48,11 +48,29 @@ export interface PlanScreen {
   description: string;
 }
 
+/** The template is guidance, not a scaffold: the plan states which of its
+    parts survive into this app, which are demo scaffolding to remove, and
+    what gets written fresh. Every entry is a path under the workspace. */
+export interface PlanStructure {
+  /** Template files that stay — system pieces the app is built on
+      (theme tokens, the root layout, the entry point). */
+  keep: string[];
+  /** Template files to delete, with the reason. Demo scaffolding the plan
+      replaces. Each is a task during the build, ticked like a screen. */
+  prune: string[];
+  /** Files the plan writes fresh. */
+  write: string[];
+  /** The folder conventions the app follows — one line, for the build agent
+      and for a human reading the plan later. */
+  folders: string;
+}
+
 export interface PlanData {
   screens: PlanScreen[];
   features: string[];
   navigation: string;
   packages: string[];
+  structure?: PlanStructure;
 }
 
 export interface PlanState {

@@ -64,11 +64,19 @@ Reply with JSON only. No markdown fence, no prose outside the object.
     "screens": [{"name": "Feed", "description": "what it shows and what the user can do there"}],
     "features": ["what the app can do, one capability per entry"],
     "navigation": "how the screens connect, including the entry point",
-    "packages": ["npm packages beyond the preinstalled set"]
+    "packages": ["npm packages beyond the preinstalled set"],
+    "structure": {
+      "keep":    ["template files this app is built on — the tokens, the root layout, the entry"],
+      "prune":   ["demo screens and capability demos this app replaces — with the reason"],
+      "write":   ["the files this plan creates"],
+      "folders": "one line: the folder conventions the app follows"
+    }
   }
 }
 
 Set "plan" to null while the shape of the app is still open. Fill it in once you and the user have settled on something worth building — it is what Build mode starts from.
+
+` + "`structure`" + ` is not optional once the plan is real. The project does not start empty — it ships a template whose ` + "`TEMPLATE.md`" + ` lists what is system (keep), what is capability demo (prune), and the folder conventions. Read it before you fill this in. A plan that writes three screens and leaves the template's demo home behind produces an app with two entry points and no navigation; ` + "`structure.prune`" + ` is where you say the demo home goes and why. Name the path and the reason in each ` + "`prune`" + ` entry — "features/account/* (MWA capability demos — the Auth screen replaces them)". Build mode treats each prune entry as a task, typechecked after, so an unexplained deletion is caught rather than shipped. Copy the call pattern out of a demo before you prune the demo.
 
 Each screen description in the plan is also the bar Build mode is verified against, so write it so a reader could tell whether it was met. Name the layout skeleton and the hierarchy — what is the most prominent thing on the screen, where the primary action sits — not just the feature list. Screens are the same product: one accent, one grey family, one corner-radius scale, one icon family from ` + "`@expo/vector-icons`" + ` (preinstalled — it is the only icon source in a Talon app; never plan a second icon package). Never plan a screen you cannot picture: if you would not be able to say what sits at the top, the middle, and the bottom of it, it is not designed yet.
 

@@ -7,6 +7,14 @@ those are enforced by the harness.
 
 ## Architecture
 
+**The template is a starting point, not a scaffold.** `TEMPLATE.md` lists every
+file this project ships, marked system (keep) or demo (prune), plus the folder
+conventions. Read it before you plan or build: the capability demos under
+`features/account/*` and `features/network/*` exist to show how the platform's
+APIs are called — they are not product screens, and leaving them behind when
+the app has its own screens produces two entry points and no navigation. Copy
+the call pattern, prune the demo, typecheck after.
+
 - Monorepo layout: Expo Router app under `app/`, shared UI in `components/`,
   feature modules under `features/`, constants and helpers where their names
   say they belong.

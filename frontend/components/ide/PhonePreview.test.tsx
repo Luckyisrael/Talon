@@ -11,7 +11,14 @@ describe("PhonePreview states", () => {
 
   it("connecting shows the boot state, not a dead panel", () => {
     render(<PhonePreview status="connecting" />);
-    expect(screen.getByText("Booting a device")).toBeInTheDocument();
+    // The boot state renders inside a full-size device frame — the panel is
+    // a phone that has not finished booting, never a small empty box.
+    expect(screen.getByText("Booting the device")).toBeInTheDocument();
+    const { container } = render(<PhonePreview status="connecting" />);
+    // The frame is drawn in every state, so the boot message lives inside a
+    // phone-shaped screen rather than replacing it.
+    const frame = container.querySelector(".relative.max-h-full");
+    expect(frame).not.toBeNull();
   });
 
   it("error names the failure and offers retry", () => {
