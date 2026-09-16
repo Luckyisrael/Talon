@@ -4,21 +4,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { projects, sessions } from "@/lib/api";
 import { useIDEStore } from "@/lib/store";
 import type { PlanData } from "@/lib/types";
-import ResizablePanel from "../ui/ResizablePanel";
 import AIChat, { type AIChatHandle } from "./AIChat";
 import type { PlanTask, TraceRow } from "@/lib/types";
-import CheckpointMenu from "./CheckpointMenu";
-import CodeEditor from "./CodeEditor";
-import AgentWorkspace from "./AgentWorkspace";
 import CommandPalette from "./CommandPalette";
 import FileTree from "./FileTree";
+import IconRail from "./IconRail";
 import MemoryPanel from "./MemoryPanel";
 import PhonePreview from "./PhonePreview";
 import TestOnPhone from "./TestOnPhone";
 import PlanViewer from "./PlanViewer";
+import Topbar from "./Topbar";
 import TriageForm from "./TriageForm";
-import PushToGitHub from "./PushToGitHub";
-import ExportPanel from "./ExportPanel";
 import Terminal from "./Terminal";
 
 interface IDELayoutProps {
@@ -59,6 +55,9 @@ export default function IDELayout({
   // and a build stream is never duplicated or torn down by the switch.
   const isDesktop = useIsDesktop();
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+  // On narrow screens the device panel is a drawer; this is whether it is
+  // slid in. Harmless above 1180px, where the media query ignores it.
+  const [devicePeek, setDevicePeek] = useState(false);
 
   // On a phone, picking a file should reveal the editor behind the drawer.
   // Harmless on desktop, where the drawer state is never shown.
@@ -304,44 +303,19 @@ export default function IDELayout({
   const deviceLive = store.previewStatus === "streaming";
   const deviceTab = store.deviceTab;
 
-  // The chat/files/memory switch. It lives in the command bar at md+ and in the
-  // drawer's own header below md, so it is defined once here. An inset pill on
-  // a tone step — selected reads as raised, not as a border swap.
-  const tabSwitcher = (
-    <div
-      role="group"
-      aria-label="What the panel shows"
-      className="surface-2 flex gap-0.5 rounded-lg p-0.5"
-    >
-      {(["chat", "files", "memory", "triage"] as const).map((tab) => (
-        <button
-          key={tab}
-          type="button"
-          onClick={() => setLeftTab(tab)}
-          aria-pressed={leftTab === tab}
-          className={`h-6 rounded-[7px] px-2.5 font-mono text-xs capitalize transition-colors duration-150 ease-out ${
-            leftTab === tab
-              ? "surface-3 text-paper"
-              : "text-ash hover:text-mist"
-          }`}
-        >
-          {tab}
-        </button>
-      ))}
-    </div>
-  );
-
-  // The panel body — one instance, rendered either inside the column (md+) or
-  // inside the slide-over drawer (below md). Keeping it a single element means
-  // the AIChat inside it, and its build stream, is never duplicated across the
-  // two mounts. The panel is separated from the canvas by tone, not a border.
-  const leftPanelContent = (
-    <div className="surface flex h-full flex-col overflow-hidden rounded-none">
-      {/* On a phone the panel is a drawer with no command-bar tabs above it, so
-          it carries its own switcher and a way out. Hidden at md+, where the
-          tabs live in the command bar. */}
-      <div className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-graphite p-2 md:hidden">
-        {tabSwitcher}
+  // The canvas body — one instance, rendered inside the grid cell at md+ or
+  // inside the slide-over drawer below it. Keeping it a single element means
+  // the AIChat inside it, and its build stream, is never duplicated across
+  // the two mounts.
+  //
+  // The canvas is ONE surface now: the conversation is the canvas, the trace
+  // folds into the stream, and the plan viewer rides above it rather than
+  // replacing the workspace. The terminal is a drawer over the top.
+  const canvasContent = (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      {/* On a phone the canvas is a drawer with no rail above it, so it
+          carries a way out. Hidden at md+, where the rail owns navigation. */}
+      <div className="surface-2 flex flex-shrink-0 items-center justify-between gap-2 p-2 md:hidden">
         <button
           type="button"
           onClick={() => setMobilePanelOpen(false)}
@@ -352,8 +326,21 @@ export default function IDELayout({
         </button>
       </div>
 
-      {/* Both panels stay mounted: switching to the tree mid-build must
-          not tear down the stream that is writing the files. */}
+      {/* The plan, when one is awaiting approval, rides above the stream —
+          it is part of the conversation, not a replacement for the canvas. */}
+      {store.currentPlan ? (
+        <div className="surface-2 flex-shrink-0 overflow-y-auto p-3 shadow-[0_1px_0_var(--seam)]">
+          <PlanViewer
+            message={store.currentPlan.message}
+            plan={store.currentPlan.plan}
+            onApprove={() => approvePlan(store.currentPlan!.plan)}
+            onDismiss={() => store.setCurrentPlan(null)}
+          />
+        </div>
+      ) : null}
+
+      {/* The stream. All views stay mounted: switching to the tree mid-build
+          must not tear down the stream that is writing the files. */}
       <div className={leftTab === "chat" ? "flex min-h-0 flex-1" : "hidden"}>
         <div className="min-h-0 flex-1">
           <AIChat
@@ -409,244 +396,166 @@ export default function IDELayout({
       <div className={leftTab === "triage" ? "flex min-h-0 flex-1 flex-col overflow-y-auto" : "hidden"}>
         <TriageForm projectId={projectId} />
       </div>
+
+      {/* ── Terminal drawer ── Slides up over the canvas on demand. Mounted
+          once and never unmounted, so the websocket survives the toggle —
+          the drawer only translates, it does not tear anything down. */}
+      <div
+        className={`pointer-events-none absolute inset-x-0 bottom-0 z-40 ${
+          store.terminalOpen ? "pointer-events-auto" : ""
+        }`}
+      >
+        <section
+          className={`term-drawer ${store.terminalOpen ? "open" : ""}`}
+          aria-expanded={store.terminalOpen}
+        >
+          <button
+            type="button"
+            onClick={() => store.setTerminalOpen(!store.terminalOpen)}
+            aria-expanded={store.terminalOpen}
+            className="term-bar w-full"
+          >
+            <svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2.5" />
+              <path d="M7 9l3.5 3L7 15M13 15h4" />
+            </svg>
+            <span className="t">
+              {store.adbTarget ? `terminal · ${store.adbTarget}` : "terminal · no device"}
+            </span>
+            <span className="hint">⌘J · click to toggle</span>
+            <span className="ico chev">
+              <svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 15l-6-6-6 6" />
+              </svg>
+            </span>
+          </button>
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <Terminal sessionId={store.sessionId} />
+          </div>
+        </section>
+      </div>
     </div>
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-void">
-      {/* ── Command bar ── Spans the canvas and the rail, not the device
-          panel: the device column runs edge to edge, floor to ceiling, so
-          the phone gets every pixel of height available. */}
-      <div className="surface-1 flex h-11 flex-shrink-0 items-center gap-2 px-2 shadow-[0_1px_0_var(--seam)]">
-        {/* Identity */}
-        <button
-          type="button"
-          onClick={onExit}
-          className="btn btn-ghost gap-1.5"
-          aria-label="Back to your projects"
-        >
-          <span aria-hidden>←</span>
-          <span className="hidden sm:inline">Projects</span>
-        </button>
-
-        <span className="hairline h-4 w-px flex-shrink-0" />
-
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate text-sm text-mist" title={projectName}>
-            {projectName}
-          </span>
-          {projectStatus && (
-            <span className="gauge hidden flex-shrink-0 sm:inline">{projectStatus}</span>
-          )}
-        </div>
-
-        {/* Workspace */}
-        <span className="hairline mx-1 hidden h-4 w-px flex-shrink-0 md:block" />
-
-        {/* Below md the panel is a slide-over drawer; this opens it. At md+ the
-            same chat/files/memory switch sits here inline instead. */}
-        <button
-          type="button"
-          onClick={() => setMobilePanelOpen(true)}
-          className="btn btn-ghost md:hidden"
-          aria-label="Open the agent panel"
-        >
-          <svg
-            aria-hidden
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.75}
-            className="h-4 w-4"
-          >
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M9 4v16" />
-          </svg>
-        </button>
-        <div className="hidden md:block">{tabSwitcher}</div>
-
-        <button
-          type="button"
-          onClick={() => useIDEStore.getState().setCommandPaletteOpen(true)}
-          className="btn btn-ghost hidden gap-2 lg:inline-flex"
-        >
-          Search files
-          <span className="gauge">⌘K</span>
-        </button>
-
-        {/* Device */}
-        <div className="ml-auto flex flex-shrink-0 items-center gap-1.5">
-          {store.adbTarget && (
-            <span className="gauge hidden md:inline" title="The adb target this session is attached to">
-              {store.adbTarget}
-            </span>
-          )}
-          <CheckpointMenu projectId={projectId} onRestored={handleFilesTouched} />
-          <PushToGitHub projectId={projectId} />
-          <ExportPanel projectId={projectId} />
-          <button
-            type="button"
-            onClick={() => (deviceLive ? void stopSession() : void startSession())}
-            disabled={store.previewStatus === "connecting"}
-            className={deviceLive ? "btn btn-stop" : "btn btn-go"}
-          >
-            {store.previewStatus === "connecting"
-              ? "Starting a device"
-              : deviceLive
-                ? "Stop the device"
-                : "Start a device"}
-          </button>
-        </div>
+    <div
+      className="device-grid grid h-full min-h-0 overflow-hidden bg-[var(--bg)]"
+      style={{
+        gridTemplateRows: "48px 1fr",
+        gridTemplateColumns: "var(--rail-w) 1fr var(--device-w)",
+        gridTemplateAreas: `"top top device" "rail canvas device"`,
+      }}
+    >
+      {/* ── Topbar ── Spans the rail and the canvas only. The device column
+          runs floor to ceiling, so the phone gets every pixel of height. */}
+      <div style={{ gridArea: "top" }}>
+        <Topbar
+          projectName={projectName}
+          projectStatus={projectStatus}
+          onExit={onExit}
+          onToggleTerminal={() => store.setTerminalOpen(!store.terminalOpen)}
+          onOpenPalette={() => store.setCommandPaletteOpen(true)}
+        />
       </div>
 
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* ── Left: the agent, or the files ── On a wide screen it is a
-            resizable column; on a phone it slides in over the centre. One
-            AIChat instance either way (the ternary renders exactly one
-            branch), so a build stream is never duplicated or torn down by the
-            switch. Below md the drawer stays mounted while closed — just
-            translated off-screen — so a build keeps streaming behind it. */}
-        {isDesktop ? (
-          <ResizablePanel
-            direction="horizontal"
-            defaultSize={340}
-            minSize={280}
-            maxSize={560}
-            label="agent panel"
-          >
-            {leftPanelContent}
-          </ResizablePanel>
-        ) : (
-          <>
-            <div
-              aria-hidden
-              onClick={() => setMobilePanelOpen(false)}
-              className={`fixed inset-0 z-30 bg-void/80 transition-opacity duration-200 ${
-                mobilePanelOpen ? "opacity-100" : "pointer-events-none opacity-0"
-              }`}
-            />
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Agent panel"
-              className={`fixed inset-y-0 left-0 z-40 flex w-[88%] max-w-sm flex-col transition-transform duration-200 ${
-                mobilePanelOpen ? "translate-x-0" : "-translate-x-full"
-              }`}
-            >
-              {leftPanelContent}
-            </div>
-          </>
-        )}
-
-        {/* ── Centre: the code, or the plan ── Tone separation from the rail:
-            the canvas stays void while the rail is a raised surface. */}
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-void">
-          <div className="min-h-0 flex-1 overflow-hidden bg-void">
-            {store.currentPlan ? (
-              <PlanViewer
-                message={store.currentPlan.message}
-                plan={store.currentPlan.plan}
-                onApprove={() => approvePlan(store.currentPlan!.plan)}
-                onDismiss={() => store.setCurrentPlan(null)}
-              />
-            ) : (
-              <AgentWorkspace
-                projectId={projectId}
-                traceRows={liveTrace}
-                planTasks={livePlanTasks}
-                selectedFile={store.selectedFile}
-                fileContent={selectedContent}
-                filesTouched={liveTouchedFiles}
-              />
-            )}
-          </div>
+      {/* ── Icon rail ── Five icons, one accent bar for the active view.
+          The grid item stretches; the nav inside fills it. */}
+      <nav style={{ gridArea: "rail" }} className="min-h-0">
+        <div className="h-full">
+          <IconRail
+            view={leftTab}
+            onView={setLeftTab}
+            onToggleTerminal={() => store.setTerminalOpen(!store.terminalOpen)}
+            onOpenPalette={() => store.setCommandPaletteOpen(true)}
+            changedCount={liveTouchedFiles.length}
+            terminalOpen={store.terminalOpen}
+          />
         </div>
+      </nav>
 
-        {/* ── Terminal: a drawer over the canvas, not a permanent column ──
-            The old layout spent a resizable strip on it at all times; this one
-            slides up on demand and reclaims the full canvas height when it
-            does not. The Terminal component is mounted once and never
-            unmounted, so the socket survives the toggle. */}
-        <div
-          className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col ${
-            store.terminalOpen ? "pointer-events-auto" : ""
-          }`}
-        >
+      {/* ── Canvas ── One unified surface: the conversation IS the canvas.
+          The trace folds into the stream as tool rows, the verify ladder
+          rides under the prose, and the composer floats at the bottom.
+          Below md the whole panel becomes a drawer; it stays mounted while
+          closed — translated off-screen — so a build keeps streaming. */}
+      {isDesktop ? (
+        <main style={{ gridArea: "canvas" }} className="canvas-wrap min-h-0">
+          {canvasContent}
+        </main>
+      ) : (
+        <>
           <div
-            className={`surface-1 overflow-hidden rounded-t-2xl border-t border-graphite/60 shadow-[0_-12px_40px_rgb(0_0_0/0.36)] backdrop-blur-md transition-transform duration-300 ease-out ${
-              store.terminalOpen ? "translate-y-0" : "translate-y-[calc(100%-2.5rem)]"
+            aria-hidden
+            onClick={() => setMobilePanelOpen(false)}
+            className={`fixed inset-0 z-30 bg-[var(--bg)]/80 transition-opacity duration-200 ${
+              mobilePanelOpen ? "opacity-100" : "pointer-events-none opacity-0"
             }`}
-            style={{ height: 300 }}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Agent panel"
+            className={`fixed inset-y-0 left-0 z-40 flex w-[88%] max-w-sm flex-col transition-transform duration-200 ${
+              mobilePanelOpen ? "translate-x-0" : "-translate-x-full"
+            }`}
           >
-            <button
-              type="button"
-              onClick={() => store.setTerminalOpen(!store.terminalOpen)}
-              aria-expanded={store.terminalOpen}
-              className="flex h-10 flex-shrink-0 items-center gap-2 px-4 text-left transition-colors hover:bg-white/5"
-            >
-              <span className="lamp" data-state={deviceLive ? "live" : "idle"} />
-              {/* The label names what the shell is attached to, not the word
-                  "terminal" over a black box. */}
-              <span className="gauge">
-                {store.adbTarget ? `shell · ${store.adbTarget}` : "shell · no device"}
-              </span>
-              <span className="gauge ml-auto">{store.terminalOpen ? "⌘J hide" : "⌘J show"}</span>
-            </button>
-            <div className="min-h-0 flex-1 overflow-hidden">
-              <Terminal sessionId={store.sessionId} />
-            </div>
+            <div className="canvas-wrap h-full">{canvasContent}</div>
+          </div>
+        </>
+      )}
+
+      {/* ── Device panel ── Edge to edge, floor to ceiling, two tabs. Below
+          1180px it becomes a drawer; picking a tab peeks it in. */}
+      <aside
+        style={{ gridArea: "device" }}
+        className={`surface-1 device-panel relative z-20 flex min-h-0 flex-col overflow-hidden shadow-[1px_0_0_var(--seam)] ${
+          devicePeek ? "peek" : ""
+        }`}
+        onClick={(e) => {
+          // Clicking the panel's own backdrop area closes it on narrow screens.
+          if (e.target === e.currentTarget) setDevicePeek(false);
+        }}
+      >
+        <div className="surface-2 flex h-12 flex-shrink-0 items-center px-3.5 py-2.5">
+          <div className="flex w-full gap-1 rounded-[10px] p-[3px]">
+            {(["device", "app"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                role="tab"
+                aria-selected={deviceTab === tab}
+                onClick={() => {
+                  store.setDeviceTab(tab);
+                  setDevicePeek(true);
+                }}
+                className={`h-7 flex-1 rounded-[7px] text-xs font-semibold transition-colors duration-150 ease-out ${
+                  deviceTab === tab
+                    ? "surface-3 text-paper"
+                    : "text-ash hover:text-mist"
+                }`}
+              >
+                {tab === "device" ? "Device" : "Get the app"}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* ── Right: the device, edge to edge ── Runs floor to ceiling so the
-            phone gets every available pixel; the command bar stops at the
-            canvas. Two panes — the emulator and the get-the-app QR — tabbed,
-            because the QR is a setup-time action and the emulator is
-            watch-time, and stacking both made the rail crowd the live stream.
-            The tab state is in the store so the command palette and the rail
-            agree. */}
-        <aside className="surface-1 hidden min-h-0 w-[372px] flex-shrink-0 flex-col overflow-hidden shadow-[1px_0_0_var(--seam)] lg:flex">
-          <div className="surface-2 flex h-12 flex-shrink-0 items-center gap-1 px-3 py-2">
-            <div className="flex flex-1 gap-0.5 rounded-lg p-0.5">
-              {(["device", "app"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  role="tab"
-                  aria-selected={deviceTab === tab}
-                  onClick={() => store.setDeviceTab(tab)}
-                  className={`flex-1 rounded-[7px] text-xs font-semibold transition-colors duration-150 ease-out ${
-                    deviceTab === tab
-                      ? "surface-3 text-paper"
-                      : "text-ash hover:text-mist"
-                  }`}
-                >
-                  {tab === "device" ? "Device" : "Get the app"}
-                </button>
-              ))}
-            </div>
+        {deviceTab === "device" ? (
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <PhonePreview
+              status={store.previewStatus}
+              sessionId={store.sessionId}
+              projectId={projectId}
+              adbTarget={store.adbTarget}
+              onStartSession={startSession}
+            />
           </div>
-
-          {deviceTab === "device" ? (
-            <div className="relative flex min-h-0 flex-1 flex-col">
-              <PhonePreview
-                status={store.previewStatus}
-                sessionId={store.sessionId}
-                projectId={projectId}
-                adbTarget={store.adbTarget}
-                onStartSession={startSession}
-              />
-            </div>
-          ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-              {/* The QR pane: the phone surface that used to sit under the
-                  emulator, refetching on every session change so the QR
-                  tracks the live relay. */}
-              <TestOnPhone projectId={projectId} epoch={store.sessionId ?? 0} />
-            </div>
-          )}
-        </aside>
-      </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <TestOnPhone projectId={projectId} epoch={store.sessionId ?? 0} />
+          </div>
+        )}
+      </aside>
 
       <CommandPalette
         open={store.commandPaletteOpen}
@@ -661,7 +570,6 @@ export default function IDELayout({
     </div>
   );
 }
-
 function countFiles(nodes: { type: "file" | "folder"; children?: { type: "file" | "folder" }[] }[]): number {
   let n = 0;
   for (const node of nodes) {

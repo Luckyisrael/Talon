@@ -1236,57 +1236,14 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     };
 
     return (
-      <section className="flex h-full min-h-0 min-w-[280px] flex-col overflow-x-auto bg-void">
-        <header className="bay-head justify-between">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="lamp" data-state={isStreaming ? "working" : "idle"} />
-            <span className="gauge truncate">Agent</span>
-          </div>
-
-          <div className="flex min-w-0 flex-shrink-0 items-center gap-1">
-            {messages.length > 0 && !isStreaming && (
-              <button
-                type="button"
-                onClick={clearHistory}
-                onBlur={() => setConfirmClear(false)}
-                className="btn btn-ghost h-7 px-2 font-mono text-xs"
-              >
-                {confirmClear ? "Clear it?" : "Clear"}
-              </button>
-            )}
-            <div
-              role="group"
-              aria-label="What the agent should do with your next message"
-              className="surface-2 flex gap-0.5 rounded-lg p-0.5"
-            >
-              {(["plan", "build"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMode(m)}
-                  aria-pressed={mode === m}
-                  title={
-                    m === "plan"
-                      ? "Talk through the app first. Nothing gets written."
-                      : "Write the code and run the checks."
-                  }
-                  className={`h-6 rounded-[7px] px-2.5 font-mono text-xs capitalize transition-colors duration-150 ease-out ${
-                    mode === m
-                      ? "surface-3 text-paper"
-                      : "text-ash hover:text-mist"
-                  }`}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-          </div>
-        </header>
+      <section className="flex h-full min-h-0 min-w-[280px] flex-col overflow-hidden bg-[var(--bg)]">
+        {/* No panel header: the icon rail owns navigation, and the canvas is
+            the conversation. What was a bay-head is now nothing at all. */}
 
         <div
           ref={scrollRef}
           onScroll={onScroll}
-          className="min-h-0 flex-1 overflow-y-auto px-2.5 py-3 sm:px-3"
+          className="stream"
         >
           <ChatHistory
             prompts={pastPrompts}
@@ -1340,55 +1297,59 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             </div>
           )}
 
-          <div className="flex min-w-0 flex-col gap-3">
+          <div className="flex min-w-0 flex-col">
             {messages.map((msg, i) => {
-              // A turn divider before every assistant entry that follows
+              // A turn label before every assistant entry that follows
               // another turn — the transcript reads as turns, not as one
-              // undifferentiated stack of rows. First entry needs no rule.
+              // undifferentiated stack of rows. First entry needs no label.
               const divider =
                 isAssistant(msg) && i > 0 ? (
-                  <div
-                    key={`d-${msg.id}`}
-                    className="my-1 flex items-center gap-2"
-                    aria-hidden
-                  >
-                    <span className="h-px flex-1 bg-graphite/70" />
-                    <span className="gauge text-ash">new turn</span>
-                    <span className="h-px flex-1 bg-graphite/70" />
+                  <div key={`d-${msg.id}`} className="turn-label" aria-hidden>
+                    new turn
                   </div>
                 ) : null;
               return (
                 <Fragment key={msg.id}>
                   {divider}
                   {isAssistant(msg) ? (
-                <AssistantEntry
-                  msg={msg}
-                  onApprove={approvePlan}
-                  onAnswer={answerQuestion}
-                  busy={isStreaming}
-                />
-              ) : (
-                <div className="flex min-w-0 justify-end">
-                  <div
-                    className={[
-                      "max-w-[85%] whitespace-pre-wrap break-words rounded-xl px-3 py-1.5 text-xs leading-relaxed",
-                      msg.steer
-                        ? "border border-acid-lime/20 bg-acid-lime/[0.04] text-fog"
-                        : "bg-white/5 text-mist",
-                    ].join(" ")}
-                  >
-                    {msg.steer ? (
-                      <span className="mr-1.5 font-mono text-[10px] uppercase tracking-wider text-acid-lime/70">
-                        {msg.steerError ? "steer failed" : "steer — not a new turn"}
+                    <div className="msg assistant">
+                      <span className="who" aria-hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5 10.1 12 4.5 10l5.6-1.4z" />
+                          <path d="M19 3.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" />
+                        </svg>
                       </span>
-                    ) : null}
-                    {msg.content}
-                    {msg.steer && msg.steerError ? (
-                      <div className="mt-1 text-[11px] text-sunset">{msg.steerError}</div>
-                    ) : null}
-                  </div>
-                </div>
-              )}
+                      <div className="body">
+                        <AssistantEntry
+                          msg={msg}
+                          onApprove={approvePlan}
+                          onAnswer={answerQuestion}
+                          busy={isStreaming}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="msg user">
+                      <span className="who" aria-hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.4c-1.5 0-3-.4-4.2-1.1L3 20l1.2-5.3A8.4 8.4 0 1 1 21 11.5z" />
+                        </svg>
+                      </span>
+                      <div className="body">
+                        <div className="bubble whitespace-pre-wrap break-words text-sm leading-relaxed">
+                          {msg.steer ? (
+                            <span className="mr-1.5 font-mono text-[10px] uppercase tracking-wider text-[var(--accent-2)]/70">
+                              {msg.steerError ? "steer failed" : "steer — not a new turn"}
+                            </span>
+                          ) : null}
+                          {msg.content}
+                          {msg.steer && msg.steerError ? (
+                            <div className="mt-1 text-[11px] text-[var(--err)]">{msg.steerError}</div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </Fragment>
               );
             })}
@@ -1398,25 +1359,28 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         </div>
 
         {/* Live status — the one place that says, in the moment, what the agent
-            is doing, what it is touching, and how long it has been at it. The
-            pixel grid is the only moving thing. */}
+            is doing, what it is touching, and how long it has been at it. It
+            rides at the bottom of the stream, above the composer, as a tool
+            row in the same vocabulary — not as a separate panel. */}
         {isStreaming && (
-          <div className="surface-2 flex items-center gap-2.5 px-3 py-2">
-            <LoadingState label={phaseLabel(liveMessage?.phase) || "Working"} />
-            {liveMessage?.round && liveMessage.round > 1 ? (
-              <span className="gauge flex-shrink-0">round {liveMessage.round}</span>
-            ) : null}
-            {liveTarget ? (
-              <span
-                dir="rtl"
-                title={liveTarget}
-                className="min-w-0 flex-1 truncate text-left font-mono text-xs text-fog"
-              >
-                <span dir="ltr">{liveTarget}</span>
-              </span>
-            ) : (
-              <span className="flex-1" />
-            )}
+          <div className="px-7 pb-2">
+            <div className="mx-auto flex max-w-[760px] items-center gap-2.5 rounded-xl bg-[var(--panel-2)] px-3 py-2">
+              <LoadingState label={phaseLabel(liveMessage?.phase) || "Working"} />
+              {liveMessage?.round && liveMessage.round > 1 ? (
+                <span className="gauge flex-shrink-0">round {liveMessage.round}</span>
+              ) : null}
+              {liveTarget ? (
+                <span
+                  dir="rtl"
+                  title={liveTarget}
+                  className="min-w-0 flex-1 truncate text-left font-mono text-xs text-fog"
+                >
+                  <span dir="ltr">{liveTarget}</span>
+                </span>
+              ) : (
+                <span className="flex-1" />
+              )}
+            </div>
           </div>
         )}
 
@@ -1425,62 +1389,51 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             is not broken, it is paused. Hidden while streaming, when the status
             strip above owns this row. */}
         {resumable && !isStreaming && (
-          <div className="surface-2 flex items-center gap-2.5 px-3 py-2">
-            <span className="lamp flex-shrink-0" data-state="waiting" />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs text-paper">
-                This turn was interrupted before it finished.
-              </p>
-              <p className="gauge">
-                {resumable.status === "running"
-                  ? "the server stopped before it finished"
-                  : resumable.status === "cancelled"
-                    ? "it was stopped early"
-                    : resumable.status === "paused"
-                      ? "it hit its round budget"
-                      : "it ended with an error"}
-                {resumable.round > 0 ? ` · reached round ${resumable.round}` : ""}
-              </p>
+          <div className="px-7 pb-2">
+            <div className="mx-auto flex max-w-[760px] items-center gap-2.5 rounded-xl bg-[var(--panel-2)] px-3 py-2">
+              <span className="lamp flex-shrink-0" data-state="waiting" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-paper">
+                  This turn was interrupted before it finished.
+                </p>
+                <p className="gauge">
+                  {resumable.status === "running"
+                    ? "the server stopped before it finished"
+                    : resumable.status === "cancelled"
+                      ? "it was stopped early"
+                      : resumable.status === "paused"
+                        ? "it hit its round budget"
+                        : "it ended with an error"}
+                  {resumable.round > 0 ? ` · reached round ${resumable.round}` : ""}
+                </p>
+              </div>
+              <button type="button" onClick={resume} className="btn btn-go h-7 flex-shrink-0">
+                Resume
+              </button>
+              <button
+                type="button"
+                onClick={() => void discard()}
+                className="btn btn-ghost h-7 flex-shrink-0"
+              >
+                Discard
+              </button>
             </div>
-            <button type="button" onClick={resume} className="btn btn-go h-7 flex-shrink-0">
-              Resume
-            </button>
-            <button
-              type="button"
-              onClick={() => void discard()}
-              className="btn btn-ghost h-7 flex-shrink-0"
-            >
-              Discard
-            </button>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="surface-2 p-2.5 sm:p-3">
-          {sessionUsage ? (
-            // H13: the session token meter — this project's rolled in/out,
-            // under the input, live during the turn. cache_read is the
-            // budget-saver; it rides the title attribute.
-            <p
-              className="gauge tnum mb-1.5 px-1 text-right text-fog"
-              title={`${sessionUsage.cache_read.toLocaleString()} cache-read tokens`}
-            >
-              session {compactTokens(sessionUsage.in)} in ·{" "}
-              {compactTokens(sessionUsage.out)} out
-            </p>
-          ) : null}
+        {/* The floating composer — the canvas's single input, riding above
+            the stream on a gradient so the last message stays readable
+            underneath it. */}
+        <div className="composer">
           {isStreaming && pacingSeconds > 0 ? (
             // The honest clock: a long quiet stretch in a paced turn is
             // the gateway interval, not a hang. Say so while it happens.
-            <p className="gauge mb-1.5 px-1 text-right text-fog/70">
+            <p className="composer-meta mb-1.5 px-1 text-right text-fog/70">
               paced {pacingSeconds}s between model calls — long pauses are the
               rate limit, not a stall
             </p>
           ) : null}
-          <div
-            role="presentation"
-            onClick={() => textareaRef.current?.focus()}
-            className="surface-1 flex cursor-text flex-col gap-2 rounded-lg p-2.5 transition-colors duration-150 focus-within:bg-[var(--surface-2)]"
-          >
+          <form onSubmit={handleSubmit} className="composer-in">
             <textarea
               ref={textareaRef}
               rows={1}
@@ -1498,87 +1451,109 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                         ? "Describe the app…"
                         : "What should I build?"
               }
-              className="min-h-4 bg-transparent text-xs leading-[1.4] text-mist outline-none placeholder:text-ash resize-none"
+              className="min-h-4 flex-1 resize-none bg-transparent text-sm leading-[22px] text-[var(--label)] outline-none placeholder:text-[var(--label-4)]"
               disabled={pendingQuestion}
               aria-label="Chat prompt"
             />
-            <div className="flex items-center justify-end gap-1.5">
-              {isStreaming ? (
-                <>
-                  {/* H2: while a turn runs, submitted messages steer it by
-                      default. The toggle opts the next message into the old
-                      behavior — queue for the next turn — one submission at a
-                      time, so the common case needs no click. */}
-                  <button
-                    type="button"
-                    onClick={() => setQueueInstead((q) => !q)}
-                    title={
-                      queueInstead
-                        ? "Next message will queue for the next turn"
-                        : "Next message will steer the running build"
-                    }
-                    aria-pressed={queueInstead}
-                    className={[
-                      "flex h-7 items-center gap-1 rounded-full px-2.5 font-mono text-[10px] uppercase tracking-wider transition-colors duration-150 ease-out",
-                      queueInstead
-                        ? "bg-acid-lime/15 text-acid-lime"
-                        : "surface-2 text-fog hover:text-mist",
-                    ].join(" ")}
-                  >
-                    {queueInstead ? "Queue instead" : "Steers the build"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={stop}
-                    className="btn btn-stop h-7 flex-shrink-0"
-                  >
-                    Stop
-                  </button>
-                  <button
-                    type="submit"
-                    title={queueInstead ? "Queue for the next turn" : "Steer the running build"}
-                    aria-label={queueInstead ? "Queue for the next turn" : "Steer the running build"}
-                    disabled={!input.trim()}
-                    className="flex size-7 flex-shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 enabled:active:scale-[0.96]"
-                    style={{
-                      background: input.trim() ? "var(--color-acid-lime)" : "var(--color-graphite)",
-                      color: input.trim() ? "var(--color-void)" : "var(--color-fog)",
-                    }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-                      <path
-                        d="M2.5 8 13 3.5 10.8 8 13 12.5 2.5 8Z"
-                        fill="currentColor"
-                        stroke="currentColor"
-                        strokeWidth="1.2"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="submit"
-                  title={mode === "plan" ? "Ask" : "Build"}
-                  aria-label={mode === "plan" ? "Ask" : "Build"}
-                  disabled={!input.trim() || pendingQuestion}
-                  className="flex size-7 flex-shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 enabled:active:scale-[0.96]"
-                  style={{
-                    background: input.trim() && !pendingQuestion ? "var(--color-acid-lime)" : "var(--color-graphite)",
-                    color: input.trim() && !pendingQuestion ? "var(--color-void)" : "var(--color-fog)",
-                  }}
+            <div className="right flex items-center gap-1.5">
+              {/* The segmented mode pill — plan ⇄ build — lives in the
+                  composer, where the decision is made. */}
+              {!isStreaming ? (
+                <div
+                  role="group"
+                  aria-label="What the agent should do with your next message"
+                  className="seg"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 19V5M5 12l7-7 7 7" />
-                  </svg>
+                  {(["plan", "build"] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setMode(m)}
+                      aria-pressed={mode === m}
+                      title={
+                        m === "plan"
+                          ? "Talk through the app first. Nothing gets written."
+                          : "Write the code and run the checks."
+                      }
+                    >
+                      {m === "plan" ? "Plan" : "Build"}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                /* H2: while a turn runs, submitted messages steer it by
+                   default. The toggle opts the next message into the old
+                   behavior — queue for the next turn — one submission at a
+                   time, so the common case needs no click. */
+                <button
+                  type="button"
+                  onClick={() => setQueueInstead((q) => !q)}
+                  title={
+                    queueInstead
+                      ? "Next message will queue for the next turn"
+                      : "Next message will steer the running build"
+                  }
+                  aria-pressed={queueInstead}
+                  className={[
+                    "flex h-7 items-center gap-1 rounded-full px-2.5 font-mono text-[10px] uppercase tracking-wider transition-colors duration-150 ease-out",
+                    queueInstead
+                      ? "bg-[var(--accent-soft)] text-[var(--accent-2)]"
+                      : "surface-2 text-fog hover:text-mist",
+                  ].join(" ")}
+                >
+                  {queueInstead ? "Queue instead" : "Steers the build"}
                 </button>
               )}
+              {isStreaming ? (
+                <button
+                  type="button"
+                  onClick={stop}
+                  className="btn btn-stop h-7 flex-shrink-0"
+                >
+                  Stop
+                </button>
+              ) : null}
+              <button
+                type="submit"
+                title={
+                  isStreaming
+                    ? queueInstead
+                      ? "Queue for the next turn"
+                      : "Steer the running build"
+                    : mode === "plan"
+                      ? "Ask"
+                      : "Build"
+                }
+                aria-label="Send"
+                disabled={!input.trim() || pendingQuestion || (!isStreaming && pendingQuestion)}
+                className="send-btn flex-shrink-0"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
             </div>
-          </div>
-          <p className="gauge mt-1.5 select-none">
-            Enter sends · Shift+Enter adds a line
+          </form>
+          {/* The meta row: the session's honesty — live state, token budget,
+              and the pacing clock. cache_read is the budget-saver; it rides
+              the title attribute. */}
+          <p className="composer-meta select-none">
+            {useIDEStore.getState().previewStatus === "streaming" ? (
+              <span className="ok">● session live</span>
+            ) : (
+              <span>session idle</span>
+            )}
+            {sessionUsage ? (
+              <>
+                <span className="text-[var(--label-4)]">·</span>
+                <span title={`${sessionUsage.cache_read.toLocaleString()} cache-read tokens`}>
+                  {compactTokens(sessionUsage.in)} in · {compactTokens(sessionUsage.out)} out
+                </span>
+              </>
+            ) : null}
+            <span className="ml-auto text-[var(--label-4)]">Enter sends · Shift+Enter adds a line</span>
           </p>
-        </form>
+        </div>
       </section>
     );
   },
