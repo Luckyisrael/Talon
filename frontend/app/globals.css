@@ -55,6 +55,26 @@
   --tick: 90ms;
   --sweep: 180ms;
   --ease: cubic-bezier(0.2, 0, 0.3, 1);
+
+  /* ── DSH-learned separation system ─────────────────────────────
+     Panels are separated by background TONE, not borders. Four raised steps
+     over the void and one recessed step, and that is the whole system — the
+     IDE was carrying five to six nested hairline rectangles per chat row
+     before this. A line is the exception (a seam, a divider), never the
+     default way to separate two surfaces. */
+  --surface-1: #0e1013;
+  --surface-2: #14171c;
+  --surface-3: #1b1f26;
+  --surface-4: #232833;
+  --inset: #0b0c0f;
+  --seam: rgb(255 255 255 / 5%);
+  --seam-strong: rgb(255 255 255 / 9%);
+  --hairline-inset: inset 0 0 0 1px rgb(255 255 255 / 6%);
+  --elevation-panel: 0 12px 40px rgb(0 0 0 / 36%);
+  --elevation-pop: 0 24px 80px rgb(0 0 0 / 60%);
+  --dur-out: 160ms;
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --spring: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @theme inline {
@@ -66,6 +86,12 @@
   --color-obsidian: var(--color-obsidian);
   --color-graphite: var(--color-graphite);
   --color-smoke: var(--color-smoke);
+
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-surface-4: var(--surface-4);
+  --color-inset: var(--inset);
 
   --color-ash: var(--color-ash);
   --color-fog: var(--color-fog);
@@ -598,6 +624,96 @@ body {
 
 .rise {
   animation: rise var(--sweep) var(--ease) both;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   DSH-learned primitives — the rebuilt IDE's component vocabulary.
+
+   The old IDE separated surfaces with borders; ~5–6 nested hairline
+   rectangles per chat row. These do it with tone and one optional inset
+   shadow, which reads as depth instead of as assembled-from-parts.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* A raised panel over the void — tone, not a border. The inset 1px is an
+   edge highlight, the same trick DSH uses where a line is unavoidable. */
+.surface {
+  background: var(--surface-1);
+  border-radius: var(--radius-xl);
+}
+.surface-2 { background: var(--surface-2); }
+.surface-3 { background: var(--surface-3); }
+
+/* The one earned hairline: a seam between two panels that truly need it.
+   Use for a panel's outer edge where tone alone is not enough — never
+   inside a component. */
+.seam { box-shadow: var(--hairline-inset); }
+
+/* Interactive rows: hover/active are alpha-white fills, not border swaps. */
+.row-hover {
+  transition: background var(--dur-out) ease-out, color var(--dur-out) ease-out;
+}
+.row-hover:hover { background: var(--surface-2); }
+.row-hover:active { background: var(--surface-3); }
+
+/* A pressed-state affordance for tappable rows — scale on cards, fill on
+   rows, per the motion bar (lands on press-in, 100–150 ms). */
+.pressable { transition: transform 140ms var(--ease-out), background var(--dur-out) ease-out; }
+.pressable:active { transform: scale(0.98); }
+
+/* Status chip — the verify ladder and state pills. Tone by meaning. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  font-family: var(--font-berkeley-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-fog);
+  white-space: nowrap;
+}
+.chip[data-state="pass"] {
+  background: rgba(39, 166, 68, 0.13);
+  color: #4cc069;
+}
+.chip[data-state="live"] {
+  background: rgba(228, 242, 34, 0.13);
+  color: var(--color-acid-lime);
+}
+.chip[data-state="fail"] {
+  background: rgba(235, 87, 87, 0.13);
+  color: var(--color-coral-red);
+}
+
+/* Collapsible disclosure — the grid-rows 0fr→1fr collapse, which animates
+   height without a measured wrapper. Used by tool groups and sheets. */
+.collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 220ms var(--ease-out);
+  overflow: hidden;
+}
+.collapse[data-open="true"] { grid-template-rows: 1fr; }
+.collapse > * { min-height: 0; overflow: hidden; }
+
+/* The device panel's crop mode: a short stage keeps the phone at a
+   readable width and shows the top of the frame with a fade, rather than
+   shrinking the whole phone to illegibility. The fade is what makes the
+   crop read as intentional instead of broken. */
+.phone-crop {
+  -webkit-mask-image: linear-gradient(to bottom, #000 68%, transparent 99%);
+  mask-image: linear-gradient(to bottom, #000 68%, transparent 99%);
+}
+
+/* When the stage is shorter than a phone aspect, hold the frame at a
+   readable width and let the bottom sit below the fold. Scrolled content in
+   the stream stays fully interactive; this is about what is *visible*. */
+@container (aspect-ratio < 9 / 19) {
+  .phone-crop { height: auto; }
 }
 
 /* ── The meter: agent-working loader ───────────────────────────── */

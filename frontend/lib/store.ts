@@ -131,6 +131,10 @@ interface IDEState {
   buildOutput: string;
   terminalOpen: boolean;
   commandPaletteOpen: boolean;
+  /** Which pane the device rail shows: the live emulator, or the get-the-app
+   *  QR. The QR is a setup-time action and the emulator is watch-time, so the
+   *  rail tabs between them instead of stacking both. */
+  deviceTab: "device" | "app";
 
   setFilesFromEntries: (entries: FileEntry[]) => void;
   addFiles: (entries: FileEntry[]) => void;
@@ -148,6 +152,7 @@ interface IDEState {
   clearBuildOutput: () => void;
   setTerminalOpen: (open: boolean) => void;
   setCommandPaletteOpen: (open: boolean) => void;
+  setDeviceTab: (tab: IDEState["deviceTab"]) => void;
 }
 
 export const useIDEStore = create<IDEState>((set) => ({
@@ -163,6 +168,7 @@ export const useIDEStore = create<IDEState>((set) => ({
   buildOutput: "",
   terminalOpen: false,
   commandPaletteOpen: false,
+  deviceTab: "device",
 
   setFilesFromEntries: (entries) =>
     set({
@@ -262,4 +268,6 @@ export const useIDEStore = create<IDEState>((set) => ({
   setTerminalOpen: (open) => set({ terminalOpen: open }),
 
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+
+  setDeviceTab: (tab) => set({ deviceTab: tab }),
 }));

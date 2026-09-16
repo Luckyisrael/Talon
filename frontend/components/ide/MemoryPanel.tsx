@@ -133,7 +133,7 @@ export default function MemoryPanel({
                 {memories.map((m) => (
                   <article
                     key={m.id}
-                    className="rounded-xl border border-graphite bg-carbon p-3"
+                    className="surface-2 rounded-xl p-3"
                   >
                     <div className="mb-1.5 flex items-center gap-2">
                       <span className={`gauge ${toneFor(m.entry_type)}`}>
@@ -157,7 +157,7 @@ export default function MemoryPanel({
                 {decisions.map((d) => (
                   <article
                     key={d.id}
-                    className="rounded-xl border border-graphite bg-carbon p-3"
+                    className="surface-2 rounded-xl p-3"
                   >
                     <p className="text-sm font-medium leading-relaxed text-mist">
                       {d.decision}

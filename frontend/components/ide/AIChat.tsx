@@ -1257,7 +1257,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             <div
               role="group"
               aria-label="What the agent should do with your next message"
-              className="flex overflow-hidden rounded-md border border-graphite"
+              className="surface-2 flex gap-0.5 rounded-lg p-0.5"
             >
               {(["plan", "build"] as const).map((m) => (
                 <button
@@ -1270,10 +1270,10 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                       ? "Talk through the app first. Nothing gets written."
                       : "Write the code and run the checks."
                   }
-                  className={`h-6 px-2.5 font-mono text-xs capitalize transition-colors ${
+                  className={`h-6 rounded-[7px] px-2.5 font-mono text-xs capitalize transition-colors duration-150 ease-out ${
                     mode === m
-                      ? "bg-white/10 text-paper"
-                      : "text-ash hover:bg-white/5 hover:text-fog"
+                      ? "surface-3 text-paper"
+                      : "text-ash hover:text-mist"
                   }`}
                 >
                   {m}
@@ -1331,7 +1331,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                       setInput(example);
                       textareaRef.current?.focus();
                     }}
-                    className="rounded-md border border-graphite bg-carbon px-2.5 py-2 text-left text-xs leading-snug text-fog transition-colors hover:border-smoke hover:text-paper"
+                    className="surface-2 rounded-lg px-2.5 py-2 text-left text-xs leading-snug text-fog transition-colors duration-150 ease-out hover:bg-[var(--surface-3)] hover:text-mist"
                   >
                     {example}
                   </button>
@@ -1401,7 +1401,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             is doing, what it is touching, and how long it has been at it. The
             pixel grid is the only moving thing. */}
         {isStreaming && (
-          <div className="flex items-center gap-2.5 border-t border-graphite bg-acid-lime/[0.04] px-3 py-2">
+          <div className="surface-2 flex items-center gap-2.5 px-3 py-2">
             <LoadingState label={phaseLabel(liveMessage?.phase) || "Working"} />
             {liveMessage?.round && liveMessage.round > 1 ? (
               <span className="gauge flex-shrink-0">round {liveMessage.round}</span>
@@ -1425,7 +1425,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             is not broken, it is paused. Hidden while streaming, when the status
             strip above owns this row. */}
         {resumable && !isStreaming && (
-          <div className="flex items-center gap-2.5 border-t border-graphite bg-white/[0.03] px-3 py-2">
+          <div className="surface-2 flex items-center gap-2.5 px-3 py-2">
             <span className="lamp flex-shrink-0" data-state="waiting" />
             <div className="min-w-0 flex-1">
               <p className="text-xs text-paper">
@@ -1455,7 +1455,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="border-t border-graphite p-2.5 sm:p-3">
+        <form onSubmit={handleSubmit} className="surface-2 p-2.5 sm:p-3">
           {sessionUsage ? (
             // H13: the session token meter — this project's rolled in/out,
             // under the input, live during the turn. cache_read is the
@@ -1479,7 +1479,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           <div
             role="presentation"
             onClick={() => textareaRef.current?.focus()}
-            className="flex cursor-text flex-col gap-2 rounded-md border border-graphite bg-white/[0.02] p-2.5 transition-colors duration-150 focus-within:border-smoke"
+            className="surface-1 flex cursor-text flex-col gap-2 rounded-lg p-2.5 transition-colors duration-150 focus-within:bg-[var(--surface-2)]"
           >
             <textarea
               ref={textareaRef}
@@ -1519,10 +1519,10 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                     }
                     aria-pressed={queueInstead}
                     className={[
-                      "flex h-7 items-center gap-1 rounded-full border px-2.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
+                      "flex h-7 items-center gap-1 rounded-full px-2.5 font-mono text-[10px] uppercase tracking-wider transition-colors duration-150 ease-out",
                       queueInstead
-                        ? "border-acid-lime/50 text-acid-lime"
-                        : "border-graphite text-fog hover:text-mist",
+                        ? "bg-acid-lime/15 text-acid-lime"
+                        : "surface-2 text-fog hover:text-mist",
                     ].join(" ")}
                   >
                     {queueInstead ? "Queue instead" : "Steers the build"}
@@ -1662,7 +1662,7 @@ function ChatHistory({
       </div>
 
       {searchOpen && (
-        <div className="mt-1 flex h-8 items-center gap-1.5 rounded-md border border-graphite bg-white/[0.02] px-2 transition-colors focus-within:border-smoke">
+        <div className="surface-1 mt-1 flex h-8 items-center gap-1.5 rounded-lg px-2 transition-colors focus-within:bg-[var(--surface-2)]">
           <input
             ref={searchRef}
             value={query}

@@ -102,7 +102,9 @@ export default function PhonePreview({
   // DV3: the decoder dies with the subscription — never across re-subs.
   useEffect(() => {
     return () => {
-      if (decoderRef.current && decoderRef.current.state !== "closed") {
+      // state is only meaningful on a real WebCodecs decoder; a jsdom stub
+      // lacks it, and closing a closed decoder throws.
+      if (decoderRef.current && "state" in decoderRef.current && decoderRef.current.state !== "closed") {
         decoderRef.current.close();
       }
       decoderRef.current = null;
@@ -439,41 +441,57 @@ export default function PhonePreview({
 
   return (
     <section className="relative flex h-full min-h-0 flex-col overflow-hidden bg-void">
-      <div className="relative flex min-h-0 flex-1 items-center justify-center p-4">
+      <div
+        className="relative flex min-h-0 flex-1 items-center justify-center p-3"
+        // The stage is a query container so the phone can measure the real
+        // space available in either dimension; the crop mode below keys off
+        // the stage's own aspect ratio.
+        style={{ containerType: "size" } as React.CSSProperties}
+      >
         {status === "streaming" ? (
           <div
-            className="relative max-h-full"
+            className="relative max-h-full w-full"
+            // Largest true-aspect box that fits the stage in BOTH dimensions.
+            // Width-driven with a max-height cap: an explicit height plus a
+            // clamped max-width distorts the aspect exactly when the rail is
+            // narrower than the device's own ratio, which most rails are.
+            // The device's reported ratio always wins — never an assumed
+            // phone shape.
             style={
               frame
                 ? landscape
-                  ? { aspectRatio: `${frame.w} / ${frame.h}`, width: "100%", maxHeight: "100%" }
-                  : { aspectRatio: `${frame.w} / ${frame.h}`, height: "100%", maxWidth: "100%" }
+                  ? { aspectRatio: `${frame.w} / ${frame.h}`, height: "100%", maxWidth: "100%" }
+                  : { aspectRatio: `${frame.w} / ${frame.h}`, width: "100%", maxHeight: "100%" }
                 : { width: 180, height: 390 }
             }
           >
             {/* ── Device frame ──
-                Slim uniform bezel, concentric corner radii (outer radius minus
-                the bezel width — the premium tell), a hairline metallic edge
-                with a top specular, and one soft grounding shadow. Physical
-                keys sit recessed into the frame edge as machined graphics.
-                The punch-hole rides the screen top — the stream carries the
-                device's own status bar, which is never redrawn. */}
+                Slim uniform bezel (4px), concentric corner radii (outer minus
+                the bezel — the premium tell), a hairline metallic edge with a
+                top specular, and one soft grounding shadow. Physical keys sit
+                recessed into the frame edge, positioned as a FRACTION of frame
+                height so they stay anatomically correct at any size the
+                stream reports. The punch-hole rides the screen top — the
+                stream carries the device's own status bar, which is never
+                redrawn. */}
             <div
-              className="absolute inset-0 rounded-[34px] bg-gradient-to-b from-[#1c1f24] via-[#101215] to-[#050608]"
+              className="absolute inset-0 rounded-[32px] bg-gradient-to-b from-[#1c1f24] via-[#101215] to-[#050608] phone-crop"
               style={{
                 boxShadow:
                   "0 32px 80px -24px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.07)",
               }}
               aria-hidden
             >
-              {/* side keys — recessed frame graphics, not controls */}
-              <span className="absolute -right-[1px] top-[104px] h-11 w-[2px] rounded-full bg-[#3a3f47]/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
-              <span className="absolute -left-[1px] top-[92px] h-9 w-[2px] rounded-full bg-[#3a3f47]/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
-              <span className="absolute -left-[1px] top-[136px] h-9 w-[2px] rounded-full bg-[#3a3f47]/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
+              {/* side keys — recessed frame graphics, not controls.
+                  Percentages of the frame so they scale with any device. */}
+              <span className="absolute -left-[1px] top-[15.5%] h-[3.2%] w-[2px] rounded-full bg-[#3a3f47]/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
+              <span className="absolute -left-[1px] top-[21%] h-[7.2%] w-[2px] rounded-full bg-[#3a3f47]/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
+              <span className="absolute -left-[1px] top-[30.5%] h-[7.2%] w-[2px] rounded-full bg-[#3a3f47]/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
+              <span className="absolute -right-[1px] top-[23%] h-[11.5%] w-[2px] rounded-full bg-[#3a3f47]/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.8)]" />
             </div>
 
             {/* screen */}
-            <div className="absolute inset-[5px] overflow-hidden rounded-[29px] bg-black">
+            <div className="absolute inset-[4px] overflow-hidden rounded-[28px] bg-black">
               <canvas
                 ref={canvasRef}
                 onPointerDown={onPointerDown}

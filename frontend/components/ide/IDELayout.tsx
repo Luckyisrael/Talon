@@ -302,14 +302,16 @@ export default function IDELayout({
     ? store.fileContents[store.selectedFile]
     : undefined;
   const deviceLive = store.previewStatus === "streaming";
+  const deviceTab = store.deviceTab;
 
   // The chat/files/memory switch. It lives in the command bar at md+ and in the
-  // drawer's own header below md, so it is defined once here.
+  // drawer's own header below md, so it is defined once here. An inset pill on
+  // a tone step — selected reads as raised, not as a border swap.
   const tabSwitcher = (
     <div
       role="group"
       aria-label="What the panel shows"
-      className="flex overflow-hidden rounded-md border border-graphite"
+      className="surface-2 flex gap-0.5 rounded-lg p-0.5"
     >
       {(["chat", "files", "memory", "triage"] as const).map((tab) => (
         <button
@@ -317,10 +319,10 @@ export default function IDELayout({
           type="button"
           onClick={() => setLeftTab(tab)}
           aria-pressed={leftTab === tab}
-          className={`h-6 px-2.5 font-mono text-xs capitalize transition-colors ${
+          className={`h-6 rounded-[7px] px-2.5 font-mono text-xs capitalize transition-colors duration-150 ease-out ${
             leftTab === tab
-              ? "bg-white/10 text-paper"
-              : "text-ash hover:bg-white/5 hover:text-fog"
+              ? "surface-3 text-paper"
+              : "text-ash hover:text-mist"
           }`}
         >
           {tab}
@@ -329,12 +331,12 @@ export default function IDELayout({
     </div>
   );
 
-  // The panel body — one instance, rendered either inside the resizable column
-  // (md+) or inside the slide-over drawer (below md). Keeping it a single
-  // element means the AIChat inside it, and its build stream, is never
-  // duplicated across the two mounts.
+  // The panel body — one instance, rendered either inside the column (md+) or
+  // inside the slide-over drawer (below md). Keeping it a single element means
+  // the AIChat inside it, and its build stream, is never duplicated across the
+  // two mounts. The panel is separated from the canvas by tone, not a border.
   const leftPanelContent = (
-    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-graphite bg-void">
+    <div className="surface flex h-full flex-col overflow-hidden rounded-none">
       {/* On a phone the panel is a drawer with no command-bar tabs above it, so
           it carries its own switcher and a way out. Hidden at md+, where the
           tabs live in the command bar. */}
@@ -411,12 +413,11 @@ export default function IDELayout({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-void p-2">
-      {/* ── Command bar ── One inset module: whose project this is on the left,
-          the workspace controls in the middle, the device on the right. It used
-          to be two stacked full-width rails; merging them gave the panels their
-          height back. */}
-      <div className="flex h-11 flex-shrink-0 items-center gap-2 rounded-xl border border-graphite bg-carbon px-2">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-void">
+      {/* ── Command bar ── Spans the canvas and the rail, not the device
+          panel: the device column runs edge to edge, floor to ceiling, so
+          the phone gets every pixel of height available. */}
+      <div className="surface-1 flex h-11 flex-shrink-0 items-center gap-2 px-2 shadow-[0_1px_0_var(--seam)]">
         {/* Identity */}
         <button
           type="button"
@@ -498,13 +499,13 @@ export default function IDELayout({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 gap-2 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* ── Left: the agent, or the files ── On a wide screen it is a
             resizable column; on a phone it slides in over the centre. One
-            AIChat instance either way (the ternary renders exactly one branch),
-            so a build stream is never duplicated or torn down by the switch.
-            Below md the drawer stays mounted while closed — just translated
-            off-screen — so a build keeps streaming behind it. */}
+            AIChat instance either way (the ternary renders exactly one
+            branch), so a build stream is never duplicated or torn down by the
+            switch. Below md the drawer stays mounted while closed — just
+            translated off-screen — so a build keeps streaming behind it. */}
         {isDesktop ? (
           <ResizablePanel
             direction="horizontal"
@@ -528,7 +529,7 @@ export default function IDELayout({
               role="dialog"
               aria-modal="true"
               aria-label="Agent panel"
-              className={`fixed inset-y-0 left-0 z-40 flex w-[88%] max-w-sm flex-col p-2 transition-transform duration-200 ${
+              className={`fixed inset-y-0 left-0 z-40 flex w-[88%] max-w-sm flex-col transition-transform duration-200 ${
                 mobilePanelOpen ? "translate-x-0" : "-translate-x-full"
               }`}
             >
@@ -537,8 +538,9 @@ export default function IDELayout({
           </>
         )}
 
-        {/* ── Centre: the code, or the plan ── */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-graphite bg-void">
+        {/* ── Centre: the code, or the plan ── Tone separation from the rail:
+            the canvas stays void while the rail is a raised surface. */}
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-void">
           <div className="min-h-0 flex-1 overflow-hidden bg-void">
             {store.currentPlan ? (
               <PlanViewer
@@ -558,54 +560,75 @@ export default function IDELayout({
               />
             )}
           </div>
-
-          {/* ── Terminal ── */}
-          <ResizablePanel
-            direction="vertical"
-            defaultSize={240}
-            minSize={120}
-            maxSize={520}
-            handleSide="start"
-            collapsed={!store.terminalOpen}
-            collapsedSize={32}
-            label="terminal"
-          >
-            <div className="flex h-full flex-col overflow-hidden border-t border-graphite bg-carbon">
-              <button
-                type="button"
-                onClick={() => store.setTerminalOpen(!store.terminalOpen)}
-                aria-expanded={store.terminalOpen}
-                className="flex h-8 flex-shrink-0 items-center gap-2 px-3 text-left transition-colors hover:bg-white/5"
-              >
-                <span className="lamp" data-state={deviceLive ? "live" : "idle"} />
-                {/* The label names what the shell is attached to, not the word
-                    "terminal" over a black box. */}
-                <span className="gauge">
-                  {store.adbTarget ? `shell · ${store.adbTarget}` : "shell · no device"}
-                </span>
-                <span className="gauge ml-auto">{store.terminalOpen ? "⌘J hide" : "⌘J show"}</span>
-              </button>
-              {store.terminalOpen && (
-                <div className="min-h-0 flex-1 overflow-hidden">
-                  <Terminal sessionId={store.sessionId} />
-                </div>
-              )}
-            </div>
-          </ResizablePanel>
         </div>
 
-        {/* ── Right: the device ── */}
-        <ResizablePanel
-          direction="horizontal"
-          defaultSize={300}
-          minSize={220}
-          maxSize={520}
-          className="hidden lg:block"
-          handleSide="start"
-          label="device panel"
+        {/* ── Terminal: a drawer over the canvas, not a permanent column ──
+            The old layout spent a resizable strip on it at all times; this one
+            slides up on demand and reclaims the full canvas height when it
+            does not. The Terminal component is mounted once and never
+            unmounted, so the socket survives the toggle. */}
+        <div
+          className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col ${
+            store.terminalOpen ? "pointer-events-auto" : ""
+          }`}
         >
-          <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-graphite bg-void">
-            <div className="min-h-0 flex-1">
+          <div
+            className={`surface-1 overflow-hidden rounded-t-2xl border-t border-graphite/60 shadow-[0_-12px_40px_rgb(0_0_0/0.36)] backdrop-blur-md transition-transform duration-300 ease-out ${
+              store.terminalOpen ? "translate-y-0" : "translate-y-[calc(100%-2.5rem)]"
+            }`}
+            style={{ height: 300 }}
+          >
+            <button
+              type="button"
+              onClick={() => store.setTerminalOpen(!store.terminalOpen)}
+              aria-expanded={store.terminalOpen}
+              className="flex h-10 flex-shrink-0 items-center gap-2 px-4 text-left transition-colors hover:bg-white/5"
+            >
+              <span className="lamp" data-state={deviceLive ? "live" : "idle"} />
+              {/* The label names what the shell is attached to, not the word
+                  "terminal" over a black box. */}
+              <span className="gauge">
+                {store.adbTarget ? `shell · ${store.adbTarget}` : "shell · no device"}
+              </span>
+              <span className="gauge ml-auto">{store.terminalOpen ? "⌘J hide" : "⌘J show"}</span>
+            </button>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <Terminal sessionId={store.sessionId} />
+            </div>
+          </div>
+        </div>
+
+        {/* ── Right: the device, edge to edge ── Runs floor to ceiling so the
+            phone gets every available pixel; the command bar stops at the
+            canvas. Two panes — the emulator and the get-the-app QR — tabbed,
+            because the QR is a setup-time action and the emulator is
+            watch-time, and stacking both made the rail crowd the live stream.
+            The tab state is in the store so the command palette and the rail
+            agree. */}
+        <aside className="surface-1 hidden min-h-0 w-[372px] flex-shrink-0 flex-col overflow-hidden shadow-[1px_0_0_var(--seam)] lg:flex">
+          <div className="surface-2 flex h-12 flex-shrink-0 items-center gap-1 px-3 py-2">
+            <div className="flex flex-1 gap-0.5 rounded-lg p-0.5">
+              {(["device", "app"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={deviceTab === tab}
+                  onClick={() => store.setDeviceTab(tab)}
+                  className={`flex-1 rounded-[7px] text-xs font-semibold transition-colors duration-150 ease-out ${
+                    deviceTab === tab
+                      ? "surface-3 text-paper"
+                      : "text-ash hover:text-mist"
+                  }`}
+                >
+                  {tab === "device" ? "Device" : "Get the app"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {deviceTab === "device" ? (
+            <div className="relative flex min-h-0 flex-1 flex-col">
               <PhonePreview
                 status={store.previewStatus}
                 sessionId={store.sessionId}
@@ -614,13 +637,15 @@ export default function IDELayout({
                 onStartSession={startSession}
               />
             </div>
-            {/* DV2: the phone surface rides the device rail — refetches on
-                every session change so the QR tracks the live relay. */}
-            <div className="flex-shrink-0 overflow-y-auto">
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              {/* The QR pane: the phone surface that used to sit under the
+                  emulator, refetching on every session change so the QR
+                  tracks the live relay. */}
               <TestOnPhone projectId={projectId} epoch={store.sessionId ?? 0} />
             </div>
-          </div>
-        </ResizablePanel>
+          )}
+        </aside>
       </div>
 
       <CommandPalette

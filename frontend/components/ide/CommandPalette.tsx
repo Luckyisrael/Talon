@@ -197,9 +197,9 @@ function Palette({
         role="dialog"
         aria-modal="true"
         aria-label="Jump to a file or an action"
-        className="rise relative mx-4 w-full max-w-lg overflow-hidden rounded-xl border border-smoke bg-carbon shadow-xl"
+        className="rise relative mx-4 w-full max-w-lg overflow-hidden rounded-2xl bg-[var(--surface-2)] shadow-[0_24px_80px_rgb(0_0_0/0.6),inset_0_0_0_1px_rgb(255_255_255/0.07)]"
       >
-        <div className="flex h-11 items-center gap-2.5 border-b border-graphite px-3.5">
+        <div className="flex h-11 items-center gap-2.5 px-3.5 shadow-[0_1px_0_var(--seam)]">
           <svg
             aria-hidden
             className="h-3.5 w-3.5 flex-shrink-0 text-ash"
@@ -267,7 +267,7 @@ function Palette({
           )}
         </div>
 
-        <div className="flex items-center gap-3 border-t border-graphite px-3.5 py-1.5">
+        <div className="flex items-center gap-3 px-3.5 py-1.5 shadow-[0_-1px_0_var(--seam)]">
           <span className="gauge">↑↓ move</span>
           <span className="gauge">↵ open</span>
           {results.length >= LIMIT && (

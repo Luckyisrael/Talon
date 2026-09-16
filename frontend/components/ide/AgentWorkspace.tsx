@@ -65,35 +65,48 @@ function AgentWorkspace({
   const hasDiff = filesTouched.length > 0;
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-graphite bg-void">
-      {/* Tab rail */}
-      <div className="flex flex-shrink-0 items-center gap-1 border-b border-graphite px-2 py-1.5">
-        <button
-          type="button"
-          onClick={() => setTab("transcript")}
-          className={`btn btn-sm ${tab === "transcript" ? "btn-primary" : "btn-ghost"}`}
-        >
-          Agent
-        </button>
-        {selectedFile ? (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      {/* Tab rail — an inset pill group on a tone step. The selected tab reads
+          as raised, not as a border swap; the Diff tab's count is the only
+          signal a diff exists. */}
+      <div className="surface-1 flex flex-shrink-0 items-center gap-1 px-2 py-1.5 shadow-[0_1px_0_var(--seam)]">
+        <div className="surface-2 flex gap-0.5 rounded-lg p-0.5">
           <button
             type="button"
-            onClick={() => setTab("file")}
-            className={`btn btn-sm ${tab === "file" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setTab("transcript")}
+            aria-pressed={tab === "transcript"}
+            className={`h-7 rounded-[7px] px-3 text-xs font-medium transition-colors duration-150 ease-out ${
+              tab === "transcript" ? "surface-3 text-paper" : "text-ash hover:text-mist"
+            }`}
           >
-            {selectedFile.split("/").pop()}
+            Agent
           </button>
-        ) : null}
-        {hasDiff ? (
-          <button
-            type="button"
-            onClick={() => setTab("diff")}
-            className={`btn btn-sm ${tab === "diff" ? "btn-primary" : "btn-ghost"}`}
-          >
-            Diff
-            <span className="gauge tnum">({filesTouched.length})</span>
-          </button>
-        ) : null}
+          {selectedFile ? (
+            <button
+              type="button"
+              onClick={() => setTab("file")}
+              aria-pressed={tab === "file"}
+              className={`flex h-7 max-w-[180px] items-center gap-1.5 rounded-[7px] px-3 font-mono text-xs transition-colors duration-150 ease-out ${
+                tab === "file" ? "surface-3 text-paper" : "text-ash hover:text-mist"
+              }`}
+            >
+              <span className="truncate">{selectedFile.split("/").pop()}</span>
+            </button>
+          ) : null}
+          {hasDiff ? (
+            <button
+              type="button"
+              onClick={() => setTab("diff")}
+              aria-pressed={tab === "diff"}
+              className={`flex h-7 items-center gap-1.5 rounded-[7px] px-3 text-xs font-medium transition-colors duration-150 ease-out ${
+                tab === "diff" ? "surface-3 text-paper" : "text-ash hover:text-mist"
+              }`}
+            >
+              Diff
+              <span className="gauge tnum">{filesTouched.length}</span>
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {/* Surfaces */}
@@ -101,7 +114,7 @@ function AgentWorkspace({
         {tab === "transcript" ? (
           <div className="flex h-full min-h-0 flex-col">
             {planTasks && planTasks.length > 0 ? (
-              <div className="flex-shrink-0 border-b border-graphite px-4 py-2">
+              <div className="surface-1 flex-shrink-0 px-4 py-2 shadow-[0_1px_0_var(--seam)]">
                 <div className="mx-auto max-w-3xl">
                   <PlanProgress tasks={planTasks} />
                 </div>
@@ -236,11 +249,11 @@ function RoundBlock({ label, rows }: { label: string; rows: TraceRow[] }) {
         : "no tool calls";
 
   return (
-    <div className="overflow-hidden rounded-lg border border-graphite/70">
+    <div className="surface-2 overflow-hidden rounded-lg">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-ink/40"
+        className="row-hover flex w-full items-center gap-2 px-3 py-2 text-left"
       >
         <span className="gauge flex-shrink-0 text-cyan">{label}</span>
         {intent ? (
@@ -288,7 +301,7 @@ function TranscriptRow({ row }: { row: TraceRow }) {
   switch (row.kind) {
     case "thinking":
       return (
-        <div className="rounded-lg border border-graphite/60 bg-ink/40 px-3 py-2">
+        <div className="surface-2 rounded-lg px-3 py-2">
           <div className="gauge text-fog">thinking</div>
           <p className="mt-1 font-mono text-xs leading-relaxed text-mist">
             {row.text}
@@ -331,11 +344,11 @@ function ToolRow({ row }: { row: TraceRow }) {
   const [open, setOpen] = useState(false);
   const status = row.status ?? "done";
   return (
-    <div className="overflow-hidden rounded-lg border border-graphite bg-ink/30">
+    <div className="surface-2 overflow-hidden rounded-lg">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-ink/50"
+        className="row-hover flex w-full items-center gap-2 px-3 py-2 text-left"
       >
         <span
           className={`inline-block h-2 w-2 flex-shrink-0 rounded-full border ${
