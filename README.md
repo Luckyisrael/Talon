@@ -108,7 +108,62 @@ git clone git@github.com:Luckyisrael/Talon.git
 cd Talon
 ```
 
-### 2. Start Redroid (Android emulator)
+### 2. Install dependencies
+
+```bash
+cd backend && go mod download && cd ../frontend && npm install
+```
+
+### 3. Configure your environment
+
+Everything the stack needs lives in **one file**: `backend/.env`. The Go server
+loads it, and the dev launcher reads it to derive the frontend's API URL — so
+there is no second file to keep in sync.
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+Then edit `backend/.env` and set the four things that matter:
+
+```bash
+AI_MODEL=stealth/union-alpha        # any OpenRouter model slug
+AI_API_KEY=sk-or-v1-...             # your OpenRouter key
+PUBLIC_HOST=192.168.1.6             # your LAN IP — phones and LAN browsers
+                                    # reach the studio here
+```
+
+The model is swappable in those two lines. Anthropic's native API works too:
+`AI_PROTOCOL=anthropic`, `AI_BASE_URL=https://api.anthropic.com`.
+
+### 4. Start the whole stack
+
+```bash
+./dev.sh
+```
+
+That is it. Both servers come up from `backend/.env`:
+
+```
+▸ backend  :8080  (model: stealth/union-alpha)
+▸ frontend :3000  → API at http://192.168.1.6:8080
+
+Talon is up:
+  web     http://localhost:3000
+  web LAN http://192.168.1.6:3000
+  api     http://localhost:8080
+  model   stealth/union-alpha via https://openrouter.ai/api/v1
+  logs    .dev-logs/{backend,frontend}.log
+```
+
+`./dev.sh stop` stops both, `./dev.sh status` reports them, and
+`./dev.sh backend` or `./dev.sh frontend` starts one half. Logs land in
+`.dev-logs/`.
+
+### 5. Start Redroid (Android emulator)
+
+The preview pane needs a device. Start one before (or after) the stack —
+`./dev.sh` does not require it:
 
 ```bash
 docker run -d --name redroid-talon-dev \
@@ -121,29 +176,10 @@ docker run -d --name redroid-talon-dev \
 adb connect localhost:5555
 ```
 
-### 3. Install backend dependencies & run
+### 6. Open the IDE
 
-```bash
-cd backend
-go mod download
-go run ./cmd/server
-```
-
-Backend starts on `http://localhost:9191`.
-
-### 4. Install frontend dependencies & run
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend starts on `http://localhost:3000`.
-
-### 5. Open the IDE
-
-Navigate to `http://localhost:3000`, create an account, create a project, and start building.
+Navigate to `http://localhost:3000` (or your LAN IP from a phone or second
+machine), sign in, create a project, and start building.
 
 ## Environment Variables
 

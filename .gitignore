@@ -16,10 +16,14 @@ frontend/build/
 # Stray Next.js trace artifacts (wrong-cwd build runs)
 **/.next/
 
-# Environment & secrets
+# Environment & secrets — never commit a real .env. dev.sh reads it at
+# runtime; .env.example shows the shape.
 .env
 .env.*
 !.env.example
+
+# Dev launcher's runtime artifacts (pids, logs)
+.dev-logs/
 
 # Android
 android/
