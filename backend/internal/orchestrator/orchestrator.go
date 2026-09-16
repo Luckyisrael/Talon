@@ -774,7 +774,17 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 
 		if ai.EstimateTokens(conversation) > maxContextTokens {
 			before := len(conversation)
-			conversation = ai.Compact(conversation, maxContextTokens*3/4)
+			// Ask the model to write the checkpoint over the span being dropped
+			// instead of replacing it with a static line: the summary carries
+			// the intent, the errors, and the open decisions the oldest turns
+			// held, which a "context was compacted" notice cannot. Degrades to
+			// that notice when the summarizer fails or there is no client — the
+			// budget is still honored, only the memory is lost.
+			if o.ai != nil {
+				conversation = o.ai.CompactWithSummary(ctx, systemPrompt, conversation, maxContextTokens*3/4)
+			} else {
+				conversation = ai.Compact(conversation, maxContextTokens*3/4)
+			}
 			sess.Emitter.EmitToolCall("", "compact", "", fmt.Sprintf("Compacted context (%d → %d turns)",
 				before, len(conversation)), "completed")
 			if opts.OnCompacted != nil {
@@ -795,6 +805,14 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		// is logged with its reason — that log is the tuning data.
 		_, tier, reason := ai.ClassifyTurn(opts.Mode, promptLen, sess.GetVerifyAttempts(), routingPolicy)
 		model := routingPolicy.ModelFor(tier)
+		// A rate limit or a transient server error backoffs for seconds with no
+		// output — without this the request looks hung and gets killed. The hook
+		// says which attempt failed, why, and how long the wait is, so the trace
+		// shows a bounded recovery instead of silence.
+		retryHook := func(attempt, maxRetries int, why string, after time.Duration) {
+			sess.Emitter.EmitText(fmt.Sprintf("⏳ Model call %d/%d failed (%s) — retrying in %s.",
+				attempt, maxRetries, why, after.Round(time.Second)))
+		}
 		client := o.ai
 		if latchedModel != "" {
 			model = latchedModel
@@ -803,6 +821,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		if model != "" && model != o.ai.Model() {
 			client = o.ai.WithModel(model)
 		}
+		client = client.WithRetryHook(retryHook)
 		if client.Model() != routedModel {
 			log.Printf("orchestrator: round %d routed to %s (%s)", round, client.Model(), reason)
 			routedModel = client.Model()
@@ -825,7 +844,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 				fellBack = true
 				retryClient := client
 				if dec.RetryModel != "" && dec.RetryModel != client.Model() {
-					retryClient = o.ai.WithModel(dec.RetryModel)
+					retryClient = o.ai.WithModel(dec.RetryModel).WithRetryHook(retryHook)
 				}
 				result, err = retryClient.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
 				if err == nil {

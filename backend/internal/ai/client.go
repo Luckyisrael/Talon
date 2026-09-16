@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"strconv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +46,11 @@ type Client struct {
 	// code path that shares this client. A nil pacer (the default) means no
 	// pacing — unit tests and evals, which mock the gateway, stay fast.
 	pacer *requestPacer
+
+	// retryHook is called before every retry backoff (see WithRetryHook). It
+	// turns a silent stall into a visible one: rate limits and transient server
+	// errors otherwise look like a hung request.
+	retryHook func(attempt, maxRetries int, reason string, after time.Duration)
 }
 
 // requestPacer serializes gateway calls to at most one per interval. It is
@@ -214,13 +219,27 @@ func (c *Client) PacingInterval() time.Duration {
 // shares only the (read-only) http client. Constructed field-by-field, never
 // struct-copied, so the health mutex is never duplicated.
 func (c *Client) WithModel(model string) *Client {
-	return &Client{
-		protocol:     c.protocol,
-		baseURL:      c.baseURL,
-		apiKey:       c.apiKey,
-		model:        model,
-		httpClient:   c.httpClient,
-		workspaceDir: c.workspaceDir,
+	cp := *c // shallow copy carries the pacer and the retry hook with it
+	cp.model = model
+	return &cp
+}
+
+// WithRetryHook attaches a listener the retry loops call before every backoff.
+// It is how a stall during a rate limit or a transient server error stops being
+// silent: the hook is told which attempt failed, why, and how long the backoff
+// is, so the caller can surface it instead of looking hung. A nil hook keeps the
+// existing stdout-only behaviour.
+func (c *Client) WithRetryHook(fn func(attempt, maxRetries int, reason string, after time.Duration)) *Client {
+	cp := *c
+	cp.retryHook = fn
+	return &cp
+}
+
+// reportRetry calls the hook when one is attached. Called before the backoff
+// sleep so the person learns the stall is deliberate and bounded.
+func (c *Client) reportRetry(attempt, maxRetries int, reason string, after time.Duration) {
+	if c.retryHook != nil {
+		c.retryHook(attempt, maxRetries, reason, after)
 	}
 }
 
@@ -419,6 +438,7 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			log.Printf("chatAnthropic: retry attempt %d/%d", attempt+1, maxRetries)
+			c.reportRetry(attempt+1, maxRetries, "transient error", time.Duration(attempt*3)*time.Second)
 			time.Sleep(time.Duration(attempt*3) * time.Second)
 		}
 
@@ -465,9 +485,11 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 			if attempt < maxRetries-1 {
 				if after > 0 {
 					log.Printf("chatAnthropic: HTTP %d (attempt %d), honoring Retry-After %ds", resp.StatusCode, attempt+1, after)
+					c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("rate limited (HTTP %d)", resp.StatusCode), time.Duration(after)*time.Second)
 					time.Sleep(time.Duration(after) * time.Second)
 				} else {
 					log.Printf("chatAnthropic: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+					c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("server error (HTTP %d)", resp.StatusCode), time.Duration(attempt*3)*time.Second)
 				}
 				continue
 			}
@@ -558,6 +580,7 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			log.Printf("chatOpenAI: retry attempt %d/%d", attempt+1, maxRetries)
+			c.reportRetry(attempt+1, maxRetries, "transient error", time.Duration(attempt*3)*time.Second)
 			time.Sleep(time.Duration(attempt*3) * time.Second)
 		}
 
@@ -600,9 +623,11 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 			if attempt < maxRetries-1 {
 				if after > 0 {
 					log.Printf("chatOpenAI: HTTP %d (attempt %d), honoring Retry-After %ds", resp.StatusCode, attempt+1, after)
+					c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("rate limited (HTTP %d)", resp.StatusCode), time.Duration(after)*time.Second)
 					time.Sleep(time.Duration(after) * time.Second)
 				} else {
 					log.Printf("chatOpenAI: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+					c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("server error (HTTP %d)", resp.StatusCode), time.Duration(attempt*3)*time.Second)
 				}
 				continue
 			}
@@ -724,6 +749,11 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			log.Printf("openStream: retry attempt %d/%d after %v", attempt+1, maxRetries, lastErr)
+			reason := "transient stream error"
+			if lastErr != nil {
+				reason = lastErr.Error()
+			}
+			c.reportRetry(attempt+1, maxRetries, reason, time.Duration(attempt*3)*time.Second)
 			time.Sleep(time.Duration(attempt*3) * time.Second)
 		}
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
