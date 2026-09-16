@@ -62,7 +62,7 @@ func TestEvalsLiveScorecard(t *testing.T) {
 	}
 
 	orch := orchestrator.New(aiClient, st, knowledge)
-	h := NewPromptHandler(st, aiClient, t.TempDir(), orch, nil, knowledge, nil)
+	h := NewPromptHandler(st, aiClient, t.TempDir(), "", orch, nil, knowledge, nil)
 
 	templateRoot, err := filepath.Abs("../../template")
 	if err != nil {

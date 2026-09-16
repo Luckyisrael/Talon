@@ -80,7 +80,7 @@ func TestPlanModeSendsNoToolsToModel(t *testing.T) {
 	orch := orchestrator.New(aiClient, st, nil)
 	// The workspace is a throwaway temp dir; a correct plan turn never writes to
 	// it, and the assertions below hold regardless of what is on disk.
-	h := NewPromptHandler(st, aiClient, t.TempDir(), orch, nil, nil, nil)
+	h := NewPromptHandler(st, aiClient, t.TempDir(), "", orch, nil, nil, nil)
 
 	body := fmt.Sprintf(`{"project_id":%d,"prompt":"Plan a wallet app for the Seeker phone","mode":"plan"}`, project.ID)
 	rec := httptest.NewRecorder()

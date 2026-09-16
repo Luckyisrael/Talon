@@ -225,7 +225,7 @@ func main() {
 	pushNotifier := notify.Get(func(ctx context.Context, userID int64) (string, error) {
 		return s.GetOneSignalID(userID)
 	})
-	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, orchestratorSvc, devClientMgr, knowledge, pushNotifier)
+	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, templateDir, orchestratorSvc, devClientMgr, knowledge, pushNotifier)
 	var warmPool *redroid.Pool
 	if warmPoolSize > 0 {
 		warmPool = redroid.NewPool(containerMgr, warmPoolSize)

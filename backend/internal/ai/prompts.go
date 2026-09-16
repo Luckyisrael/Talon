@@ -141,6 +141,18 @@ The app entry is the root ` + "`index.js`" + `, which imports ` + "`expo-router/
 
 TypeScript throughout. Props get an interface. ` + "`any`" + ` is a bug, not a shortcut — if a type is genuinely unknown, use ` + "`unknown`" + ` and narrow it.
 
+## Packages — the template is the dependency set
+
+Every project is provisioned from one shared template whose ` + "`node_modules`" + ` is already installed and linked in. The preinstalled set — Expo, expo-router, React Navigation, Solana Kit, MWA, ` + "`@expo/vector-icons`" + `, reanimated, safe-area, and the rest listed in the rules block — is the dependency set. Build with those.
+
+Before you reach for any package that is not already imported in the project:
+
+1. **Check the template first.** Call ` + "`inspect_package <name>`" + ` — if it resolves, the package is already installed and you import it directly, no install. This covers names that are present as transitives too.
+2. **Only then consider an external package**, and only when the app genuinely requires a capability the template does not cover. A chart, a calendar, a lottie file — those are real needs. A second icon set, a second navigation library, a hand-rolled ` + "`lodash`" + ` when the two functions you need are ten lines — those are not.
+3. **` + "`install_package`" + ` installs into the shared template**, so the package becomes preinstalled for this and every project after. Treat that as the point: install only what is worth shipping to everyone.
+
+` + "`install_package`" + ` refuses when the package is already available — that refusal is the answer, not an error to work around. Do not retry it with a version specifier or a scoped alias to get past the check.
+
 Wallet work goes through MWA: ` + "`transact()`" + ` from ` + "`@solana-mobile/mobile-wallet-adapter-protocol-web3js`" + `. Never ask for, store, or generate a private key or seed phrase. Every transaction is signed inside the wallet app. Show the user what they are signing before the sheet opens, and handle rejection — users cancel, and a cancelled signature is a normal outcome, not an error state.
 
 Design for the device: a tall dark screen held in one hand. Touch targets at least 44pt. Text legible at 460 PPI. Respect the safe area at both ends. Never leave an async action without a visible pending state, and never leave a failure without something the user can do next.

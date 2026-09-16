@@ -15,6 +15,7 @@ package sessionlog
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -36,6 +37,10 @@ type Log struct {
 	store   Store
 	key     string
 	rows    []Event
+	// repairOnLoad closes an interrupted final turn when the log is loaded. It
+	// is on by default; tests that want to inspect a crashed tail construct a
+	// log with it off. See crash.go.
+	repairOnLoad bool
 	// shadowSeq, when > 0, is the highest seq shadowed for derivation: every
 	// surface event at or before it is replaced by the summary in
 	// shadowSummary for DeriveMessages. The rows themselves stay.
@@ -59,7 +64,7 @@ type Store interface {
 // a restarted process resumes a live session's history rather than starting a
 // second one alongside it.
 func New(store Store, key string) (*Log, error) {
-	l := &Log{store: store, key: key}
+	l := &Log{store: store, key: key, repairOnLoad: true}
 	rows, err := store.EventsFrom(key, 0)
 	if err != nil {
 		return nil, err
@@ -83,6 +88,17 @@ func New(store Store, key string) (*Log, error) {
 				l.shadowSummary = p.Summary
 				break
 			}
+		}
+	}
+	// Close an interrupted final turn before anyone derives from the log: a
+	// crash leaves tool requests with no answers, and replaying those would
+	// hand the provider a conversation it must reject. See crash.go.
+	if l.repairOnLoad {
+		if rep, err := l.Repair(); err != nil {
+			return nil, fmt.Errorf("sessionlog: could not close the interrupted turn: %w", err)
+		} else if rep.ClosedTurn || rep.UnknownResults > 0 || rep.NotStartedResults > 0 {
+			log.Printf("sessionlog %s: recovered a crashed turn (%d unknown results, %d not-started, turn closed=%t)",
+				key, rep.UnknownResults, rep.NotStartedResults, rep.ClosedTurn)
 		}
 	}
 	return l, nil

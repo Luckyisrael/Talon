@@ -11,6 +11,7 @@ import type {
   MeProfile,
   Project,
   ProjectAsset,
+  PlanTask,
   ProjectMemory,
   PromptResponse,
   Session,
@@ -271,16 +272,38 @@ export const conversation = {
     turns: ConversationTurn[];
     latest: LatestPrompt | null;
     usage?: { in: number; out: number; cache_read: number };
+    planTasks?: PlanTask[];
   }> {
     const res = await request<{
       turns: ConversationTurn[] | null;
       latest?: LatestPrompt;
       usage?: { in: number; out: number; cache_read: number };
+      planTasks?: {
+        id: string;
+        description: string;
+        status: string;
+        result?: string;
+      }[];
     }>(`/v1/projects/${projectId}/conversation`);
     return {
       turns: res?.turns ?? [],
       latest: res?.latest ?? null,
       usage: res?.usage,
+      // The durable plan backlog: every plan: task's persisted status, so the
+      // checklist survives a reload instead of waiting for the next SSE frame.
+      planTasks: res?.planTasks?.map((t) => ({
+        id: t.id,
+        label: t.description || t.id,
+        status:
+          t.status === "completed"
+            ? "completed"
+            : t.status === "in_progress" || t.status === "running"
+              ? "in_progress"
+              : t.status === "failed"
+                ? "failed"
+                : "pending",
+        note: t.result || undefined,
+      })),
     };
   },
 

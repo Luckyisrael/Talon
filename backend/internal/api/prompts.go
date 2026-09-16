@@ -30,9 +30,14 @@ type PromptHandler struct {
 	store        *store.Store
 	ai           *ai.Client
 	workspaceDir string
-	orch         *orchestrator.Orchestrator
-	devClient    *devclient.Manager
-	knowledge    *knowledge.Registry
+	// templateDir is the shared template root every workspace's node_modules
+	// links into. The install tool needs it: installing inside a workspace
+	// would replace that symlink with a real directory and the workspace would
+	// lose every preinstalled dependency.
+	templateDir string
+	orch        *orchestrator.Orchestrator
+	devClient   *devclient.Manager
+	knowledge   *knowledge.Registry
 	// planPrompt is the Plan-mode system prompt, assembled once at startup with the
 	// template's preinstalled-package list folded in. Building it here — the one
 	// place that holds both the AI client and the knowledge registry — is what keeps
@@ -50,7 +55,7 @@ type PromptHandler struct {
 	skillCatalog *skills.Catalog
 }
 
-func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *knowledge.Registry, n notify.Notifier) *PromptHandler {
+func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *knowledge.Registry, n notify.Notifier) *PromptHandler {
 	var preinstalled []string
 	if knowledge != nil {
 		preinstalled = knowledge.PreinstalledList()
@@ -59,6 +64,7 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir string, orch *o
 		store:        s,
 		ai:           a,
 		workspaceDir: workspaceDir,
+		templateDir:  templateDir,
 		orch:         orch,
 		devClient:    dc,
 		knowledge:    knowledge,
@@ -1467,6 +1473,29 @@ func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) 
 	// per-turn usage SSE events; this is the reload restore.
 	if in, out, cacheRead, err := h.store.ProjectTokenUsage(projectID); err == nil {
 		resp["usage"] = map[string]int64{"in": in, "out": out, "cache_read": cacheRead}
+	}
+
+	// The durable plan backlog. The checklist the UI renders during a build is
+	// fed by live task_update SSE frames; without this restore the list is empty
+	// after a reload even though every status is persisted in plan_task_status.
+	// Only plan: tasks are checklist items — the rest of the backlog is
+	// per-prompt attribution, not the plan.
+	if tasks, err := h.store.LoadPlanTasks(projectID); err == nil {
+		planTasks := make([]map[string]interface{}, 0, len(tasks))
+		for _, t := range tasks {
+			if !strings.HasPrefix(t.TaskID, "plan:") {
+				continue
+			}
+			planTasks = append(planTasks, map[string]interface{}{
+				"id":          t.TaskID,
+				"description": t.Description,
+				"status":      t.Status,
+				"result":      t.Result,
+			})
+		}
+		resp["planTasks"] = planTasks
+	} else {
+		log.Printf("project %d: could not load the plan backlog: %v", projectID, err)
 	}
 
 	writeJSON(w, http.StatusOK, resp)

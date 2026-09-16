@@ -39,7 +39,7 @@ func TestVerifyLadderToolsResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewPromptHandler(st, nil, t.TempDir(), orchestrator.New(nil, st, nil), nil, nil, nil)
+	h := NewPromptHandler(st, nil, t.TempDir(), "", orchestrator.New(nil, st, nil), nil, nil, nil)
 	ws := t.TempDir()
 	bs := h.newBuildSession(ws, proj.ID, "", nil) // no device attached
 

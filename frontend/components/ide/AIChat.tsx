@@ -359,13 +359,17 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       let cancelled = false;
       conversation
         .get(projectId)
-        .then(({ turns, latest, usage }) => {
+        .then(({ turns, latest, usage, planTasks }) => {
           if (cancelled) return;
           if (usage) setSessionUsage(usage);
           setMessages(turnsToEntries(turns, latest));
           // Offer resume only for a build turn whose last run did not finish.
           // A waiting turn is not resumable this way — its question card owns it.
           setResumable(isResumable(latest) ? latest : null);
+          // The plan checklist is otherwise fed live by task_update frames; this
+          // is the reload restore from the durable backlog, so a refresh does
+          // not blank the checklist the person was watching fill in.
+          if (planTasks && planTasks.length > 0) setPlanTasks(planTasks);
         })
         .catch(() => {
           // An unreachable history is not worth an error banner over an empty

@@ -130,7 +130,7 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	if h.devClient != nil {
 		allowlist = h.devClient.Allowlist()
 	}
-	reg.Register(&tools.InstallPackage{WorkspacePath: workspacePath, Allowlist: allowlist, Output: output})
+	reg.Register(&tools.InstallPackage{WorkspacePath: workspacePath, TemplateDir: h.templateDir, Allowlist: allowlist, Output: output})
 	reg.Register(&tools.BuildAPK{WorkspacePath: workspacePath, Allowlist: allowlist, Output: output})
 
 	// Asking the user. ask_user pauses the turn rather than executing; the
