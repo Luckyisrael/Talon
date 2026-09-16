@@ -77,22 +77,24 @@
   --spring: cubic-bezier(0.22, 1, 0.36, 1);
 
   /* ── Canvas surface family ──────────────────────────────────────
-     The rebuilt screen's own palette. The canvas is the deepest tone and
-     everything raises off it one step at a time; the accent is a working
-     blue, reserved for the live state and the primary action. */
-  --bg: #0a0b0e;
-  --panel: #111319;
-  --panel-2: #171a21;
-  --panel-3: #1e222b;
-  --label: #f0f2f5;
-  --label-2: #a3aab5;
-  --label-3: #6e7681;
-  --label-4: #4b5159;
-  --accent: #4f7cf6;
-  --accent-2: #7aa3ff;
-  --accent-soft: rgb(79 124 246 / 15%);
-  --ok: #35d0a0;
-  --err: #f67878;
+     These are ALIASES of the brand tokens above, not a second palette.
+     The screen's vocabulary (canvas / panel / label steps) maps onto the
+     Linear-Talon ramp that the rest of the product already speaks, so a
+     person moving between the dashboard and a project never changes
+     brand. Acid lime stays the one chromatic action. */
+  --bg: var(--color-void);
+  --panel: var(--color-carbon);
+  --panel-2: var(--color-obsidian);
+  --panel-3: var(--color-graphite);
+  --label: var(--color-paper);
+  --label-2: var(--color-mist);
+  --label-3: var(--color-fog);
+  --label-4: var(--color-ash);
+  --accent: var(--color-acid-lime);
+  --accent-2: #eef75c;
+  --accent-soft: rgb(228 242 34 / 13%);
+  --ok: var(--color-pulse-green);
+  --err: var(--color-coral-red);
   --warn: #f2b234;
   --rail-w: 56px;
   --device-w: 388px;
@@ -999,7 +1001,7 @@ body {
 .file-row .chev { color: var(--label-4); transition: transform var(--dur-out) ease-out; }
 .file-row[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .diff-collapse { display: grid; grid-template-rows: 0fr; overflow: hidden; transition: grid-template-rows 240ms var(--ease-out); }
-.file-row[aria-expanded="true"] + .diff-collapse { grid-template-rows: 1fr; }
+.diff-collapse[data-open="true"] { grid-template-rows: 1fr; }
 .diff-collapse > div { min-height: 0; overflow: hidden; }
 .diff-collapse pre {
   margin: 2px 0 6px 12px; padding: 12px 14px;

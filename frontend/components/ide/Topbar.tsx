@@ -47,7 +47,7 @@ export default function Topbar({
       >
         <span
           aria-hidden
-          className="grid h-[22px] w-[22px] place-items-center rounded-[7px] bg-gradient-to-br from-[#7b5cff] to-[#4f7cf6]"
+          className="grid h-[22px] w-[22px] place-items-center rounded-[7px] bg-[var(--color-acid-lime)]"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="text-white">
             <path d="M13 2L4.5 13.5H11l-1 8.5L19.5 10H13z" />

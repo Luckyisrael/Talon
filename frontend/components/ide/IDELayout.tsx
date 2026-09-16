@@ -6,9 +6,11 @@ import { useIDEStore } from "@/lib/store";
 import type { PlanData } from "@/lib/types";
 import AIChat, { type AIChatHandle } from "./AIChat";
 import type { PlanTask, TraceRow } from "@/lib/types";
+import ChangedFiles from "./ChangedFiles";
+import CodeEditor from "./CodeEditor";
 import CommandPalette from "./CommandPalette";
-import FileTree from "./FileTree";
 import IconRail from "./IconRail";
+import Markdown from "@/components/ui/Markdown";
 import MemoryPanel from "./MemoryPanel";
 import PhonePreview from "./PhonePreview";
 import TestOnPhone from "./TestOnPhone";
@@ -354,39 +356,45 @@ export default function IDELayout({
         </div>
       </div>
 
+      {/* The files view — the changed files with expandable inline diffs.
+          Selecting a file opens it as a reader; the tree stays reachable
+          through the selected-file path so the canvas is never a dead end. */}
       <div className={leftTab === "files" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-        <div className="bay-head justify-between">
-          <span className="gauge">Workspace</span>
-          <span className="gauge tnum">{countFiles(store.files)}</span>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto py-1">
-          {store.files.length === 0 ? (
-            <div className="px-4 py-6">
-              <p className="text-sm text-mist">Nothing here yet.</p>
-              <p className="mt-1 font-mono text-xs text-fog">
-                Describe what you want in the chat and the files will appear
-                as they are written.
-              </p>
+        {store.selectedFile ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="bay-head justify-between">
               <button
                 type="button"
-                onClick={() => setLeftTab("chat")}
-                className="btn mt-3"
+                onClick={() => store.selectFile(null)}
+                className="btn btn-ghost h-7 px-2 font-mono text-xs"
               >
-                Open the chat
+                ← Changed files
               </button>
+              <span className="gauge truncate" title={store.selectedFile}>
+                {store.selectedFile.split("/").pop()}
+              </span>
             </div>
-          ) : (
-            <FileTree
-              files={store.files}
-              selectedFile={store.selectedFile}
-              onSelectFile={selectFile}
-              onNewFile={handleNewFile}
-              onNewFolder={handleNewFolder}
-              onRename={handleRename}
-              onDelete={handleDelete}
-            />
-          )}
-        </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {selectedContent !== undefined && !store.selectedFile.endsWith(".md") ? (
+                <CodeEditor
+                  projectId={projectId}
+                  filePath={store.selectedFile}
+                  content={selectedContent}
+                />
+              ) : (
+                <div className="h-full overflow-y-auto px-6 py-6">
+                  <div className="mx-auto max-w-2xl">
+                    <Markdown>{selectedContent ?? ""}</Markdown>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <ChangedFiles projectId={projectId} filesTouched={liveTouchedFiles} />
+          </div>
+        )}
       </div>
 
       <div className={leftTab === "memory" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
