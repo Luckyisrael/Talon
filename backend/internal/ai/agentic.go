@@ -126,6 +126,14 @@ func (c *Client) doWithRetry(ctx context.Context, url string, body []byte, setHe
 		case resp.StatusCode == http.StatusOK:
 			return respBody, nil
 		case resp.StatusCode == 429 || resp.StatusCode >= 500:
+			// Quota exhaustion is not throttling: the budget refills on the
+			// provider's clock, so retrying (even with Retry-After) only
+			// burns requests. Fail fast with the reset time when given.
+			if resp.StatusCode == 429 && isQuotaExhausted(string(respBody)) {
+				err := quotaError(resp.Header.Get("X-RateLimit-Reset"))
+				c.noteFailure(err)
+				return nil, err
+			}
 			lastErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncate(string(respBody), 500))
 			if ra := resp.Header.Get("Retry-After"); ra != "" {
 				if secs, convErr := strconv.Atoi(ra); convErr == nil && secs > 0 && secs <= 60 {
@@ -192,6 +200,11 @@ func (c *Client) doWithEnvelopeRetry(ctx context.Context, url string, body []byt
 		if !ok {
 			return respBody, nil
 		}
+		if isQuotaExhausted(msg) {
+			err := quotaError("")
+			c.noteFailure(err)
+			return nil, err
+		}
 		transient := (code == 429 || (code >= 500 && code < 600)) || transientEnvelopeRe.MatchString(msg)
 		if !transient {
 			err := fmt.Errorf("%s: provider refused the request (code %d): %s", label, code, truncate(msg, 500))
@@ -253,6 +266,12 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	// Estimated input size, logged on every call: request bodies that exceed
+	// a provider's per-minute input budget are rejected outright (Groq 413),
+	// so the estimate is the diagnostic that tells us what to trim. ~4
+	// chars/token is coarse but consistent enough for budget decisions.
+	log.Printf("ChatWithTools(OpenAI): model=%s est_input_tok=%d (system=%d hist_msgs=%d tools=%d body_bytes=%d)",
+		c.model, len(body)/4, len(system)/4, len(history), len(oaiTools), len(body))
 
 	respBody, err := c.doWithEnvelopeRetry(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)

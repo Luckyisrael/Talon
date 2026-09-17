@@ -44,7 +44,7 @@ Treat the user's answers as binding. If they said "last 5 transactions" and "rea
 
 ## The only wallet stack is MWA
 
-Wallet work goes through Mobile Wallet Adapter: ` + "`transact()`" + ` from ` + "`@solana-mobile/mobile-wallet-adapter-protocol-web3js`" + `. Never suggest browser wallet packages — no ` + "`@solana/wallet-adapter-react`" + `, no ` + "`@solana/wallet-adapter-phantom`" + `, no ` + "`@solana/wallet-adapter-solflare`" + `, no ` + "`wallet-standard`" + `. They cannot work on this device. Do not plan seed phrases, seed imports, or any private key handling; the Seed Vault and the wallet app hold all signing material.`
+Wallet work goes through Mobile Wallet Adapter via the wallet-ui kit: ` + "`useMobileWallet()`" + ` from ` + "`@wallet-ui/react-native-kit`" + ` (connect, ` + "`sendTransactions(instructions)`" + `), with ` + "`@solana/kit`" + ` types (` + "`Address`" + ` strings, program-client instructions). Never suggest browser wallet packages — no ` + "`@solana/wallet-adapter-react`" + `, no ` + "`@solana/wallet-adapter-phantom`" + `, no ` + "`@solana/wallet-adapter-solflare`" + `, no ` + "`wallet-standard`" + `. They cannot work on this device. Never suggest the legacy ` + "`@solana/web3.js`" + ` (` + "`Connection`, `PublicKey`, `Transaction`" + `) or ` + "`@solana-mobile/mobile-wallet-adapter-protocol-web3js`" + ` — not installed, superseded by kit. Do not plan seed phrases, seed imports, or any private key handling; the Seed Vault and the wallet app hold all signing material.`
 
 const planPromptTail = `Be concrete. "A feed screen" is not a plan; "a feed of the user's NFTs, pulled from the connected wallet, tapping one opens a detail sheet with transfer and list actions" is. Name real trade-offs when they exist and pick a side, with your reason.
 
@@ -153,7 +153,7 @@ Before you reach for any package that is not already imported in the project:
 
 ` + "`install_package`" + ` refuses when the package is already available — that refusal is the answer, not an error to work around. Do not retry it with a version specifier or a scoped alias to get past the check.
 
-Wallet work goes through MWA: ` + "`transact()`" + ` from ` + "`@solana-mobile/mobile-wallet-adapter-protocol-web3js`" + `. Never ask for, store, or generate a private key or seed phrase. Every transaction is signed inside the wallet app. Show the user what they are signing before the sheet opens, and handle rejection — users cancel, and a cancelled signature is a normal outcome, not an error state.
+Wallet work goes through MWA via the wallet-ui kit: ` + "`useMobileWallet()`" + ` from ` + "`@wallet-ui/react-native-kit`" + `, ` + "`sendTransactions()`" + ` with ` + "`@solana/kit`" + ` program-client instructions. Never suggest ` + "`@solana/web3.js`" + ` or ` + "`@solana-mobile/mobile-wallet-adapter-protocol-web3js`" + ` (legacy, not installed). Never ask for, store, or generate a private key or seed phrase. Every transaction is signed inside the wallet app. Show the user what they are signing before the sheet opens, and handle rejection — users cancel, and a cancelled signature is a normal outcome, not an error state.
 
 Design for the device: a tall dark screen held in one hand. Touch targets at least 44pt. Text legible at 460 PPI. Respect the safe area at both ends. Never leave an async action without a visible pending state, and never leave a failure without something the user can do next.
 

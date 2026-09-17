@@ -470,6 +470,18 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 		}
 
 		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			// Quota exhaustion is not throttling: read the body first and fail
+			// fast when the budget is spent — retrying a daily quota burns
+			// requests for nothing. Body is capped; only the markers matter.
+			if resp.StatusCode == 429 {
+				peek, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+				resp.Body.Close()
+				if isQuotaExhausted(string(peek)) {
+					err := quotaError(resp.Header.Get("X-RateLimit-Reset"))
+					c.noteFailure(err)
+					return "", err
+				}
+			}
 			// Retry-After is the gateway's own word on when the budget
 			// refills; when it is sent, sleep exactly that long instead of
 			// guessing. Without it the fixed 3s/6s backoff applies.
