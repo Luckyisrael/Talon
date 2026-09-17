@@ -59,6 +59,33 @@ type BuildAPKArgs struct {
 
 type ADBRunner struct {
 	Target string
+	// MetroPort is the host Metro bundler port already reverse-forwarded
+	// onto the device (adb reverse tcp:PORT tcp:PORT). Zero means unknown —
+	// launches proceed without a bundle URL rather than guessing one.
+	MetroPort int
+}
+
+// LaunchApp starts the app's main activity. With a known Metro port the
+// launch carries the bundle deep link (exp://127.0.0.1:PORT), so a dev
+// build loads JavaScript immediately instead of idling on the dev launcher
+// waiting for a human to pick the dev server — the exact stall that made
+// every unattended boot screenshot black.
+func (a *ADBRunner) LaunchApp(pkg string) (string, error) {
+	args := launchArgs(a.Target, pkg, a.MetroPort)
+	out, err := exec.Command("adb", args...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// launchArgs builds the adb invocation. Pure so the deep-link shape is
+// unit-testable without a device.
+func launchArgs(target, pkg string, metroPort int) []string {
+	if metroPort > 0 {
+		return []string{"-s", target, "shell", "am", "start",
+			"-a", "android.intent.action.VIEW",
+			"-d", "exp://127.0.0.1:" + strconv.Itoa(metroPort),
+			pkg + "/.MainActivity"}
+	}
+	return []string{"-s", target, "shell", "am", "start", "-n", pkg + "/.MainActivity"}
 }
 
 func (a *ADBRunner) Run(command string) (string, error) {

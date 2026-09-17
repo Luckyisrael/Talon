@@ -227,6 +227,14 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 		// inputs are missing (no built APK, no capture path) — registered
 		// whenever a device exists so the rungs are never absent.
 		adbClient := &tools.ADBRunner{Target: adbTarget}
+		// Metro port for bundle deep links: resolved live (a restarted
+		// server kills Metro processes, so a stored port would be stale).
+		// Zero when no bundler runs — launches proceed without the URL.
+		if live, err := h.store.LatestLiveSession(projectID); err == nil && live != nil {
+			if port, ok := metro.PortForSession(live.ID); ok {
+				adbClient.MetroPort = port
+			}
+		}
 		// boot installs the project's APK and polls pidof. The package name
 		// is the project's identity; the APK path is build_apk's standard
 		// output, which exists only after a build — until then the gate

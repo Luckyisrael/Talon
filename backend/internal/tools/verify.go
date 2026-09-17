@@ -43,7 +43,15 @@ const (
 // means the check never produced a verdict and must surface as a real error.
 // output, when non-nil, receives the checker's stdout/stderr as it runs.
 func runVerifyCmd(ctx context.Context, dir string, output io.Writer, name string, args ...string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+	return runVerifyCmdWithTimeout(ctx, verifyTimeout, dir, output, name, args...)
+}
+
+// runVerifyCmdWithTimeout is runVerifyCmd with an explicit budget. Only the
+// gradle gate uses a non-default budget: a cold assemble runs ~13 minutes,
+// so the generic 4-minute verify budget would kill every cold build before
+// it can pass. Same kill-group semantics, longer fuse.
+func runVerifyCmdWithTimeout(ctx context.Context, budget time.Duration, dir string, output io.Writer, name string, args ...string) (string, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -65,7 +73,7 @@ func runVerifyCmd(ctx context.Context, dir string, output io.Writer, name string
 	out := string(raw)
 
 	if ctx.Err() == context.DeadlineExceeded {
-		return out, false, fmt.Errorf("%s timed out after %s", name, verifyTimeout)
+		return out, false, fmt.Errorf("%s timed out after %s", name, budget)
 	}
 
 	if runErr != nil {
@@ -351,7 +359,7 @@ func (t *RunGradle) Execute(ctx context.Context, args json.RawMessage) (ToolResu
 	// prebuild, so a template file would never reach it). Best-effort.
 	_ = gbuild.EnsureGradlePerfFlags(androidDir)
 
-	out, failed, err := runVerifyCmd(ctx, androidDir, t.Output, "./gradlew", "assembleDebug", "--daemon", "--parallel", "--build-cache")
+	out, failed, err := runVerifyCmdWithTimeout(ctx, buildToolTimeout, androidDir, t.Output, "./gradlew", "assembleDebug", "--daemon", "--parallel", "--build-cache")
 	if err != nil {
 		return marshalVerify(VerifyResult{Passed: true, Summary: "gradle unavailable: " + err.Error()}), nil
 	}
@@ -422,6 +430,18 @@ func (t *RunBoot) Execute(ctx context.Context, args json.RawMessage) (ToolResult
 	// evidence, it never fails the gate by itself.
 	launch := time.Now()
 	_ = t.ADBClient.ClearLogcat()
+
+	// Launch explicitly: adb install does not start the app, and without a
+	// launch the pidof poll below waits on a process that will never exist.
+	// With a Metro port the deep link loads the bundle at once; without it
+	// the launcher at least starts and first-launch evidence decides.
+	if launchOut, err := t.ADBClient.LaunchApp(pkg); err != nil {
+		return marshalVerify(VerifyResult{
+			Passed:  false,
+			Errors:  "app launch failed: " + strings.TrimSpace(launchOut),
+			Summary: "process did not come up",
+		}), nil
+	}
 
 	// pidof is the cheapest "is the process alive" check; on Redroid the boot
 	// animation takes a few hundred ms so we allow up to ~5 s.

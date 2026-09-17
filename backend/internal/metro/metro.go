@@ -205,6 +205,19 @@ func (s *Server) Subscribe() (chan Event, func()) {
 	return ch, func() { s.events.unsubscribe(ch) }
 }
 
+// PortForSession returns the live bundler port for a session. False when the
+// session has no running Metro (not started, start failed, or server restart
+// killed it) — callers launch without a bundle URL rather than fabricate one.
+func PortForSession(sessionID int64) (int, bool) {
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+	s, exists := sessions[sessionID]
+	if !exists {
+		return 0, false
+	}
+	return s.port, true
+}
+
 // SubscribeSession resolves a running metro by session id. Nil when the
 // session has no bundler (not started, or start failed) — callers report
 // that honestly instead of fabricating state.
