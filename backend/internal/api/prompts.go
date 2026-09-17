@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/ai"
 	"github.com/luckyisrael/talon/backend/internal/devclient"
 	"github.com/luckyisrael/talon/backend/internal/events"
-	"github.com/luckyisrael/talon/backend/internal/metrics"
 	"github.com/luckyisrael/talon/backend/internal/harness/approval"
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
+	"github.com/luckyisrael/talon/backend/internal/harness/tooltimeout"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/metrics"
 	"github.com/luckyisrael/talon/backend/internal/notify"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/store"
@@ -486,8 +487,8 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 				if audit != nil {
 					audit(approval.AuditRecord{
 						Scope:    store.ScopeDeviceBuild,
-						Action:  "user answered a device-build approval: " + firstLine(body.Answer),
-						Outcome: approval.AllowedOnce,
+						Action:   "user answered a device-build approval: " + firstLine(body.Answer),
+						Outcome:  approval.AllowedOnce,
 						PromptID: id,
 					})
 				}
@@ -939,6 +940,7 @@ func (h *PromptHandler) runBuild(
 		History:      history,
 		Tools:        bs.defs,
 		Execute:      bs.executor(),
+		Timeouts:     tooltimeout.DefaultPolicy(),
 		ReadOnlyTool: bs.reg.IsReadOnly,
 		FilesTouched: bs.fs.Touched,
 		Exists:       bs.fs.Exists,

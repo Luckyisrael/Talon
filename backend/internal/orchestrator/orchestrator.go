@@ -27,6 +27,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/pipeline"
 	"github.com/luckyisrael/talon/backend/internal/harness/promptsec"
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
+	"github.com/luckyisrael/talon/backend/internal/harness/tooltimeout"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/metrics"
 	"github.com/luckyisrael/talon/backend/internal/runtime"
@@ -376,6 +377,24 @@ func retryClass(why string) string {
 	return "other"
 }
 
+// wrapWithTimeouts bounds each tool call cooperatively. A tool the policy does
+// not name is passed through untouched; an earlier parent deadline wins over
+// the tool's own budget so a nested cancel reads as upstream, not as a
+// timeout. A call that reaches its deadline is reported as an error naming the
+// budget — a truncated result must never be presented as a success.
+func wrapWithTimeouts(exec ToolExecutor, p *tooltimeout.Policy) ToolExecutor {
+	return func(ctx context.Context, name string, input json.RawMessage) (string, bool) {
+		budget, bounded := p.BudgetFor(name)
+		tctx, cancel, msg := tooltimeout.Derive(ctx, name, budget, bounded)
+		defer cancel()
+		out, isErr := exec(tctx, name, input)
+		if tctx.Err() == context.DeadlineExceeded && msg != "" {
+			return msg + ". The result may be incomplete — re-run the tool if you need the full output.", true
+		}
+		return out, isErr
+	}
+}
+
 // screenBaseName strips a trailing parenthetical qualifier from a plan screen
 // name: "Portfolio (tab)" → "Portfolio". Qualifiers describe navigation role,
 // not identity, and route files never contain them.
@@ -621,6 +640,11 @@ type RunOptions struct {
 	History []ai.Message
 	Tools   []ai.ToolDefinition
 	Execute ToolExecutor
+	// Timeouts, when set, bounds each tool call cooperatively. A tool the
+	// policy does not name stays unbounded — no registry-wide default is
+	// applied, because one number is wrong for every tool class at once.
+	// Nil keeps the old unbounded behaviour.
+	Timeouts *tooltimeout.Policy
 	// ReadOnlyTool reports whether a tool can run concurrently with others in
 	// the same turn. Nil means treat everything as sequential.
 	ReadOnlyTool func(name string) bool
@@ -724,6 +748,20 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			ending, outcome.Rounds, elapsed.Round(time.Second), perRound.Round(time.Second))
 	}
 
+	// Wrap the executor once with the timeout policy so every Execute call
+	// site — the tool loop, the forced typecheck, the verification gate — runs
+	// under the same cooperative bound. A tool the policy does not name is
+	// passed through untouched; an earlier parent deadline wins over the tool's
+	// own budget so a nested cancel reads as upstream, not as a timeout.
+	if opts.Timeouts != nil && opts.Execute != nil {
+		opts.Execute = wrapWithTimeouts(opts.Execute, opts.Timeouts)
+	}
+
+	// wrapWithTimeouts bounds each tool call cooperatively. A tool the policy does
+	// not name is passed through untouched; an earlier parent deadline wins over
+	// the tool's own budget so a nested cancel reads as upstream, not as a
+	// timeout. A call that reaches its deadline is reported as an error naming the
+	// budget — a truncated result must never be presented as a success.
 	// Hand finished turns to the caller as the loop advances so an interrupted
 	// run keeps them. `flushed` is the count already handed over; flush() sends
 	// only the tail past it, so no message is persisted twice however the loop
