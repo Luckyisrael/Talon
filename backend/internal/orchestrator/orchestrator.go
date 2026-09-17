@@ -648,19 +648,31 @@ type RunOptions struct {
 	// and the wire stay honest with each other. Errors are the caller's to
 	// log; the loop never blocks on them.
 	OnCompacted func(before, after int)
-	// EventLog, when set, is where the loop records the non-surface audit
-	// events it owns — currently the llm/retry record, so a recovered transient
-	// gateway failure survives a reload instead of vanishing from the trace.
-	// Nil keeps the loop quiet: tests that do not care about replay fidelity
-	// pass nothing and the retry hook stays SSE-only.
-	EventLog EventAppender
+	// EventLog, when set, is the durability boundary the checkpoint policy
+	// enforces: the assistant's tool requests are flushed and forced to stable
+	// storage before any tool body runs, and before each model request, so a
+	// crash between recording intent and producing the effect cannot leave the
+	// log claiming something that never happened. Nil keeps the loop quiet:
+	// tests that do not care about crash fidelity pass nothing.
+	EventLog AuditLog
 }
 
-// EventAppender is the one-method seam the loop needs to write an audit event.
-// sessionlog.Log satisfies it; the interface keeps the orchestrator from
-// importing the log package (and the store behind it).
+// EventAppender is the write half of the audit sink.
 type EventAppender interface {
 	Append(kind harnessevents.Kind, payload any) (int64, error)
+}
+
+// AuditLog is the durable audit sink the checkpoint policy needs: Append
+// records an event, Sync forces everything recorded onto stable storage so it
+// survives a hard crash, not just a process exit. sessionlog.Log satisfies it;
+// the interface keeps the orchestrator from importing the log package (and the
+// store behind it).
+//
+// Sync is the fail-closed boundary: when it fails, the model call or tool that
+// was about to run must not run — its intent is not yet durable.
+type AuditLog interface {
+	EventAppender
+	Sync() error
 }
 
 // RunAgentLoop drives the agent until it stops calling tools and the code
@@ -725,6 +737,30 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		flushed = len(outcome.Messages)
 	}
 	defer flush()
+
+	// checkpoint is the fail-closed durability boundary (the DSH
+	// session-checkpoint policy). It flushes the turns recorded so far — which
+	// writes the assistant's tool/dispatch events, the durable record of what
+	// the model asked for — and then forces them to stable storage. A tool body
+	// or a model request must not run until its intent survives a hard crash:
+	// without this, a power loss between recording a tool call and running it
+	// leaves the log unable to explain an effect that happened.
+	//
+	// A failed barrier is a hard stop, not a warning: the honest failure is
+	// "the round ended because its record could not be made durable," never
+	// "the effect ran, unrecorded."
+	checkpoint := func(why string) bool {
+		flush()
+		if opts.EventLog == nil {
+			return true
+		}
+		if err := opts.EventLog.Sync(); err != nil {
+			log.Printf("prompt %d: durability barrier failed (%s); refusing to proceed: %v",
+				sess.ID, why, err)
+			return false
+		}
+		return true
+	}
 
 	// Whether this turn may run device builds comes from the user's own
 	// words, once, up front — never from the model's plans. A bare "build"
@@ -879,6 +915,16 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			outcome.RouteReason = reason
 		}
 
+		// Boundary 1 — before the model request: everything the previous round
+		// produced (its tool results, its assistant turns) must be durable
+		// before the next request is derived from it. A crash here otherwise
+		// lets a resumed session hand the model a history that silently omits
+		// the work it already sees the results of.
+		if !checkpoint("model dispatch") {
+			outcome.FinalText = "This turn stopped because its record could not be made durable before the model request. No work was lost; re-run the turn."
+			return outcome, fmt.Errorf("durability barrier failed before model dispatch")
+		}
+
 		result, err := client.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
 		if err != nil {
 			// H2: the request-error decision is a listener (harness/loop), not
@@ -955,6 +1001,15 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		}
 		conversation = append(conversation, assistantTurn)
 		outcome.Messages = append(outcome.Messages, assistantTurn)
+
+		// Durability ordering: the assistant turn carrying this round's tool_use
+		// blocks must be persisted before any of those tools run. Persist is
+		// what appends the tool/dispatch event — the durable record that the
+		// model asked for the effect — and executeTools' barrier Syncs it to
+		// stable storage. Without this flush the side effect would precede its
+		// own record, and a crash between the two would leave a changed file
+		// the log cannot explain.
+		flush()
 
 		// ── The model is asking the user something ──
 		// ask_user pauses the turn instead of running: the loop cannot answer its
@@ -1532,6 +1587,9 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			sess.EmitTaskUpdate(taskID, verb, "in_progress", "")
 		}
 
+		// Boundary 2 is enforced once before the dispatch fork, not inside
+		// runCall: a parallel read-only batch crosses it together.
+
 		output, isError := opts.Execute(ctx, call.Name, call.Input)
 
 		// H8 context economy, in order of severity: spill moves a giant
@@ -1719,6 +1777,30 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			ToolUseID: call.ID,
 			Content:   output + readNote + watchNote + probeNote + failReminder + repeatNote,
 			IsError:   isError,
+		}
+	}
+
+	// Boundary 2 — before the side effect. The assistant message carrying
+	// these tool_use blocks was flushed to Persist by the caller, which
+	// appends the tool/dispatch event: the durable record that the model
+	// asked for these effects. No body runs until that record is on stable
+	// storage — otherwise a power loss between here and the effect leaves a
+	// changed file the log cannot explain. One barrier per round, ahead of
+	// the fork, so a parallel batch costs one checkpoint, not one per call.
+	if opts.EventLog != nil {
+		if err := opts.EventLog.Sync(); err != nil {
+			log.Printf("prompt %d: durability barrier failed; refusing to run this round's tools: %v",
+				sess.ID, err)
+			for i, call := range calls {
+				results[i] = ai.Block{
+					Type:      "tool_result",
+					ToolUseID: call.ID,
+					Content: "The tool could not run because its record could not be made durable. " +
+						"Re-run the turn; nothing was changed.",
+					IsError: true,
+				}
+			}
+			return results
 		}
 	}
 

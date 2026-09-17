@@ -6,15 +6,18 @@ import (
 	harnessevents "github.com/luckyisrael/talon/backend/internal/harness/events"
 )
 
-// memEventLog is the one-method audit sink RunOptions.EventLog takes.
+// memEventLog is the AuditLog fake: it records appends and Syncs so a test can
+// assert both the event written and the barrier crossed.
 type memEventLog struct {
 	events []harnessevents.Kind
+	syncs  int
 }
 
 func (m *memEventLog) Append(kind harnessevents.Kind, payload any) (int64, error) {
 	m.events = append(m.events, kind)
 	return int64(len(m.events)), nil
 }
+func (m *memEventLog) Sync() error { m.syncs++; return nil }
 
 // A recovered retry must land in the log as llm/retry — after a reload it is
 // the only record that a transient gateway failure did not become the outcome.

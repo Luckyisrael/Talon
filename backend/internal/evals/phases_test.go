@@ -268,6 +268,9 @@ func (m *harnessMemStore) EventsFrom(key string, fromSeq int64) ([]sessionlog.Ev
 	return out, nil
 }
 
+// Sync is the durability barrier; the in-memory fake has no disk to force.
+func (m *harnessMemStore) Sync() error { return nil }
+
 // H2: the steer contract — a mid-turn message reaches the running loop as a
 // marked turn, and only when delivered. Both polarities: the delivered steer
 // surfaces in the next request's conversation, and an undelivered one leaves

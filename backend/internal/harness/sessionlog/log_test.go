@@ -12,8 +12,10 @@ import (
 // byte-frozen payloads, no deletion — the same contract the SQLite backend
 // honours.
 type memStore struct {
-	rows map[string][]Event
-	seq  map[string]int64
+	rows    map[string][]Event
+	seq     map[string]int64
+	syncs   int
+	syncErr error
 }
 
 func newMemStore() *memStore {
@@ -34,6 +36,14 @@ func (m *memStore) EventsFrom(key string, fromSeq int64) ([]Event, error) {
 		}
 	}
 	return out, nil
+}
+
+// Sync is the durability barrier. The in-memory fake has nothing to force to
+// stable storage, so it records that the barrier was crossed — and fails on
+// demand so a test can exercise the fail-closed path.
+func (m *memStore) Sync() error {
+	m.syncs++
+	return m.syncErr
 }
 
 func msg(role string, text string) events.MessagePayload {

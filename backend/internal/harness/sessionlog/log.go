@@ -33,10 +33,10 @@ type Event struct {
 // Log is one session's append-only event log. Safe for concurrent use: the
 // mutex orders appends and guards the derivation cache.
 type Log struct {
-	mu      sync.Mutex
-	store   Store
-	key     string
-	rows    []Event
+	mu    sync.Mutex
+	store Store
+	key   string
+	rows  []Event
 	// repairOnLoad closes an interrupted final turn when the log is loaded. It
 	// is on by default; tests that want to inspect a crashed tail construct a
 	// log with it off. See crash.go.
@@ -44,20 +44,27 @@ type Log struct {
 	// shadowSeq, when > 0, is the highest seq shadowed for derivation: every
 	// surface event at or before it is replaced by the summary in
 	// shadowSummary for DeriveMessages. The rows themselves stay.
-	shadowSeq    int64
+	shadowSeq     int64
 	shadowSummary string
 	// derived caches the projection; invalidated by any append or shadow
 	// change so the next DeriveMessages re-derives.
-	derived []DerivedMessage
+	derived      []DerivedMessage
 	derivedValid bool
 }
 
 // Store is the persistence seam: whatever database the host composition
 // chooses. It sees only (key, seq, kind, payload, at) rows — the log owns the
 // projection logic, and a backend swap changes no caller.
+// Store is the persistence backend for one log. AppendEvent and EventsFrom are
+// the append/read path; Sync is the durability barrier — it forces everything
+// recorded so far onto stable storage so the log survives a hard crash (power
+// loss, OS panic), not just a process exit. SQLite in WAL with synchronous=NORMAL
+// is durable across process crashes but not across power loss until a checkpoint
+// runs; the checkpoint policy calls Sync at the semantic boundaries.
 type Store interface {
 	AppendEvent(key string, kind events.Kind, payload []byte, at time.Time) (seq int64, err error)
 	EventsFrom(key string, fromSeq int64) ([]Event, error)
+	Sync() error
 }
 
 // New creates a log backed by store, loading any persisted events under key so
@@ -144,6 +151,15 @@ func (l *Log) AppendPayload(kind events.Kind, raw []byte) (int64, error) {
 	l.rows = append(l.rows, Event{Seq: seq, Kind: kind, Payload: raw, At: time.Now().UTC()})
 	l.derivedValid = false
 	return seq, nil
+}
+
+// Sync forces everything recorded so far onto stable storage. It is the
+// durability barrier the checkpoint policy uses: a non-nil error means the log
+// is not trustworthy and a side effect recorded but not synced must not run.
+func (l *Log) Sync() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.store.Sync()
 }
 
 // Seq returns the current log length.

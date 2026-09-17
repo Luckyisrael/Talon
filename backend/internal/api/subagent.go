@@ -31,7 +31,7 @@ type childRunner struct {
 	// eventLog, when set, is where the child's recovered model-call retries
 	// land — a delegated turn that hit a rate limit should show in the same
 	// project log as the parent's retries. Nil keeps the child SSE-only.
-	eventLog orchestrator.EventAppender
+	eventLog orchestrator.AuditLog
 }
 
 // RunChild executes one child to completion. The loop is the same

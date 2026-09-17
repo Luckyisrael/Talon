@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/luckyisrael/talon/backend/internal/harness/events"
@@ -30,6 +31,32 @@ func (s *Store) AppendEvent(key string, kind events.Kind, payload []byte, at tim
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// Sync is the durability barrier: it checkpoints the WAL into the main database
+// file and truncates it. AppendEvent is a synchronous insert, so every event is
+// already durable across a process crash — but the connection runs
+// synchronous=NORMAL, which does not fsync the WAL on every commit. Until this
+// runs, a power loss can take the committed-but-unfsync'd tail with it.
+//
+// The checkpoint policy calls this before a model dispatch and before a
+// top-level tool's side effect, fail-closed: the event that records intent must
+// be on stable storage before the effect it describes happens.
+func (s *Store) Sync() error {
+	var busy, log, checkpointed int
+	// TRUNCATE resets the WAL to zero pages, so the next barrier has a bounded
+	// amount to force. A checkpoint cannot run while another connection holds a
+	// read lock; busy_timeout (5s on the DSN) covers the normal case, and the
+	// returned busy flag keeps a transient lock a warning rather than a failure
+	// that refuses a tool the model needs.
+	err := s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &log, &checkpointed)
+	if err != nil {
+		return err
+	}
+	if busy != 0 {
+		return fmt.Errorf("wal checkpoint was busy; %d frames remain uncheckpointed", log)
+	}
+	return nil
 }
 
 // EventsFrom returns every event under key from fromSeq (0 = all), in seq
