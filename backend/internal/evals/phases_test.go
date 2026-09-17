@@ -895,7 +895,13 @@ func TestPhaseH11Goals(t *testing.T) {
 	}
 
 	// Simulated restart: a fresh service over the same store re-reads the
-	// same goal; blocked state and explanation survive verbatim.
+	// same goal; blocked state and explanation survive verbatim. The stall
+	// floor must be met first — a goal that has not stalled cannot be blocked.
+	for i := 0; i < 5; i++ {
+		if _, err := svc.RecordStall(1, false); err != nil {
+			t.Fatalf("record stall: %v", err)
+		}
+	}
 	if _, err := svc.Block(1, "the device pool has no free container; waits exceeded 30m"); err != nil {
 		t.Fatalf("block: %v", err)
 	}

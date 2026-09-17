@@ -80,13 +80,22 @@ func TestRoundAccountingAppendOnly(t *testing.T) {
 	}
 }
 
-// Block carries the concrete condition verbatim; the chip renders it.
+// Block carries the concrete condition verbatim; the chip renders it. The
+// anti-premature-blocking floor must be met first: a goal that has not stalled
+// for blockedAfterConsecutiveRounds consecutive rounds may not be blocked.
 func TestBlock(t *testing.T) {
 	svc := NewService(NewMemStore())
 	_, _ = svc.Start(1, "objective", 10)
 	_, _ = svc.RecordRounds(1, 4)
 	if _, err := svc.Block(1, ""); err == nil {
 		t.Error("fault: empty blocking condition accepted")
+	}
+	if _, err := svc.Block(1, "the gradle cache dir is read-only on this host; builds cannot run"); err != ErrPrematureBlock {
+		t.Errorf("fault: blocked before the stall floor was met, got err=%v", err)
+	}
+	// Meet the floor, then the block lands.
+	for i := 0; i < blockedAfterConsecutiveRounds; i++ {
+		_, _ = svc.RecordStall(1, false)
 	}
 	g, err := svc.Block(1, "the gradle cache dir is read-only on this host; builds cannot run")
 	if err != nil {
