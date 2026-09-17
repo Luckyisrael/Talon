@@ -309,3 +309,17 @@ func TestRunVisionBlankFailsFast(t *testing.T) {
 		t.Fatalf("summary should name gate+screen, got %q", vr.Summary)
 	}
 }
+
+func TestRunPrettierRejectsEscapes(t *testing.T) {
+	dir := t.TempDir()
+	tool := &RunPrettier{WorkspacePath: dir}
+	for _, p := range []string{"../evil.ts", "/etc/passwd", "..", ".", "a.png", "missing.ts"} {
+		res, err := tool.Execute(context.Background(), json.RawMessage(`{"paths":["`+p+`"]}`))
+		if err != nil {
+			t.Fatalf("tool must not propagate errors: %v", err)
+		}
+		if !res.IsError {
+			t.Errorf("path %q must be refused, got: %s", p, res.Content)
+		}
+	}
+}

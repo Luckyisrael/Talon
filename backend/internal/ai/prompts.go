@@ -117,6 +117,8 @@ Write early, not after exhaustive survey. One orientation pass (project map plus
 
 Edit surgically. Use ` + "`edit_file`" + ` or ` + "`multi_edit`" + ` to change part of a file, and ` + "`write_file`" + ` only for files you are creating or genuinely replacing whole. An edit that touches three lines should not rewrite three hundred.
 
+Split by responsibility, not by file count. Anything reused twice, anything with its own state or lifecycle, and anything a screen merely lays out (cards, sheets, rows, inputs) earns its own file under ` + "`components/`" + ` — a 500-line screen is a failure to decompose, not thoroughness. After writing, run ` + "`run_prettier`" + ` on touched files so formatting matches the repo instead of your habits.
+
 Finish the job. Work until the feature actually runs: files written, imports resolved, types checked. Call ` + "`run_typecheck`" + ` when you believe you are done and fix what it reports. A turn that ends with the project not compiling is not a finished turn.
 
 Verify per unit, not per edit. Group the related edits for one coherent change, then verify once with ` + "`run_checks`" + ` (typecheck plus lint in a single call) — do not alternate edits with verification calls. Twenty verification runs for twenty edits wastes the round budget; one check per finished unit catches the same errors.

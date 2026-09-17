@@ -209,6 +209,103 @@ func hasLintableFile(files []string) bool {
 	return false
 }
 
+// ── run_prettier ────────────────────────────────────────
+
+type RunPrettier struct {
+	WorkspacePath string
+	// Output, when set, receives prettier's stdout/stderr as it runs.
+	Output io.Writer
+}
+
+func (t *RunPrettier) Name() string { return "run_prettier" }
+
+func (t *RunPrettier) Description() string {
+	return "Format files with the project's prettier config, exactly as `npm run format` would. " +
+		"Pass paths to format specific files, or nothing to format the whole project. " +
+		"Run it after writing code so style matches the repo instead of your habits."
+}
+
+func (t *RunPrettier) InputSchema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"paths": {"type": "array", "items": {"type": "string"}, "description": "Workspace-relative file paths to format. Omit to format the whole project."}
+		},
+		"required": []
+	}`)
+}
+
+// resolveFormatPath keeps formatting inside the workspace: clean the path,
+// refuse escapes and missing files. Prettier with an absolute or escaping
+// path would happily rewrite files outside the project.
+func (t *RunPrettier) resolveFormatPath(p string) (string, error) {
+	clean := filepath.Clean(strings.TrimSpace(p))
+	if clean == "" || clean == "." || filepath.IsAbs(clean) || clean == ".." ||
+		strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "..\\") {
+		return "", fmt.Errorf("path escapes the workspace: %q", p)
+	}
+	full := filepath.Join(t.WorkspacePath, clean)
+	st, err := os.Stat(full)
+	if err != nil || st.IsDir() {
+		return "", fmt.Errorf("not a file in the workspace: %q", p)
+	}
+	switch strings.ToLower(filepath.Ext(clean)) {
+	case ".ts", ".tsx", ".js", ".jsx", ".json", ".md":
+		return clean, nil
+	default:
+		return "", fmt.Errorf("not a formattable file type: %q", p)
+	}
+}
+
+func (t *RunPrettier) Execute(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	var a struct {
+		Paths []string `json:"paths"`
+	}
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &a); err != nil {
+			return errResult("invalid arguments: %v", err), nil
+		}
+	}
+
+	targets := []string{"."}
+	if len(a.Paths) > 0 {
+		targets = targets[:0]
+		seen := map[string]bool{}
+		for _, p := range a.Paths {
+			clean, err := t.resolveFormatPath(p)
+			if err != nil {
+				return errResult("%v", err), nil
+			}
+			if !seen[clean] {
+				seen[clean] = true
+				targets = append(targets, clean)
+			}
+		}
+	} else {
+		files, err := walkSource(t.WorkspacePath, t.WorkspacePath)
+		if err != nil || !hasLintableFile(files) {
+			return marshalVerify(VerifyResult{Passed: true, Summary: "nothing to format"}), nil
+		}
+	}
+
+	cmdArgs := append([]string{"--no-install", "prettier", "--write"}, targets...)
+	out, failed, err := runVerifyCmd(ctx, t.WorkspacePath, t.Output, "npx", cmdArgs...)
+	if err != nil {
+		return marshalVerify(VerifyResult{Passed: true, Summary: "prettier unavailable: " + err.Error()}), nil
+	}
+	if failed {
+		return marshalVerify(VerifyResult{
+			Passed:  false,
+			Errors:  clipOutput(out),
+			Summary: "prettier reported issues",
+		}), nil
+	}
+	if len(a.Paths) > 0 {
+		return marshalVerify(VerifyResult{Passed: true, Summary: fmt.Sprintf("formatted %d file(s)", len(targets))}), nil
+	}
+	return marshalVerify(VerifyResult{Passed: true, Summary: "project formatted"}), nil
+}
+
 func marshalVerify(r VerifyResult) ToolResult {
 	data, err := json.Marshal(r)
 	if err != nil {

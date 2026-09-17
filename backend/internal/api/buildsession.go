@@ -117,6 +117,7 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	reg.Register(&tools.RunShell{WorkspacePath: workspacePath, Output: output})
 	reg.Register(&tools.RunTypecheck{WorkspacePath: workspacePath, Output: output})
 	reg.Register(&tools.RunLint{WorkspacePath: workspacePath, Output: output})
+	reg.Register(&tools.RunPrettier{WorkspacePath: workspacePath, Output: output})
 	reg.Register(&tools.RunChecks{WorkspacePath: workspacePath, Output: output})
 	// The G4 static gates the orchestrator's verify ladder walks. run_bundle
 	// and run_gradle degrade to honest "unavailable" verdicts on hosts
