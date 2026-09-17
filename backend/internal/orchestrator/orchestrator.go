@@ -34,9 +34,11 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/tools"
 )
 
-// maxContextTokens is when the conversation gets compacted. Sized to leave room
-// for the system prompt, tool definitions and a full response.
-const maxContextTokens = 120_000
+// MaxContextTokens is when the conversation gets compacted. Sized to leave room
+// for the system prompt, tool definitions and a full response. Exported so the
+// token meter reads the same window the compaction decision uses — an occupancy
+// bar and the compactor must agree on what "full" means.
+const MaxContextTokens = 120_000
 
 type Orchestrator struct {
 	ai *ai.Client
@@ -843,7 +845,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			lastADRs, lastMemory, lastTaskVer = adrs, memory, taskVer
 		}
 
-		if ai.EstimateTokens(conversation) > maxContextTokens {
+		if ai.EstimateTokens(conversation) > MaxContextTokens {
 			before := len(conversation)
 			// Ask the model to write the checkpoint over the span being dropped
 			// instead of replacing it with a static line: the summary carries
@@ -852,9 +854,9 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			// that notice when the summarizer fails or there is no client — the
 			// budget is still honored, only the memory is lost.
 			if o.ai != nil {
-				conversation = o.ai.CompactWithSummary(ctx, systemPrompt, conversation, maxContextTokens*3/4)
+				conversation = o.ai.CompactWithSummary(ctx, systemPrompt, conversation, MaxContextTokens*3/4)
 			} else {
-				conversation = ai.Compact(conversation, maxContextTokens*3/4)
+				conversation = ai.Compact(conversation, MaxContextTokens*3/4)
 			}
 			sess.Emitter.EmitToolCall("", "compact", "", fmt.Sprintf("Compacted context (%d → %d turns)",
 				before, len(conversation)), "completed")
@@ -979,6 +981,21 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		outcome.Usage.CacheReadTokens += result.Usage.CacheReadTokens
 		outcome.Usage.CacheWriteTokens += result.Usage.CacheWriteTokens
 		sess.Emitter.EmitUsage(outcome.Usage.InputTokens, outcome.Usage.OutputTokens, outcome.Usage.CacheReadTokens)
+
+		// The meter's source: one usage/record event per model call, so the
+		// cumulative accounting survives a reload instead of living only in the
+		// SSE stream. Cost attribution prices the model that actually served
+		// the round.
+		if opts.EventLog != nil {
+			if _, err := opts.EventLog.Append(harnessevents.UsageRecord, harnessevents.UsagePayload{
+				InputTokens:  result.Usage.InputTokens,
+				OutputTokens: result.Usage.OutputTokens,
+				CacheRead:    result.Usage.CacheReadTokens,
+				Model:        client.Model(),
+			}); err != nil {
+				log.Printf("prompt %d: could not record the usage event: %v", sess.ID, err)
+			}
+		}
 
 		// Forward the model's own words. Without this the user watches a build
 		// happen with no idea what the agent thinks it is doing.

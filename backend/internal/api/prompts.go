@@ -1479,6 +1479,25 @@ func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) 
 		resp["usage"] = map[string]int64{"in": in, "out": out, "cache_read": cacheRead}
 	}
 
+	// The meter: one accounting read from the session log, so the rail and any
+	// occupancy bar read the same number compaction does. Spend is cumulative
+	// across the whole session; pressure is the replayed conversation against
+	// the window, so a compacted session reports its real current cost.
+	if lg := h.slog.get(h.store, projectID); lg != nil {
+		usage := lg.TokenUsage()
+		resp["meter"] = map[string]interface{}{
+			"usage": map[string]int64{
+				"in":         usage.InputTokens,
+				"out":        usage.OutputTokens,
+				"cache_read": usage.CacheRead,
+			},
+			"calls": usage.Calls,
+			"pressure": lg.ContextPressure(orchestrator.MaxContextTokens, func(messages int) int {
+				return ai.EstimateTokens(deriveToAIMessages(lg.DeriveMessages()))
+			}),
+		}
+	}
+
 	// The durable plan backlog. The checklist the UI renders during a build is
 	// fed by live task_update SSE frames; without this restore the list is empty
 	// after a reload even though every status is persisted in plan_task_status.
