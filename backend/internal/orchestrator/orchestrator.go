@@ -20,12 +20,13 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/build"
 	"github.com/luckyisrael/talon/backend/internal/events"
 	"github.com/luckyisrael/talon/backend/internal/guardrails"
-	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
-	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	harnessagent "github.com/luckyisrael/talon/backend/internal/harness/agent"
+	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
+	harnessevents "github.com/luckyisrael/talon/backend/internal/harness/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/loop"
 	"github.com/luckyisrael/talon/backend/internal/harness/pipeline"
 	"github.com/luckyisrael/talon/backend/internal/harness/promptsec"
+	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/metrics"
 	"github.com/luckyisrael/talon/backend/internal/runtime"
@@ -352,6 +353,27 @@ func lastUserText(conversation []ai.Message) string {
 	return ""
 }
 
+// retryClass folds a retry loop's reason string into a stable failure class for
+// the audit record. The exact status is useful detail; the class is what an
+// operator groups over ("how often did the gateway rate-limit us this week").
+func retryClass(why string) string {
+	switch {
+	case strings.Contains(why, "rate limit"):
+		return "rate_limited"
+	case strings.Contains(why, "server error"):
+		return "server_error"
+	case strings.Contains(why, "empty"):
+		return "empty_response"
+	case strings.Contains(why, "stream"):
+		return "stream_error"
+	case strings.Contains(why, "timeout") || strings.Contains(why, "deadline"):
+		return "timeout"
+	case strings.Contains(why, "transient"):
+		return "transient"
+	}
+	return "other"
+}
+
 // screenBaseName strips a trailing parenthetical qualifier from a plan screen
 // name: "Portfolio (tab)" → "Portfolio". Qualifiers describe navigation role,
 // not identity, and route files never contain them.
@@ -626,6 +648,19 @@ type RunOptions struct {
 	// and the wire stay honest with each other. Errors are the caller's to
 	// log; the loop never blocks on them.
 	OnCompacted func(before, after int)
+	// EventLog, when set, is where the loop records the non-surface audit
+	// events it owns — currently the llm/retry record, so a recovered transient
+	// gateway failure survives a reload instead of vanishing from the trace.
+	// Nil keeps the loop quiet: tests that do not care about replay fidelity
+	// pass nothing and the retry hook stays SSE-only.
+	EventLog EventAppender
+}
+
+// EventAppender is the one-method seam the loop needs to write an audit event.
+// sessionlog.Log satisfies it; the interface keeps the orchestrator from
+// importing the log package (and the store behind it).
+type EventAppender interface {
+	Append(kind harnessevents.Kind, payload any) (int64, error)
 }
 
 // RunAgentLoop drives the agent until it stops calling tools and the code
@@ -805,14 +840,6 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		// is logged with its reason — that log is the tuning data.
 		_, tier, reason := ai.ClassifyTurn(opts.Mode, promptLen, sess.GetVerifyAttempts(), routingPolicy)
 		model := routingPolicy.ModelFor(tier)
-		// A rate limit or a transient server error backoffs for seconds with no
-		// output — without this the request looks hung and gets killed. The hook
-		// says which attempt failed, why, and how long the wait is, so the trace
-		// shows a bounded recovery instead of silence.
-		retryHook := func(attempt, maxRetries int, why string, after time.Duration) {
-			sess.Emitter.EmitText(fmt.Sprintf("⏳ Model call %d/%d failed (%s) — retrying in %s.",
-				attempt, maxRetries, why, after.Round(time.Second)))
-		}
 		client := o.ai
 		if latchedModel != "" {
 			model = latchedModel
@@ -820,6 +847,29 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		}
 		if model != "" && model != o.ai.Model() {
 			client = o.ai.WithModel(model)
+		}
+		// A rate limit or a transient server error backoffs for seconds with no
+		// output — without this the request looks hung and gets killed. The hook
+		// says which attempt failed, why, and how long the wait is, so the trace
+		// shows a bounded recovery instead of silence. It also lands in the
+		// session log: after a reload a recovered failure is otherwise gone.
+		retryHook := func(attempt, maxRetries int, why string, after time.Duration) {
+			sess.Emitter.EmitText(fmt.Sprintf("⏳ Model call %d/%d failed (%s) — retrying in %s.",
+				attempt, maxRetries, why, after.Round(time.Second)))
+			if opts.EventLog != nil {
+				if _, err := opts.EventLog.Append(harnessevents.RetryLogged, harnessevents.RetryPayload{
+					Attempt:    attempt,
+					MaxRetries: maxRetries,
+					Reason:     retryClass(why),
+					Detail:     why,
+					BackoffMs:  after.Milliseconds(),
+					Model:      client.Model(),
+					PromptID:   sess.ID,
+				}); err != nil {
+					// A failed audit append must never fail the retry it records.
+					log.Printf("prompt %d: could not record the llm/retry event: %v", sess.ID, err)
+				}
+			}
 		}
 		client = client.WithRetryHook(retryHook)
 		if client.Model() != routedModel {
@@ -1927,8 +1977,8 @@ func backfillMissingResults(results []ai.Block, calls []ai.ToolUseBlock) {
 // session's KnownFiles (last-seen) and the workspace mtime (current), so a
 // write over a file someone else changed mid-turn is refused, not clobbering.
 type guardState struct {
-	sess        *SessionState
-	exists      func(string) bool
+	sess         *SessionState
+	exists       func(string) bool
 	currentMtime func(path string) (int64, bool)
 }
 

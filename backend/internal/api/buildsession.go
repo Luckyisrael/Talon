@@ -541,6 +541,7 @@ func childRunnerFor(h *PromptHandler, workspacePath string, projectID int64, adb
 		systemPrompt: h.systemPrompt(),
 		orchestrator: h.orch,
 		parentTools:  nil,
+		eventLog:     h.slog.get(h.store, projectID),
 	}
 }
 

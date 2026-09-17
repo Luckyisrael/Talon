@@ -70,6 +70,12 @@ const (
 	// ApprovalDecided records a one-shot permission decision for audit.
 	// Payload: ApprovalPayload.
 	ApprovalDecided Kind = "approval/decided"
+	// RetryLogged records one model-call retry: which attempt, why it failed,
+	// and how long the backoff was. A recovered transient failure is otherwise
+	// invisible after a reload — this is the durable record that a gateway
+	// error was retried away rather than becoming the turn's outcome.
+	// Payload: RetryPayload.
+	RetryLogged Kind = "llm/retry"
 )
 
 // SurfaceKind reports whether events of this kind join the model-visible
@@ -84,7 +90,7 @@ func SurfaceKind(k Kind) bool {
 
 // MessagePayload is the body of user/message and assistant/message.
 type MessagePayload struct {
-	Role   string        `json:"role"` // "user" | "assistant"
+	Role   string         `json:"role"` // "user" | "assistant"
 	Blocks []BlockPayload `json:"blocks,omitempty"`
 	// Interrupted is true when this assistant anchor carries only the
 	// delivered prefix of a cancelled stream; the next request must include
@@ -98,17 +104,17 @@ type MessagePayload struct {
 // without importing the ai package — the taxonomy owns its own wire shapes so
 // harness components never depend on the provider layer.
 type BlockPayload struct {
-	Type        string       `json:"type"` // text | thinking | tool_use | tool_result | plan
-	Text        string       `json:"text,omitempty"`
-	ID          string       `json:"id,omitempty"`
-	Name        string       `json:"name,omitempty"`
-	Input       *RawJSON     `json:"input,omitempty"`
-	Content     string       `json:"content,omitempty"`
-	IsError     bool         `json:"is_error,omitempty"`
-	Signature   string       `json:"signature,omitempty"` // thought signature passthrough
+	Type      string   `json:"type"` // text | thinking | tool_use | tool_result | plan
+	Text      string   `json:"text,omitempty"`
+	ID        string   `json:"id,omitempty"`
+	Name      string   `json:"name,omitempty"`
+	Input     *RawJSON `json:"input,omitempty"`
+	Content   string   `json:"content,omitempty"`
+	IsError   bool     `json:"is_error,omitempty"`
+	Signature string   `json:"signature,omitempty"` // thought signature passthrough
 	// Plan carries a structured plan block (raw JSON) — persisted for the
 	// restore path, deliberately not a provider-facing shape.
-	Plan    *RawJSON `json:"plan,omitempty"`
+	Plan *RawJSON `json:"plan,omitempty"`
 }
 
 // RawJSON is raw JSON carried verbatim through the log. Marshals as-is.
@@ -122,9 +128,9 @@ func (r *RawJSON) UnmarshalJSON(b []byte) error {
 
 // ToolDispatchPayload is the body of tool/dispatch.
 type ToolDispatchPayload struct {
-	CallID string   `json:"call_id"`
-	Name   string   `json:"name"`
-	Target string   `json:"target,omitempty"` // display hint (path, command…)
+	CallID string `json:"call_id"`
+	Name   string `json:"name"`
+	Target string `json:"target,omitempty"` // display hint (path, command…)
 }
 
 // ToolResultPayload is the body of tool/result.
@@ -178,8 +184,8 @@ type UsagePayload struct {
 
 // InterruptedPayload is the body of stream/interrupted.
 type InterruptedPayload struct {
-	PromptID  int64  `json:"prompt_id"`
-	Reason    string `json:"reason,omitempty"`
+	PromptID int64  `json:"prompt_id"`
+	Reason   string `json:"reason,omitempty"`
 	// DeliveredPrefix is the text already streamed to the user before the
 	// interruption — the anchor the resumed request carries forward.
 	DeliveredPrefix string `json:"delivered_prefix,omitempty"`
@@ -189,7 +195,7 @@ type InterruptedPayload struct {
 type CompactionPayload struct {
 	// ShadowFromSeq shadows every surface event at or before this seq for
 	// derivation. The log itself is untouched.
-	ShadowFromSeq int64 `json:"shadow_from_seq"`
+	ShadowFromSeq int64  `json:"shadow_from_seq"`
 	Reason        string `json:"reason,omitempty"`
 }
 
@@ -206,4 +212,21 @@ type ApprovalPayload struct {
 	Allowed  bool   `json:"allowed"`
 	Reason   string `json:"reason,omitempty"`
 	PromptID int64  `json:"prompt_id,omitempty"`
+}
+
+// RetryPayload is the body of llm/retry.
+type RetryPayload struct {
+	// Attempt is 1-based: attempt 1 is the first retry, after the first request
+	// already failed.
+	Attempt    int `json:"attempt"`
+	MaxRetries int `json:"max_retries"`
+	// Reason names the failure class as the retry loop saw it: a rate limit, a
+	// server error, an empty response, a transport error. The exact status or
+	// error string rides in Detail.
+	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
+	// BackoffMs is the wait before this retry runs.
+	BackoffMs int64  `json:"backoff_ms"`
+	Model     string `json:"model,omitempty"`
+	PromptID  int64  `json:"prompt_id,omitempty"`
 }

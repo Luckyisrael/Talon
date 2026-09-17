@@ -28,6 +28,10 @@ type childRunner struct {
 	parentTools map[string]bool
 	// orchestrator runs the child's loop.
 	orchestrator *orchestrator.Orchestrator
+	// eventLog, when set, is where the child's recovered model-call retries
+	// land — a delegated turn that hit a rate limit should show in the same
+	// project log as the parent's retries. Nil keeps the child SSE-only.
+	eventLog orchestrator.EventAppender
 }
 
 // RunChild executes one child to completion. The loop is the same
@@ -101,6 +105,9 @@ func (r *childRunner) runLoop(ctx context.Context, sess *orchestrator.SessionSta
 		ReadOnlyTool: bs.reg.IsReadOnly,
 		FilesTouched: bs.fs.Touched,
 		Exists:       bs.fs.Exists,
+		// A subagent's retries belong to the same project log: the parent
+		// turn's replay should see that a delegated call recovered too.
+		EventLog: r.eventLog,
 	})
 }
 

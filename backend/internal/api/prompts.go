@@ -977,6 +977,10 @@ func (h *PromptHandler) runBuild(
 				log.Printf("project %d: could not shadow the session log at compaction: %v", projectID, err)
 			}
 		},
+		// The audit sink for non-surface events the loop owns: a recovered
+		// model-call retry lands here so it survives a reload instead of
+		// living only in the SSE trace.
+		EventLog: h.slog.get(h.store, projectID),
 	})
 
 	// Everything below runs whether or not the loop succeeded: a failed turn
