@@ -10,6 +10,35 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
+// containerAction is what the reconciler owes a session's container:
+// destroy it, resume it from pause, or recover it as-is.
+type containerAction int
+
+const (
+	actionDestroy containerAction = iota
+	actionResume
+	actionRecover
+)
+
+// decideAction maps (exists, docker state) to the reconciler's duty. Pure
+// so the pause-vs-destroy judgement is unit-testable without Docker: paused
+// means sleeping (resume), anything halted means dead (destroy), running
+// means recover. Unknown states fail toward destroy — a container in a state
+// we do not recognize is not one we should trust a session to.
+func decideAction(exists bool, state string) containerAction {
+	if !exists {
+		return actionDestroy
+	}
+	switch state {
+	case "running":
+		return actionRecover
+	case "paused":
+		return actionResume
+	default:
+		return actionDestroy
+	}
+}
+
 // Reconcile compares DB session state against actual Docker container state.
 // It recovers tracking of running containers and removes orphans.
 // This runs on server startup to handle containers that survived a backend restart.
@@ -53,15 +82,35 @@ func (m *Manager) Reconcile(s *store.Store) error {
 		}
 
 		info, exists := dockerByID[session.ContainerID]
-		if !exists || info.State != "running" {
-			// Container gone or stopped → mark session destroyed
+		switch decideAction(exists, info.State) {
+		case actionDestroy:
+			// Container gone, or exited/crashed — genuinely dead, not sleeping.
 			log.Printf("reconciler: session %d container %s missing/stopped (state=%s) → marking destroyed",
 				session.ID, shortID(session.ContainerID), info.State)
 			s.UpdateSessionState(session.ID, "destroyed")
 			s.UpdateSessionContainer(session.ID, "", "", 0)
 			m.portAlloc.Release(session.ID)
 			markedDestroyed++
-		} else {
+		case actionResume:
+			// Paused by the reaper for idleness, but the session row is
+			// still live — resume it rather than destroying work in
+			// progress. Destroying paused containers is what killed
+			// mid-turn device flows (gradle compiling while adb sat idle).
+			if err := m.UnpauseContainer(session.ContainerID); err != nil {
+				log.Printf("reconciler: session %d container %s unpause failed (%v) → marking destroyed",
+					session.ID, shortID(session.ContainerID), err)
+				s.UpdateSessionState(session.ID, "destroyed")
+				s.UpdateSessionContainer(session.ID, "", "", 0)
+				m.portAlloc.Release(session.ID)
+				markedDestroyed++
+				continue
+			}
+			s.UpdateSessionContainerState(session.ID, "running")
+			m.portAlloc.Restore(int64(info.ADBPort), session.ID)
+			log.Printf("reconciler: session %d container %s resumed from pause (port %d)",
+				session.ID, shortID(session.ContainerID), info.ADBPort)
+			recovered++
+		default: // actionRecover
 			// Container is running — recover port allocation
 			m.portAlloc.Restore(int64(info.ADBPort), session.ID)
 			log.Printf("reconciler: session %d container %s recovered (port %d)",

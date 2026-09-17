@@ -59,6 +59,21 @@ type buildSession struct {
 	// keeps the tools unregistered — the flag TALONSTUDIO_SUBAGENTS=1 opts
 	// a deployment in.
 	children *subagent.Service
+	// projectID + store let the executor keep the device session alive:
+	// device-scoped tool calls touch the live session clock so the reaper
+	// does not pause the container mid-build (a 15-minute gradle run is
+	// one tool call — without touches the session looks idle and dies).
+	projectID int64
+	store     *store.Store
+}
+
+// deviceTools need a live container; invoking one is activity that must
+// move the reaper clock. Everything else (reads, edits, shell) is
+// host-side work the reaper correctly ignores.
+var deviceTools = map[string]bool{
+	"build_apk": true, "run_gradle": true, "run_boot": true,
+	"run_vision": true, "run_interact": true, "capture_screenshot": true,
+	"tail_logcat": true, "test_wallet_roundtrip": true, "run_e2e": true,
 }
 
 // newBuildSession wires the agent's tools to one project's workspace.
@@ -76,7 +91,7 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	// TALONSTUDIO_SANDBOX=read-only selects a read-only session (plan-style
 	// turns that must not mutate), danger-full-access is not selectable from
 	// the environment — only a composition change can grant it.
-	bs := &buildSession{fs: fs, reg: reg}
+	bs := &buildSession{fs: fs, reg: reg, projectID: projectID, store: h.store}
 	bs.sandbox = sandbox.New(sandboxModeFromEnv(), workspacePath,
 		[]string{os.TempDir()}, func(op sandbox.Operation) error { return nil })
 
@@ -274,7 +289,7 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 		})
 	}
 
-	return &buildSession{reg: reg, fs: fs, defs: defs}
+	return &buildSession{reg: reg, fs: fs, defs: defs, projectID: projectID, store: h.store}
 }
 
 func (h *PromptHandler) storeAdapter() *tools.StoreAdapter {
@@ -378,6 +393,15 @@ func (g gateVision) VisionCheck(ctx context.Context, png []byte, intended string
 // abort underneath it.
 func (b *buildSession) executor() orchestrator.ToolExecutor {
 	return func(ctx context.Context, name string, input json.RawMessage) (string, bool) {
+		// Device-scoped calls keep the live session clock moving so a long
+		// device flow (gradle, boot, vision) is never mistaken for idleness
+		// and reaped mid-turn. Best-effort: a failed touch must not fail
+		// the tool call it accompanies.
+		if deviceTools[name] && b.store != nil {
+			if live, err := b.store.LatestLiveSession(b.projectID); err == nil && live != nil {
+				_ = b.store.TouchSession(live.ID)
+			}
+		}
 		// H4 uniform outer ring: when the sandbox capability is present, the
 		// mutating tools' target paths are checked against the confinement
 		// mode before the tool runs. The per-tool checks inside the registry

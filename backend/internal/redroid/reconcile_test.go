@@ -65,3 +65,30 @@ func dockerAvailable() bool {
 	_ = mgr
 	return true
 }
+
+// decideAction is the pause-vs-destroy judgement, unit-tested without
+// Docker: paused sleeps (resume), halted states die (destroy), running
+// recovers. The E2E proved destroying paused containers kills mid-turn
+// device flows; this pins the corrected behavior.
+func TestDecideAction(t *testing.T) {
+	cases := []struct {
+		exists bool
+		state  string
+		want   containerAction
+	}{
+		{false, "", actionDestroy},
+		{false, "running", actionDestroy},
+		{true, "running", actionRecover},
+		{true, "paused", actionResume},
+		{true, "exited", actionDestroy},
+		{true, "dead", actionDestroy},
+		{true, "removing", actionDestroy},
+		{true, "created", actionDestroy},
+		{true, "weird-state", actionDestroy},
+	}
+	for _, c := range cases {
+		if got := decideAction(c.exists, c.state); got != c.want {
+			t.Errorf("decideAction(%v, %q) = %v, want %v", c.exists, c.state, got, c.want)
+		}
+	}
+}
