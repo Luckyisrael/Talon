@@ -50,7 +50,7 @@ func TestDeviceToolCallsTouchSession(t *testing.T) {
 	}
 
 	h := NewPromptHandler(st, nil, t.TempDir(), "", orchestrator.New(nil, st, nil), nil, nil, nil)
-	bs := h.newBuildSession(t.TempDir(), proj.ID, "localhost:15555", nil)
+	bs := h.newBuildSession(t.TempDir(), proj.ID, 0, "localhost:15555", nil)
 	bs.reg.Register(stubDeviceTool{name: "build_apk"})
 	bs.reg.Register(stubDeviceTool{name: "read_file"})
 	exec := bs.executor()

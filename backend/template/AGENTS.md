@@ -24,10 +24,12 @@ the call pattern, prune the demo, typecheck after.
 
 ## Wallet & keys
 
-- The only wallet stack is Mobile Wallet Adapter (MWA) via
-  `@solana-mobile/mobile-wallet-adapter-protocol-web3js`.
-- Never add browser wallet packages (`@solana/wallet-adapter-*`,
-  `wallet-standard`, Phantom/Solflare SDKs) — they cannot run on-device.
+- The only wallet stack is Mobile Wallet Adapter via `@wallet-ui/react-native-kit`
+  (`useMobileWallet()`: connect, `sendTransactions(instructions)`), with
+  `@solana/kit` types (`Address` strings, program-client instructions).
+  Never `browser` wallets, never `@solana/web3.js` (`Connection`, `PublicKey`,
+  `Transaction`) or `@solana-mobile/mobile-wallet-adapter-protocol-web3js` —
+  legacy, not installed.
 - Key material stays inside the wallet app. This app never sees, stores, or
   logs a private key or seed phrase.
 

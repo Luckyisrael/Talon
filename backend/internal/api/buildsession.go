@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -63,7 +64,9 @@ type buildSession struct {
 	// device-scoped tool calls touch the live session clock so the reaper
 	// does not pause the container mid-build (a 15-minute gradle run is
 	// one tool call — without touches the session looks idle and dies).
+	// promptID attributes build receipts to the owning turn.
 	projectID int64
+	promptID  int64
 	store     *store.Store
 }
 
@@ -79,7 +82,7 @@ var deviceTools = map[string]bool{
 // newBuildSession wires the agent's tools to one project's workspace.
 // output, when non-nil, is attached to the command-running tools so their
 // subprocess output streams back to the frontend while the agent works.
-func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, adbTarget string, output io.Writer) *buildSession {
+func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptID int64, adbTarget string, output io.Writer) *buildSession {
 	fs := tools.NewFS(workspacePath)
 	reg := tools.NewRegistry()
 
@@ -91,7 +94,7 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID int64, a
 	// TALONSTUDIO_SANDBOX=read-only selects a read-only session (plan-style
 	// turns that must not mutate), danger-full-access is not selectable from
 	// the environment — only a composition change can grant it.
-	bs := &buildSession{fs: fs, reg: reg, projectID: projectID, store: h.store}
+	bs := &buildSession{fs: fs, reg: reg, projectID: projectID, promptID: promptID, store: h.store}
 	bs.sandbox = sandbox.New(sandboxModeFromEnv(), workspacePath,
 		[]string{os.TempDir()}, func(op sandbox.Operation) error { return nil })
 
@@ -416,7 +419,45 @@ func (b *buildSession) executor() orchestrator.ToolExecutor {
 		if err != nil && result.Content == "" {
 			return fmt.Sprintf("%s failed: %v", name, err), true
 		}
+		// Build receipts: every build_apk completion is filed durably with
+		// the owning turn attached, whether that turn is still alive or not.
+		// The live turn reads the inline result as today; a turn that died
+		// mid-build (cancel, restart, timeout) leaves a receipt the next
+		// turn picks up instead of rebuilding blind. Best-effort — a failed
+		// write must not rewrite the tool's own verdict.
+		if name == "build_apk" && b.store != nil && b.promptID != 0 {
+			b.recordBuildReceipt(result, err)
+		}
 		return result.Content, result.IsError
+	}
+}
+
+// recordBuildReceipt files one finished build_apk run: status, artifact,
+// one-line summary. Child sessions (promptID 0, read-only registries)
+// never reach here — build_apk is not in their toolset.
+func (b *buildSession) recordBuildReceipt(result tools.ToolResult, err error) {
+	status := "built"
+	if err != nil || result.IsError {
+		status = "failed"
+	}
+	apkPath := ""
+	if status == "built" {
+		for _, line := range strings.Split(result.Content, "\n") {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "APK built successfully:"); ok {
+				apkPath = strings.TrimSpace(rest)
+				break
+			}
+		}
+	}
+	summary := result.Content
+	if len(summary) > 500 {
+		summary = summary[:500] + "…"
+	}
+	if summary == "" && err != nil {
+		summary = err.Error()
+	}
+	if rerr := b.store.RecordBuildReceipt(b.projectID, b.promptID, status, apkPath, summary); rerr != nil {
+		log.Printf("build receipt for prompt %d not recorded: %v", b.promptID, rerr)
 	}
 }
 
@@ -551,7 +592,7 @@ func childRunnerFor(h *PromptHandler, workspacePath string, projectID int64, adb
 			// A child's registry: the read tools only. bs.defs is rebuilt
 			// because newBuildSession would register the full set including
 			// delegate (depth-1 wall #2: the child cannot see the tool).
-			child := h.newBuildSession(workspacePath, projectID, adbTarget, output)
+			child := h.newBuildSession(workspacePath, projectID, 0, adbTarget, output)
 			readOnly := child.reg
 			readDefs := make([]ai.ToolDefinition, 0, len(child.defs))
 			for _, d := range child.defs {

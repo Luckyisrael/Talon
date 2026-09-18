@@ -17,6 +17,26 @@ const READ_ONLY_TOOLS = new Set([
   "context_build",
 ]);
 
+/**
+ * progressHint distills streaming command output to one readable line for
+ * the running tool row: the latest gradle `> Task :x` line wins, then a
+ * trailing percentage, else the last non-empty line. Capped so a verbose
+ * build never stretches the row.
+ */
+export function progressHint(text: string): string | undefined {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return undefined;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(/^>\s*Task\s+(.+)$/);
+    if (m) return m[1].slice(0, 60);
+  }
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(/(\d{1,3})%/);
+    if (m) return `${m[1]}% — ${lines[i].slice(0, 48)}`;
+  }
+  return lines[lines.length - 1].slice(0, 60);
+}
+
 export function getToolLabel(
   tool: string,
   input: { path?: string; name?: string; command?: string; pattern?: string } | undefined,
@@ -574,6 +594,14 @@ function ToolRow({ row }: { row: TraceRow }) {
         >
           {row.label}
         </span>
+
+        {/* Live progress hint while running (gradle task / percent) — the
+            row reads at a glance instead of requiring the expanded tail. */}
+        {running && row.progress ? (
+          <span className="shrink-0 truncate font-mono text-[11.5px] text-fog">
+            {row.progress}
+          </span>
+        ) : null}
 
         {/* The path is the machine's word for the thing, so it is set in mono and
             truncated from the left — the filename matters more than the folder. */}

@@ -4,6 +4,7 @@ import AgentTrace, {
   PlanProgress,
   getToolLabel,
   isReadOnlyTool,
+  progressHint,
 } from "./AgentTrace";
 import type { TraceRow } from "@/lib/types";
 
@@ -130,5 +131,19 @@ describe("settle-on-stream-end law (B6/B8): no row shimmers after the turn", () 
     // No group summary, no calls chip — the artifact row vanishes.
     expect(screen.queryByText(/0 calls/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Looked through the project/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("progressHint — running-row progress line", () => {
+  it("prefers the latest gradle task line", () => {
+    const out = progressHint("> Task :app:preBuild\n> Task :app:compileDebug\nsome noise");
+    expect(out).toBe(":app:compileDebug");
+  });
+  it("falls back to a trailing percentage", () => {
+    expect(progressHint("building...\n45% done")).toBe("45% — 45% done");
+  });
+  it("falls back to the last non-empty line, capped", () => {
+    expect(progressHint("\n  hello world  \n")).toBe("hello world");
+    expect(progressHint("")).toBeUndefined();
   });
 });

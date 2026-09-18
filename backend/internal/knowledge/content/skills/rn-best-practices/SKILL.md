@@ -73,6 +73,11 @@ below. For the full per-rule examples, see `ATTRIBUTION.md` (upstream repo).
   show a fallback on first render rather than blocking.
 - If React Compiler is enabled, destructure functions from props/hooks so it can
   memoize them, and read Reanimated shared values through the compiler-safe pattern.
+- **Shared state lives in zustand stores, one per feature** (`stores/useWatchlist.ts`,
+  not a global god-store). Screens subscribe with selectors so only the rows that
+  changed re-render. Local UI state stays in `useState`; server state stays in
+  TanStack Query. Do not add redux, jotai, mobx, or valtio — zustand is
+  preinstalled and is the only store in a Talon app.
 
 ## Configuration (LOW)
 

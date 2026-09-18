@@ -67,10 +67,14 @@ They are not product screens. A user-facing app replaces them.
 - `components/` — shared UI used by more than one feature.
 - `constants/` — tokens, config, styles. No logic.
 - `assets/` — images and fonts only.
+- Keep authored files focused: anything reused, stateful, or laid out by a
+  screen earns its own file. Screens compose; they don't accumulate.
 
 ## Wallet stack
 
-The only wallet stack is Mobile Wallet Adapter via
-`@solana-mobile/mobile-wallet-adapter-protocol-web3js`, wrapped by
-`@wallet-ui/react-native-kit`. Browser wallet packages cannot run on-device —
+The only wallet stack is Mobile Wallet Adapter via `@wallet-ui/react-native-kit`
+(`useMobileWallet()`: connect, `sendTransactions()` with `@solana/kit`
+program-client instructions). Never `@solana/web3.js` (`Connection`,
+`PublicKey`, `Transaction`) or `@solana-mobile/mobile-wallet-adapter-protocol-web3js` —
+legacy, not installed. Browser wallet packages cannot run on-device —
 never add them. Keys stay in the wallet app; this app never sees a seed phrase.

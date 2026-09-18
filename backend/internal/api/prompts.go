@@ -914,7 +914,7 @@ func (h *PromptHandler) runBuild(
 
 	// The output writer mirrors the sink for the command-running tools, so a
 	// tool's subprocess output appears in the terminal pane as it happens.
-	bs := h.newBuildSession(workspacePath, projectID, h.adbTargetFor(projectID), commandOutputWriter{emitter: sess.Emitter})
+	bs := h.newBuildSession(workspacePath, projectID, promptID, h.adbTargetFor(projectID), commandOutputWriter{emitter: sess.Emitter})
 
 	// Ground the model in what already exists before the first round: capture a
 	// one-time map of the project's files, their exports, and their imports, and
@@ -1043,6 +1043,31 @@ func (h *PromptHandler) turnHistory(projectID, promptID int64, userPrompt string
 		userTurn = ai.UserText(userPrompt + "\n\n[Context: an earlier turn is still waiting on this " +
 			"question from you: \"" + q + "\" If this message answers or relates to it, act on that " +
 			"connection; otherwise proceed with the message as a new request.]")
+	}
+	// Build receipts: finished builds whose turn is gone surface here, once.
+	// A turn that died mid-gradle (cancel, restart, timeout) leaves a verdict
+	// no live turn ever read; the next turn starts by reading it instead of
+	// rebuilding blind. Ack-on-read delivers exactly once — the receipt waits,
+	// nothing polls, and a turn that never asks sees nothing.
+	if receipts, err := h.store.PendingBuildReceipts(projectID); err == nil && len(receipts) > 0 {
+		var lines []string
+		var ids []int64
+		for _, r := range receipts {
+			line := fmt.Sprintf("- %s", r.Status)
+			if r.ApkPath != "" {
+				line += " (" + r.ApkPath + ")"
+			}
+			if r.Summary != "" {
+				line += ": " + r.Summary
+			}
+			lines = append(lines, line)
+			ids = append(ids, r.ID)
+		}
+		userTurn = ai.UserText(userTurn.Blocks[0].Text + "\n\n[Build receipts since you last looked — " +
+			"finished builds whose turn is gone. Read before rebuilding:]\n" + strings.Join(lines, "\n"))
+		if err := h.store.AckBuildReceipts(ids); err != nil {
+			log.Printf("project %d: could not ack build receipts: %v", projectID, err)
+		}
 	}
 	history = append(history, userTurn)
 

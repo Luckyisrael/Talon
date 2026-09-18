@@ -303,6 +303,9 @@ export interface TraceRow {
   target?: string;
   status?: "running" | "done" | "fail" | "warning";
   summary?: string;
+  /** Live progress hint parsed from streaming output (gradle task lines,
+      percentages) — shown while running so long builds read at a glance. */
+  progress?: string;
   // Decision (write_adr / write_memory rendered as a card)
   decision?: DecisionCard;
   // Group

@@ -45,6 +45,10 @@ var configFiles = []string{
 	// platform conventions in editable form — the agent reads it as its
 	// instructions chain (H6), and the user can edit it per project.
 	"AGENTS.md",
+	// TEMPLATE.md ships alongside it: the keep/prune inventory the plan
+	// prompt requires before filling in structure. Without it the planner
+	// stalls asking for a file that does not exist in the workspace.
+	"TEMPLATE.md",
 }
 
 // templateDirs are directories copied recursively from the template into the

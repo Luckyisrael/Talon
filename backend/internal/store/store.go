@@ -298,6 +298,24 @@ func (s *Store) migrate() error {
 			UNIQUE(prompt_id, scope),
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
+		// build_receipts records every build_apk completion (built or failed),
+		// written by the executor the moment the tool returns — not by the
+		// turn, which may already be gone (cancelled, restarted, timed out).
+		// The next turn picks unacknowledged receipts up into its context
+		// and acks them, so a finished build is never silently lost and the
+		// model always reads the verdict instead of rebuilding blind. No
+		// polling: the receipt waits; nothing spins.
+		`CREATE TABLE IF NOT EXISTS build_receipts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			prompt_id INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			apk_path TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			acknowledged INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
 		// plan_task_status is the durable project backlog. One canonical row
 		// per (project, task) so every turn — and every restart — sees the
 		// same truth: a server restart used to blank the checklist and make
@@ -954,6 +972,58 @@ func (s *Store) HasApproval(promptID int64, scope string) bool {
 	var count int
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM turn_approvals WHERE prompt_id = ? AND scope = ?", promptID, scope).Scan(&count)
 	return count > 0
+}
+
+// BuildReceipt is one finished build_apk run: its verdict, artifact, and a
+// one-line summary. Status is "built" or "failed".
+type BuildReceipt struct {
+	ID        int64  `json:"id"`
+	ProjectID int64  `json:"project_id"`
+	PromptID  int64  `json:"prompt_id"`
+	Status    string `json:"status"`
+	ApkPath   string `json:"apk_path,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+}
+
+// RecordBuildReceipt files a finished build. Called from the tool executor,
+// which outlives any particular turn state — the receipt is the durable
+// half of the build contract.
+func (s *Store) RecordBuildReceipt(projectID, promptID int64, status, apkPath, summary string) error {
+	_, err := s.db.Exec(
+		"INSERT INTO build_receipts (project_id, prompt_id, status, apk_path, summary) VALUES (?, ?, ?, ?, ?)",
+		projectID, promptID, status, apkPath, summary)
+	return err
+}
+
+// PendingBuildReceipts returns unacknowledged receipts, oldest first.
+func (s *Store) PendingBuildReceipts(projectID int64) ([]BuildReceipt, error) {
+	rows, err := s.db.Query(
+		"SELECT id, project_id, prompt_id, status, apk_path, summary FROM build_receipts WHERE project_id = ? AND acknowledged = 0 ORDER BY id ASC",
+		projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BuildReceipt
+	for rows.Next() {
+		var r BuildReceipt
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.PromptID, &r.Status, &r.ApkPath, &r.Summary); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// AckBuildReceipts marks receipts read so they are delivered exactly once.
+// Reading without acking would re-inject the same verdict every turn.
+func (s *Store) AckBuildReceipts(ids []int64) error {
+	for _, id := range ids {
+		if _, err := s.db.Exec("UPDATE build_receipts SET acknowledged = 1 WHERE id = ?", id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PlanTask is the durable per-project backlog row. Status mirrors the in-memory

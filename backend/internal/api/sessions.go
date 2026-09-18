@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -309,6 +311,11 @@ func (h *SessionHandler) LiveForProject(w http.ResponseWriter, r *http.Request) 
 // Screenshot captures one PNG frame from the session's device for download
 // or store-asset use. Same ownership posture as Get: session ids route here,
 // and the adb target comes from the session row, never the request.
+// A copy lands in the project's app/assets/screenshots/ (best-effort, never
+// failing the request): captures used to live only in the caller's /tmp and
+// died with it. Unreferenced PNGs are not bundled by Metro, so the capture
+// history does not bloat the APK — and the agent can read its own captures
+// back for vision self-review.
 func (h *SessionHandler) Screenshot(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -329,10 +336,26 @@ func (h *SessionHandler) Screenshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "screenshot failed: "+err.Error())
 		return
 	}
+	h.persistCapture(session.ProjectID, id, png)
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Content-Length", strconv.Itoa(len(png)))
 	w.WriteHeader(http.StatusOK)
 	w.Write(png)
+}
+
+// persistCapture files one screenshot under the project's capture history.
+// Best-effort by contract: logging, never erroring — a failed write must
+// not turn a good capture into a failed request.
+func (h *SessionHandler) persistCapture(projectID, sessionID int64, png []byte) {
+	dir := filepath.Join(h.workspaceDir, strconv.FormatInt(projectID, 10), "app", "assets", "screenshots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("capture persist: mkdir %s: %v", dir, err)
+		return
+	}
+	name := fmt.Sprintf("session-%d-%s.png", sessionID, time.Now().UTC().Format("20060102-150405"))
+	if err := os.WriteFile(filepath.Join(dir, name), png, 0o644); err != nil {
+		log.Printf("capture persist: write %s: %v", name, err)
+	}
 }
 
 func (h *SessionHandler) Pause(w http.ResponseWriter, r *http.Request) {

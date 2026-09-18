@@ -110,7 +110,7 @@ func TestEvalsLiveScorecard(t *testing.T) {
 			}
 		}()
 
-		bs := h.newBuildSession(ws, proj.ID, "", nil)
+		bs := h.newBuildSession(ws, proj.ID, 0, "", nil)
 
 		evalCtx, cancel := context.WithTimeout(ctx, perEval)
 		defer cancel()

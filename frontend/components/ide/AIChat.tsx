@@ -24,7 +24,7 @@ import {
 import { useIDEStore } from "@/lib/store";
 import { uuid } from "@/lib/uuid";
 import type { ChatMessage, PlanData, PlanTask, StreamMessage, TraceRow } from "@/lib/types";
-import AgentTrace, { getToolLabel, PlanProgress } from "./AgentTrace";
+import AgentTrace, { getToolLabel, PlanProgress, progressHint } from "./AgentTrace";
 import LoadingState from "@/components/ui/LoadingState";
 
 interface AIChatProps {
@@ -739,7 +739,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                     ) {
                       const MAX = 2000;
                       const merged = ((r.summary ?? "") + chunk).slice(-MAX);
-                      rows[i] = { ...r, summary: merged };
+                      rows[i] = { ...r, summary: merged, progress: progressHint(merged) };
                       break;
                     }
                   }

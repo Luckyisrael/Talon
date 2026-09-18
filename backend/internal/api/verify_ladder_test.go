@@ -41,7 +41,7 @@ func TestVerifyLadderToolsResolve(t *testing.T) {
 
 	h := NewPromptHandler(st, nil, t.TempDir(), "", orchestrator.New(nil, st, nil), nil, nil, nil)
 	ws := t.TempDir()
-	bs := h.newBuildSession(ws, proj.ID, "", nil) // no device attached
+	bs := h.newBuildSession(ws, proj.ID, 0, "", nil) // no device attached
 
 	for _, name := range ladderTools {
 		if _, ok := bs.reg.Get(name); !ok {
