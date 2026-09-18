@@ -117,6 +117,11 @@ Before using a component, confirm its real props against the installed version: 
 the relevant `.d.ts` from `node_modules/@expo/ui` in the workspace, which is the
 reliable source of truth for the version actually installed.
 
+## Android appendix
+
+For the Android-only Compose layer (`LazyColumn`, `Icon` XML, `useNativeState`,
+`.android.tsx` isolation): see `references/jetpack-compose.md` in this skill.
+
 ---
 
 *Adapted from Expo's `expo-ui` skill (MIT). Full component references and platform

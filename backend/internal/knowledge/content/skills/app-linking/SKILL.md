@@ -73,7 +73,8 @@ installed. A debug build's fingerprint will not be verified.
   `application/json` at the exact path.
 - **Wrong SHA-256.** Compute it correctly:
   `keytool -list -v -keystore release.keystore | grep SHA256`.
-  Strip colons, lowercase.
+  Keep the canonical form: colon-separated UPPERCASE hex (`AB:CD:…`) —
+  stripped or lowercased fingerprints fail verification.
 - **Mixed content.** `assetlinks.json` over HTTPS only. Plain
   HTTP is rejected.
 - **The app re-prompts the user to choose between browser and

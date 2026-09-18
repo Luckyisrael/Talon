@@ -3,7 +3,7 @@ name: mobile-defaults
 description: Mobile-first defaults every Talon app should have — safe areas, keyboard handling, network loss, slow CPU, low-data mode, status bar. Load when the build is producing a screen and "happy path only" is the default, because the user will hit every other path on a real phone.
 version: "RN 0.83, react-native-safe-area-context 5.6.x, expo-status-bar 3.x, NetInfo 7.x"
 autoAttach: true
-triggers: [path:app/**, path:components/**, content:SafeAreaView, content:KeyboardAvoidingView, content:NetInfo, content:useSafeAreaInsets, content:StatusBar, content:AppState]
+triggers: [path:app/**, path:components/**, content:NetInfo, content:useSafeAreaInsets, content:StatusBar, content:AppState, content:keyboard-controller, content:AbortController]
 ---
 
 # Mobile defaults — the paths you only find on a real phone
@@ -14,18 +14,16 @@ the first week.
 
 ## Safe areas
 
-- Wrap every screen in `SafeAreaView` (from
-  `react-native-safe-area-context`, preinstalled) **or** apply
-  `useSafeAreaInsets()` padding. Do not hardcode top/bottom
-  padding. (See `talon-screen-design`.)
-- The Talon has both a status bar and a gesture area. Both count.
-- A modal sheet (e.g. `@expo/ui` `BottomSheet`) needs its own
-  safe-area handling on the bottom edge.
+- Safe-area geometry lives in `mobile-craft` — follow it. This skill covers
+  only what craft doesn't: a modal sheet (e.g. `@expo/ui` `BottomSheet`)
+  needs its own safe-area handling on the bottom edge.
 
 ## Keyboard
 
-- `KeyboardAvoidingView` with `behavior="padding"` on iOS and
-  `"height"` on Android (or just `padding` on both — test).
+- Keyboard tracking goes through `react-native-keyboard-controller`
+  (animated values that follow the real keyboard) — never
+  `KeyboardAvoidingView` with guessed durations, never a keyboard listener
+  plus a hardcoded animation. See `mobile-motion` for the pattern.
 - `keyboardShouldPersistTaps="handled"` on scrollable lists that
   contain `TextInput`, so a tap outside the keyboard does not
   dismiss-then-reopen the input.
@@ -37,9 +35,9 @@ the first week.
 - `StatusBar` from `expo-status-bar` (preinstalled) is enough
   for colour and translucency. `style="light"` for dark surfaces,
   `style="dark"` for light ones.
-- The default `app.json` already declares an iOS-ish status bar;
-  in an Android-first app, set `"androidStatusBar": { "barStyle":
-  "light-content", "backgroundColor": "#0a0a0a" }`.
+- Under SDK 54+ edge-to-edge enforcement the OS owns the status-bar
+  background — `androidStatusBar.backgroundColor` in `app.json` is ignored.
+  Control style only, never background.
 
 ## Network loss
 
@@ -59,8 +57,9 @@ the first week.
 
 - Initial render must not block on a heavy computation. Move
   parsing, sorting, and crypto off the first paint.
-- `InteractionManager.runAfterInteractions(() => ...)` for work
-  that can wait until animations finish.
+- Defer non-critical work until the transition settles (interaction-aware
+  scheduling, not a fixed timeout) for work that can wait until animations
+  finish.
 - `useMemo` for derived data the screen re-computes on every
   render (lists, sort, search).
 

@@ -3,7 +3,7 @@ name: mobile-motion
 description: The motion bar for Talon screens — the frequency gate (should this animate at all), gesture-driven springs seeded with finger velocity, narrative timing curves, worklets and the UI thread, Reduce Motion. Load before writing any react-native-reanimated code, Animated.timing, gesture, sheet, or transition.
 version: "appllama-app-design-skill@1.3.0 motion reference — adapted; Appllama MIT"
 autoAttach: true
-triggers: [import:react-native-reanimated, import:react-native-gesture-handler, content:useAnimatedStyle, content:withSpring, content:withTiming, content:Animated.timing, content:runOnJS, content:useSharedValue]
+triggers: [import:react-native-reanimated, import:react-native-gesture-handler, content:useAnimatedStyle, content:withSpring, content:withTiming, content:scheduleOnRN, content:useSharedValue, content:runOnJS, content:Animated.timing]
 license: MIT (Appllama — see ATTRIBUTION.md)
 source: https://github.com/appllama/appllama-skills (skills/appllama-app-design-skill/SKILL.md + references/motion.md)
 ---

@@ -84,6 +84,11 @@ below. For the full per-rule examples, see `ATTRIBUTION.md` (upstream repo).
 - Install custom fonts via an Expo config plugin, not runtime loading.
 - Keep native dependencies in the app package (monorepos) and on a single version.
 - Hoist `Intl.*` formatter creation out of render — constructing them is expensive.
+- **Money math is exact or it doesn't ship.** Token amounts in lamports as
+  integers/`bigint` — never floats, never `lamports / 1e9` (precision loss on
+  small balances, overflow on large). `shortenAddress` as `g4y…b7x`, never the
+  full string in a row. No hardcoded mint lists or RPC URLs — single
+  `lib/solana/rpc.ts` with timeouts and fallback.
 
 ---
 

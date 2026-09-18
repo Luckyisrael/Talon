@@ -39,21 +39,25 @@ func TestLoadEmbeddedContent(t *testing.T) {
 	// Every skill we ship: the Phase-A internal ones plus the WS3-vendored
 	// Expo/Vercel skills, plus the curated Talon bundle (Phase 1) and the
 	// failure-pattern index. If one is renamed, update this list deliberately —
-	// the manifest and triggers depend on these names.
+	// the manifest and triggers depend on these names. Merged-away skills stay
+	// off this list by design: mobile-navigation lives inside expo-router-nav,
+	// expo-ui-jetpack-compose inside expo-ui/references, talon-screen-design
+	// inside mobile-craft's Device appendix, and scl folded into
+	// rn-best-practices — deleting any of those homes must fail here.
 	want := []string{
 		"app-linking",
 		"dapp-store",
 		"expo-router-nav",
 		"expo-ui",
-		"expo-ui-jetpack-compose",
 		"failure-patterns",
+		"mobile-craft",
 		"mobile-defaults",
+		"mobile-motion",
 		"reanimated-v4",
 		"rn-best-practices",
-		"scl",
 		"talon-mobile",
-		"talon-screen-design",
 		"seed-vault",
+		"solana-dev",
 		"wallet-mwa",
 	}
 	for _, name := range want {
@@ -98,7 +102,7 @@ func TestAutoAttachFor(t *testing.T) {
 		tool       string
 		input      string
 		want       string // skill expected in the result, or "" for none
-		wantDesign bool   // talon-screen-design auto-attaches on app/** and components/** writes
+		wantDesign bool   // mobile-craft auto-attaches on app/** and components/** writes
 	}{
 		{
 			name:       "reanimated import in written file",
@@ -130,7 +134,7 @@ func TestAutoAttachFor(t *testing.T) {
 			name:       "screen file pulls the design skill",
 			tool:       "write_file",
 			input:      `{"path":"app/home.tsx","content":"// SafeAreaView AMOLED FlatList touch target"}`,
-			want:       "talon-screen-design", // now autoAttach:true on app/**; expo-router-nav co-attaches
+			want:       "mobile-craft", // merged home of talon-screen-design; expo-router-nav co-attaches
 			wantDesign: true,
 		},
 		{
@@ -148,10 +152,10 @@ func TestAutoAttachFor(t *testing.T) {
 			wantDesign: true,
 		},
 		{
-			name:       "jetpack-compose import pulls the platform-specific skill",
+			name:       "jetpack-compose import pulls expo-ui (appendix lives there now)",
 			tool:       "write_file",
 			input:      `{"path":"components/ProductList.android.tsx","content":"import { Column } from '@expo/ui/jetpack-compose';"}`,
-			want:       "expo-ui-jetpack-compose", // expo-ui also co-attaches (@expo/ui is a substring); both are autoAttach
+			want:       "expo-ui", // standalone skill merged into expo-ui/references; @expo/ui substring still matches
 			wantDesign: true,
 		},
 		{
@@ -195,11 +199,11 @@ func TestAutoAttachFor(t *testing.T) {
 			if tc.want != "" && !names[tc.want] {
 				t.Errorf("expected skill %q, got %v", tc.want, keys(names))
 			}
-			// talon-screen-design auto-attaches on app/** and components/** writes
+			// mobile-craft auto-attaches on app/** and components/** writes
 			// and must stay out everywhere else (lib/ files, package installs).
-			if names["talon-screen-design"] != tc.wantDesign {
-				t.Errorf("talon-screen-design auto-attach = %v, want %v (got %v)",
-					names["talon-screen-design"], tc.wantDesign, keys(names))
+			if names["mobile-craft"] != tc.wantDesign {
+				t.Errorf("mobile-craft auto-attach = %v, want %v (got %v)",
+					names["mobile-craft"], tc.wantDesign, keys(names))
 			}
 		})
 	}

@@ -13,7 +13,7 @@ source: https://github.com/appllama/appllama-skills (skills/appllama-app-design-
 Every Talon screen sits on a phone next to the best-designed apps in the world,
 and the user compares within seconds. This skill is the bar and the method for
 clearing it. Talon-specific overrides win where they conflict (the device is a
-2670×1200 AMOLED Android at 460 PPI — see `talon-screen-design` for geometry).
+2670×1200 AMOLED Android at 460 PPI — see the Device appendix below for geometry).
 
 ## Prime directive: study before you draw
 
@@ -157,3 +157,44 @@ second icon package — they are duplicates of an installed dependency. If the
 glyph the screen needs is missing from the chosen family, switch family for
 that icon only via the same package, never the package itself. Emoji and
 Unicode symbols are never icons.
+
+## Device appendix — the Talon panel
+
+All craft laws above hold; this section adds what the hardware demands.
+(Merged from `talon-screen-design`: geometry and reach are device facts,
+everything else it taught was restated here.)
+- **One-handed tall panel.** 6.36" AMOLED, 2670×1200, 460 PPI, 120 Hz.
+  Primary actions live in the **lower two-thirds** — anything critical at
+  the top edge is unreachable one-handed. Design for the panel, not a
+  tablet and not a browser.
+- **Touch targets at least 44×44pt**, body text no smaller than 14–16pt,
+  on a 460 PPI screen with rendering at full sharpness.
+- **Dark-first, not dark-only.** AMOLED rewards true dark surfaces with
+  real contrast — default to dark, spend the accent where the fidelity
+  law says. The both-themes law above still holds: light must render
+  without breakage, it just isn't the lead.
+- **StyleSheet.create, not inline object literals** — inline styles defeat
+  the token discipline and re-allocate every render.
+
+## Emotion and flow — designed, not decorated
+
+A screen is remembered by two moments: its **peak** (most intense) and its
+**end** (last impression). Name both before building — a wallet approval
+that *feels* safe converts; one that feels sketchy doesn't, whatever the
+copy says. Motion is a trust signal in high-stakes flows (signing, money,
+health): one deliberate confirmation animation beats three decorative ones
+(see `mobile-motion` frequency gate).
+
+- **Thumb zone.** Primary actions live in the bottom third — reachable
+  one-handed on the tall panel (see Device appendix). Anything critical at
+  the top edge might as well not exist.
+- **Selection over input.** Prefer tappable options with an Other/free-text
+  fallback over blank fields, especially one-time setup. Every keystroke on
+  glass is friction; reserve text fields for repeated, precise entry.
+- **Never-blank states.** Loading, empty, error, and success are all
+  composed screens, not spinners: recent items, popular choices, or guidance
+  plus a CTA. Waits and failures get uplifting, specific microcopy ("Still
+  syncing — your balance is safe") never a dead spinner or a bare error code.
+- **Type discipline.** One family for UI, one mono for numerals — max four
+  sizes, two weights. Hierarchy comes from size, weight, and opacity steps
+  (100/80/60), never from bolding everything.

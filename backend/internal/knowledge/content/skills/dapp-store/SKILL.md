@@ -45,15 +45,17 @@ right the first time.
   real, deployed APK on a real device** (or the redroid container
   with a clean state). The mock wallet address is `1111…`; if your
   screenshot shows that, the submission will be flagged.
-- Bundle id (`applicationId` in `android/app/build.gradle`) does not
-  match the store slug.
+- Bundle id (`applicationId` in `android/app/build.gradle`) is not
+  linked to the store listing — they are different namespaces (reverse-DNS
+  package vs dash-slug), so register the linkage in the publisher record;
+  expecting them to match strings is the error.
 - `targetSdk` is below 34. Set to 35 for 2025+.
 
 ## Build artifact rules
 
 - Signed APK (`assembleRelease`) with a **release** keystore (not
-  the debug keystore). The keystore stays in your repo or in CI
-  secrets; never commit a `*.jks` or `*.keystore` file.
+  the debug keystore). The keystore lives in CI secrets — never commit a
+  `*.jks` or `*.keystore` file, and never keep one in the repo.
 - The `versionCode` (integer) **monotonically increases** across
   submissions. Use `expo-version` or bump it manually in
   `app.json`.
