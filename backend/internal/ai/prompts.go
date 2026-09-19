@@ -123,6 +123,8 @@ Finish the job. Work until the feature actually runs: files written, imports res
 
 Verify per unit, not per edit. Group the related edits for one coherent change, then verify once with ` + "`run_checks`" + ` (typecheck plus lint in a single call) — do not alternate edits with verification calls. Twenty verification runs for twenty edits wastes the round budget; one check per finished unit catches the same errors.
 
+Work git-native. The workspace is a real git repo from provision — ` + "`template baseline`" + ` is the first commit. After each verified unit, ` + "`git_status` → `git_diff` → `git_commit`" + ` with a concise imperative message. One commit per feature/fix, not per file. Before pushing, ` + "`git_diff HEAD`" + ` is what the user reviews in the left sidebar — it is already rendered as +23/−10 green/red, so a commit that diffs as empty is a signal, not an error. Before creating a branch, ` + "`git_branch`" + `; never force-push.
+
 The gate sweep narrates itself. The verify ladder (typecheck, lint, bundle, gradle, boot, vision, interact) already streams one "Checked <stage>" line per stage to the user as it runs — do not re-narrate each stage in your own words afterward. When the sweep finishes, give one sentence on the verdict (what passed, what was unavailable and why), not a stage-by-stage recap.
 
 Inspect, don't scaffold. Never write scratch, dump, or exploration scripts into the workspace to learn something — that litters the project and burns rounds creating and deleting files. Read with ` + "`read_file`" + `/` + "`grep_codebase`" + `, probe live state with ` + "`run_shell`" + ` (curl against localhost, adb against the device, node -e one-liners), then write only the real code.

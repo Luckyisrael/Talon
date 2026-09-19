@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,6 +33,8 @@ type GitHandler struct {
 	workspace    *workspace.Manager
 	workspaceDir string
 	states       *oauthStateStore
+	pushMu       sync.Mutex
+	pushLocks    map[int64]*sync.Mutex
 }
 
 func NewGitHandler(s *store.Store, cfg gitremote.Config, ws *workspace.Manager, workspaceDir string) *GitHandler {
@@ -41,7 +44,17 @@ func NewGitHandler(s *store.Store, cfg gitremote.Config, ws *workspace.Manager, 
 		workspace:    ws,
 		workspaceDir: workspaceDir,
 		states:       newOAuthStateStore(),
+		pushLocks:    make(map[int64]*sync.Mutex),
 	}
+}
+
+func (h *GitHandler) lockFor(projectID int64) *sync.Mutex {
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
+	if h.pushLocks[projectID] == nil {
+		h.pushLocks[projectID] = &sync.Mutex{}
+	}
+	return h.pushLocks[projectID]
 }
 
 // ── Status ──────────────────────────────────────────────────────────────────
@@ -230,6 +243,10 @@ func (h *GitHandler) Push(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	mu := h.lockFor(project.ID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	userID, ok := h.requirePaid(w, r)
 	if !ok {
 		return
@@ -281,24 +298,12 @@ func (h *GitHandler) Push(w http.ResponseWriter, r *http.Request) {
 	repo, err := h.cfg.EnsureRepo(r.Context(), token, name, private)
 	if err != nil {
 		log.Printf("git push: ensuring repo for project %d failed: %v", project.ID, err)
-		writeError(w, http.StatusBadGateway, "could not create or find the GitHub repository")
+		if isAuthError(err) {
+			writeError(w, http.StatusUnauthorized, "GitHub authentication failed; please reconnect")
+		} else {
+			writeError(w, http.StatusBadGateway, "could not create or find the GitHub repository")
+		}
 		return
-	}
-
-	// Record the mapping now that we know the repo exists, so a later push (or a
-	// failed push below) still finds the link.
-	if err := h.store.UpsertGitRemote(store.GitRemote{
-		ProjectID:     project.ID,
-		Provider:      gitProvider,
-		Owner:         repo.Owner.Login,
-		Repo:          repo.Name,
-		CloneURL:      repo.CloneURL,
-		HTMLURL:       repo.HTMLURL,
-		DefaultBranch: "main",
-		Private:       repo.Private,
-	}); err != nil {
-		log.Printf("git push: storing remote for project %d failed: %v", project.ID, err)
-		// Non-fatal to the push itself; continue.
 	}
 
 	message := strings.TrimSpace(req.Message)
@@ -318,8 +323,31 @@ func (h *GitHandler) Push(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// The error is already scrubbed of the token by the push layer.
 		log.Printf("git push: pushing project %d failed: %v", project.ID, err)
-		writeError(w, http.StatusBadGateway, "the push to GitHub failed")
+		msg := err.Error()
+		switch {
+		case isNonFastForward(msg):
+			writeError(w, http.StatusConflict, "push rejected: remote has changes you don't have — pull first")
+		case isAuthError(err):
+			writeError(w, http.StatusUnauthorized, "GitHub authentication failed; please reconnect")
+		default:
+			writeError(w, http.StatusBadGateway, "the push to GitHub failed")
+		}
 		return
+	}
+
+	// Record the mapping now that we know the push succeeded — a failed push
+	// must not claim a remote that never received the commit.
+	if err := h.store.UpsertGitRemote(store.GitRemote{
+		ProjectID:     project.ID,
+		Provider:      gitProvider,
+		Owner:         repo.Owner.Login,
+		Repo:          repo.Name,
+		CloneURL:      repo.CloneURL,
+		HTMLURL:       repo.HTMLURL,
+		DefaultBranch: "main",
+		Private:       repo.Private,
+	}); err != nil {
+		log.Printf("git push: storing remote for project %d failed: %v", project.ID, err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -329,6 +357,94 @@ func (h *GitHandler) Push(w http.ResponseWriter, r *http.Request) {
 		"commit_made":  result.CommitMade,
 		"nothing_todo": result.NothingToDo,
 	})
+}
+
+func isAuthError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "authentication failed") || strings.Contains(msg, "could not read username") || strings.Contains(msg, "invalid credentials")
+}
+
+func isNonFastForward(msg string) bool {
+	low := strings.ToLower(msg)
+	return strings.Contains(low, "non-fast-forward") || strings.Contains(low, "fetch first") || strings.Contains(low, "rejected") && strings.Contains(low, "failed to push")
+}
+
+// ── Project git read endpoints (branch/dirty/log) ──────────────────────────
+
+func (h *GitHandler) GetProjectGitStatus(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.ownedProject(w, r)
+	if !ok {
+		return
+	}
+	dir := h.dir(project.ID)
+	branchOut, _ := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").CombinedOutput()
+	branch := strings.TrimSpace(string(branchOut))
+	if branch == "" {
+		branch = "main"
+	}
+	statusOut, _ := exec.Command("git", "-C", dir, "status", "--porcelain=v1").CombinedOutput()
+	dirty := 0
+	if len(statusOut) > 0 {
+		for _, l := range strings.Split(strings.TrimSpace(string(statusOut)), "\n") {
+			if strings.TrimSpace(l) != "" {
+				dirty++
+			}
+		}
+	}
+	// Ahead/behind against origin/main if remote exists
+	ahead, behind := 0, 0
+	if out, err := exec.Command("git", "-C", dir, "rev-list", "--left-right", "--count", "HEAD...origin/main").CombinedOutput(); err == nil {
+		parts := strings.Fields(strings.TrimSpace(string(out)))
+		if len(parts) == 2 {
+			ahead, _ = strconv.Atoi(parts[0])
+			behind, _ = strconv.Atoi(parts[1])
+		}
+	}
+	// Last commit oneline
+	logOut, _ := exec.Command("git", "-C", dir, "log", "--oneline", "-1").CombinedOutput()
+	lastCommit := strings.TrimSpace(string(logOut))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"branch": branch, "dirty": dirty, "ahead": ahead, "behind": behind, "last_commit": lastCommit,
+	})
+}
+
+func (h *GitHandler) GetProjectGitBranches(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.ownedProject(w, r)
+	if !ok {
+		return
+	}
+	dir := h.dir(project.ID)
+	out, err := exec.Command("git", "-C", dir, "branch", "-a", "--verbose").CombinedOutput()
+	if err != nil && isNotRepo(string(out)) {
+		writeJSON(w, http.StatusOK, map[string]any{"branches": []string{}})
+		return
+	}
+	var branches []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			branches = append(branches, t)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"branches": branches})
+}
+
+func (h *GitHandler) GetProjectGitLog(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.ownedProject(w, r)
+	if !ok {
+		return
+	}
+	dir := h.dir(project.ID)
+	out, err := exec.Command("git", "-C", dir, "log", "--oneline", "--decorate", "-20").CombinedOutput()
+	if err != nil && isNotRepo(string(out)) {
+		writeJSON(w, http.StatusOK, map[string]any{"log": ""})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"log": strings.TrimSpace(string(out))})
+}
+
+func isNotRepo(out string) bool {
+	low := strings.ToLower(out)
+	return strings.Contains(low, "not a git repository")
 }
 
 // ── Gates and helpers ─────────────────────────────────────────────────────────

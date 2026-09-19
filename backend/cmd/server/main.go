@@ -16,17 +16,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/joho/godotenv"
-	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/ai"
 	"github.com/luckyisrael/talon/backend/internal/api"
 	"github.com/luckyisrael/talon/backend/internal/auth"
 	"github.com/luckyisrael/talon/backend/internal/billing"
 	"github.com/luckyisrael/talon/backend/internal/devclient"
 	"github.com/luckyisrael/talon/backend/internal/gitremote"
-	"github.com/luckyisrael/talon/backend/internal/logx"
 	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
 	"github.com/luckyisrael/talon/backend/internal/harness/instructions"
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/logx"
 	"github.com/luckyisrael/talon/backend/internal/notify"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/redroid"
@@ -377,9 +377,11 @@ func main() {
 		// Project knowledge and history.
 		r.Get("/v1/projects/{projectID}/memory", promptHandler.GetMemory)
 		metroHandler := api.NewMetroHandler(promptHandler)
-	testInfoHandler := api.NewTestInfoHandler(promptHandler, devClientMgr)
+		testInfoHandler := api.NewTestInfoHandler(promptHandler, devClientMgr)
 
 		r.Get("/v1/projects/{projectID}/conversation", promptHandler.GetConversation)
+		r.Post("/v1/projects/{projectID}/feedback", promptHandler.RecordFeedback)
+		r.Get("/v1/projects/{projectID}/feedback", promptHandler.ProjectFeedback)
 		r.Get("/v1/projects/{projectID}/live-session", sessionHandler.LiveForProject)
 		r.Get("/v1/projects/{projectID}/diff", promptHandler.GitDiff)
 		r.Get("/v1/projects/{projectID}/metro", metroHandler.Serve)
@@ -447,6 +449,9 @@ func main() {
 		r.Post("/v1/git/github/connect", gitHandler.Connect)
 		r.Delete("/v1/git/github", gitHandler.Disconnect)
 		r.Get("/v1/projects/{id}/git/remote", gitHandler.GetProjectRemote)
+		r.Get("/v1/projects/{id}/git/status", gitHandler.GetProjectGitStatus)
+		r.Get("/v1/projects/{id}/git/branches", gitHandler.GetProjectGitBranches)
+		r.Get("/v1/projects/{id}/git/log", gitHandler.GetProjectGitLog)
 		r.Post("/v1/projects/{id}/git/push", gitHandler.Push)
 	})
 

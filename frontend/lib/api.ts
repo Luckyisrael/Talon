@@ -802,6 +802,20 @@ export const git = {
     return res?.remote ?? null;
   },
 
+  getProjectStatus(projectId: number) {
+    return request<{ branch: string; dirty: number; ahead: number; behind: number; last_commit: string }>(
+      `/v1/projects/${projectId}/git/status`,
+    );
+  },
+
+  getBranches(projectId: number) {
+    return request<{ branches: string[] }>(`/v1/projects/${projectId}/git/branches`);
+  },
+
+  getLog(projectId: number) {
+    return request<{ log: string }>(`/v1/projects/${projectId}/git/log`);
+  },
+
   push(projectId: number, opts: { message?: string; private?: boolean } = {}) {
     return request<GitPushResult>(`/v1/projects/${projectId}/git/push`, {
       method: "POST",
