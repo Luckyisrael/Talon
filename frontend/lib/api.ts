@@ -320,6 +320,27 @@ export const conversation = {
       method: "DELETE",
     });
   },
+
+  // Rate one assistant message. The rating lives outside the session log, so
+  // the model never replays a human judgement of its own output; a re-vote
+  // replaces the prior rating in place.
+  rate(projectId: number, messageId: string, rating: number, comment?: string) {
+    return request<{ messageId: string; rating: number }>(
+      `/v1/projects/${projectId}/feedback`,
+      {
+        method: "POST",
+        body: JSON.stringify({ messageId, rating, comment: comment ?? "" }),
+      },
+    );
+  },
+
+  // Every rated message in the project, oldest first. The tuning view: what
+  // the person actually thought of the output here. Unrated is an empty list.
+  feedback(projectId: number) {
+    return request<{ items: { messageId: string; rating: number; comment: string; at: string }[] }>(
+      `/v1/projects/${projectId}/feedback`,
+    );
+  },
 };
 
 // ── Checkpoints ───────────────────────────────────────
@@ -436,7 +457,8 @@ export type StreamEventType =
   | "decision"
   | "guardrail_reject"
   | "error"
-  | "done";
+  | "done"
+  | "skills_group";
 
 export interface StreamEventData {
   // text.delta / thinking.delta
@@ -461,6 +483,9 @@ export interface StreamEventData {
   question?: string;
   choices?: string[];
   prompt_id?: number;
+  // skills_group — pre-flight skill names for this turn
+  skills?: string[];
+  data?: unknown;
   // decision — the agent recorded an architecture decision (write_adr) or a
   // durable memory (write_memory). `variant` selects the shape; the field set
   // mirrors the "What the agent knows" panel — decision+outcome for an ADR;

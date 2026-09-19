@@ -230,6 +230,21 @@ func TestGlobMatch(t *testing.T) {
 	}
 }
 
+func TestSkillsForPrompt(t *testing.T) {
+	r := testRegistry(t)
+	if got := r.SkillsForPrompt(""); len(got) != 0 {
+		t.Errorf("empty prompt should suggest nothing, got %v", got)
+	}
+	if got := r.SkillsForPrompt("Build a balance watcher with transact and sendTransactions"); len(got) == 0 {
+		t.Error("wallet prompt should suggest wallet-mwa or solana-dev")
+	}
+	// Must cap at 3
+	longPrompt := "wallet connect transact sendTransactions getBalance FlatList SafeAreaView"
+	if got := r.SkillsForPrompt(longPrompt); len(got) > 3 {
+		t.Errorf("should cap at 3, got %d", len(got))
+	}
+}
+
 func TestSkillBodyUnknown(t *testing.T) {
 	r := testRegistry(t)
 	if _, ok := r.SkillBody("does-not-exist"); ok {

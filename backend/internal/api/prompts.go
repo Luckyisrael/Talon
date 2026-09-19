@@ -835,6 +835,8 @@ func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event)
 		writeSSE(w, "task_update", map[string]interface{}{
 			"id": evt.Tool, "description": evt.Name, "status": evt.Status, "result": evt.Error,
 		})
+	case events.SkillsEvent:
+		writeSSE(w, "skills_group", evt.Data)
 	case events.RebuildEvent:
 		writeSSE(w, "rebuild", map[string]interface{}{"status": evt.Status, "detail": evt.Error})
 	case events.GuardrailEvent:
@@ -1342,7 +1344,9 @@ func (h *PromptHandler) conversation(projectID int64) []ai.Message {
 }
 
 // planHistory builds the flat history Plan mode uses. Plan mode calls no tools,
-// so only the prose turns are relevant.
+// so only the prose turns are relevant. Before the final user turn, we inject
+// any skills whose triggers match the prompt text — the planner otherwise has
+// zero kit context and falls back to legacy web3.js.
 func (h *PromptHandler) planHistory(projectID int64, userPrompt string) []ai.PromptMessage {
 	var history []ai.PromptMessage
 
@@ -1360,6 +1364,21 @@ func (h *PromptHandler) planHistory(projectID int64, userPrompt string) []ai.Pro
 	for _, m := range h.conversation(projectID) {
 		if text := strings.TrimSpace(m.Text()); text != "" {
 			history = append(history, ai.PromptMessage{Role: m.Role, Content: text})
+		}
+	}
+
+	if h.knowledge != nil {
+		if suggested := h.knowledge.SkillsForPrompt(userPrompt); len(suggested) > 0 {
+			if len(suggested) > 2 {
+				suggested = suggested[:2]
+			}
+			var b strings.Builder
+			b.WriteString("Relevant skills for this request — follow them, do not invent alternatives:\n\n")
+			for _, s := range suggested {
+				b.WriteString("## " + s.Name + " — " + s.Description + "\n" + s.Body + "\n\n")
+			}
+			history = append(history, ai.PromptMessage{Role: "user", Content: strings.TrimSpace(b.String())})
+			history = append(history, ai.PromptMessage{Role: "assistant", Content: "Got it — will follow those guides."})
 		}
 	}
 
@@ -1567,6 +1586,84 @@ func (h *PromptHandler) ClearConversation(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+}
+
+// ── Message feedback ───────────────────────────────────
+//
+// The feedback endpoints are the human-facing side of the sidecar in
+// internal/store/feedback.go. RecordFeedback takes a rating for one assistant
+// message; ProjectFeedback hands back every rated message in the project. The
+// data never enters the session log, so the model never replays a human
+// judgement of its own output.
+
+// feedbackRequest is one POST body: which message, which way, and why.
+type feedbackRequest struct {
+	MessageID string `json:"messageId"`
+	Rating    int    `json:"rating"`
+	Comment   string `json:"comment"`
+}
+
+// RecordFeedback writes or overwrites the rating for one message. A re-vote
+// replaces the prior rating — the row is the person's settled view — and the
+// response echoes what landed so the caller can stop its optimistic spinner.
+func (h *PromptHandler) RecordFeedback(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	if _, ok := h.ownedProject(w, r, projectID); !ok {
+		return
+	}
+	var req feedbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "could not read the feedback")
+		return
+	}
+	if req.MessageID == "" {
+		writeError(w, http.StatusBadRequest, "feedback needs a message id")
+		return
+	}
+	// Any int is accepted; the UI writes 1, -1, or 0. A rating outside that is
+	// the caller's business — the store keeps the column an int so a richer
+	// scale can be introduced without a migration.
+	if err := h.store.RecordFeedback(projectID, req.MessageID, req.Rating, req.Comment); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not record the feedback")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"messageId": req.MessageID,
+		"rating":    req.Rating,
+	})
+}
+
+// ProjectFeedback returns every rated message for the project, oldest first.
+// An unrated project is an empty list, not an error — the tuning view shows
+// nothing rather than a failure to load.
+func (h *PromptHandler) ProjectFeedback(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	if _, ok := h.ownedProject(w, r, projectID); !ok {
+		return
+	}
+	all, err := h.store.ProjectFeedback(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load the feedback")
+		return
+	}
+	out := make([]map[string]interface{}, 0, len(all))
+	for _, f := range all {
+		out = append(out, map[string]interface{}{
+			"messageId": f.MessageID,
+			"rating":    f.Rating,
+			"comment":   f.Comment,
+			"at":        f.Updated,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"items": out})
 }
 
 // ── Checkpoints ───────────────────────────────────────

@@ -697,11 +697,13 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             }
 
             case "skills_group": {
-              const skills = Array.isArray(d.data)
-                ? (d.data as string[])
-                : Array.isArray((d as unknown as { skills?: string[] }).skills)
-                  ? (d as unknown as { skills: string[] }).skills
-                  : [];
+              const skills = Array.isArray(d)
+                ? (d as unknown as string[])
+                : Array.isArray((d as unknown as { data?: unknown }).data)
+                  ? ((d as unknown as { data: string[] }).data as string[])
+                  : Array.isArray((d as unknown as { skills?: string[] }).skills)
+                    ? (d as unknown as { skills: string[] }).skills
+                    : [];
               if (skills.length === 0) break;
               patch((prev) => ({
                 ...prev,
