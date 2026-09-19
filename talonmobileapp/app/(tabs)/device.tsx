@@ -6,6 +6,7 @@ import { Badge, Screen, UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
 import { useActiveProject, useCreateSession, useDestroySession, useTestInfo } from '@/hooks';
 import { getSessionId, setSessionId } from '@/lib/session';
+import { openMetroStream, type MetroEvent } from '@/lib/api';
 
 // Device tab: the project's live device session — the frame, the session
 // state badge, real lifecycle controls (start/destroy), the honest logs
@@ -70,6 +71,19 @@ export default function DeviceScreen() {
 
   const { data: testInfo } = useTestInfo(projectId);
 
+  // Metro badge — no video stream, just bundler events. Installed APK reloads from Metro.
+  const [metro, setMetro] = React.useState<MetroEvent | null>(null);
+  React.useEffect(() => {
+    if (projectId == null) return;
+    let close: (() => void) | undefined;
+    void openMetroStream(
+      projectId,
+      ev => setMetro(ev),
+      () => {},
+    ).then(c => (close = c));
+    return () => close?.();
+  }, [projectId]);
+
   async function startSession() {
     if (projectId == null) return;
     const s = await createSession.mutateAsync(projectId);
@@ -80,6 +94,15 @@ export default function DeviceScreen() {
   const badgeTone =
     sessionId == null ? 'neutral' : 'success';
   const badgeLabel = sessionId == null ? 'no session' : 'live';
+
+  const metroLabel =
+    !metro ? 'metro idle'
+    : metro.kind === 'bundle_progress' ? `bundling ${metro.progress}%`
+    : metro.kind === 'bundle_start' ? 'bundling…'
+    : metro.kind === 'bundle_done' ? 'bundle ready'
+    : metro.kind === 'reloaded' ? 'reloaded ✓'
+    : metro.kind === 'error' ? `⚠ ${metro.text.slice(0, 40)}`
+    : metro.text.slice(0, 30) || metro.kind;
 
   return (
     <Screen>
@@ -93,6 +116,10 @@ export default function DeviceScreen() {
           </UIText>
         </View>
         <Badge label={badgeLabel} tone={badgeTone as 'success'} />
+      </View>
+
+      <View style={styles.metroBadge}>
+        <UIText variant="monoSm" tone="faint">{metroLabel}</UIText>
       </View>
 
       <ScrollView style={styles.stream} showsVerticalScrollIndicator={false}>
@@ -133,8 +160,7 @@ export default function DeviceScreen() {
                   Session #{sessionId}
                 </UIText>
                 <UIText variant="caption" tone="muted">
-                  The frame streams in the web IDE&apos;s phone relay; this tab is
-                  the honest state surface.
+                  Optional cloud device. For your phone, install the APK once — Metro reloads after each turn.
                 </UIText>
                 <Pressable
                   onPress={async () => {
@@ -214,9 +240,19 @@ export default function DeviceScreen() {
             )}
             <UIText variant="caption" tone="muted" style={styles.qrCaption}>
               {testInfo?.deep_link
-                ? 'Scan to open this project in this phone’s dev client.'
+                ? 'Install the APK once, then Open — Metro connects to the workspace and reloads after each turn. No streaming.'
                 : 'The pairing QR appears when the project has a testable build.'}
             </UIText>
+            {testInfo?.metro_url ? (
+              <UIText variant="monoSm" tone="faint" style={{ textAlign: 'center' }}>
+                Metro: {testInfo.metro_url}
+              </UIText>
+            ) : null}
+            {testInfo?.dev_client_url ? (
+              <Pressable onPress={() => void Linking.openURL(testInfo.dev_client_url!)}>
+                <UIText variant="label" tone="muted" style={{ textDecorationLine: 'underline' }}>Download APK</UIText>
+              </Pressable>
+            ) : null}
           </View>
         </View>
       </ScrollView>
@@ -231,6 +267,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: Spacing.s12,
     marginBottom: Spacing.s4,
+  },
+  metroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 9999,
+    backgroundColor: Colors.carbon,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.graphite,
+    marginTop: 6,
+    marginBottom: 4,
   },
   titles: { gap: 8, flex: 1 },
   stream: { flex: 1, marginTop: Spacing.s12 },
