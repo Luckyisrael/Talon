@@ -23,11 +23,17 @@ repo at this commit, not against a prior session's memory.
 
 ## What is already shipped (do not re-do)
 
-- **Skill bundle (9 skills):** `talon-mobile` (SKILL.md, seed-vault, scl,
-  dapp-store, app-linking, mobile-defaults), `wallet-mwa`, `talon-screen-design`,
-  `rn-best-practices`, `expo-router-nav`, `expo-ui`, `expo-ui-jetpack-compose`,
-  `reanimated-v4`, `failure-patterns`. Curated, version-pinned, MIT-licensed
-  where applicable (Vercel Labs, Expo), with ATTRIBUTION.md.
+- **Skill bundle (14 skills):** `talon-mobile` (SKILL.md, seed-vault,
+  dapp-store, app-linking, mobile-defaults), `wallet-mwa`,
+  `rn-best-practices` (incl. folded `scl` money rules),
+  `expo-router-nav` (incl. merged `mobile-navigation` semantics),
+  `expo-ui` (incl. `jetpack-compose` appendix), `reanimated-v4`,
+  `failure-patterns`, `mobile-craft` (incl. merged `talon-screen-design`
+  device appendix), `mobile-motion`, `solana-dev`. Curated, version-pinned,
+  MIT-licensed where applicable (Vercel Labs, Expo, Solana Foundation,
+  Appllama), with ATTRIBUTION.md. Merged-away names (`mobile-navigation`,
+  `expo-ui-jetpack-compose`, `talon-screen-design`, `scl`) must not be
+  reintroduced as skills — their content lives in the homes named above.
 - **Triggers (A2):** `triggers:` front-matter is in `agent/frontmatter.go` with
   `import:`, `content:`, `path:`, `pkg:`, `symptom:`, `phase:`. Symptom matching
   feeds `failure-patterns` on `TS[0-9]+`, `Cannot find module`, `ENOSPC`,

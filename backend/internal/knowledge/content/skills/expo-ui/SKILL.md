@@ -42,7 +42,7 @@ instead.** Fall back to RN built-ins only when `@expo/ui` is missing the compone
 > indicators. Each `ListItem` is a native node on the JS thread; rows are not
 > recycled. For large or unknown-length data (feeds, search, catalogs) use
 > `FlatList` (preinstalled) or install a virtualizer — see the `rn-best-practices`
-> and `talon-screen-design` skills. `List` is right for short, fixed groups.
+> skill and the Device appendix in `mobile-craft`. `List` is right for short, fixed groups.
 
 **`BottomSheet` example** (use this for map-pin details, action sheets, detail
 panels — not Reanimated):
@@ -94,8 +94,8 @@ Work down this list and stop at the first layer that meets the need:
    when the universal layer is missing a component or modifier, or when you need
    platform-specific behavior. **Downside:** you write a separate tree and split it
    into `.android.tsx` / `.ios.tsx` files. Since the Talon is Android-first, the
-   Android layer is the one that matters — see the **`expo-ui-jetpack-compose`**
-   skill for its components, modifiers, `LazyColumn`, and `useNativeState`.
+   Android layer is the one that matters — see `references/jetpack-compose.md`
+   in this skill for its components, modifiers, `LazyColumn`, and `useNativeState`.
 
    > `@expo/ui/swift-ui` is iOS-only and `@expo/ui/jetpack-compose` is Android-only.
    > Importing either on the other platform crashes at runtime ("Unable to get view

@@ -17,7 +17,8 @@ the source of truth; if it disagrees with what you see in `app.json` /
 ## Hardware (Talon 1 / Gen 1)
 
 - **AMOLED**, 6.36", 2670×1200, **460 PPI**, **120 Hz**. Design for a sharp,
-  tall, one-hand-held panel, not a tablet. (See `talon-screen-design`.)
+  tall, one-hand-held panel, not a tablet. (See the Device appendix in
+  `mobile-craft` for reach and geometry.)
 - **Snapdragon**-class SoC. Mid-tier GPU. Avoid heavy WebGL on load; use
   `expo-image` for everything visual and `FlatList` / `FlashList` for lists.
 - **8 GB RAM, 128 GB storage** baseline. Your APK should stay well under

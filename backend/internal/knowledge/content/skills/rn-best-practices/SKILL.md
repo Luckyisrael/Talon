@@ -12,7 +12,7 @@ source: https://github.com/vercel-labs/agent-skills (skills/react-native-skills)
 
 A checklist of high-impact RN/Expo practices, ordered by how much they matter on a
 120Hz device. This condenses Vercel Labs' React Native rules; where their advice and
-this project's `talon-screen-design` skill differ, the reconciled Talon guidance is
+this project's Device appendix in `mobile-craft` differ, the reconciled Talon guidance is
 below. For the full per-rule examples, see `ATTRIBUTION.md` (upstream repo).
 
 ## List performance (CRITICAL)

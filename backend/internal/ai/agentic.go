@@ -235,6 +235,43 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
+func indexSentenceEnd(s string, min int) int {
+	for i := min; i < len(s); i++ {
+		if s[i] == '.' && (i+1 == len(s) || s[i+1] == ' ' || s[i+1] == '\n') {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func mustMarshalJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+var coreToolSet = map[string]bool{
+	"read_file": true, "write_file": true, "edit_file": true, "multi_edit": true,
+	"list_files": true, "grep_codebase": true, "search_files": true, "find_files": true,
+	"explore": true, "project_map": true, "inspect_package": true, "read_skill": true,
+	"run_typecheck": true, "run_lint": true, "run_checks": true, "run_prettier": true,
+	"ask_user": true, "mark_task_done": true,
+}
+
+func filterToCoreTools(tools []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, t := range tools {
+		if fn, ok := t["function"].(map[string]any); ok {
+			if name, ok := fn["name"].(string); ok && coreToolSet[name] {
+				out = append(out, t)
+			}
+		}
+	}
+	if len(out) < 8 {
+		return tools
+	}
+	return out
+}
+
 // ── OpenAI-compatible path ────────────────────────────
 
 func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history []Message, tools []ToolDefinition) (*AgenticChatResult, error) {
@@ -242,14 +279,31 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 
 	oaiTools := make([]map[string]any, 0, len(tools))
 	for _, t := range tools {
+		desc := t.Description
+		if len(desc) > 160 {
+			if idx := indexSentenceEnd(desc, 160); idx > 0 {
+				desc = desc[:idx]
+			} else {
+				desc = desc[:157] + "..."
+			}
+		}
 		oaiTools = append(oaiTools, map[string]any{
 			"type": "function",
 			"function": map[string]any{
 				"name":        t.Name,
-				"description": t.Description,
+				"description": desc,
 				"parameters":  t.InputSchema,
 			},
 		})
+	}
+	// If still over Groq-class input limit, drop non-core tools and retry.
+	// Core = read/write/verify/project-map — enough to start building; the
+	// rest load via read_skill or next round pagination.
+	if len(tools) > 12 {
+		est := (len(system) + len(mustMarshalJSON(messages)) + len(mustMarshalJSON(oaiTools))) / 4
+		if est > 6500 {
+			oaiTools = filterToCoreTools(oaiTools)
+		}
 	}
 
 	reqBody := map[string]any{
