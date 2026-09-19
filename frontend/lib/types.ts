@@ -125,6 +125,10 @@ export interface ChatMessage {
    * capture and send). Shows on the bubble so the user knows their words never
    * reached the build. */
   steerError?: string | null;
+  /** The human's rating of this assistant message, from the feedback sidecar.
+   * Undefined means unrated — the common case, rendered as no thumb pressed.
+   * 1 is good, -1 is bad, 0 is a bare comment. */
+  rating?: number;
 }
 
 export interface AuthResponse {
@@ -358,6 +362,9 @@ export interface StreamMessage {
   rounds?: number;
   /** True for turns restored from the stored conversation rather than streamed. */
   restored?: boolean;
+  /** The human's rating of this turn, from the feedback sidecar. Undefined is
+   * unrated; 1 good, -1 bad, 0 a bare comment. */
+  rating?: number;
   /**
    * Set by the `question` event when the agent paused on ask_user: the turn is
    * waiting for the user. The chat renders a question card from it. `promptId`

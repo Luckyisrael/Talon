@@ -58,8 +58,8 @@ type Prompt struct {
 	// Title is the H13 session title: the human-facing line history lists
 	// render — LLM-titled from the first prompt when a client answers, the
 	// honest truncated prompt otherwise.
-	Title string `json:"title,omitempty"`
-	Response  string `json:"response,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Response string `json:"response,omitempty"`
 	// Status is the run state of the turn this prompt drove: running while the
 	// agent loop is live, then a terminal completed | cancelled | failed, or
 	// abandoned when the user discards an interrupted turn. A row left at
@@ -332,6 +332,24 @@ func (s *Store) migrate() error {
 			completed_by_prompt INTEGER NOT NULL DEFAULT 0,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(project_id, task_id),
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
+		// message_feedback is the human-feedback sidecar. Deliberately NOT in
+		// the session log: feedback is about the model's output, and writing it
+		// into the log would put a human judgement of a message into the context
+		// the model replays — the model would read its own reviews and start
+		// performing for them. The sidecar keeps the signal for tuning while the
+		// conversation stays clean. One row per (project, message): a re-vote
+		// updates in place, so the signal reflects the person's settled view.
+		`CREATE TABLE IF NOT EXISTS message_feedback (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			message_id TEXT NOT NULL,
+			rating INTEGER NOT NULL,
+			comment TEXT NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(project_id, message_id),
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
 		// customers is the link between a user and the payment provider's own
@@ -1509,12 +1527,12 @@ func (s *Store) RecordNotification(userID int64, kind, title, body string) error
 
 // Notification is one in-app history row.
 type Notification struct {
-	ID        int64   `json:"id"`
-	Kind      string  `json:"kind"`
-	Title     string  `json:"title"`
-	Body      string  `json:"body"`
-	SentAt    string  `json:"sent_at"`
-	ReadAt    *string `json:"read_at"`
+	ID     int64   `json:"id"`
+	Kind   string  `json:"kind"`
+	Title  string  `json:"title"`
+	Body   string  `json:"body"`
+	SentAt string  `json:"sent_at"`
+	ReadAt *string `json:"read_at"`
 }
 
 // ListNotifications returns the user's most recent notifications, newest
@@ -1549,7 +1567,7 @@ func (s *Store) MarkNotificationRead(userID, id int64) error {
 	return err
 }
 
-// GetOneSignalID resolves the push target for a user ('' when the user has
+// GetOneSignalID resolves the push target for a user (” when the user has
 // not registered a device).
 func (s *Store) GetOneSignalID(userID int64) (string, error) {
 	var id string
