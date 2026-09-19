@@ -22,50 +22,19 @@ func TestClassifyTier(t *testing.T) {
 		}
 	})
 
-	t.Run("small-model markers classify weak", func(t *testing.T) {
+	t.Run("without override always medium — no model-name heuristics", func(t *testing.T) {
 		for _, m := range []string{
-			"gpt-4o-mini", // contains gpt-4o too — small marker must win
+			"gpt-4o-mini",
 			"claude-3-5-haiku-20241022",
-			"llama-3.1-8b-instruct",
-			"gemini-1.5-flash",
-			"phi-3-medium",
-			"mistral-7b-instruct",
-		} {
-			if got := classifyTier(m, ""); got != TierWeak {
-				t.Errorf("classifyTier(%q) = %s, want weak", m, got)
-			}
-		}
-	})
-
-	t.Run("frontier markers classify strong", func(t *testing.T) {
-		for _, m := range []string{
 			"claude-opus-4-20250514",
-			"claude-3-5-sonnet-20241022",
 			"gpt-4o",
-			"gpt-4.1",
-			"o3-mini-high", // "mini" — this is intentionally weak, see below
 			"llama-3.1-70b",
 			"deepseek-v3",
+			"", "some-internal-model", "custom-tuned-v2",
+			"nex-agi/nex-n2.5-pro:free",
 		} {
-			got := classifyTier(m, "")
-			// o3-mini-high contains "mini" and is deliberately weak: a "mini"
-			// variant is the small one whatever the family.
-			if strings.Contains(m, "mini") {
-				if got != TierWeak {
-					t.Errorf("classifyTier(%q) = %s, want weak (mini variant)", m, got)
-				}
-				continue
-			}
-			if got != TierStrong {
-				t.Errorf("classifyTier(%q) = %s, want strong", m, got)
-			}
-		}
-	})
-
-	t.Run("unknown model degrades to medium", func(t *testing.T) {
-		for _, m := range []string{"", "some-internal-model", "custom-tuned-v2"} {
 			if got := classifyTier(m, ""); got != TierMedium {
-				t.Errorf("classifyTier(%q) = %s, want medium", m, got)
+				t.Errorf("classifyTier(%q, \"\") = %s, want medium (harness owns tier)", m, got)
 			}
 		}
 	})

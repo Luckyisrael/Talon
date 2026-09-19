@@ -20,9 +20,8 @@ import (
 // because it applies to every tier. This file only adds the tier-specific scaffold
 // on top of it.
 //
-// The classification is a heuristic on the model id with an operator override,
-// never a hard dependency: an unknown model degrades to the middle tier, so a new
-// or renamed model is adapted cautiously rather than mishandled.
+// The tier is explicit operator config (AI_MODEL_TIER) — no model-name heuristics.
+// Harness owns discipline; models follow it.
 
 // Tier is a coarse capability class for the configured model.
 type Tier string
@@ -53,12 +52,11 @@ func (c *Client) Capabilities() Capabilities {
 	}
 }
 
-// classifyTier maps a model id to a tier. An explicit override always wins —
-// model names are not a reliable signal for local, fine-tuned, or renamed models,
-// so operators get the final say. Otherwise it matches known markers in the id,
-// checking small-model markers before large ones because a name like
-// "gpt-4o-mini" contains both.
-func classifyTier(model, override string) Tier {
+// classifyTier maps the operator's explicit tier to a Tier. The model id is
+// accepted but unused — the harness owns discipline, not the model name. An
+// unset or unknown override degrades to the neutral middle tier so a new or
+// renamed model is never silently strong or weak.
+func classifyTier(_ string, override string) Tier {
 	switch strings.ToLower(strings.TrimSpace(override)) {
 	case "strong":
 		return TierStrong
@@ -67,35 +65,6 @@ func classifyTier(model, override string) Tier {
 	case "weak":
 		return TierWeak
 	}
-
-	m := strings.ToLower(strings.TrimSpace(model))
-
-	// Small-model markers first: "mini" / "haiku" and small parameter counts
-	// signal a model that needs the discipline spelled out.
-	for _, w := range []string{
-		"mini", "small", "haiku", "gpt-3.5", "flash",
-		"-1b", "-2b", "-3b", "-4b", "-7b", "-8b", "-9b", "-13b",
-		"phi-", "gemma", "qwen2", "mistral-7b",
-	} {
-		if strings.Contains(m, w) {
-			return TierWeak
-		}
-	}
-
-	// Frontier markers: models that plan and verify without being told to.
-	for _, s := range []string{
-		"opus", "sonnet", "gpt-4o", "gpt-4.1", "gpt-4-turbo", "gpt-5",
-		"o1", "o3", "o4", "-70b", "-405b", "-72b",
-		"deepseek", "grok", "gemini-1.5-pro", "gemini-2",
-		"glm-4", "glm-5",
-	} {
-		if strings.Contains(m, s) {
-			return TierStrong
-		}
-	}
-
-	// Unknown: adapt cautiously. Neither bury a capable model in scaffolding nor
-	// leave a weak one without the structure it needs.
 	return TierMedium
 }
 

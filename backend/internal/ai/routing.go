@@ -223,10 +223,7 @@ type ModelRates struct {
 }
 
 func DefaultPricing() map[string]ModelRates {
-	out := map[string]ModelRates{
-		// Free-tier routing target: genuinely $0.
-		"minimax/minimax-m3:free": {0, 0, 0},
-	}
+	out := map[string]ModelRates{}
 	raw := strings.TrimSpace(os.Getenv("ROUTING_PRICING_JSON"))
 	if raw == "" {
 		return out
