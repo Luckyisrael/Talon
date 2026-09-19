@@ -5,7 +5,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Clock, Logout, MessageQuestion, Setting, User } from 'iconsax-react-native';
 import { UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
-import { useQuery } from '@tanstack/react-query';
 import { meApi } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -39,15 +38,27 @@ export function Drawer({
     transform: [{ translateX: (progress.value - 1) * width }],
   }));
 
-  const { data: me } = useQuery({
-    queryKey: ['me'],
-    queryFn: async () => {
-      const t = await getToken();
-      if (!t) return null;
-      return meApi.get().catch(() => null);
-    },
-    enabled: open,
-  });
+  const [me, setMe] = React.useState<{ email: string; tier?: string } | null>(null);
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      const t = await getToken().catch(() => null);
+      if (!t) {
+        if (!cancelled) setMe(null);
+        return;
+      }
+      try {
+        const u = await meApi.get();
+        if (!cancelled) setMe({ email: u.email, tier: u.tier });
+      } catch {
+        if (!cancelled) setMe(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   return (
     <Animated.View style={[styles.sheet, { width }, sheet]}>

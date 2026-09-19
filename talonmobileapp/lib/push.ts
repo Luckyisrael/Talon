@@ -9,11 +9,17 @@
 //   - The OneSignal subscription id is the external id the backend pushes
 //     to (POST /v1/users/push-token).
 
-import { OneSignal } from 'react-native-onesignal';
-
 const APP_ID = process.env.EXPO_PUBLIC_ONESIGNAL_APP_ID ?? '';
 
 let inited = false;
+let OneSignal: any = null;
+try {
+  // Expo Go has no native OneSignal — static import crashes the bundle.
+  // Lazy-require keeps the app alive and lets push stay dark.
+  OneSignal = require('react-native-onesignal').OneSignal;
+} catch {
+  OneSignal = null;
+}
 
 /** True when push is wired on this build (app id present + native module). */
 export function pushAvailable(): boolean {
