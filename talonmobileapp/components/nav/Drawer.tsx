@@ -5,6 +5,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Clock, Logout, MessageQuestion, Setting, User } from 'iconsax-react-native';
 import { UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
+import { useQuery } from '@tanstack/react-query';
+import { meApi } from '@/lib/api';
+import { getToken } from '@/lib/auth';
 
 const ITEMS = [
   { icon: User, label: 'Profile' },
@@ -36,6 +39,16 @@ export function Drawer({
     transform: [{ translateX: (progress.value - 1) * width }],
   }));
 
+  const { data: me } = useQuery({
+    queryKey: ['me'],
+    queryFn: async () => {
+      const t = await getToken();
+      if (!t) return null;
+      return meApi.get().catch(() => null);
+    },
+    enabled: open,
+  });
+
   return (
     <Animated.View style={[styles.sheet, { width }, sheet]}>
       <View style={[styles.inner, { paddingTop: insets.top + Spacing.s16 }]}>
@@ -43,11 +56,11 @@ export function Drawer({
           <View style={styles.avatar}>
             <User size={24} color={Colors.mist} variant="Linear" />
           </View>
-          <UIText variant="heading" tone="hero" style={styles.name}>
-            Guest
+          <UIText variant="heading" tone="hero" style={styles.name} numberOfLines={1}>
+            {me?.email ?? 'Guest'}
           </UIText>
-          <UIText variant="bodySm" tone="body">
-            Not signed in — explore freely, nothing syncs yet.
+          <UIText variant="bodySm" tone="body" numberOfLines={1}>
+            {me ? `${me.email} · ${me.tier ?? 'free'}` : 'Not signed in — explore freely, nothing syncs yet.'}
           </UIText>
         </View>
         {ITEMS.map((item) => {

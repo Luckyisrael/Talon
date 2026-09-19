@@ -7,7 +7,7 @@ import { QuestionCard } from '@/components/build/QuestionCard';
 import { FileBrowser } from '@/components/files/FileBrowser';
 import { Colors, Spacing, Type } from '@/constants/theme';
 import { useActiveProject, usePromptStream } from '@/hooks';
-import { projectsApi } from '@/lib/api';
+import { conversationApi, projectsApi } from '@/lib/api';
 import type { PlanTask } from '@/lib/api';
 
 // The build tab drives the real prompt stream: send a plan/build prompt,
@@ -52,6 +52,14 @@ export default function BuildScreen() {
   const [subView, setSubView] = React.useState<'chat' | 'files'>('chat');
   const [newName, setNewName] = React.useState('');
   const [creating, setCreating] = React.useState(false);
+  const [history, setHistory] = React.useState<{ role: string; text: string }[]>([]);
+  React.useEffect(() => {
+    if (!projectId) return;
+    void conversationApi.get(projectId).then(r => {
+      const turns = (r.turns ?? []).slice(-3).flatMap(t => t.blocks.filter(b => b.text).map(b => ({ role: t.role, text: b.text! })));
+      setHistory(turns);
+    }).catch(() => {});
+  }, [projectId, turn.phase]);
 
   const busy = turn.phase === 'streaming';
 
@@ -136,7 +144,15 @@ export default function BuildScreen() {
       ) : (
       <ScrollView style={styles.stream} showsVerticalScrollIndicator={false}>
         <View style={styles.stack}>
-          {turn.phase === 'idle' && (
+          {history.length > 0 && turn.phase === 'idle' && (
+            <View style={{ gap: 8, padding: 10, backgroundColor: Colors.obsidian, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: Colors.graphite }}>
+              <UIText variant="label" tone="faint">Recent</UIText>
+              {history.map((h, i) => (
+                <Text key={i} style={{ color: h.role === 'user' ? Colors.fog : Colors.mist, fontSize: Type.bodySm.fontSize }} numberOfLines={2}>{h.role === 'user' ? 'You: ' : 'Agent: '}{h.text.slice(0, 160)}</Text>
+              ))}
+            </View>
+          )}
+          {turn.phase === 'idle' && history.length === 0 && (
             <UIText variant="body" tone="muted" style={styles.empty}>
               Describe what you want. The agent plans, writes files, and verifies on the device.
             </UIText>
