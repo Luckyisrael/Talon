@@ -22,6 +22,7 @@ const (
 	CommandOutputEvent  EventType = "command_output"
 	QuestionEvent       EventType = "question"
 	DecisionEvent       EventType = "decision"
+	SkillsEvent         EventType = "skills_group"
 )
 
 type Phase string
@@ -243,6 +244,17 @@ type Decision struct {
 // stands for a decision actually on record, never an attempt that failed.
 func (e *SessionEmitter) EmitDecision(d Decision) {
 	e.Emit(Event{Type: DecisionEvent, Data: d})
+}
+
+// EmitSkillsGroup surfaces the pre-flight skill suggestion for a turn: the
+// skill names whose triggers matched the user prompt before round 1. Shown as
+// a collapsed GroupRow with lime dots (no bodies). Bodies load only via
+// explicit read_skill.
+func (e *SessionEmitter) EmitSkillsGroup(skills []string) {
+	if len(skills) == 0 {
+		return
+	}
+	e.Emit(Event{Type: SkillsEvent, Data: skills})
 }
 
 // ToJSON serialises an event.

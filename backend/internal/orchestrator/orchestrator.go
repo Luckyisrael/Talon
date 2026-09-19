@@ -725,6 +725,22 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	sess.ResetWriteCounts()
 	sess.ResetToolRepeats()
 
+	// Pre-flight skill group: classify the user prompt before round 1 and
+	// surface the matched skills as a collapsed hint (names only). No bodies
+	// — the agent still must read_skill explicitly. Saves the throwaway
+	// first write that auto-attach would correct.
+	if o.knowledge != nil {
+		if promptText := lastUserText(opts.History); promptText != "" {
+			if suggested := o.knowledge.SkillsForPrompt(promptText); len(suggested) > 0 {
+				names := make([]string, 0, len(suggested))
+				for _, s := range suggested {
+					names = append(names, s.Name)
+				}
+				sess.Emitter.EmitSkillsGroup(names)
+			}
+		}
+	}
+
 	// conversation is what goes to the provider; added tracks just this run's
 	// turns so the caller can append them to storage.
 	conversation := make([]ai.Message, len(opts.History))

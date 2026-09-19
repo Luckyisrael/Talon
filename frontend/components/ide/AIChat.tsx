@@ -61,6 +61,87 @@ const isAssistant = (m: Entry): m is StreamMessage => "isStreaming" in m;
  * narration/thinking row that never received its end frame (aborted stream,
  * gateway error) must not shimmer or blink forever after the turn is over.
  */
+/**
+ * FeedbackRow is the human-facing half of the message-feedback sidecar: two
+ * thumbs under each finished assistant message.
+ *
+ * The rating is fire-and-forget optimistic — the thumb snaps to its state so
+ * the UI never lags a person's click — but the write is what makes it durable.
+ * A failure rolls the thumb back and says why rather than silently keeping a
+ * state the server never accepted.
+ *
+ * Pressing the same thumb twice un-rates: the only thing worse than no feedback
+ * is being unable to take it back.
+ */
+function FeedbackRow({
+  msg,
+  projectId,
+  onRate,
+}: {
+  msg: { id: string; rating?: number };
+  projectId: number;
+  onRate: (rating: number) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // A click is a toggle: pressing the thumb already pressed clears the rating
+  // (written as 0 — "no opinion" — so the row stays a single source of truth).
+  const rate = async (value: number) => {
+    const next = msg.rating === value ? 0 : value;
+    onRate(next);
+    setErr(null);
+    if (projectId == null) return;
+    try {
+      setSaving(true);
+      await conversation.rate(projectId, msg.id, next);
+    } catch {
+      // Roll back to whatever the server actually has: a failed write must not
+      // leave a thumb the person thinks landed.
+      setErr("could not save the rating");
+      onRate(msg.rating ?? 0);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const active = msg.rating ?? 0;
+
+  return (
+    <div className="mt-2 flex items-center gap-1.5">
+      <button
+        type="button"
+        disabled={saving}
+        onClick={() => rate(1)}
+        title="Good response"
+        aria-pressed={active === 1}
+        className="rounded-md p-1 text-[var(--muted)] transition-colors hover:text-[var(--accent-1)] disabled:opacity-40 aria-pressed:text-[var(--accent-1)]"
+      >
+        <svg viewBox="0 0 24 24" fill={active === 1 ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+          <path d="M7 10v11H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h3z" />
+          <path d="M7 10l4.5-7a2 2 0 0 1 3.5 1.9V9h4.5a2 2 0 0 1 2 2.4l-1.2 6A2 2 0 0 1 18.3 19H7z" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        disabled={saving}
+        onClick={() => rate(-1)}
+        title="Bad response"
+        aria-pressed={active === -1}
+        className="rounded-md p-1 text-[var(--muted)] transition-colors hover:text-[var(--warn)] disabled:opacity-40 aria-pressed:text-[var(--warn)]"
+      >
+        <svg viewBox="0 0 24 24" fill={active === -1 ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+          <path d="M17 14V3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-3z" />
+          <path d="M17 14l-4.5 7a2 2 0 0 1-3.5-1.9V15H4.5a2 2 0 0 1-2-2.4l1.2-6A2 2 0 0 1 5.7 5H17z" />
+        </svg>
+      </button>
+      {err ? (
+        <span className="font-mono text-[10px] text-[var(--warn)]/80">{err}</span>
+      ) : null}
+    </div>
+  );
+}
+
 function settleRows(rows: StreamMessage["traceRows"]): StreamMessage["traceRows"] {
   let changed = false;
   const settled = rows.map((r): TraceRow => {
@@ -612,6 +693,37 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                   ...(roundMatch ? { round: parseInt(roundMatch[1], 10) } : {}),
                 };
               });
+              break;
+            }
+
+            case "skills_group": {
+              const skills = Array.isArray(d.data)
+                ? (d.data as string[])
+                : Array.isArray((d as unknown as { skills?: string[] }).skills)
+                  ? (d as unknown as { skills: string[] }).skills
+                  : [];
+              if (skills.length === 0) break;
+              patch((prev) => ({
+                ...prev,
+                traceRows: [
+                  ...prev.traceRows,
+                  {
+                    id: `${id}-skills`,
+                    kind: "group",
+                    label: `Skills for this turn`,
+                    summary: skills.join(" · "),
+                    collapsed: false,
+                    children: skills.map((name, i) => ({
+                      id: `${id}-skill-${i}`,
+                      kind: "tool" as const,
+                      tool: "read_skill",
+                      label: name,
+                      target: "",
+                      status: "done" as const,
+                    })),
+                  },
+                ],
+              }));
               break;
             }
 
@@ -1331,6 +1443,27 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                           busy={isStreaming}
                           planTasks={planTasks}
                         />
+                        {/*
+                          The feedback row sits under each finished assistant
+                          message. It is deliberately absent while a message is
+                          still streaming: rating half a thought is noise. The
+                          rating lives in the sidecar, never the session log,
+                          so the model never replays a human judgement of its
+                          own output and starts performing for it.
+                        */}
+                        {!isStreaming && (msg.text ?? "").trim() ? (
+                          <FeedbackRow
+                            msg={msg}
+                            projectId={projectId}
+                            onRate={(rating) =>
+                              setMessages((prev) =>
+                                prev.map((m) =>
+                                  m.id === msg.id ? { ...m, rating } : m,
+                                ),
+                              )
+                            }
+                          />
+                        ) : null}
                       </div>
                     </div>
                   ) : (

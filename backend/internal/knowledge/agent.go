@@ -423,6 +423,44 @@ func (r *Registry) SkillsForPhase(phase string) []*Skill {
 	return out
 }
 
+// SkillsForPrompt returns skills whose content/import/pkg triggers appear in
+// the user prompt text. Used for pre-flight skill suggestion before round 1:
+// the model sees the grouped names (not bodies) so it can pull them
+// deliberately via read_skill, without paying bodies for 18 skills upfront
+// and without the throwaway first write that auto-attach would correct.
+func (r *Registry) SkillsForPrompt(prompt string) []*Skill {
+	if r == nil || strings.TrimSpace(prompt) == "" {
+		return nil
+	}
+	lower := strings.ToLower(prompt)
+	var out []*Skill
+	for i := range r.skills {
+		s := &r.skills[i]
+		for _, t := range s.Triggers {
+			kind, val, found := strings.Cut(t, ":")
+			if !found {
+				continue
+			}
+			val = strings.TrimSpace(val)
+			if val == "" {
+				continue
+			}
+			switch kind {
+			case "content", "import", "pkg":
+				if strings.Contains(lower, strings.ToLower(val)) {
+					out = append(out, s)
+					goto nextSkill
+				}
+			}
+		}
+	nextSkill:
+	}
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	return out
+}
+
 // globMatch is a small path glob supporting * (within a segment) and ** (any
 // depth). It is not a full glob engine — only enough for the path triggers we
 // author, e.g. "app/**".

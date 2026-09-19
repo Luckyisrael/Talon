@@ -76,6 +76,11 @@ const (
 	// error was retried away rather than becoming the turn's outcome.
 	// Payload: RetryPayload.
 	RetryLogged Kind = "llm/retry"
+	// SkillsSuggested records the pre-flight skill group for a turn: the
+	// skills whose triggers matched the user prompt before round 1. The group
+	// is shown as a collapsed hint (names only); bodies load only via
+	// read_skill. Payload: SkillsPayload.
+	SkillsSuggested Kind = "skills/suggested"
 )
 
 // SurfaceKind reports whether events of this kind join the model-visible
@@ -229,4 +234,10 @@ type RetryPayload struct {
 	BackoffMs int64  `json:"backoff_ms"`
 	Model     string `json:"model,omitempty"`
 	PromptID  int64  `json:"prompt_id,omitempty"`
+}
+
+// SkillsPayload is the body of skills/suggested.
+type SkillsPayload struct {
+	Skills []string `json:"skills"`
+	PromptID int64  `json:"prompt_id,omitempty"`
 }
