@@ -39,18 +39,18 @@ const inter700: '700' = '700';
 // DESIGN_MOBILE.md. Base family resolves in lib/fonts.ts (loaded Inter,
 // else system fallback — never blocks render).
 export const Type = {
-  display: { fontSize: 40, lineHeight: 42, letterSpacing: -0.88, fontWeight: inter700 },
-  heading: { fontSize: 32, lineHeight: 35, letterSpacing: -0.7, fontWeight: inter700 },
-  subheading: { fontSize: 24, lineHeight: 30, letterSpacing: -0.29, fontWeight: inter600 },
-  title: { fontSize: 20, lineHeight: 26, letterSpacing: -0.24, fontWeight: inter600 },
-  bodyLg: { fontSize: 17, lineHeight: 26, fontWeight: inter400 },
-  body: { fontSize: 16, lineHeight: 24, fontWeight: inter400 },
-  bodySm: { fontSize: 15, lineHeight: 23, letterSpacing: -0.17, fontWeight: inter400 },
-  caption: { fontSize: 13, lineHeight: 18, fontWeight: inter400 },
-  label: { fontSize: 12, lineHeight: 17, fontWeight: inter400 },
-  micro: { fontSize: 10, lineHeight: 15, letterSpacing: 0.4, fontWeight: inter500 },
-  mono: { fontSize: 12, lineHeight: 18, fontFamily: 'JetBrainsMono_400Regular' },
-  monoSm: { fontSize: 10, lineHeight: 15, fontFamily: 'JetBrainsMono_400Regular' },
+  display: { fontSize: 32, lineHeight: 36, letterSpacing: -0.7, fontWeight: inter700 },
+  heading: { fontSize: 26, lineHeight: 30, letterSpacing: -0.57, fontWeight: inter700 },
+  subheading: { fontSize: 20, lineHeight: 26, letterSpacing: -0.24, fontWeight: inter600 },
+  title: { fontSize: 18, lineHeight: 24, letterSpacing: -0.22, fontWeight: inter600 },
+  bodyLg: { fontSize: 15, lineHeight: 22, fontWeight: inter400 },
+  body: { fontSize: 14, lineHeight: 20, fontWeight: inter400 },
+  bodySm: { fontSize: 13, lineHeight: 19, letterSpacing: -0.15, fontWeight: inter400 },
+  caption: { fontSize: 12, lineHeight: 16, fontWeight: inter400 },
+  label: { fontSize: 11, lineHeight: 15, fontWeight: inter400 },
+  micro: { fontSize: 9, lineHeight: 13, letterSpacing: 0.36, fontWeight: inter500 },
+  mono: { fontSize: 11, lineHeight: 16, fontFamily: 'JetBrainsMono_400Regular' },
+  monoSm: { fontSize: 9, lineHeight: 13, fontFamily: 'JetBrainsMono_400Regular' },
 } as const;
 
 export type TextStyleName = keyof typeof Type;
