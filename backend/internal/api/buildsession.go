@@ -167,6 +167,15 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// path); registered so the model sees their schemas.
 	reg.Register(&tools.TryEdit{})
 	reg.Register(&tools.KeepEdit{})
+
+	// Git-native workflow (G1-G2): the workspace is a real repo from provision.
+	// These tools let the agent work standard — status/diff/log/commit/branch
+	// without shell-escaping or guessing git invocations.
+	reg.Register(&tools.GitStatus{WorkspacePath: workspacePath})
+	reg.Register(&tools.GitDiff{WorkspacePath: workspacePath})
+	reg.Register(&tools.GitLog{WorkspacePath: workspacePath})
+	reg.Register(&tools.GitCommit{WorkspacePath: workspacePath})
+	reg.Register(&tools.GitBranch{WorkspacePath: workspacePath})
 	// Project knowledge.
 	adapter := h.storeAdapter()
 	reg.Register(tools.NewWriteADR(adapter, projectID))
