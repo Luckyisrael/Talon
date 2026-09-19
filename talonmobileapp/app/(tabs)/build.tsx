@@ -1,11 +1,13 @@
 import React from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Field, LimeButton, Screen, UIText } from '@/components/ui';
 import { TraceRow } from '@/components/build/TraceRow';
 import { PixelGrid } from '@/components/build/PixelGrid';
 import { QuestionCard } from '@/components/build/QuestionCard';
-import { Colors, Spacing } from '@/constants/theme';
+import { FileBrowser } from '@/components/files/FileBrowser';
+import { Colors, Spacing, Type } from '@/constants/theme';
 import { useActiveProject, usePromptStream } from '@/hooks';
+import { projectsApi } from '@/lib/api';
 import type { PlanTask } from '@/lib/api';
 
 // The build tab drives the real prompt stream: send a plan/build prompt,
@@ -47,6 +49,9 @@ export default function BuildScreen() {
   const [draft, setDraft] = React.useState('');
   const [mode, setMode] = React.useState<'plan' | 'build'>('build');
   const [answers, setAnswers] = React.useState<string[]>([]);
+  const [subView, setSubView] = React.useState<'chat' | 'files'>('chat');
+  const [newName, setNewName] = React.useState('');
+  const [creating, setCreating] = React.useState(false);
 
   const busy = turn.phase === 'streaming';
 
@@ -56,6 +61,17 @@ export default function BuildScreen() {
     setDraft('');
     setAnswers([]);
     send(mode, text);
+  }
+
+  async function createProject() {
+    const name = newName.trim()
+    if (!name) return
+    setCreating(true)
+    try {
+      await projectsApi.create(name)
+      setNewName('')
+    } catch {}
+    setCreating(false)
   }
 
   return (
@@ -82,6 +98,15 @@ export default function BuildScreen() {
             ))}
           </View>
         </View>
+        {projectId && (
+          <View style={styles.subTabs}>
+            {(['chat', 'files'] as const).map(v => (
+              <Pressable key={v} onPress={() => setSubView(v)} style={[styles.subTab, subView === v && styles.subTabOn]}>
+                <Text style={{ color: subView === v ? Colors.paper : Colors.fog, fontSize: Type.label.fontSize, fontWeight: '500' }}>{v === 'chat' ? 'Chat' : `Files`}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
         {turn.phase === 'done' && (
           <UIText variant="bodySm" tone="faint">
             turn finished
@@ -94,13 +119,26 @@ export default function BuildScreen() {
         )}
       </View>
 
+      {projectId == null ? (
+        <View style={{ gap: 12, paddingVertical: 16 }}>
+          <UIText variant="body" tone="muted" style={styles.empty}>No project yet — create one to start building.</UIText>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <View style={{ flex: 1 }}>
+              <Field value={newName} onChangeText={setNewName} placeholder="My app" />
+            </View>
+            <LimeButton title={creating ? '…' : 'Create'} onPress={createProject} disabled={!newName.trim() || creating} style={{ minWidth: 88 }} />
+          </View>
+        </View>
+      ) : subView === 'files' ? (
+        <View style={{ flex: 1, marginTop: Spacing.s12 }}>
+          <FileBrowser projectId={projectId} />
+        </View>
+      ) : (
       <ScrollView style={styles.stream} showsVerticalScrollIndicator={false}>
         <View style={styles.stack}>
           {turn.phase === 'idle' && (
             <UIText variant="body" tone="muted" style={styles.empty}>
-              {projectId == null
-                ? 'No project yet — create one to start building.'
-                : 'Describe what you want. The agent plans, writes files, and verifies on the device.'}
+              Describe what you want. The agent plans, writes files, and verifies on the device.
             </UIText>
           )}
 
@@ -164,7 +202,9 @@ export default function BuildScreen() {
           {busy && <PixelGrid label="Working" variant="Drive" />}
         </View>
       </ScrollView>
+      )}
 
+      {subView === 'chat' && (
       <View style={styles.composer}>
         <Field
           value={draft}
@@ -180,6 +220,7 @@ export default function BuildScreen() {
           onPress={busy ? stop : submit}
         />
       </View>
+      )}
     </Screen>
   );
 }
@@ -196,6 +237,9 @@ const styles = StyleSheet.create({
     borderColor: Colors.acidLime,
     borderRadius: 4,
   },
+  subTabs: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  subTab: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 9999, backgroundColor: Colors.carbon, borderWidth: StyleSheet.hairlineWidth, borderColor: Colors.graphite },
+  subTabOn: { backgroundColor: Colors.graphite, borderColor: Colors.mist },
   stream: { flex: 1, marginTop: Spacing.s12 },
   stack: { gap: Spacing.s12, paddingBottom: Spacing.s16 },
   empty: { textAlign: 'center', paddingVertical: Spacing.s16 },

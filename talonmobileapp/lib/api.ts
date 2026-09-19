@@ -21,6 +21,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!res.ok) {
+    if (res.status === 401) {
+      try {
+        const { clearToken } = await import('./auth');
+        await clearToken();
+      } catch {}
+    }
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `request failed (${res.status})`);
   }
@@ -161,8 +167,57 @@ export const projectsApi = {
   getFiles(id: number) {
     return request<FileEntry[]>(`/v1/projects/${id}/files`);
   },
+  writeFiles(id: number, files: FileEntry[]) {
+    return request<void>(`/v1/projects/${id}/files`, {
+      method: 'PUT',
+      body: JSON.stringify({ files }),
+    });
+  },
+  deleteFile(id: number, path: string) {
+    return request<void>(`/v1/projects/${id}/files?path=${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+    });
+  },
   delete(id: number) {
     return request<void>(`/v1/projects/${id}`, { method: 'DELETE' });
+  },
+};
+
+// ── Conversation (history + diff) ─────────────────────────
+export const conversationApi = {
+  get(projectId: number) {
+    return request<{
+      turns: { role: string; blocks: { kind: string; text?: string; plan?: unknown }[] }[] | null;
+      latest?: { id: number; status: string } | null;
+      usage?: Usage | null;
+      planTasks?: PlanTask[] | null;
+    }>(`/v1/projects/${projectId}/conversation`);
+  },
+  diff(projectId: number) {
+    return request<{ diff: string; note?: string }>(`/v1/projects/${projectId}/diff`);
+  },
+  clear(projectId: number) {
+    return request<void>(`/v1/projects/${projectId}/conversation`, { method: 'DELETE' });
+  },
+  rate(projectId: number, messageId: string, rating: number, comment?: string) {
+    return request<void>(`/v1/projects/${projectId}/feedback`, {
+      method: 'POST',
+      body: JSON.stringify({ messageId, rating, comment }),
+    });
+  },
+};
+
+export const checkpointsApi = {
+  list(projectId: number) {
+    return request<{ checkpoints: { id: string; created_at: string }[] | null }>(
+      `/v1/projects/${projectId}/checkpoints`,
+    );
+  },
+  restore(projectId: number, checkpointId: string) {
+    return request<{ status: string; restored: string[] }>(
+      `/v1/projects/${projectId}/checkpoints/${checkpointId}/restore`,
+      { method: 'POST' },
+    );
   },
 };
 
@@ -286,6 +341,25 @@ export const promptsApi = {
       onEvent,
       onError,
     );
+  },
+
+  resume(
+    promptId: number,
+    onEvent: (event: StreamEvent) => void,
+    onError?: (error: Error) => void,
+  ) {
+    return openStream(`/v1/prompts/${promptId}/resume`, { method: 'POST' }, onEvent, onError);
+  },
+
+  steer(promptId: number, message: string, klass: 'steer' | 'inject' = 'steer') {
+    return request<{ prompt_id: number; delivered: boolean; sequence: number }>(
+      `/v1/prompts/${promptId}/steer`,
+      { method: 'POST', body: JSON.stringify({ message, class: klass }) },
+    );
+  },
+
+  discard(promptId: number) {
+    return request<{ status: string }>(`/v1/prompts/${promptId}/discard`, { method: 'POST' });
   },
 
   list(projectId: number) {
