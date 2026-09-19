@@ -17,6 +17,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { conversation } from "@/lib/api";
+import PushToGitHub from "./PushToGitHub";
 
 interface ChangedFilesProps {
   projectId: number;
@@ -166,7 +167,13 @@ export default function ChangedFiles({ projectId, filesTouched }: ChangedFilesPr
 
   return (
     <div className="files-view">
-      <h2>Changed files</h2>
+      <div className="flex items-center justify-between">
+        <h2>Changed files</h2>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-fog">{rows.length} file{rows.length === 1 ? "" : "s"} · +{rows.reduce((a, r) => a + r.add, 0)} −{rows.reduce((a, r) => a + r.del, 0)}</span>
+          <PushToGitHub projectId={projectId} />
+        </div>
+      </div>
       <p className="lede">
         {rows.length} file{rows.length === 1 ? "" : "s"} changed · against the template baseline
       </p>

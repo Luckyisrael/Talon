@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { projects, sessions } from "@/lib/api";
+import { git, projects, sessions } from "@/lib/api";
 import { useIDEStore } from "@/lib/store";
 import type { PlanData } from "@/lib/types";
 import AIChat, { type AIChatHandle } from "./AIChat";
@@ -51,6 +51,22 @@ export default function IDELayout({
     [],
   );
   const [leftTab, setLeftTab] = useState<"chat" | "files" | "memory" | "triage">("chat");
+  const [gitMeta, setGitMeta] = useState<null | { branch: string; dirty: number; ahead: number; behind: number; last_commit: string }>(null);
+  const refreshGit = useCallback(async () => {
+    try {
+      const g = await git.getProjectStatus(projectId);
+      setGitMeta(g);
+    } catch {
+      // No git yet or workspace missing — badge stays hidden.
+    }
+  }, [projectId]);
+  useEffect(() => {
+    void refreshGit();
+  }, [refreshGit]);
+  // Refresh the branch/dirty badge after each turn writes files.
+  useEffect(() => {
+    if (liveTouchedFiles.length > 0) void refreshGit();
+  }, [liveTouchedFiles, refreshGit]);
 
   // Below md the agent panel is a slide-over drawer rather than a fixed column.
   // isDesktop gates which one mounts, so there is only ever one AIChat instance
@@ -460,6 +476,11 @@ export default function IDELayout({
         <Topbar
           projectName={projectName}
           projectStatus={projectStatus}
+          gitBranch={gitMeta?.branch ?? null}
+          gitDirty={gitMeta?.dirty ?? null}
+          gitAheadBehind={
+            gitMeta ? (gitMeta.ahead || gitMeta.behind ? `${gitMeta.ahead}↑ ${gitMeta.behind}↓` : null) : null
+          }
           onExit={onExit}
           onToggleTerminal={() => store.setTerminalOpen(!store.terminalOpen)}
           onOpenPalette={() => store.setCommandPaletteOpen(true)}

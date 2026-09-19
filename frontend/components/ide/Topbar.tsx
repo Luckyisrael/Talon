@@ -15,6 +15,9 @@ interface TopbarProps {
   projectStatus?: string;
   /** When the last verified build happened, for the status pill. */
   verifiedAgo?: string | null;
+  gitBranch?: string | null;
+  gitDirty?: number | null;
+  gitAheadBehind?: string | null;
   onExit: () => void;
   onToggleTerminal: () => void;
   onOpenPalette: () => void;
@@ -25,6 +28,9 @@ export default function Topbar({
   projectName,
   projectStatus,
   verifiedAgo,
+  gitBranch,
+  gitDirty,
+  gitAheadBehind,
   onExit,
   onToggleTerminal,
   onOpenPalette,
@@ -61,6 +67,17 @@ export default function Topbar({
       </button>
       {projectStatus ? (
         <span className="gauge hidden flex-shrink-0 sm:inline">{projectStatus}</span>
+      ) : null}
+      {gitBranch ? (
+        <span
+          className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-2)] px-2.5 py-0.5 font-mono text-xs text-[var(--label-2)]"
+          title={`${gitBranch}${gitDirty ? ` · ${gitDirty} dirty` : " · clean"}${gitAheadBehind ? ` · ${gitAheadBehind}` : ""}`}
+        >
+          <span className={`h-2 w-2 rounded-full ${gitDirty ? "bg-amber-400" : "bg-emerald-400"}`} />
+          {gitBranch}
+          {gitDirty ? ` · ${gitDirty}` : ""}
+          {gitAheadBehind ? ` · ${gitAheadBehind}` : ""}
+        </span>
       ) : null}
 
       <span className="flex-1" />
