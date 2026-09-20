@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"strconv"
 	"time"
 )
 
@@ -30,6 +31,13 @@ func (s *Store) AppendMessage(projectID, promptID int64, role, blocksJSON string
 		 VALUES (?, (SELECT user_id FROM projects WHERE id = ?), ?, COALESCE((SELECT MAX(seq) FROM conversation_messages WHERE project_id = ?), 0) + 1, ?, ?, ?, ?)`,
 		projectID, projectID, promptID, projectID, role, blocksJSON, inTok, outTok,
 	)
+	if err == nil {
+		end := len(blocksJSON)
+		if end > 80 {
+			end = 80
+		}
+		_, _ = s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES ((SELECT user_id FROM projects WHERE id = ?), ?, 'append_message', ?, ?)", projectID, projectID, role, blocksJSON[:end])
+	}
 	return err
 }
 
@@ -86,12 +94,18 @@ func (s *Store) TrimConversation(projectID int64, keep int) error {
 		`DELETE FROM conversation_messages WHERE project_id = ? AND seq <= (
 			SELECT COALESCE(MAX(seq), 0) - ? FROM conversation_messages WHERE project_id = ?
 		)`, projectID, keep, projectID)
+	if err == nil {
+		_, _ = s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES ((SELECT user_id FROM projects WHERE id = ?), ?, 'trim_conversation', ?, ?)", projectID, projectID, strconv.Itoa(keep), "")
+	}
 	return err
 }
 
 // ClearConversation removes the entire conversation for a project.
 func (s *Store) ClearConversation(projectID int64) error {
 	_, err := s.db.Exec("DELETE FROM conversation_messages WHERE project_id = ?", projectID)
+	if err == nil {
+		_, _ = s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES ((SELECT user_id FROM projects WHERE id = ?), ?, 'clear_conversation', ?, '')", projectID, projectID, strconv.FormatInt(projectID, 10))
+	}
 	return err
 }
 
