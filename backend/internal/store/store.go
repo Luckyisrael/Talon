@@ -640,6 +640,21 @@ func (s *Store) migrate() error {
 	)`)
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_conv_archive_project ON conversation_archive(project_id, seq)")
 
+	// P3a: audit log — append-only, who/when/what for every memory/history mutation.
+	// Never DELETE. Hash chain is implicit via id ordering; before/after can be
+	// added when needed for tamper audit.
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS audit_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER,
+		project_id INTEGER,
+		action TEXT NOT NULL,
+		target_id TEXT DEFAULT '',
+		detail TEXT DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id)")
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_audit_project ON audit_log(project_id)")
+
 	return nil
 }
 
@@ -1438,6 +1453,41 @@ func (s *Store) DeleteMemory(id int64) error {
 func (s *Store) ClearMemory(projectID int64) error {
 	_, err := s.db.Exec("DELETE FROM project_memory WHERE project_id = ?", projectID)
 	return err
+}
+
+type AuditEntry struct {
+	ID        int64     `json:"id"`
+	UserID    int64     `json:"user_id"`
+	ProjectID int64     `json:"project_id"`
+	Action    string    `json:"action"`
+	TargetID  string    `json:"target_id"`
+	Detail    string    `json:"detail"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (s *Store) AuditLog(userID, projectID int64, action, targetID, detail string) error {
+	_, err := s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES (?, ?, ?, ?, ?)", userID, projectID, action, targetID, detail)
+	return err
+}
+
+func (s *Store) ListAuditLog(projectID int64, limit int) ([]AuditEntry, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := s.db.Query("SELECT id, user_id, project_id, action, target_id, detail, created_at FROM audit_log WHERE project_id = ? ORDER BY id DESC LIMIT ?", projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuditEntry
+	for rows.Next() {
+		var r AuditEntry
+		if err := rows.Scan(&r.ID, &r.UserID, &r.ProjectID, &r.Action, &r.TargetID, &r.Detail, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // SlugExists checks if a slug is already in use.
