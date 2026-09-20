@@ -376,6 +376,7 @@ func main() {
 
 		// Project knowledge and history.
 		r.Get("/v1/projects/{projectID}/memory", promptHandler.GetMemory)
+		r.Get("/v1/projects/{projectID}/audit", promptHandler.ListAuditLog)
 		metroHandler := api.NewMetroHandler(promptHandler)
 		testInfoHandler := api.NewTestInfoHandler(promptHandler, devClientMgr)
 
