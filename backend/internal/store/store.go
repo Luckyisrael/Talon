@@ -1375,6 +1375,21 @@ func memoryCipher() *secrets.Cipher {
 	return secrets.FromPassphrase(key)
 }
 
+func decryptContent(plain, enc string) string {
+	if enc == "" {
+		return plain
+	}
+	c := memoryCipher()
+	if c == nil {
+		return plain
+	}
+	b, err := c.Decrypt(enc)
+	if err != nil {
+		return plain
+	}
+	return string(b)
+}
+
 // Project Memory methods
 
 func (s *Store) AddMemory(projectID int64, entryType, content, metadata string) error {
@@ -1398,7 +1413,7 @@ func (s *Store) AddMemory(projectID int64, entryType, content, metadata string) 
 }
 
 func (s *Store) GetMemoryByType(projectID int64, entryType string) ([]ProjectMemory, error) {
-	rows, err := s.db.Query("SELECT id, project_id, entry_type, content, metadata, created_at FROM project_memory WHERE project_id = ? AND entry_type = ? ORDER BY created_at ASC", projectID, entryType)
+	rows, err := s.db.Query("SELECT id, project_id, entry_type, content, content_encrypted, metadata, created_at FROM project_memory WHERE project_id = ? AND entry_type = ? ORDER BY created_at ASC", projectID, entryType)
 	if err != nil {
 		return nil, err
 	}
@@ -1407,16 +1422,18 @@ func (s *Store) GetMemoryByType(projectID int64, entryType string) ([]ProjectMem
 	var memories []ProjectMemory
 	for rows.Next() {
 		var m ProjectMemory
-		if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &m.Metadata, &m.CreatedAt); err != nil {
+		var enc string
+		if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &enc, &m.Metadata, &m.CreatedAt); err != nil {
 			return nil, err
 		}
+		m.Content = decryptContent(m.Content, enc)
 		memories = append(memories, m)
 	}
 	return memories, nil
 }
 
 func (s *Store) GetAllMemory(projectID int64) ([]ProjectMemory, error) {
-	rows, err := s.db.Query("SELECT id, project_id, entry_type, content, metadata, created_at FROM project_memory WHERE project_id = ? ORDER BY created_at ASC", projectID)
+	rows, err := s.db.Query("SELECT id, project_id, entry_type, content, content_encrypted, metadata, created_at FROM project_memory WHERE project_id = ? ORDER BY created_at ASC", projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -1425,9 +1442,11 @@ func (s *Store) GetAllMemory(projectID int64) ([]ProjectMemory, error) {
 	var memories []ProjectMemory
 	for rows.Next() {
 		var m ProjectMemory
-		if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &m.Metadata, &m.CreatedAt); err != nil {
+		var enc string
+		if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &enc, &m.Metadata, &m.CreatedAt); err != nil {
 			return nil, err
 		}
+		m.Content = decryptContent(m.Content, enc)
 		memories = append(memories, m)
 	}
 	return memories, nil
@@ -1441,7 +1460,7 @@ func (s *Store) SearchMemoryFTS(projectID int64, query, entryType string, limit 
 	q := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
 	if entryType != "" {
 		rows, err := s.db.Query(
-			`SELECT id, project_id, entry_type, content, metadata, created_at FROM project_memory WHERE project_id = ? AND entry_type = ? AND id IN (SELECT rowid FROM project_memory_fts WHERE project_memory_fts MATCH ?) ORDER BY created_at DESC LIMIT ?`,
+			`SELECT id, project_id, entry_type, content, content_encrypted, metadata, created_at FROM project_memory WHERE project_id = ? AND entry_type = ? AND id IN (SELECT rowid FROM project_memory_fts WHERE project_memory_fts MATCH ?) ORDER BY created_at DESC LIMIT ?`,
 			projectID, entryType, q, limit)
 		if err != nil {
 			return nil, err
@@ -1450,15 +1469,17 @@ func (s *Store) SearchMemoryFTS(projectID int64, query, entryType string, limit 
 		var out []ProjectMemory
 		for rows.Next() {
 			var m ProjectMemory
-			if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &m.Metadata, &m.CreatedAt); err != nil {
+			var enc string
+			if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &enc, &m.Metadata, &m.CreatedAt); err != nil {
 				return nil, err
 			}
+			m.Content = decryptContent(m.Content, enc)
 			out = append(out, m)
 		}
 		return out, rows.Err()
 	}
 	rows, err := s.db.Query(
-		`SELECT id, project_id, entry_type, content, metadata, created_at FROM project_memory WHERE project_id = ? AND id IN (SELECT rowid FROM project_memory_fts WHERE project_memory_fts MATCH ?) ORDER BY created_at DESC LIMIT ?`,
+		`SELECT id, project_id, entry_type, content, content_encrypted, metadata, created_at FROM project_memory WHERE project_id = ? AND id IN (SELECT rowid FROM project_memory_fts WHERE project_memory_fts MATCH ?) ORDER BY created_at DESC LIMIT ?`,
 		projectID, q, limit)
 	if err != nil {
 		return nil, err
@@ -1467,9 +1488,11 @@ func (s *Store) SearchMemoryFTS(projectID int64, query, entryType string, limit 
 	var out []ProjectMemory
 	for rows.Next() {
 		var m ProjectMemory
-		if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &m.Metadata, &m.CreatedAt); err != nil {
+		var enc string
+		if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &enc, &m.Metadata, &m.CreatedAt); err != nil {
 			return nil, err
 		}
+		m.Content = decryptContent(m.Content, enc)
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -1478,7 +1501,13 @@ func (s *Store) SearchMemoryFTS(projectID int64, query, entryType string, limit 
 func (s *Store) UpdateMemory(id int64, content, metadata string) error {
 	var projectID, userID int64
 	_ = s.db.QueryRow("SELECT project_id, user_id FROM project_memory WHERE id = ?", id).Scan(&projectID, &userID)
-	_, err := s.db.Exec("UPDATE project_memory SET content = ?, metadata = ? WHERE id = ?", content, metadata, id)
+	enc := ""
+	if c := memoryCipher(); c != nil {
+		if sealed, err := c.Encrypt([]byte(content)); err == nil {
+			enc = sealed
+		}
+	}
+	_, err := s.db.Exec("UPDATE project_memory SET content = ?, content_encrypted = ?, metadata = ? WHERE id = ?", content, enc, metadata, id)
 	if err == nil && projectID != 0 {
 		_, _ = s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES (?, ?, 'update_memory', ?, ?)", userID, projectID, strconv.FormatInt(id, 10), content[:minInt(len(content), 120)])
 	}
