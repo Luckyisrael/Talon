@@ -609,6 +609,15 @@ func (s *Store) migrate() error {
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_project_memory_user ON project_memory(user_id)")
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_conv_user ON conversation_messages(user_id)")
 
+	// P1b: FTS5 for semantic recall — substring → tokenised search. Content sync
+	// via triggers so project_memory is source of truth; FTS is just the index.
+	s.db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS project_memory_fts USING fts5(content, entry_type, metadata, content='project_memory', content_rowid='id', tokenize='porter unicode61')`)
+	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS project_memory_fts_ai AFTER INSERT ON project_memory BEGIN INSERT INTO project_memory_fts(rowid, content, entry_type, metadata) VALUES (new.id, new.content, new.entry_type, new.metadata); END`)
+	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS project_memory_fts_ad AFTER DELETE ON project_memory BEGIN INSERT INTO project_memory_fts(project_memory_fts, rowid, content, entry_type, metadata) VALUES('delete', old.id, old.content, old.entry_type, old.metadata); END`)
+	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS project_memory_fts_au AFTER UPDATE ON project_memory BEGIN INSERT INTO project_memory_fts(project_memory_fts, rowid, content, entry_type, metadata) VALUES('delete', old.id, old.content, old.entry_type, old.metadata); INSERT INTO project_memory_fts(rowid, content, entry_type, metadata) VALUES (new.id, new.content, new.entry_type, new.metadata); END`)
+	// Backfill any rows that predate the FTS table (INSERT trigger missed them).
+	s.db.Exec(`INSERT INTO project_memory_fts(project_memory_fts) VALUES('rebuild')`)
+
 	return nil
 }
 
@@ -1350,6 +1359,48 @@ func (s *Store) GetAllMemory(projectID int64) ([]ProjectMemory, error) {
 		memories = append(memories, m)
 	}
 	return memories, nil
+}
+
+func (s *Store) SearchMemoryFTS(projectID int64, query, entryType string, limit int) ([]ProjectMemory, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 50
+	}
+	// FTS5 query: escape double quotes and append * for prefix matching on last token.
+	q := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+	if entryType != "" {
+		rows, err := s.db.Query(
+			`SELECT id, project_id, entry_type, content, metadata, created_at FROM project_memory WHERE project_id = ? AND entry_type = ? AND id IN (SELECT rowid FROM project_memory_fts WHERE project_memory_fts MATCH ?) ORDER BY created_at DESC LIMIT ?`,
+			projectID, entryType, q, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []ProjectMemory
+		for rows.Next() {
+			var m ProjectMemory
+			if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &m.Metadata, &m.CreatedAt); err != nil {
+				return nil, err
+			}
+			out = append(out, m)
+		}
+		return out, rows.Err()
+	}
+	rows, err := s.db.Query(
+		`SELECT id, project_id, entry_type, content, metadata, created_at FROM project_memory WHERE project_id = ? AND id IN (SELECT rowid FROM project_memory_fts WHERE project_memory_fts MATCH ?) ORDER BY created_at DESC LIMIT ?`,
+		projectID, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProjectMemory
+	for rows.Next() {
+		var m ProjectMemory
+		if err := rows.Scan(&m.ID, &m.ProjectID, &m.EntryType, &m.Content, &m.Metadata, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) UpdateMemory(id int64, content, metadata string) error {

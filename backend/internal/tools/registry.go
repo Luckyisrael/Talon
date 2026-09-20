@@ -192,6 +192,7 @@ type StoreAdapter struct {
 	AddMemoryFn      func(projectID int64, entryType, content, metadata string) error
 	GetAllMemoryFn   func(projectID int64) ([]MemoryEntry, error)
 	GetMemoryByTypeFn func(projectID int64, entryType string) ([]MemoryEntry, error)
+	SearchMemoryFn   func(projectID int64, query, entryType string, limit int) ([]MemoryEntry, error)
 }
 
 // MemoryEntry is the read-side view of a project memory row. It mirrors the
@@ -236,4 +237,12 @@ func (a *StoreAdapter) ListMemoryByType(projectID int64, entryType string) ([]Me
 		return nil, fmt.Errorf("project memory is not wired in this session")
 	}
 	return a.GetMemoryByTypeFn(projectID, entryType)
+}
+
+func (a *StoreAdapter) SearchMemory(projectID int64, query, entryType string, limit int) ([]MemoryEntry, error) {
+	if a == nil || a.SearchMemoryFn == nil {
+		// Fallback to List + substring — no FTS wired (tests without store).
+		return nil, fmt.Errorf("search not wired")
+	}
+	return a.SearchMemoryFn(projectID, query, entryType, limit)
 }

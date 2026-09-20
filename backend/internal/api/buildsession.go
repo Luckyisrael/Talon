@@ -328,6 +328,13 @@ func (h *PromptHandler) storeAdapter() *tools.StoreAdapter {
 			}
 			return projectMemoryToEntries(rows), nil
 		},
+		SearchMemoryFn: func(projectID int64, query, entryType string, limit int) ([]tools.MemoryEntry, error) {
+			rows, err := h.store.SearchMemoryFTS(projectID, query, entryType, limit)
+			if err != nil {
+				return nil, err
+			}
+			return projectMemoryToEntries(rows), nil
+		},
 	}
 }
 

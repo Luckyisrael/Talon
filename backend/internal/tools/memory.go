@@ -130,36 +130,59 @@ func (t *ReadMemory) Execute(ctx context.Context, args json.RawMessage) (ToolRes
 
 	var entries []MemoryEntry
 	var err error
-	if a.Type != "" {
-		entries, err = t.Store.ListMemoryByType(t.ProjectID, a.Type)
+	// Hybrid: when contains is set, try FTS5 tokenised search first — it
+	// handles stemming and prefix, so "wallet" hits "wallets" and "MWA".
+	// Falls back to substring when FTS is not wired (tests) or yields nothing.
+	if a.Contains != "" {
+		if fts, ferr := t.Store.SearchMemory(t.ProjectID, a.Contains, a.Type, readMemoryCap); ferr == nil && len(fts) > 0 {
+			entries = fts
+		} else {
+			if a.Type != "" {
+				entries, err = t.Store.ListMemoryByType(t.ProjectID, a.Type)
+			} else {
+				entries, err = t.Store.ListMemory(t.ProjectID)
+			}
+			if err != nil {
+				return errResult("could not read memory: %v", err), nil
+			}
+			if len(entries) > 0 {
+				for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+					entries[i], entries[j] = entries[j], entries[i]
+				}
+			}
+			needle := strings.ToLower(a.Contains)
+			filtered := entries[:0]
+			for _, e := range entries {
+				if strings.Contains(strings.ToLower(e.Content), needle) || strings.Contains(strings.ToLower(e.Metadata), needle) {
+					filtered = append(filtered, e)
+				}
+			}
+			entries = filtered
+			if len(entries) > readMemoryCap {
+				entries = entries[:readMemoryCap]
+			}
+		}
 	} else {
-		entries, err = t.Store.ListMemory(t.ProjectID)
-	}
-	if err != nil {
-		return errResult("could not read memory: %v", err), nil
+		if a.Type != "" {
+			entries, err = t.Store.ListMemoryByType(t.ProjectID, a.Type)
+		} else {
+			entries, err = t.Store.ListMemory(t.ProjectID)
+		}
+		if err != nil {
+			return errResult("could not read memory: %v", err), nil
+		}
+		if len(entries) == 0 {
+			return ToolResult{Content: "No memory entries match."}, nil
+		}
+		for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+			entries[i], entries[j] = entries[j], entries[i]
+		}
+		if len(entries) > readMemoryCap {
+			entries = entries[:readMemoryCap]
+		}
 	}
 	if len(entries) == 0 {
 		return ToolResult{Content: "No memory entries match."}, nil
-	}
-
-	// The list comes back oldest-first; surface it newest-first because that is
-	// what the model usually wants ("did I just learn something about X?"). With
-	// a cap so a long-running project does not blow the context window.
-	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-		entries[i], entries[j] = entries[j], entries[i]
-	}
-	if a.Contains != "" {
-		needle := strings.ToLower(a.Contains)
-		filtered := entries[:0]
-		for _, e := range entries {
-			if strings.Contains(strings.ToLower(e.Content), needle) {
-				filtered = append(filtered, e)
-			}
-		}
-		entries = filtered
-	}
-	if len(entries) > readMemoryCap {
-		entries = entries[:readMemoryCap]
 	}
 
 	var b strings.Builder
