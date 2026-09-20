@@ -230,6 +230,7 @@ func (s *Store) migrate() error {
 			entry_type TEXT NOT NULL,
 			content TEXT NOT NULL,
 			metadata TEXT DEFAULT '',
+			embedding BLOB,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (project_id) REFERENCES projects(id),
 			FOREIGN KEY (user_id) REFERENCES users(id)
@@ -617,6 +618,10 @@ func (s *Store) migrate() error {
 	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS project_memory_fts_au AFTER UPDATE ON project_memory BEGIN INSERT INTO project_memory_fts(project_memory_fts, rowid, content, entry_type, metadata) VALUES('delete', old.id, old.content, old.entry_type, old.metadata); INSERT INTO project_memory_fts(rowid, content, entry_type, metadata) VALUES (new.id, new.content, new.entry_type, new.metadata); END`)
 	// Backfill any rows that predate the FTS table (INSERT trigger missed them).
 	s.db.Exec(`INSERT INTO project_memory_fts(project_memory_fts) VALUES('rebuild')`)
+
+	// P1c: vector placeholder — embedding BLOB for future sqlite-vss. Empty until
+	// an embedding provider is wired; schema is ready so P1b FTS is not blocked.
+	s.db.Exec("ALTER TABLE project_memory ADD COLUMN embedding BLOB")
 
 	return nil
 }
