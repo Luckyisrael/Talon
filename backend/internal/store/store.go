@@ -231,6 +231,7 @@ func (s *Store) migrate() error {
 			content TEXT NOT NULL,
 			metadata TEXT DEFAULT '',
 			embedding BLOB,
+			content_encrypted TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (project_id) REFERENCES projects(id),
 			FOREIGN KEY (user_id) REFERENCES users(id)
@@ -622,6 +623,12 @@ func (s *Store) migrate() error {
 	// P1c: vector placeholder — embedding BLOB for future sqlite-vss. Empty until
 	// an embedding provider is wired; schema is ready so P1b FTS is not blocked.
 	s.db.Exec("ALTER TABLE project_memory ADD COLUMN embedding BLOB")
+
+	// P2b: encryption at rest — content_encrypted holds AES-GCM sealed copy when
+	// MEMORY_ENCRYPTION_KEY (or JWT_SECRET) is set; plaintext stays for FTS until
+	// sqlcipher replaces file-level encryption. Schema ready, no behavior change
+	// until key is configured.
+	s.db.Exec("ALTER TABLE project_memory ADD COLUMN content_encrypted TEXT DEFAULT ''")
 
 	// P2a: durable history archive — TrimConversation no longer hard-deletes beyond 400;
 	// rows are copied to archive first so replay can be audited. Archive is append-only.
