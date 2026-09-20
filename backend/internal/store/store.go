@@ -1476,18 +1476,40 @@ func (s *Store) SearchMemoryFTS(projectID int64, query, entryType string, limit 
 }
 
 func (s *Store) UpdateMemory(id int64, content, metadata string) error {
+	var projectID, userID int64
+	_ = s.db.QueryRow("SELECT project_id, user_id FROM project_memory WHERE id = ?", id).Scan(&projectID, &userID)
 	_, err := s.db.Exec("UPDATE project_memory SET content = ?, metadata = ? WHERE id = ?", content, metadata, id)
+	if err == nil && projectID != 0 {
+		_, _ = s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES (?, ?, 'update_memory', ?, ?)", userID, projectID, strconv.FormatInt(id, 10), content[:minInt(len(content), 120)])
+	}
 	return err
 }
 
 func (s *Store) DeleteMemory(id int64) error {
+	var projectID, userID int64
+	_ = s.db.QueryRow("SELECT project_id, user_id FROM project_memory WHERE id = ?", id).Scan(&projectID, &userID)
 	_, err := s.db.Exec("DELETE FROM project_memory WHERE id = ?", id)
+	if err == nil && projectID != 0 {
+		_, _ = s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES (?, ?, 'delete_memory', ?, '')", userID, projectID, strconv.FormatInt(id, 10))
+	}
 	return err
 }
 
 func (s *Store) ClearMemory(projectID int64) error {
+	var userID int64
+	_ = s.db.QueryRow("SELECT user_id FROM projects WHERE id = ?", projectID).Scan(&userID)
 	_, err := s.db.Exec("DELETE FROM project_memory WHERE project_id = ?", projectID)
+	if err == nil {
+		_, _ = s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES (?, ?, 'clear_memory', ?, '')", userID, projectID, strconv.FormatInt(projectID, 10))
+	}
 	return err
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 type AuditEntry struct {
