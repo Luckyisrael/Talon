@@ -22,11 +22,13 @@ type ConversationMessage struct {
 }
 
 // AppendMessage stores one turn at the next sequence number for the project.
+// user_id is denormalized from projects for per-tenant RLS — every row is
+// tagged with its owner so a DB-level filter can enforce isolation.
 func (s *Store) AppendMessage(projectID, promptID int64, role, blocksJSON string, inTok, outTok int) error {
 	_, err := s.db.Exec(
-		`INSERT INTO conversation_messages (project_id, prompt_id, seq, role, blocks, input_tokens, output_tokens)
-		 VALUES (?, ?, COALESCE((SELECT MAX(seq) FROM conversation_messages WHERE project_id = ?), 0) + 1, ?, ?, ?, ?)`,
-		projectID, promptID, projectID, role, blocksJSON, inTok, outTok,
+		`INSERT INTO conversation_messages (project_id, user_id, prompt_id, seq, role, blocks, input_tokens, output_tokens)
+		 VALUES (?, (SELECT user_id FROM projects WHERE id = ?), ?, COALESCE((SELECT MAX(seq) FROM conversation_messages WHERE project_id = ?), 0) + 1, ?, ?, ?, ?)`,
+		projectID, projectID, promptID, projectID, role, blocksJSON, inTok, outTok,
 	)
 	return err
 }

@@ -226,11 +226,13 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS project_memory (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			project_id INTEGER NOT NULL,
+			user_id INTEGER,
 			entry_type TEXT NOT NULL,
 			content TEXT NOT NULL,
 			metadata TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (project_id) REFERENCES projects(id)
+			FOREIGN KEY (project_id) REFERENCES projects(id),
+			FOREIGN KEY (user_id) REFERENCES users(id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS architecture_decisions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -250,6 +252,7 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS conversation_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			project_id INTEGER NOT NULL,
+			user_id INTEGER,
 			prompt_id INTEGER DEFAULT 0,
 			seq INTEGER NOT NULL,
 			role TEXT NOT NULL,
@@ -257,7 +260,8 @@ func (s *Store) migrate() error {
 			input_tokens INTEGER DEFAULT 0,
 			output_tokens INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (project_id) REFERENCES projects(id)
+			FOREIGN KEY (project_id) REFERENCES projects(id),
+			FOREIGN KEY (user_id) REFERENCES users(id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_conv_project_seq ON conversation_messages(project_id, seq)`,
 		// session_events is the H1 harness session log: the append-only,
@@ -593,6 +597,17 @@ func (s *Store) migrate() error {
 		sent_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		read_at DATETIME
 	)`)
+
+	// P0b: per-tenant user_id on hot tables — defense-in-depth RLS. Every
+	// project_memory / conversation row is now tagged with its owner's user_id
+	// so a future JOIN can enforce tenant isolation at the DB, not only at the
+	// handler. Backfill from projects; new writes fill via SELECT subquery.
+	s.db.Exec("ALTER TABLE project_memory ADD COLUMN user_id INTEGER")
+	s.db.Exec("ALTER TABLE conversation_messages ADD COLUMN user_id INTEGER")
+	s.db.Exec("UPDATE project_memory SET user_id = (SELECT user_id FROM projects WHERE projects.id = project_memory.project_id) WHERE user_id IS NULL")
+	s.db.Exec("UPDATE conversation_messages SET user_id = (SELECT user_id FROM projects WHERE projects.id = conversation_messages.project_id) WHERE user_id IS NULL")
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_project_memory_user ON project_memory(user_id)")
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_conv_user ON conversation_messages(user_id)")
 
 	return nil
 }
@@ -1297,7 +1312,7 @@ func (s *Store) IncrementDeviceMinutes(userID int64, minutes float64) error {
 // Project Memory methods
 
 func (s *Store) AddMemory(projectID int64, entryType, content, metadata string) error {
-	_, err := s.db.Exec("INSERT INTO project_memory (project_id, entry_type, content, metadata) VALUES (?, ?, ?, ?)", projectID, entryType, content, metadata)
+	_, err := s.db.Exec("INSERT INTO project_memory (project_id, user_id, entry_type, content, metadata) VALUES (?, (SELECT user_id FROM projects WHERE id = ?), ?, ?, ?)", projectID, projectID, entryType, content, metadata)
 	return err
 }
 
