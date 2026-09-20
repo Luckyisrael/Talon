@@ -57,6 +57,17 @@ func NewSessionHandler(s *store.Store, mgr *redroid.Manager, portAlloc *redroid.
 	}
 }
 
+// requireSessionOwnership 404s unless the session's project belongs to the caller.
+// Mirrors ws/auth.go:109 and projects.go:73 posture.
+func (h *SessionHandler) requireSessionOwnership(w http.ResponseWriter, r *http.Request, session *store.Session) bool {
+	project, err := h.store.GetProject(session.ProjectID)
+	if err != nil || project.UserID != GetUserID(r.Context()) {
+		writeError(w, http.StatusNotFound, "session not found")
+		return false
+	}
+	return true
+}
+
 // notifyUser is the session surface's fire-and-forget send (the turn surface
 // has its own; both converge on notify.Dispatch).
 func (h *SessionHandler) notifyUser(userID int64, kind notify.Kind, title, body string) {
@@ -98,6 +109,13 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	if req.ProjectID == 0 {
 		writeError(w, http.StatusBadRequest, "project_id required")
+		return
+	}
+
+	// Ownership: project must belong to caller — 404 hides existence.
+	project, err := h.store.GetProject(req.ProjectID)
+	if err != nil || project.UserID != GetUserID(r.Context()) {
+		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
 
@@ -243,6 +261,9 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
+	if !h.requireSessionOwnership(w, r, session) {
+		return
+	}
 
 	// Include Metro port if running
 	response := map[string]interface{}{
@@ -327,6 +348,9 @@ func (h *SessionHandler) Screenshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
+	if !h.requireSessionOwnership(w, r, session) {
+		return
+	}
 	if session.ADBPort == 0 {
 		writeError(w, http.StatusConflict, "no device attached to this session")
 		return
@@ -370,6 +394,9 @@ func (h *SessionHandler) Pause(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
+	if !h.requireSessionOwnership(w, r, session) {
+		return
+	}
 
 	// Pause the Docker container
 	if session.ContainerID != "" && h.manager != nil {
@@ -400,6 +427,9 @@ func (h *SessionHandler) Resume(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
+	if !h.requireSessionOwnership(w, r, session) {
+		return
+	}
 
 	// Unpause the Docker container
 	if session.ContainerID != "" && h.manager != nil {
@@ -428,6 +458,9 @@ func (h *SessionHandler) Destroy(w http.ResponseWriter, r *http.Request) {
 	session, err := h.store.GetSession(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if !h.requireSessionOwnership(w, r, session) {
 		return
 	}
 
