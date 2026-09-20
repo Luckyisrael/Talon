@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/luckyisrael/talon/backend/internal/secrets"
 )
 
 // ErrDuplicateEmail is returned by CreateUser when the address is already taken,
@@ -1362,11 +1364,37 @@ func (s *Store) IncrementDeviceMinutes(userID int64, minutes float64) error {
 	return err
 }
 
+func memoryCipher() *secrets.Cipher {
+	key := os.Getenv("MEMORY_ENCRYPTION_KEY")
+	if key == "" {
+		key = os.Getenv("JWT_SECRET")
+	}
+	if key == "" {
+		return nil
+	}
+	return secrets.FromPassphrase(key)
+}
+
 // Project Memory methods
 
 func (s *Store) AddMemory(projectID int64, entryType, content, metadata string) error {
-	_, err := s.db.Exec("INSERT INTO project_memory (project_id, user_id, entry_type, content, metadata) VALUES (?, (SELECT user_id FROM projects WHERE id = ?), ?, ?, ?)", projectID, projectID, entryType, content, metadata)
-	return err
+	enc := ""
+	if c := memoryCipher(); c != nil {
+		if sealed, err := c.Encrypt([]byte(content)); err == nil {
+			enc = sealed
+		}
+	}
+	_, err := s.db.Exec("INSERT INTO project_memory (project_id, user_id, entry_type, content, content_encrypted, metadata) VALUES (?, (SELECT user_id FROM projects WHERE id = ?), ?, ?, ?, ?)", projectID, projectID, entryType, content, enc, metadata)
+	if err != nil {
+		return err
+	}
+	// Audit — best effort, never fails the write.
+	end := len(content)
+	if end > 120 {
+		end = 120
+	}
+	_, _ = s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES ((SELECT user_id FROM projects WHERE id = ?), ?, 'write_memory', ?, ?)", projectID, projectID, entryType, content[:end])
+	return nil
 }
 
 func (s *Store) GetMemoryByType(projectID int64, entryType string) ([]ProjectMemory, error) {
