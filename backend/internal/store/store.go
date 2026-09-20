@@ -623,6 +623,23 @@ func (s *Store) migrate() error {
 	// an embedding provider is wired; schema is ready so P1b FTS is not blocked.
 	s.db.Exec("ALTER TABLE project_memory ADD COLUMN embedding BLOB")
 
+	// P2a: durable history archive — TrimConversation no longer hard-deletes beyond 400;
+	// rows are copied to archive first so replay can be audited. Archive is append-only.
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS conversation_archive (
+		id INTEGER PRIMARY KEY,
+		project_id INTEGER NOT NULL,
+		user_id INTEGER,
+		prompt_id INTEGER,
+		seq INTEGER NOT NULL,
+		role TEXT NOT NULL,
+		blocks TEXT NOT NULL,
+		input_tokens INTEGER,
+		output_tokens INTEGER,
+		created_at DATETIME,
+		archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_conv_archive_project ON conversation_archive(project_id, seq)")
+
 	return nil
 }
 

@@ -74,8 +74,14 @@ func (s *Store) GetConversation(projectID int64, limit int) ([]ConversationMessa
 	return msgs, nil
 }
 
-// TrimConversation deletes all but the newest `keep` messages for a project.
+// TrimConversation archives then deletes all but the newest `keep` messages.
+// Archive is append-only so a long build never loses its early turns.
 func (s *Store) TrimConversation(projectID int64, keep int) error {
+	_, _ = s.db.Exec(
+		`INSERT INTO conversation_archive (id, project_id, user_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at)
+		 SELECT id, project_id, user_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at FROM conversation_messages
+		 WHERE project_id = ? AND seq <= (SELECT COALESCE(MAX(seq), 0) - ? FROM conversation_messages WHERE project_id = ?)`,
+		projectID, keep, projectID)
 	_, err := s.db.Exec(
 		`DELETE FROM conversation_messages WHERE project_id = ? AND seq <= (
 			SELECT COALESCE(MAX(seq), 0) - ? FROM conversation_messages WHERE project_id = ?
