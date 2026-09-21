@@ -57,6 +57,13 @@ type Relay struct {
 	mu       sync.Mutex
 	conns    map[net.Conn]struct{}
 	closed   bool
+	// trusted holds phone addresses that completed the §2.4 handshake.
+	// The Expo dev client drops query params when it reduces the deep
+	// link to host:port, so the credential can only be checked once —
+	// on the first request of the first connection. Once spoken, the
+	// address is trusted for the relay's life; every later connection
+	// (bundle reloads, HMR, inspector probes) is already authenticated.
+	trusted map[string]bool
 }
 
 // Start opens the public listener. The port must already be allocated by
@@ -81,8 +88,9 @@ func startRelay(publicPort int, metroAddr, token string) (*Relay, error) {
 		publicPort: publicPort,
 		metroAddr:   metroAddr,
 		listener:    l,
-		conns:        make(map[net.Conn]struct{}),
-		token:        token,
+		conns:    make(map[net.Conn]struct{}),
+		trusted:  make(map[string]bool),
+		token:    token,
 	}
 	go r.acceptLoop()
 	if token != "" {
@@ -103,6 +111,32 @@ func (r *Relay) Token() string { return r.token }
 
 // Addr is the public dial address (host:port).
 func (r *Relay) Addr() string { return r.listener.Addr().String() }
+
+// trusts reports whether a phone address completed the handshake. NAT and
+// DHCP aside, a phone on a LAN keeps one source address for a session; the
+// deep link is the only way to learn the credential, and it is not
+// transferable — the token dies with this relay.
+func (r *Relay) trusts(addr net.Addr) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.trusted[hostFromAddr(addr)]
+}
+
+// trust records a phone that presented the token.
+func (r *Relay) trust(addr net.Addr) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.trusted[hostFromAddr(addr)] = true
+}
+
+// hostFromAddr strips the port: trust is per-phone, not per-socket.
+func hostFromAddr(addr net.Addr) string {
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return addr.String()
+	}
+	return host
+}
 
 func (r *Relay) acceptLoop() {
 	for {
@@ -139,24 +173,39 @@ func (r *Relay) serveConn(public net.Conn) {
 		public.Close()
 	}()
 
-	// §2.4: the QR embeds authentication, not just a location. When this
-	// relay carries a token, the first bytes on the connection must be an
-	// HTTP request whose URL carries it (?token=…). The Expo dev client
-	// preserves query params from the exp:// deep link onto the requests it
-	// makes, so a legitimate phone presents the credential on its very
-	// first line — and a connection that never speaks a token is refused
-	// without ever reaching metro. Peek bounded: the request line fits well
-	// under 4KiB; a client that opens a socket and says nothing is dropped
-	// at the read deadline, not held.
-	if r.token != "" {
+	// §2.4: the QR embeds authentication, not just a location. The Expo
+	// dev client reduces the deep link to host:port before it makes a
+	// single request (DevLauncherReactUtils.kt: `url.host + ":" + port`,
+	// and DevLauncherPackagerConnectionSettings returns that string
+	// verbatim as debugServerHost). The query param carrying the token is
+	// discarded, so a per-request gate is unreachable from a real phone.
+	// The phone can present the credential exactly once, on the first
+	// request of its first connection — that is the handshake: speak the
+	// token, and the source address is trusted for the relay's life. A
+	// connection from an untrusted address that never speaks it is
+	// refused before a byte reaches metro.
+	//
+	// Peek bounded: the request line fits well under 4KiB; a client that
+	// opens a socket and says nothing is dropped at the read deadline,
+	// not held.
+	if r.token != "" && !r.trusts(public.RemoteAddr()) {
 		buf := make([]byte, 4096)
 		public.SetReadDeadline(time.Now().Add(10 * time.Second))
 		n, err := public.Read(buf)
 		public.SetReadDeadline(time.Time{})
 		if err != nil || n == 0 || !bytes.Contains(buf[:n], []byte("token="+r.token)) {
-			log.Printf("relay %d: refused unauthenticated connection", r.publicPort)
+			reqLine := string(buf[:n])
+			if nl := indexByte(reqLine, '\n'); nl > 0 {
+				reqLine = reqLine[:nl]
+			}
+			log.Printf("relay %d: refused unauthenticated connection from %s; first line: %s", r.publicPort, public.RemoteAddr(), reqLine)
 			return
 		}
+		// The phone proved possession. Trust its address: the dev client
+		// reopens connections for every bundle reload and every HMR
+		// channel, and each arrives from here.
+		r.trust(public.RemoteAddr())
+		log.Printf("relay %d: authenticated %s", r.publicPort, public.RemoteAddr())
 		// Splice the peeked bytes back: the copy loops below must see the
 		// whole request, not just its tail.
 		spliced := newSpliceConn(public, buf[:n])
@@ -302,4 +351,14 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+// indexByte returns the first index of b in s, or -1.
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
 }

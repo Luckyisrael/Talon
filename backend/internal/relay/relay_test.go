@@ -7,6 +7,18 @@ import (
 	"time"
 )
 
+// dialFrom connects to addr from a specific source address. Trust in the
+// relay is per-phone, so a test that models two phones needs two source
+// hosts — 127.0.0.1/2/3 are all loopback and all reachable on Linux.
+func dialFrom(addr, local string) (net.Conn, error) {
+	laddr, err := net.ResolveTCPAddr("tcp", local+":0")
+	if err != nil {
+		return nil, err
+	}
+	d := net.Dialer{LocalAddr: laddr, Timeout: 2 * time.Second}
+	return d.Dial("tcp", addr)
+}
+
 // A relay passes bytes both ways and dies cleanly. Real sockets, no mocks —
 // the relay is transport and its test is bytes on the wire.
 func TestRelayPassthrough(t *testing.T) {
@@ -248,8 +260,12 @@ func TestTokenGateAcceptsValidAndRefusesBad(t *testing.T) {
 		t.Errorf("spliced request mangled: %q", buf)
 	}
 
-	// A request without the token is refused: no answer, connection dead.
-	sneak, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	// A different phone, with no token on its first request, is refused.
+	// The relay trusts an address only after it presented the credential,
+	// so an unauthenticated phone never reaches metro even after another
+	// phone authenticated. Dial from a distinct source address: a real
+	// phone is a distinct host, and trust is per-phone, not per-socket.
+	sneak, err := dialFrom(addr, "127.0.0.2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +279,7 @@ func TestTokenGateAcceptsValidAndRefusesBad(t *testing.T) {
 	}
 
 	// A tampered token is refused too.
-	tamper, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	tamper, err := dialFrom(addr, "127.0.0.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,6 +290,44 @@ func TestTokenGateAcceptsValidAndRefusesBad(t *testing.T) {
 	tamper.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := tamper.Read(make([]byte, 64)); err == nil {
 		t.Error("tampered token reached metro")
+	}
+}
+
+// An authenticated phone's later connections are already trusted: the Expo
+// dev client drops the deep link's query param when it reduces the URL to
+// host:port, so the credential can only be presented once — on the first
+// request of the first connection. Bundle reloads and HMR reopen sockets
+// that carry no token; they must still work.
+func TestTokenTrustSurvivesReconnect(t *testing.T) {
+	_, addr := tokenRelayFixture(t)
+
+	first, err := dialFrom(addr, "127.0.0.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	req := "GET /index.bundle?platform=android&token=deadbeefcafebabe HTTP/1.1\r\n\r\n"
+	if _, err := first.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	first.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(first, make([]byte, len(req))); err != nil {
+		t.Fatalf("handshake request got no answer: %v", err)
+	}
+
+	// A later connection from the same phone carries no token — the client
+	// rebuilt the URL from host:port alone. It must still reach metro.
+	again, err := dialFrom(addr, "127.0.0.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	again.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := again.Write([]byte("GET /inspector/network HTTP/1.1\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := again.Read(make([]byte, 32)); err != nil {
+		t.Fatalf("authenticated phone's tokenless reconnect was refused: %v", err)
 	}
 }
 
