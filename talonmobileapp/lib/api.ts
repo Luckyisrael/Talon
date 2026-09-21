@@ -97,6 +97,13 @@ export interface ConversationBlock {
   tool_use_id?: string
   content?: string
   is_error?: boolean
+  /** turn_end: the terminal marker a turn writes when it settles. Says how the
+   *  turn ended (completed | failed | cancelled | interrupted) and, on failure,
+   *  the provider message. Without it a dead turn is indistinguishable from one
+   *  still in flight — DSH models this as turn/end with a reason. */
+  status?: string
+  error?: string
+  rounds?: number
 }
 
 export interface Project {

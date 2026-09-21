@@ -535,3 +535,39 @@ func TestTrimKeepsImageTurns(t *testing.T) {
 		t.Errorf("kept %d turns, want 2", len(got))
 	}
 }
+
+// The terminal marker is display-only: it must never reach the provider, or a
+// failed turn would replay its own outcome into the model as if it were
+// content. This is the log-only property DSH gives its surface events.
+func TestTurnEndMarkerIsLogOnly(t *testing.T) {
+	history := []Message{
+		msg("user", text("run the build")),
+		msg("assistant", text("on it"), Block{Type: "tool_use", ID: "c1", Name: "run_shell"}),
+		msg("user", Block{Type: "tool_result", ToolUseID: "c1", Content: "ok"}),
+		msg("assistant", Block{Type: "turn_end", Status: "failed", Error: "model request failed", Rounds: 4}),
+	}
+
+	anth := toAnthropic(history, -1)
+	for _, m := range anth {
+		for _, b := range m.Content {
+			if b.Type == "turn_end" {
+				t.Errorf("anthropic replay leaked the turn_end marker: %+v", b)
+			}
+		}
+	}
+	open := toOpenAI("", history)
+	for _, m := range open {
+		if s, ok := m.Content.(string); ok && strings.Contains(s, "turn_end") {
+			t.Errorf("openai replay leaked the turn_end marker: %q", s)
+		}
+	}
+	// The marker round-trips through storage so a reload still shows it.
+	raw := MarshalBlocks(history[3].Blocks)
+	if !strings.Contains(raw, `"turn_end"`) || !strings.Contains(raw, `"failed"`) {
+		t.Errorf("marker did not round-trip to storage: %s", raw)
+	}
+	back := UnmarshalBlocks(raw)
+	if len(back) != 1 || back[0].Status != "failed" || back[0].Error != "model request failed" || back[0].Rounds != 4 {
+		t.Errorf("marker fields lost in the round trip: %+v", back)
+	}
+}

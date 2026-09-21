@@ -46,6 +46,17 @@ type Block struct {
 	// the provider — the accompanying text block carries the replayable message,
 	// and the model does not need its own plan echoed back.
 	Plan json.RawMessage `json:"plan,omitempty"`
+
+	// turn_end is Talon's terminal marker, modelled on DSH's turn/end with a
+	// reason. It is written once, after the loop settles, and it is what makes
+	// a failed or cancelled turn legible on reload: without it the transcript
+	// holds the tool calls that ran but never says what happened to them, so a
+	// turn that died looks the same as one still in flight. Status is
+	// completed | failed | cancelled | interrupted; Error carries the provider
+	// message on a failure; Rounds is how far it got.
+	Status string `json:"status,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Rounds int    `json:"rounds,omitempty"`
 }
 
 // Message is one conversation turn.

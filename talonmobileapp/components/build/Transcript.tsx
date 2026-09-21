@@ -78,7 +78,8 @@ export function RestoredTranscript({
           .join('\n\n')
         const tools = (t.blocks ?? []).filter((b) => b.kind === 'tool_use')
         const question = (t.blocks ?? []).find((b) => b.kind === 'tool_use' && b.name === 'ask_user')
-        if (!narration && tools.length === 0) return null
+        const ending = (t.blocks ?? []).find((b) => b.kind === 'turn_end')
+        if (!narration && tools.length === 0 && !ending) return null
         return (
           <View key={i} style={styles.assistantWrap}>
             {narration ? <MarkdownView>{narration}</MarkdownView> : null}
@@ -97,6 +98,7 @@ export function RestoredTranscript({
                   />
                 )
               })}
+            {ending ? <TurnEndRow block={ending} /> : null}
             {question && waitingPromptId ? (
               <QuestionCard
                 question={str(inputOf(question, 'question')) ?? 'The agent asked a question.'}
@@ -114,6 +116,40 @@ export function RestoredTranscript({
 function inputOf(b: ConversationBlock, key: string): unknown {
   const input = (b.input ?? {}) as Record<string, unknown>
   return input[key]
+}
+
+// TurnEndRow renders the terminal marker — the line that says how a turn ended.
+// This is what was missing when a turn that ran four tools died: the rows were
+// there with nothing to say they stopped, so it read as still in flight. DSH
+// shows the same thing as its turn-tail; a clean turn renders nothing here so
+// the transcript does not gain a line of noise per prompt.
+function TurnEndRow({ block }: { block: ConversationBlock }) {
+  const status = block.status ?? ''
+  // A turn that completed cleanly needs no announcement: the assistant text
+  // already ends it. Interrupted is the restart sweep's marker; failed and
+  // cancelled are the two a user needs to see.
+  if (status === 'completed') return null
+
+  const tone = status === 'failed' || status === 'interrupted' ? Colors.coralRed : Colors.fog
+  const label =
+    status === 'failed' ? 'Turn failed'
+    : status === 'cancelled' ? 'Turn cancelled'
+    : status === 'interrupted' ? 'Turn interrupted by a restart'
+    : status === 'stalled' ? 'Turn stalled'
+    : 'Turn ended'
+  const detail = block.error?.trim()
+  return (
+    <View style={styles.turnEnd}>
+      <UIText variant="caption" style={{ color: tone }}>
+        {label}{block.rounds ? ` · after ${block.rounds} round${block.rounds === 1 ? '' : 's'}` : ''}
+      </UIText>
+      {detail ? (
+        <UIText variant="caption" tone="faint" numberOfLines={4} style={styles.turnEndError}>
+          {detail}
+        </UIText>
+      ) : null}
+    </View>
+  )
 }
 
 function str(v: unknown): string | undefined {
@@ -164,4 +200,11 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   assistantWrap: { gap: Spacing.s8 },
+  turnEnd: {
+    borderLeftWidth: 2,
+    borderLeftColor: Colors.coralRed,
+    paddingLeft: Spacing.s8,
+    paddingVertical: 2,
+  },
+  turnEndError: { opacity: 0.8 },
 })

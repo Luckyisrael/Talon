@@ -299,6 +299,17 @@ function turnsToEntries(
           packages: p.packages ?? [],
         };
       }
+      if (block.type === "turn_end") {
+        // The terminal marker — DSH's turn-tail. Only a non-clean outcome adds
+        // a row; a completed turn is already ended by its own narration.
+        rows.push({
+          id: `restored-end-${i}-${j}`,
+          kind: "end",
+          ending: (block.status as TraceRow["ending"]) ?? "failed",
+          text: block.error,
+          rounds: block.rounds,
+        });
+      }
       if (block.type === "tool_use") {
         const input = (block.input ?? {}) as {
           path?: string;

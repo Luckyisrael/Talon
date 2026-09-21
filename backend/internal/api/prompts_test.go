@@ -178,6 +178,25 @@ func TestMarkInterruptedPromptsSweep(t *testing.T) {
 	if ids2, _ := st.MarkInterruptedPrompts(); len(ids2) != 0 {
 		t.Fatalf("second sweep should find nothing, got %v", ids2)
 	}
+	// The sweep must close the orphan in the transcript too, not only in the
+	// prompts row: the chat reads conversation_messages, so a turn left
+	// running by a dead process would otherwise look still in flight to
+	// anyone who reloads. This is DSH's interruptedTurnClosers.
+	msgs, err := st.GetConversation(p.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var markers int
+	for _, m := range msgs {
+		for _, b := range ai.UnmarshalBlocks(m.Blocks) {
+			if b.Type == "turn_end" && b.Status == "interrupted" {
+				markers++
+			}
+		}
+	}
+	if markers != len(ids) {
+		t.Fatalf("sweep should write one interrupted turn_end marker per swept prompt into the transcript, got %d for %d ids", markers, len(ids))
+	}
 }
 
 // Item 3: skipped gates persist on the prompt row and round-trip through

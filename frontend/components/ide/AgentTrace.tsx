@@ -330,12 +330,61 @@ function TraceRowItem({ row }: { row: TraceRow }) {
       return <ToolRow row={row} />;
     case "decision":
       return row.decision ? <DecisionRow decision={row.decision} /> : null;
+    case "end":
+      return row.ending && row.ending !== "completed" ? (
+        <EndRow ending={row.ending} error={row.text} rounds={row.rounds} />
+      ) : null;
     case "group":
       return <GroupRow row={row} />;
     default:
       return null;
   }
 }
+
+// ── End — the terminal marker, DSH's turn-tail ──
+//
+// A turn that ran tools and then died used to leave its rows in the trace with
+// nothing to say they stopped, so it read as still in flight. The backend now
+// writes a turn_end block; this row is what makes that legible. Only the
+// non-clean outcomes render — a completed turn is already ended by its own
+// narration, and a line of "turn finished" per prompt would be noise.
+function EndRow({
+  ending,
+  error,
+  rounds,
+}: {
+  ending: NonNullable<TraceRow["ending"]>;
+  error?: string;
+  rounds?: number;
+}) {
+  const label = END_LABELS[ending] ?? "Turn ended";
+  const tone = END_TONES[ending] ?? "text-dim";
+  return (
+    <div className="flex flex-col gap-1 border-l-2 border-l-danger/60 py-1.5 pl-2.5">
+      <span className={`text-xs font-medium ${tone}`}>
+        {label}
+        {rounds ? ` · after ${rounds} round${rounds === 1 ? "" : "s"}` : ""}
+      </span>
+      {error?.trim() ? (
+        <span className="line-clamp-3 text-xs text-dim opacity-80">{error.trim()}</span>
+      ) : null}
+    </div>
+  );
+}
+
+const END_LABELS: Record<string, string> = {
+  failed: "Turn failed",
+  cancelled: "Turn cancelled",
+  interrupted: "Turn interrupted by a restart",
+  stalled: "Turn stalled",
+};
+
+const END_TONES: Record<string, string> = {
+  failed: "text-danger",
+  interrupted: "text-danger",
+  cancelled: "text-warning",
+  stalled: "text-warning",
+};
 
 // ── Narration — the agent's own voice ──
 

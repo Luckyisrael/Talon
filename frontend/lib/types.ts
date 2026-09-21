@@ -314,7 +314,7 @@ export interface DecisionCard {
 
 export interface TraceRow {
   id: string;
-  kind: "narration" | "thinking" | "tool" | "group" | "decision";
+  kind: "narration" | "thinking" | "tool" | "group" | "decision" | "end";
   // Narration / thinking
   text?: string;
   streaming?: boolean;
@@ -331,6 +331,11 @@ export interface TraceRow {
   progress?: string;
   // Decision (write_adr / write_memory rendered as a card)
   decision?: DecisionCard;
+  // End — the terminal marker a turn writes when it settles (DSH's turn-tail).
+  // Says how it ended; only the non-clean ones render, so a completed turn
+  // adds no noise.
+  ending?: "completed" | "failed" | "cancelled" | "interrupted" | "stalled";
+  rounds?: number;
   // Group
   children?: TraceRow[];
   collapsed?: boolean;

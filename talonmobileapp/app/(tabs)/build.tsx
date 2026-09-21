@@ -297,7 +297,14 @@ export default function BuildScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadHistory()} tintColor={Colors.fog} />}
       >
         <View style={styles.stack}>
-          {turn.phase === 'idle' && history.length > 0 && (
+          {/* The transcript renders whenever the turn is not streaming. The
+              phase used to gate on 'idle' alone, and since nothing ever moved
+              a finished or failed turn back to idle, the history fetched on
+              done/error stayed invisible behind a closed gate — the transcript
+              read as empty and every previous prompt "disappeared". DSH's rule:
+              the UI is a projection of the durable log, and the log is what
+              shows; in-memory phase only ever hides it while work is live. */}
+          {turn.phase !== 'streaming' && history.length > 0 && (
             <View style={styles.recent}>
               <View style={styles.recentHead}>
                 <UIText variant="label" tone="faint">Transcript</UIText>
@@ -317,7 +324,7 @@ export default function BuildScreen() {
               )}
             </View>
           )}
-          {turn.phase === 'idle' && history.length === 0 && (
+          {turn.phase !== 'streaming' && history.length === 0 && (
             <UIText variant="body" tone="muted" style={styles.empty}>
               Describe what you want. The agent plans, writes files, and verifies on the device.
             </UIText>
@@ -342,8 +349,11 @@ export default function BuildScreen() {
             </View>
           ))}
 
-          {/* The live tool trace. */}
-          {turn.toolCalls.map((c, i) => {
+          {/* The live tool trace, shown only while streaming. Once the turn
+              settles the transcript carries the same rows durably (the
+              turn_end marker says how they ended), so the in-memory trace hands
+              off rather than duplicating rows. */}
+          {turn.phase === 'streaming' && turn.toolCalls.map((c, i) => {
             const meta = toolRow(c.name);
             return (
               <TraceRow
@@ -480,12 +490,12 @@ const styles = StyleSheet.create({
     padding: Spacing.s12,
   },
   composer: { gap: Spacing.s8, paddingTop: Spacing.s8 },
-  composerRow: { flexDirection: 'row', gap: Spacing.s8, alignItems: 'flex-end' },
-  input: { flex: 1 },
+  composerRow: { flexDirection: 'row', gap: Spacing.s8, alignItems: 'flex-end', marginBottom: Spacing.s12 },
+  input: { flex: 1, borderWidth: 0, borderRadius: 20 },
   attachBtn: {
     width: 48,
     height: 48,
-    borderRadius: 24,
+    borderRadius: 20,
     backgroundColor: Colors.obsidian,
     alignItems: 'center',
     justifyContent: 'center',
@@ -494,7 +504,7 @@ const styles = StyleSheet.create({
   sendBtn: {
     width: 48,
     height: 48,
-    borderRadius: 24,
+    borderRadius: 20,
     backgroundColor: Colors.acidLime,
     alignItems: 'center',
     justifyContent: 'center',

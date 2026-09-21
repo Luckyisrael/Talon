@@ -1153,8 +1153,20 @@ func (s *Store) MarkInterruptedPrompts() ([]int64, error) {
 		ids = append(ids, id)
 	}
 	rows.Close()
+	var projectID int64
 	for _, id := range ids {
+		if err := s.db.QueryRow("SELECT project_id FROM prompts WHERE id = ?", id).Scan(&projectID); err != nil {
+			return ids, err
+		}
 		if _, err := s.db.Exec("UPDATE prompts SET status = 'interrupted', updated_at = CURRENT_TIMESTAMP WHERE id = ?", id); err != nil {
+			return ids, err
+		}
+		// Close the orphan in the transcript too, not just the prompts row: the
+		// chat reads conversation_messages, and a turn left running by a dead
+		// process would otherwise look still in flight to anyone who reloads.
+		// DSH calls this interruptedTurnClosers — close, don't truncate.
+		if err := s.AppendMessage(projectID, id, "assistant",
+			`[{"type":"turn_end","status":"interrupted"}]`, 0, 0); err != nil {
 			return ids, err
 		}
 	}

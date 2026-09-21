@@ -280,7 +280,7 @@ export const projects = {
 
 /** One stored turn, in the provider-neutral block shape the backend persists. */
 export interface ConversationBlock {
-  type: "text" | "thinking" | "tool_use" | "tool_result" | "plan" | "image" | "doc";
+  type: "text" | "thinking" | "tool_use" | "tool_result" | "plan" | "image" | "doc" | "turn_end";
   text?: string;
   id?: string;
   name?: string;
@@ -288,6 +288,12 @@ export interface ConversationBlock {
   tool_use_id?: string;
   content?: string;
   is_error?: boolean;
+  // turn_end: the terminal marker — completed | failed | cancelled | interrupted
+  // | stalled — written once when the turn settles. error carries the provider
+  // message on a failure, rounds how far it got.
+  status?: string;
+  error?: string;
+  rounds?: number;
   // Image blocks reference a prompt attachment by id — the bytes live on the
   // server and resolve at send time, so the transcript never holds pixels.
   // Steer deliveries persist as marker blocks carrying the redirect text.

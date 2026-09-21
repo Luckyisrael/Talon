@@ -1167,6 +1167,16 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 		log.Printf("project %d: could not record run status: %v", projectID, err)
 	}
 
+	// The terminal marker: DSH's turn/end-with-reason, persisted. The prompt
+	// row already carries the status, but the transcript is what the user
+	// reads, and without a marker a turn that died looks the same as one still
+	// in flight — the tool calls sit there with nothing to say how they ended.
+	// Written for every outcome, including success, so a finished turn is
+	// distinguishable from an interrupted one by content, not by absence of it.
+	if !h.persistTurnEnd(projectID, promptID, status, runErr, round, outcome) {
+		log.Printf("project %d: could not persist the turn-end marker", projectID)
+	}
+
 	if outcome == nil {
 		return
 	}
@@ -1254,6 +1264,47 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 // prompts row records. A cancellation (deliberate Stop or a dropped connection,
 // both surfaced as a wrapped context error) is distinct from a genuine failure
 // so the UI can offer Resume for the former without treating it as an error.
+// persistTurnEnd writes the terminal marker for a turn into the stored
+// conversation — DSH's turn/end-with-a-reason. It runs once, after the loop
+// settles, for every outcome including success.
+//
+// Why the transcript needs it: the prompt row's status lives in a different
+// table the chat does not read per-turn. Without a marker, a failed turn
+// leaves tool_use and tool_result blocks in the transcript and nothing to say
+// what happened — indistinguishable from a turn that is still running. The
+// marker makes the outcome legible on reload, the same way DSH's interrupted
+// closers make a crashed turn read as closed rather than truncated.
+//
+// A waiting or paused turn is deliberately NOT given a marker: those are
+// mid-flight, resumable, and a terminal row would claim they ended.
+func (h *PromptHandler) persistTurnEnd(projectID, promptID int64, status string, runErr error, rounds int, outcome *orchestrator.BuildOutcome) bool {
+	switch status {
+	case "waiting", "paused":
+		return true // mid-flight, resumable — no terminal marker
+	}
+
+	errMsg := ""
+	if runErr != nil {
+		errMsg = friendlyAIError(runErr)
+	}
+
+	block := ai.Block{
+		Type:   "turn_end",
+		Status: status,
+		Error:  errMsg,
+		Rounds: rounds,
+	}
+	if err := h.store.AppendMessage(projectID, promptID, "assistant",
+		ai.MarshalBlocks([]ai.Block{block}), 0, 0); err != nil {
+		log.Printf("project %d: could not store the turn-end marker: %v", projectID, err)
+		return false
+	}
+	if lg := h.slog.get(h.store, projectID); lg != nil {
+		appendLoggedAssistant(lg, ai.Message{Role: "assistant", Blocks: []ai.Block{block}}, promptID)
+	}
+	return true
+}
+
 func terminalStatus(runErr error) string {
 	switch {
 	case runErr == nil:
