@@ -166,6 +166,10 @@ export interface NotificationRow {
   payload: string
   sent_at: string
   read_at?: string | null
+  /** Wire names. The server sends title/body; normalized to payload
+   *  on fetch (see notificationsApi.list). */
+  title?: string
+  body?: string
 }
 
 export interface User {
@@ -570,9 +574,13 @@ export const meApi = {
 export const notificationsApi = {
   list() {
     // The endpoint wraps the rows: {notifications, push_configured}.
-    // Unwrap here so every screen maps an array, never an object.
-    return request<{ notifications: NotificationRow[] }>('/v1/notifications').then(
-      r => r.notifications ?? [],
+    // Unwrap here so every screen maps an array, never an object. Title
+    // plus body fold into payload, the one text the rows render.
+    return request<{ notifications: NotificationRow[] }>('/v1/notifications').then((r) =>
+      (r.notifications ?? []).map((n) => ({
+        ...n,
+        payload: n.payload ?? ([n.title, n.body].filter(Boolean).join('\n') || ''),
+      })),
     )
   },
   markRead(id: number) {
@@ -608,6 +616,10 @@ export interface MemoryEntry {
   kind: string
   text: string
   created_at?: string
+  /** Wire names. The server sends entry_type/content; normalized to
+   *  kind/text on fetch (see memoryApi.get). */
+  entry_type?: string
+  content?: string
 }
 
 export const memoryApi = {
@@ -616,7 +628,17 @@ export const memoryApi = {
       memories: MemoryEntry[]
       summary: string
       decisions: { id: number; title: string; status: string }[]
-    }>(`/v1/projects/${projectId}/memory`)
+    }>(`/v1/projects/${projectId}/memory`).then((r) => ({
+      ...r,
+      // EntryType/content is the wire shape; the screens read kind/text.
+      // Without this, kind is undefined and the More tab crashes on
+      // toUpperCase the moment a project has any memory.
+      memories: (r.memories ?? []).map((m) => ({
+        ...m,
+        kind: m.kind ?? m.entry_type ?? 'memory',
+        text: m.text ?? m.content ?? '',
+      })),
+    }))
   },
 }
 
