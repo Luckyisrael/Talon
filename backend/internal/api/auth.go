@@ -9,6 +9,7 @@ import (
 )
 
 type authResponse struct {
-	Token string      `json:"token"`
-	User  *store.User `json:"user"`
+	Token        string      `json:"token"`
+	RefreshToken string      `json:"refresh_token"`
+	User         *store.User `json:"user"`
 }

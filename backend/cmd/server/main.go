@@ -20,6 +20,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/api"
 	"github.com/luckyisrael/talon/backend/internal/auth"
 	"github.com/luckyisrael/talon/backend/internal/billing"
+	"github.com/luckyisrael/talon/backend/internal/blobstore"
 	"github.com/luckyisrael/talon/backend/internal/devclient"
 	"github.com/luckyisrael/talon/backend/internal/gitremote"
 	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
@@ -122,7 +123,13 @@ func main() {
 	// name: embedded). The catalog reloads lazily; workspace skills are listed
 	// to the model but their bodies load only through read_skill, same trust
 	// boundary as today.
-	skillCatalog := skills.NewCatalog(skills.EmbeddedProvider{Registry: knowledge})
+	skillCatalog := skills.NewCatalog(
+		skills.EmbeddedProvider{Registry: knowledge},
+		skills.RegistryProvider{
+			Pins:     skills.ParsePluginPins(os.Getenv("TALON_PLUGINS")),
+			CacheDir: filepath.Join(workspaceDir, "..", "plugin-cache"),
+		},
+	)
 
 	// H6: the AGENTS.md instructions chain factory — the user's global
 	// conventions ($TALON_HOME/AGENTS.md or ~/.talon/AGENTS.md) plus each
@@ -138,6 +145,13 @@ func main() {
 		return instructions.Loader{WorkspaceRoot: workspacePath, GlobalPath: globalAGENTS}.Load().Text()
 	})
 	orchestratorSvc.AttachSkills(skillCatalog)
+	// Per-project plugin pins: each workspace's .talon/plugins.json resolves
+	// through the same verified provider and cache, memoized 5 minutes per
+	// workspace so manifest renders never hit the network. The pin file is
+	// the approval; resolutions are logged, which is the audit trail.
+	orchestratorSvc.AttachPluginRegistry(skills.RegistryProvider{
+		CacheDir: filepath.Join(workspaceDir, "..", "plugin-cache"),
+	}, 5*time.Minute)
 
 	// H8: the spill store files oversized tool outputs (from run_shell,
 	// inspect_package, and friends) under a locator instead of truncating
@@ -214,18 +228,28 @@ func main() {
 	} else {
 		log.Print("auth: no OAuth providers configured — set AUTH_GITHUB_CLIENT_ID/SECRET or AUTH_GOOGLE_CLIENT_ID/SECRET to enable sign-in")
 	}
-	oauthHandler := api.NewOAuthAuthHandler(s, authSvc, oauthProviders)
+	// E: push notifications. OneSignal when fully configured, the honest
+	// Noop otherwise; the subscriber resolver is the store's push-target
+	// lookup. Dark mode is named in the log, never silent. Built before the
+	// auth handlers so sign-in alerts ride the real notifier, not the dark.
+	pushNotifier := notify.Get(func(ctx context.Context, userID int64) (string, error) {
+		return s.GetOneSignalID(userID)
+	})
+	oauthHandler := api.NewOAuthAuthHandler(s, authSvc, oauthProviders, pushNotifier)
 	projectHandler := api.NewProjectHandler(s, wsMgr, workspaceDir)
 	exportHandler := api.NewExportHandler(s, api.LoadReleaseCipher(), workspaceDir, templateDir, filepath.Join(workspaceDir, "..", "exports"))
 	log.Printf("release export ready (keystores + submission bundles)")
 	triageHandler := api.NewTriageHandler(s)
-	// E: push notifications. OneSignal when fully configured, the honest
-	// Noop otherwise; the subscriber resolver is the store's push-target
-	// lookup. Dark mode is named in the log, never silent.
-	pushNotifier := notify.Get(func(ctx context.Context, userID int64) (string, error) {
-		return s.GetOneSignalID(userID)
-	})
 	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, templateDir, orchestratorSvc, devClientMgr, knowledge, pushNotifier)
+	// Prompt attachments: images to Cloudflare R2 when configured, local
+	// disk otherwise. Docs always stay local (small text, already inlined
+	// into the transcript).
+	if r2, ok := blobstore.NewR2StoreFromEnv(); ok {
+		promptHandler.SetR2Store(r2)
+		log.Print("attachments: images to Cloudflare R2")
+	} else {
+		log.Print("attachments: R2 env absent — images stay on local disk")
+	}
 	var warmPool *redroid.Pool
 	if warmPoolSize > 0 {
 		warmPool = redroid.NewPool(containerMgr, warmPoolSize)
@@ -333,9 +357,11 @@ func main() {
 		r.Use(authLimiter.Middleware)
 		r.Get("/v1/auth/providers", oauthHandler.Providers)
 		r.Post("/v1/auth/exchange", oauthHandler.Exchange)
+		r.Post("/v1/auth/refresh", oauthHandler.Refresh)
+		r.Post("/v1/auth/logout", oauthHandler.Logout)
 		// P17: wallet sign-in — challenge/verify, same account-linking law
 		// as the OAuth exchange, same auth limiter.
-		walletHandler := api.NewWalletAuthHandler(s, authSvc)
+		walletHandler := api.NewWalletAuthHandler(s, authSvc, pushNotifier)
 		r.Post("/v1/auth/wallet/challenge", walletHandler.Challenge)
 		r.Post("/v1/auth/wallet/verify", walletHandler.Verify)
 	})
@@ -381,6 +407,8 @@ func main() {
 		testInfoHandler := api.NewTestInfoHandler(promptHandler, devClientMgr)
 
 		r.Get("/v1/projects/{projectID}/conversation", promptHandler.GetConversation)
+		r.Get("/v1/projects/{projectID}/conversation/search", promptHandler.SearchConversation)
+		r.Get("/v1/projects/{id}/prompts", promptHandler.ListPrompts)
 		r.Post("/v1/projects/{projectID}/feedback", promptHandler.RecordFeedback)
 		r.Get("/v1/projects/{projectID}/feedback", promptHandler.ProjectFeedback)
 		r.Get("/v1/projects/{projectID}/live-session", sessionHandler.LiveForProject)
@@ -389,6 +417,11 @@ func main() {
 		r.Get("/v1/projects/{projectID}/test-info", testInfoHandler.Info)
 		r.Get("/v1/projects/{projectID}/dev-client.apk", testInfoHandler.DevClientAPK)
 		r.Delete("/v1/projects/{projectID}/conversation", promptHandler.ClearConversation)
+
+		// Prompt attachments — images and markdown docs a turn carries.
+		// Uploaded unclaimed, claimed exactly once by the send.
+		r.Post("/v1/projects/{id}/attachments", promptHandler.UploadAttachment)
+		r.Get("/v1/projects/{id}/attachments/{attID}", promptHandler.DownloadAttachment)
 
 		// Checkpoints — undo for anything the agent changed.
 		r.Get("/v1/projects/{projectID}/checkpoints", promptHandler.ListCheckpoints)
@@ -434,6 +467,13 @@ func main() {
 		// they sit inside the auth group. The webhook does not (see below).
 		r.Get("/v1/me", meHandler.Get)
 		r.Put("/v1/me", meHandler.Update)
+		// Sessions: the caller's live logins for inspection and revocation.
+		// Identity comes from the access token, so these sit in the auth
+		// group — unlike /v1/auth/logout, which authenticates by refresh
+		// token and stays public.
+		r.Get("/v1/auth/sessions", oauthHandler.ListSessions)
+		r.Delete("/v1/auth/sessions/{id}", oauthHandler.RevokeSession)
+		r.Post("/v1/auth/logout/all", oauthHandler.LogoutAll)
 		r.Post("/v1/billing/upgrade", billingHandler.StartUpgrade)
 		r.Post("/v1/billing/cancel", billingHandler.Cancel)
 		// Test-mode only: simulates finishing checkout. Under a real provider this

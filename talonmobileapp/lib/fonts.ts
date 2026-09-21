@@ -4,7 +4,7 @@ import { JetBrainsMono_400Regular } from '@expo-google-fonts/jetbrains-mono';
 
 // useAppFonts loads the three families: Space Grotesk (display/headings),
 // Inter (body/labels), JetBrains Mono (code-adjacent). Every weight maps to
-// its true file — never faux-bold. Render is NEVER gated on fonts.
+// its true file, never faux-bold. Render is NEVER gated on fonts.
 export function useAppFonts(): {
   loaded: boolean;
   inter: (weight: string | number) => string;

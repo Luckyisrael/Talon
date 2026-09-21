@@ -12,7 +12,7 @@ type ButtonProps = Omit<PressableProps, 'style' | 'children'> & {
 
 // LimeButton is the ONE chromatic action per screen: full-width, 48px,
 // acid-lime fill with a 1px bottom edge (the RN translation of the web
-// inset-shadow stack). Disabled renders smoke/ash — never greyed lime.
+// inset-shadow stack). Disabled renders smoke/ash, never greyed lime.
 export function LimeButton({ title, disabled, haptic = true, style, ...rest }: ButtonProps) {
   return (
     <Pressable

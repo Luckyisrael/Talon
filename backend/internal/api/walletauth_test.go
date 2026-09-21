@@ -26,7 +26,7 @@ func TestWalletAuthRoundTrip(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	svc := auth.New()
-	h := NewWalletAuthHandler(st, svc)
+	h := NewWalletAuthHandler(st, svc, nil)
 
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	addr := base58Encode(pub)
@@ -89,7 +89,7 @@ func TestWalletAuthAdversarial(t *testing.T) {
 	dir := t.TempDir()
 	st, _ := store.New(dir + "/t.db")
 	t.Cleanup(func() { _ = st.Close() })
-	h := NewWalletAuthHandler(st, auth.New())
+	h := NewWalletAuthHandler(st, auth.New(), nil)
 
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	addr := base58Encode(pub)

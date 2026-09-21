@@ -345,9 +345,9 @@ body {
   gap: 0.5rem;
   height: 2rem;
   padding: 0 0.875rem;
-  border: 1px solid var(--color-graphite);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.05);
   color: var(--color-mist);
   font-family: var(--font-inter-variable);
   font-size: 13px;
@@ -360,7 +360,8 @@ body {
 }
 
 .btn:hover:not(:disabled) {
-  border-color: var(--color-smoke);
+  background: rgba(255, 255, 255, 0.09);
+  border-color: transparent;
   color: var(--color-paper);
 }
 
@@ -414,7 +415,7 @@ body {
 .btn-ghost[aria-pressed="true"],
 .btn-ghost[data-active="true"] {
   background: rgba(255, 255, 255, 0.06);
-  border-color: var(--color-graphite);
+  border-color: transparent;
   color: var(--color-paper);
 }
 
@@ -493,7 +494,7 @@ body {
 .field {
   width: 100%;
   background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--color-mist);
   font-family: var(--font-inter-variable);
@@ -788,8 +789,7 @@ body {
 }
 
 /* Turn label — the replacement for the old turn divider. */
-.turn-label {
-  display: flex;
+.turn-label {  display: flex;
   align-items: center;
   gap: 10px;
   margin: 0 0 18px;
@@ -804,6 +804,22 @@ body {
   flex: 1;
   height: 1px;
   background: rgb(255 255 255 / 5%);
+}
+
+/* Jump flash: the history drawer lands the stream on a turn and marks it
+   once, then the marker removes itself. */
+.turn-flash {
+  animation: turn-flash 1.6s var(--ease) both;
+}
+@keyframes turn-flash {
+  0%,
+  60% {
+    background: rgb(228 242 34 / 7%);
+    border-radius: 12px;
+  }
+  100% {
+    background: transparent;
+  }
 }
 
 /* Messages — user right-aligned with a bubble, assistant full-width prose. */
@@ -901,7 +917,6 @@ body {
   border-radius: 16px;
   padding: 16px 18px;
   margin: 6px 0 4px;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 5%);
 }
 .plan-card header { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
 .plan-card header .ico {
@@ -940,10 +955,14 @@ body {
   max-width: 760px; margin: 0 auto;
   background: var(--panel);
   border-radius: 20px;
-  padding: 8px 8px 8px 14px;
-  display: flex; align-items: center; gap: 10px;
-  box-shadow: 0 8px 40px rgb(0 0 0 / 36%), inset 0 0 0 1px rgb(255 255 255 / 6%);
+  padding: 10px 10px 8px 12px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 0;
+  box-shadow: 0 8px 40px rgb(0 0 0 / 36%);
   transition: box-shadow var(--dur-out) ease-out;
+}
+/* A drag over the composer is a lime inset — the one place a drop lands. */
+.composer-in.drag {
+  box-shadow: 0 8px 40px rgb(0 0 0 / 36%), inset 0 0 0 1px var(--accent);
 }
 .composer-in:focus-within {
   box-shadow: 0 10px 44px rgb(0 0 0 / 44%), inset 0 0 0 1px rgb(79 124 246 / 40%);
@@ -955,9 +974,45 @@ body {
 }
 .composer textarea::placeholder { color: var(--label-4); }
 .composer .right { display: flex; align-items: center; gap: 6px; flex: none; }
+
+/* Composer attachments — staged chips ride above the input row, inside the
+   same elevated surface. Tone steps, no boxes: the chip is inset, the remove
+   is a quiet overlay, errors read as text. */
+.composer-row { display: flex; align-items: center; gap: 10px; }
+.att-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 2px 8px; }
+.att-row:empty { display: none; }
+.att {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  background: var(--inset); border-radius: 10px; padding: 6px; max-width: 100%;
+}
+.att img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; display: block; }
+.att .meta { font-family: var(--font-berkeley-mono); font-size: 11px; color: var(--label-3); min-width: 0; }
+.att .meta b { display: block; font-size: 12px; color: var(--label-2); font-weight: 500; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att .x {
+  position: absolute; top: 4px; right: 4px; width: 20px; height: 20px;
+  border-radius: 999px; background: rgb(0 0 0 / 60%); color: #fff;
+  font-size: 12px; line-height: 1; display: grid; place-items: center;
+}
+.att .x:hover { background: rgb(0 0 0 / 85%); }
+.att-doc {
+  width: 56px; height: 56px; border-radius: 6px; flex: none;
+  display: grid; place-items: center;
+  background: var(--panel-3); color: var(--label-3);
+  font-family: var(--font-berkeley-mono); font-size: 11px; font-weight: 600;
+}
+.att-err { font-size: 12px; color: var(--err); align-self: center; }
+.att-readonly { cursor: default; }
+.icon-btn {
+  width: 30px; height: 30px; border-radius: 8px; flex: none;
+  display: grid; place-items: center; color: var(--label-3); background: transparent;
+  transition: background var(--dur-out) ease-out, color var(--dur-out) ease-out;
+}
+.icon-btn:hover:not(:disabled) { background: var(--panel-3); color: var(--label); }
+.icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.icon-btn svg { width: 15px; height: 15px; }
 .send-btn {
-  width: 34px; height: 34px; border-radius: 10px;
-  background: var(--accent); color: #fff;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--accent); color: #08090a;
   display: grid; place-items: center;
   transition: background var(--dur-out) ease-out, transform var(--dur-out) ease-out;
 }
@@ -1216,7 +1271,7 @@ body {
   font-family: var(--font-berkeley-mono);
   font-size: 0.8125em;
   background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--color-graphite);
+  border: none;
   border-radius: var(--radius-sm);
   padding: 0.0625rem 0.25rem;
   color: var(--color-bone);
@@ -1225,7 +1280,7 @@ body {
 
 .prose-agent pre {
   background: var(--color-obsidian);
-  border: 1px solid var(--color-graphite);
+  border: none;
   border-radius: var(--radius-md);
   overflow-x: auto;
   padding: 0.625rem 0.75rem;
@@ -1245,6 +1300,47 @@ body {
   border-left: 2px solid var(--color-graphite);
   padding-left: 0.6875rem;
   color: var(--color-fog);
+}
+
+.prose-agent table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  margin: 0.5rem 0;
+}
+
+.prose-agent th,
+.prose-agent td {
+  border: none;
+  border-bottom: 1px solid var(--color-graphite);
+  padding: 0.375rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose-agent tr:last-child td {
+  border-bottom: none;
+}
+
+.prose-agent th {
+  color: var(--color-paper);
+  font-weight: 590;
+}
+
+.prose-agent img {
+  max-width: 100%;
+  border-radius: var(--radius-xl);
+  display: block;
+}
+
+.prose-agent a:has(> img) {
+  display: inline-block;
+}
+
+.prose-agent input[type="checkbox"] {
+  accent-color: var(--color-acid-lime);
+  margin-right: 0.375rem;
+  vertical-align: baseline;
 }
 
 /* ── Utilities ─────────────────────────────────────────────────── */

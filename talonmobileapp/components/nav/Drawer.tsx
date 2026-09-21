@@ -2,21 +2,25 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Clock, Logout, MessageQuestion, Setting, User } from 'iconsax-react-native';
+import { useRouter } from 'expo-router';
+import { Book, Clock, Crown, Folder, Logout, MessageQuestion, Setting, User } from 'iconsax-react-native';
 import { UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
-import { meApi } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { authApi, meApi } from '@/lib/api';
+import { clearToken, getToken } from '@/lib/auth';
 
 const ITEMS = [
-  { icon: User, label: 'Profile' },
-  { icon: Clock, label: 'History' },
-  { icon: Setting, label: 'Settings' },
-  { icon: MessageQuestion, label: 'Help & Support' },
+  { icon: Folder, label: 'Projects', route: '/menu/projects' },
+  { icon: Crown, label: 'Upgrade', route: '/menu/upgrade' },
+  { icon: User, label: 'Profile', route: '/menu/profile' },
+  { icon: Clock, label: 'History', route: '/menu/history' },
+  { icon: Setting, label: 'Settings', route: '/menu/settings' },
+  { icon: MessageQuestion, label: 'Help & Support', route: '/menu/help' },
+  { icon: Book, label: 'Documentation', route: '/menu/docs' },
 ] as const;
 
 // Push drawer: fixed half-screen sheet sliding in from the left while the
-// content translates right by the same distance — shift, never squeeze.
+// content translates right by the same distance, shift, never squeeze.
 // No scrim, no overlay: both panes stay full-width, the content simply
 // slides half off-screen.
 export function Drawer({
@@ -30,6 +34,7 @@ export function Drawer({
 }) {
   const progress = useSharedValue(0);
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   React.useEffect(() => {
     progress.value = withTiming(open ? 1 : 0, { duration: 280 });
   }, [open, progress]);
@@ -65,20 +70,28 @@ export function Drawer({
       <View style={[styles.inner, { paddingTop: insets.top + Spacing.s16 }]}>
         <View style={styles.head}>
           <View style={styles.avatar}>
-            <User size={24} color={Colors.mist} variant="Linear" />
+            <User size={24} color={Colors.mist} variant="Bulk" />
           </View>
           <UIText variant="heading" tone="hero" style={styles.name} numberOfLines={1}>
             {me?.email ?? 'Guest'}
           </UIText>
           <UIText variant="bodySm" tone="body" numberOfLines={1}>
-            {me ? `${me.email} · ${me.tier ?? 'free'}` : 'Not signed in — explore freely, nothing syncs yet.'}
+            {me ? `${me.email} · ${me.tier ?? 'free'}` : 'Not signed in. Explore freely, nothing syncs yet.'}
           </UIText>
         </View>
         {ITEMS.map((item) => {
           const Icon = item.icon;
           return (
-            <Pressable key={item.label} style={styles.item} onPress={onClose}>
-              <Icon size={24} color={Colors.fog} variant="Linear" />
+            <Pressable
+              key={item.label}
+              style={styles.item}
+              accessibilityRole="button"
+              onPress={() => {
+                onClose();
+                router.push(item.route);
+              }}
+            >
+              <Icon size={24} color={Colors.fog} variant="Bulk" />
               <UIText variant="bodyLg" tone="body">
                 {item.label}
               </UIText>
@@ -86,8 +99,17 @@ export function Drawer({
           );
         })}
         <View style={styles.foot}>
-          <Pressable style={styles.item} onPress={onClose}>
-            <Logout size={24} color={Colors.coralRed} variant="Linear" />
+          <Pressable
+            style={styles.item}
+            accessibilityRole="button"
+            onPress={async () => {
+              onClose();
+              await authApi.revoke().catch(() => {});
+              await clearToken();
+              router.replace('/auth');
+            }}
+          >
+            <Logout size={24} color={Colors.coralRed} variant="Bulk" />
             <UIText variant="bodyLg" tone="danger">
               Sign out
             </UIText>
@@ -120,8 +142,6 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 26,
     backgroundColor: Colors.obsidian,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.graphite,
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -40,7 +40,7 @@ below. For the full per-rule examples, see `ATTRIBUTION.md` (upstream repo).
 - Prefer `useDerivedValue` for values computed from other shared values.
 - Drive press animations with `Gesture.Tap` / `GestureDetector` rather than
   `Pressable` state when the press itself is animated.
-- This project uses Reanimated v4 — see the **`reanimated-v4`** skill for the APIs.
+- This project uses Reanimated v4 — see the **`mobile-motion`** skill for the APIs and the thread law.
 
 ## Navigation (HIGH)
 

@@ -1,11 +1,15 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { PropsWithChildren } from 'react'
+import { PropsWithChildren, useEffect } from 'react'
 import { NetworkProvider } from '@/features/network/network-provider'
 import { MobileWalletProvider } from '@wallet-ui/react-native-kit'
 import { AppConfig } from '@/constants/app-config'
+import { useAppStore } from '@/stores/app'
 
 const queryClient = new QueryClient()
 export function AppProviders({ children }: PropsWithChildren) {
+  useEffect(() => {
+    void useAppStore.getState().hydrate()
+  }, [])
   return (
     <QueryClientProvider client={queryClient}>
       <NetworkProvider

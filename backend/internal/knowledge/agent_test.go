@@ -44,6 +44,7 @@ func TestLoadEmbeddedContent(t *testing.T) {
 	// expo-ui-jetpack-compose inside expo-ui/references, talon-screen-design
 	// inside mobile-craft's Device appendix, and scl folded into
 	// rn-best-practices — deleting any of those homes must fail here.
+	// 2026-09-21: reanimated-v4 folded into mobile-motion (same rule).
 	want := []string{
 		"app-linking",
 		"dapp-store",
@@ -53,7 +54,7 @@ func TestLoadEmbeddedContent(t *testing.T) {
 		"mobile-craft",
 		"mobile-defaults",
 		"mobile-motion",
-		"reanimated-v4",
+		"motion-review",
 		"rn-best-practices",
 		"talon-mobile",
 		"seed-vault",
@@ -108,7 +109,7 @@ func TestAutoAttachFor(t *testing.T) {
 			name:       "reanimated import in written file",
 			tool:       "write_file",
 			input:      `{"path":"components/Card.tsx","content":"import Animated from 'react-native-reanimated';"}`,
-			want:       "reanimated-v4",
+			want:       "mobile-motion",
 			wantDesign: true, // components/** path
 		},
 		{

@@ -92,7 +92,7 @@ func newOAuthHarness(t *testing.T, stub *stubOAuth) (*OAuthAuthHandler, *store.S
 	}
 	providers := map[auth.Provider]auth.OAuthConfig{auth.ProviderGitHub: cfg}
 	svc := auth.New()
-	return NewOAuthAuthHandler(st, svc, providers), st
+	return NewOAuthAuthHandler(st, svc, providers, nil), st
 }
 
 // driveFlow walks the full browser-visible flow: Start → (stub consent) →
@@ -229,12 +229,12 @@ func TestOAuthEmailCollisionLinksExistingUser(t *testing.T) {
 	})
 	cfg := auth.OAuthConfig{
 		Provider: auth.ProviderGitHub, ClientID: "c", ClientSecret: "s",
-		CallbackURL:         "http://studio.test/v1/auth/github/callback",
-		AuthorizeEndpoint:   stub.server.URL + "/authorize",
-		TokenEndpoint:       stub.server.URL + "/token",
-		ProfileEndpoint:     stub.server.URL + "/profile",
+		CallbackURL:       "http://studio.test/v1/auth/github/callback",
+		AuthorizeEndpoint: stub.server.URL + "/authorize",
+		TokenEndpoint:     stub.server.URL + "/token",
+		ProfileEndpoint:   stub.server.URL + "/profile",
 	}
-	h := NewOAuthAuthHandler(st, auth.New(), map[auth.Provider]auth.OAuthConfig{auth.ProviderGitHub: cfg})
+	h := NewOAuthAuthHandler(st, auth.New(), map[auth.Provider]auth.OAuthConfig{auth.ProviderGitHub: cfg}, nil)
 
 	_, body := driveFlow(t, h, "/")
 	var resp struct {
@@ -350,7 +350,7 @@ func TestOAuthDarkProviderHonest(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	h := NewOAuthAuthHandler(st, auth.New(), providers)
+	h := NewOAuthAuthHandler(st, auth.New(), providers, nil)
 
 	rec := httptest.NewRecorder()
 	h.Providers(rec, httptest.NewRequest(http.MethodGet, "/v1/auth/providers", nil))
@@ -425,4 +425,42 @@ func countUsers(t *testing.T, st *store.Store) int {
 		t.Fatalf("CountUsers: %v", err)
 	}
 	return n
+}
+
+// The login flow redirects back to the mobile app by scheme: talon:// is
+// production, expokit:// stays for older installs. Anything else,
+// especially off-origin URLs, collapses to "/".
+func TestSanitizeRedirectAcceptsAppSchemes(t *testing.T) {
+	for _, raw := range []string{
+		"talon://auth/callback?code=x",
+		"expokit://auth/callback?code=x",
+		"/dashboard",
+	} {
+		if got := sanitizeRedirect(raw); got != raw {
+			t.Errorf("sanitizeRedirect(%q) = %q, want passthrough", raw, got)
+		}
+	}
+	for _, raw := range []string{"https://evil.com", "//evil.com/phish", ""} {
+		if got := sanitizeRedirect(raw); got != "/" {
+			t.Errorf("sanitizeRedirect(%q) = %q, want /", raw, got)
+		}
+	}
+}
+
+// webTarget must pass mobile deep links through untouched even when a web
+// origin is configured: the whole OAuth return hop depends on it.
+func TestWebTargetPassesMobileDeepLinks(t *testing.T) {
+	h := NewOAuthAuthHandler(nil, nil, nil, nil)
+	h.webOrigin = "http://web.test:3000"
+	for _, raw := range []string{
+		"talon://auth/callback?provider=github&code=x",
+		"expokit://auth/callback?code=x",
+	} {
+		if got := h.webTarget(raw); got != raw {
+			t.Errorf("webTarget(%q) = %q, want passthrough", raw, got)
+		}
+	}
+	if got := h.webTarget("/dashboard"); got != "http://web.test:3000/dashboard" {
+		t.Errorf("webTarget(/dashboard) = %q, want origin-prefixed", got)
+	}
 }

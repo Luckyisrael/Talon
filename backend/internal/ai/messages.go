@@ -10,10 +10,19 @@ import (
 // tool_calls / tool messages. Storing turns in this shape is what lets the
 // agent replay a conversation verbatim across restarts and across providers.
 type Block struct {
-	Type string `json:"type"` // text | thinking | tool_use | tool_result
+	Type string `json:"type"` // text | thinking | tool_use | tool_result | image | doc | plan | image
 
 	// text / thinking
 	Text string `json:"text,omitempty"`
+
+	// image (user-attached). Stored blocks carry the reference
+	// (attachment_id, plus the shared name field, and mime); Data holds
+	// base64 bytes only in memory for the provider request and is never
+	// serialised (json:"-"), so the database and the session log never hold
+	// megabytes of pixels.
+	AttachmentID int64  `json:"attachment_id,omitempty"`
+	Mime         string `json:"mime,omitempty"`
+	Data         string `json:"-"`
 
 	// tool_use
 	ID    string          `json:"id,omitempty"`
@@ -134,15 +143,23 @@ func UnmarshalBlocks(s string) []Block {
 // anthropicContentBlock mirrors the Messages API content-block shape. Input must be a
 // JSON object (not a string), and tool_result content is a plain string here.
 type anthropicContentBlock struct {
-	Type         string          `json:"type"`
-	Text         string          `json:"text,omitempty"`
-	ID           string          `json:"id,omitempty"`
-	Name         string          `json:"name,omitempty"`
-	Input        json.RawMessage `json:"input,omitempty"`
-	ToolUseID    string          `json:"tool_use_id,omitempty"`
-	Content      string          `json:"content,omitempty"`
-	IsError      bool            `json:"is_error,omitempty"`
-	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+	Type         string                `json:"type"`
+	Text         string                `json:"text,omitempty"`
+	ID           string                `json:"id,omitempty"`
+	Name         string                `json:"name,omitempty"`
+	Input        json.RawMessage       `json:"input,omitempty"`
+	ToolUseID    string                `json:"tool_use_id,omitempty"`
+	Content      string                `json:"content,omitempty"`
+	IsError      bool                  `json:"is_error,omitempty"`
+	Source       *anthropicImageSource `json:"source,omitempty"`
+	CacheControl *cacheControl         `json:"cache_control,omitempty"`
+}
+
+// anthropicImageSource is the base64 payload of an image content block.
+type anthropicImageSource struct {
+	Type      string `json:"type"` // base64
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type cacheControl struct {
@@ -184,6 +201,22 @@ func toAnthropic(msgs []Message, cacheBreakpoint int) []anthropicBlockMessage {
 				blocks = append(blocks, anthropicContentBlock{
 					Type: "tool_result", ToolUseID: b.ToolUseID,
 					Content: b.Content, IsError: b.IsError,
+				})
+			case "image":
+				// Image bytes ride resolved Data; a block that lost its file
+				// (deleted attachment) degrades to a named text note rather
+				// than failing the whole request.
+				if b.Data == "" {
+					blocks = append(blocks, anthropicContentBlock{Type: "text", Text: "[attached image " + b.Name + " is unavailable — the file is missing]"})
+					continue
+				}
+				mime := b.Mime
+				if mime == "" {
+					mime = "image/png"
+				}
+				blocks = append(blocks, anthropicContentBlock{
+					Type:   "image",
+					Source: &anthropicImageSource{Type: "base64", MediaType: mime, Data: b.Data},
 				})
 			}
 		}
@@ -263,6 +296,7 @@ func toOpenAI(system string, msgs []Message) []openaiChatMessage {
 		var text string
 		var calls []openaiToolCall
 		var results []openaiChatMessage
+		var images []Block
 
 		for _, b := range m.Blocks {
 			switch b.Type {
@@ -295,6 +329,13 @@ func toOpenAI(system string, msgs []Message) []openaiChatMessage {
 				results = append(results, openaiChatMessage{
 					Role: "tool", Content: content, ToolCallID: b.ToolUseID,
 				})
+			case "image":
+				// Unresolved images (missing file) are dropped here; the
+				// Anthropic path names them instead. A user turn always
+				// carries prompt text, so the turn itself survives.
+				if b.Data != "" {
+					images = append(images, b)
+				}
 			}
 		}
 
@@ -314,7 +355,24 @@ func toOpenAI(system string, msgs []Message) []openaiChatMessage {
 			// sit directly after the assistant turn that requested them.
 			out = append(out, results...)
 			results = nil
-			if text != "" {
+			switch {
+			case len(images) > 0:
+				// A user turn with attached images goes out as a content-parts
+				// array: text first, then one image_url part per image.
+				parts := make([]map[string]any, 0, len(images)+1)
+				parts = append(parts, map[string]any{"type": "text", "text": text})
+				for _, im := range images {
+					mime := im.Mime
+					if mime == "" {
+						mime = "image/png"
+					}
+					parts = append(parts, map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": "data:" + mime + ";base64," + im.Data},
+					})
+				}
+				out = append(out, openaiChatMessage{Role: "user", Content: parts})
+			case text != "":
 				out = append(out, openaiChatMessage{Role: "user", Content: text})
 			}
 		}
@@ -326,11 +384,13 @@ func toOpenAI(system string, msgs []Message) []openaiChatMessage {
 // ── Compaction ────────────────────────────────────────
 
 // approxTokens estimates a message's token cost. Deliberately cheap: 1 token
-// per 3.5 characters is close enough to decide when to compact.
+// per 3.5 characters is close enough to decide when to compact. Resolved image
+// bytes count at full weight — pixels cost context on the wire, and pretending
+// otherwise would let an image-heavy history sail past the compaction budget.
 func approxTokens(m Message) int {
 	n := 8 // per-message overhead
 	for _, b := range m.Blocks {
-		n += (len(b.Text) + len(b.Content) + len(b.Input) + len(b.Name)) / 3
+		n += (len(b.Text) + len(b.Content) + len(b.Input) + len(b.Name) + len(b.Data)) / 3
 	}
 	return n
 }

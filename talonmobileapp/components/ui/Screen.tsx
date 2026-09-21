@@ -4,9 +4,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Spacing } from '@/constants/theme';
 
 // Screen wraps every app screen: void canvas, safe-area top, 16px gutters.
-// Design-system component (not a screen itself) — all screens compose it.
+// Design-system component (not a screen itself), all screens compose it.
 // topInset defaults on (standalone screens under the notch); tab screens
-// set it off because TopNav already consumes the top inset — otherwise the
+// set it off because TopNav already consumes the top inset, otherwise the
 // notch gap doubles and the content sits too far down.
 export function Screen({ children, style, padded = true, topInset = true, ...rest }: ViewProps & { padded?: boolean; topInset?: boolean }) {
   const insets = useSafeAreaInsets();

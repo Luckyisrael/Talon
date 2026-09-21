@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import {
+  attachments,
   conversation,
   isResumable,
   prompts,
@@ -20,7 +21,18 @@ import {
   type ConversationTurn,
   type LatestPrompt,
   type StreamEvent,
+  type TurnIndexEntry,
 } from "@/lib/api";
+import {
+  classifyFile,
+  describeSize,
+  downscaleImage,
+  MAX_ATTACHMENTS,
+  previewFor,
+  stripInlineDocs,
+  type LocalAttachment,
+} from "@/lib/attachments";
+import { ComposerAttachments, MessageAttachments } from "./Attachments";
 import { useIDEStore } from "@/lib/store";
 import { uuid } from "@/lib/uuid";
 import type { ChatMessage, PlanData, PlanTask, StreamMessage, TraceRow } from "@/lib/types";
@@ -230,11 +242,25 @@ function turnsToEntries(
         .join("")
         .trim();
       if (!text) return;
+      // Image and doc blocks restore as chips; the bytes load on demand and
+      // inlined doc prose stays out of the bubble (see stripInlineDocs).
+      const atts = blocks
+        .filter(
+          (b) =>
+            (b.type === "image" || b.type === "doc") && typeof b.attachment_id === "number",
+        )
+        .map((b) => ({
+          id: b.attachment_id as number,
+          name: (b.name as string) || "file",
+          mime: (b.mime as string) || "application/octet-stream",
+        }));
       entries.push({
         id: `restored-u${i}`,
         role: "user",
         content: text,
         timestamp: Date.parse(turn.at) || 0,
+        ...(typeof turn.prompt_id === "number" ? { promptId: turn.prompt_id } : {}),
+        ...(atts.length > 0 ? { attachments: atts } : {}),
       });
       return;
     }
@@ -350,6 +376,7 @@ function turnsToEntries(
       traceRows: rows,
       isStreaming: false,
       restored: true,
+      ...(typeof turn.prompt_id === "number" ? { promptId: turn.prompt_id } : {}),
     };
     if (restoredPlan) {
       entry.plan = restoredPlan;
@@ -374,12 +401,21 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     const [messages, setMessages] = useState<Entry[]>([]);
     const [input, setInput] = useState("");
     const [mode, setMode] = useState<"plan" | "build">("plan");
+    // Staged attachments: validated local files waiting for the next send.
+    // They upload at send time (no orphans on abandoned composers) and clear
+    // once the stream starts — the server claims them to that turn.
+    const [staged, setStaged] = useState<LocalAttachment[]>([]);
+    const [attError, setAttError] = useState<string | null>(null);
+    const [uploading, setUploading] = useState(false);
+    const [dragging, setDragging] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const keyRef = useRef(0);
+    const previewUrlsRef = useRef<Set<string>>(new Set());
     // Which project's history has finished loading. Derived into `restoring`
     // rather than flipped on in the effect, so switching projects reads as
     // restoring immediately instead of after an extra render pass.
     const [restoredFor, setRestoredFor] = useState<number | null>(null);
     const restoring = restoredFor !== projectId;
-    const [confirmClear, setConfirmClear] = useState(false);
     // The last turn, when it ended without finishing cleanly — the chat offers
     // to resume or discard it. Null once resumed, discarded, or superseded by a
     // new prompt. Derived from server truth on every load, so it never claims a
@@ -426,6 +462,20 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       return () => {
         cancelled = true;
       };
+    }, []);
+
+    // Object URLs minted for image chips die with the project view — the
+    // messages that reuse them unmount with it too.
+    useEffect(() => {
+      const minted = previewUrlsRef.current;
+      return () => {
+        minted.forEach((u) => URL.revokeObjectURL(u));
+        minted.clear();
+      };
+    }, [projectId]);
+
+    const removeStaged = useCallback((key: string) => {
+      setStaged((prev) => prev.filter((a) => a.key !== key));
     }, []);
 
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -504,6 +554,47 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       [messages],
     );
 
+    const addFiles = useCallback(
+      (files: FileList | File[]) => {
+        const list = Array.from(files);
+        if (list.length === 0 || pendingQuestion) return;
+        // Steering and attachments do not mix: steers carry text to a running
+        // turn, while files claim to the next fresh turn. Say so now rather
+        // than silently dropping them later.
+        if (isStreaming) {
+          setAttError("wait for this turn to finish — files send with the next one");
+          return;
+        }
+        const next = [...staged];
+        let err: string | null = null;
+        for (const f of list) {
+          if (next.length >= MAX_ATTACHMENTS) {
+            err = `at most ${MAX_ATTACHMENTS} files per turn`;
+            break;
+          }
+          const verdict = classifyFile(f);
+          if ("error" in verdict) {
+            err = verdict.error;
+            continue;
+          }
+          const previewUrl = previewFor(f, verdict.kind);
+          if (previewUrl) previewUrlsRef.current.add(previewUrl);
+          keyRef.current += 1;
+          next.push({
+            key: `${Date.now()}-${keyRef.current}`,
+            file: f,
+            kind: verdict.kind,
+            name: f.name || "file",
+            sizeLabel: describeSize(f.size),
+            previewUrl,
+          });
+        }
+        setAttError(err);
+        setStaged(next);
+      },
+      [staged, isStreaming, pendingQuestion],
+    );
+
     // §7: lift the live turn's trace to the layout's AgentWorkspace. The
     // rows and the last reported touched files cross; the effect fires only
     // when they actually change. Rows cap in the rail; the workspace gets
@@ -515,21 +606,6 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         planTasks,
       );
     }, [liveMessage, liveTouched, planTasks, onLiveTrace]);
-
-    // Past user prompts for the history block: most recent first, deduped,
-    // capped. Real transcript data — nothing invented.
-    const pastPrompts = useMemo(() => {
-      const out: string[] = [];
-      const seen = new Set<string>();
-      for (let i = messages.length - 1; i >= 0 && out.length < 10; i--) {
-        const m = messages[i];
-        if (!isAssistant(m) && m.content.trim() && !seen.has(m.content)) {
-          seen.add(m.content);
-          out.push(m.content);
-        }
-      }
-      return out;
-    }, [messages]);
 
     // The path of the tool the agent is running right now — shown in the live
     // status strip so you can see what it is touching, not just that it is busy.
@@ -1061,10 +1137,34 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     const send = useCallback(
       async (raw: string, forcedMode?: "plan" | "build") => {
         const prompt = raw.trim();
-        if (!prompt || isStreaming) return;
+        if (!prompt || isStreaming || uploading) return;
+
+        // Staged files upload first (downscaled when they are large images),
+        // then the turn claims them by id. An upload failure stops the send
+        // here: a turn whose chips the model never saw would be a lie.
+        const outgoing = staged;
+        let sent: { id: number; name: string; mime: string; previewUrl?: string }[] = [];
+        if (outgoing.length > 0) {
+          setUploading(true);
+          setAttError(null);
+          try {
+            sent = [];
+            for (const a of outgoing) {
+              const file = await downscaleImage(a.file);
+              const rec = await attachments.upload(projectId, file);
+              sent.push({ id: rec.id, name: rec.name, mime: rec.mime, previewUrl: a.previewUrl });
+            }
+          } catch (err) {
+            setAttError(err instanceof Error ? err.message : "upload failed");
+            setUploading(false);
+            return;
+          }
+          setStaged([]);
+          setUploading(false);
+        }
 
         setInput("");
-        setConfirmClear(false);
+        setAttError(null);
         // A fresh prompt becomes the latest turn, so the interrupted one is no
         // longer what a reload would offer to resume. Drop the banner to match.
         setResumable(null);
@@ -1074,7 +1174,13 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         const streamId = uuid();
         setMessages((prev) => [
           ...prev,
-          { id: uuid(), role: "user", content: prompt, timestamp: Date.now() },
+          {
+            id: uuid(),
+            role: "user",
+            content: prompt,
+            timestamp: Date.now(),
+            ...(sent.length > 0 ? { attachments: sent } : {}),
+          },
           { id: streamId, role: "assistant", traceRows: [], isStreaming: true },
         ]);
 
@@ -1102,9 +1208,10 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           forcedMode ?? mode,
           handleEvent(streamId, patch),
           (err) => patch((prev) => ({ ...prev, isStreaming: false, error: err.message })),
+          sent.map((a) => a.id),
         );
       },
-      [handleEvent, isStreaming, mode, projectId],
+      [handleEvent, isStreaming, uploading, mode, projectId, staged],
     );
 
     // Resume the interrupted turn: no new user message, since this continues the
@@ -1225,7 +1332,6 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         const promptId = runningPromptIdRef.current;
         if (!message || promptId <= 0) return;
         setInput("");
-        setConfirmClear(false);
         setMessages((prev) => [
           ...prev,
           {
@@ -1325,20 +1431,6 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       );
     }
 
-    async function clearHistory() {
-      if (!confirmClear) {
-        setConfirmClear(true);
-        return;
-      }
-      setConfirmClear(false);
-      try {
-        await conversation.clear(projectId);
-        setMessages([]);
-      } catch {
-        setConfirmClear(false);
-      }
-    }
-
     // Grow the composer with its content, up to a ceiling.
     useEffect(() => {
       const el = textareaRef.current;
@@ -1353,6 +1445,22 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       onApprovePlan?.(plan);
     };
 
+    // Jump the stream to a restored turn: scrolls the first message row
+    // carrying its prompt id into view and flashes it once. Returns whether
+    // the turn is currently rendered — live turns and trimmed pages are not,
+    // and the drawer says so instead of pretending.
+    const jumpToTurn = useCallback((promptId: number) => {
+      const el = scrollRef.current?.querySelector(
+        `[data-prompt-turn="${promptId}"]`,
+      );
+      if (!(el instanceof HTMLElement)) return false;
+      pinnedRef.current = false;
+      el.scrollIntoView({ block: "center" });
+      el.classList.add("turn-flash");
+      window.setTimeout(() => el.classList.remove("turn-flash"), 1600);
+      return true;
+    }, []);
+
     return (
       <section className="flex h-full min-h-0 min-w-[280px] flex-col overflow-hidden bg-[var(--bg)]">
         {/* No panel header: the icon rail owns navigation, and the canvas is
@@ -1364,13 +1472,13 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           className="stream"
         >
           <ChatHistory
-            prompts={pastPrompts}
-            onPick={(text) => {
+            key={projectId}
+            projectId={projectId}
+            onJump={jumpToTurn}
+            onReuse={(text) => {
               setInput(text);
               textareaRef.current?.focus();
             }}
-            onNewChat={() => void clearHistory()}
-            newChatConfirming={confirmClear}
           />
           {restoring && messages.length === 0 && (
             <p className="gauge py-4 text-center">Loading this project&rsquo;s history</p>
@@ -1430,7 +1538,12 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                 <Fragment key={msg.id}>
                   {divider}
                   {isAssistant(msg) ? (
-                    <div className="msg assistant">
+                    <div
+                      className="msg assistant"
+                      {...(msg.promptId !== undefined
+                        ? { "data-prompt-turn": msg.promptId }
+                        : {})}
+                    >
                       <span className="who" aria-hidden>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
                           <path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5 10.1 12 4.5 10l5.6-1.4z" />
@@ -1469,22 +1582,34 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                       </div>
                     </div>
                   ) : (
-                    <div className="msg user">
+                    <div
+                      className="msg user"
+                      {...(msg.promptId !== undefined
+                        ? { "data-prompt-turn": msg.promptId }
+                        : {})}
+                    >
                       <span className="who" aria-hidden>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
                           <path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.4c-1.5 0-3-.4-4.2-1.1L3 20l1.2-5.3A8.4 8.4 0 1 1 21 11.5z" />
                         </svg>
                       </span>
                       <div className="body">
-                        <div className="bubble whitespace-pre-wrap break-words text-sm leading-relaxed">
-                          {msg.steer ? (
-                            <span className="mr-1.5 font-mono text-[10px] uppercase tracking-wider text-[var(--accent-2)]/70">
-                              {msg.steerError ? "steer failed" : "steer — not a new turn"}
-                            </span>
-                          ) : null}
-                          {msg.content}
-                          {msg.steer && msg.steerError ? (
-                            <div className="mt-1 text-[11px] text-[var(--err)]">{msg.steerError}</div>
+                        <div className="flex min-w-0 flex-col items-end gap-2">
+                          <div className="bubble whitespace-pre-wrap break-words text-sm leading-relaxed">
+                            {msg.steer ? (
+                              <span className="mr-1.5 font-mono text-[10px] uppercase tracking-wider text-[var(--accent-2)]/70">
+                                {msg.steerError ? "steer failed" : "steer — not a new turn"}
+                              </span>
+                            ) : null}
+                            {stripInlineDocs(msg.content)}
+                            {msg.steer && msg.steerError ? (
+                              <div className="mt-1 text-[11px] text-[var(--err)]">{msg.steerError}</div>
+                            ) : null}
+                          </div>
+                          {msg.attachments && msg.attachments.length > 0 ? (
+                            <div className="flex justify-end">
+                              <MessageAttachments projectId={projectId} items={msg.attachments} />
+                            </div>
                           ) : null}
                         </div>
                       </div>
@@ -1573,7 +1698,30 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               rate limit, not a stall
             </p>
           ) : null}
-          <form onSubmit={handleSubmit} className="composer-in">
+          <form
+            onSubmit={handleSubmit}
+            className={`composer-in${dragging ? " drag" : ""}`}
+            onPaste={(e) => {
+              const files = e.clipboardData?.files;
+              if (files && files.length > 0) addFiles(files);
+            }}
+            onDragOver={(e) => {
+              if (pendingQuestion) return;
+              if (Array.from(e.dataTransfer.types).includes("Files")) {
+                e.preventDefault();
+                setDragging(true);
+              }
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              const files = e.dataTransfer.files;
+              if (files && files.length > 0) addFiles(files);
+            }}
+          >
+            <ComposerAttachments items={staged} onRemove={removeStaged} error={attError} />
+            <div className="composer-row">
             <textarea
               ref={textareaRef}
               rows={1}
@@ -1596,6 +1744,31 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               aria-label="Chat prompt"
             />
             <div className="right flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isStreaming || uploading || !!pendingQuestion}
+                title="Attach an image or markdown file"
+                aria-label="Attach an image or markdown file"
+                className="icon-btn"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                hidden
+                multiple
+                accept="image/png,image/jpeg,image/webp,.md"
+                onChange={(e) => {
+                  if (e.target.files) addFiles(e.target.files);
+                  e.target.value = "";
+                }}
+                aria-hidden
+                tabIndex={-1}
+              />
               {/* The segmented mode pill — plan ⇄ build — lives in the
                   composer, where the decision is made. */}
               {!isStreaming ? (
@@ -1665,13 +1838,14 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                       : "Build"
                 }
                 aria-label="Send"
-                disabled={!input.trim() || pendingQuestion || (!isStreaming && pendingQuestion)}
+                disabled={!input.trim() || pendingQuestion || (!isStreaming && pendingQuestion) || uploading}
                 className="send-btn flex-shrink-0"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <path d="M12 19V5M5 12l7-7 7 7" />
                 </svg>
               </button>
+            </div>
             </div>
           </form>
           {/* The meta row: the session's honesty — live state, token budget,
@@ -1703,34 +1877,102 @@ AIChat.displayName = "AIChat";
 export default AIChat;
 
 // ── Chat history ──
-// Searchable past prompts for this project, adapted from the sidebar pattern:
-// the expanding search field, the recent list, the New chat action. Everything
-// is real transcript data — past user prompts, most recent first. Picking one
-// fills the composer; New chat reuses the existing two-step clear.
+// The transcript's index: turn titles from the server (never prompt text),
+// server search across stored turns, and per-turn jump back into the stream.
+// History is never deleted from here: removing a project deletes its
+// transcript with it.
 function ChatHistory({
-  prompts,
-  onPick,
-  onNewChat,
-  newChatConfirming,
+  projectId,
+  onJump,
+  onReuse,
 }: {
-  prompts: string[];
-  onPick: (text: string) => void;
-  onNewChat: () => void;
-  newChatConfirming: boolean;
+  projectId: number;
+  /** Scroll the stream to the turn; returns whether it is rendered. */
+  onJump: (promptId: number) => boolean;
+  /** Refill the composer with the turn's title. */
+  onReuse: (text: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [turns, setTurns] = useState<TurnIndexEntry[]>([]);
+  const [loadingTurns, setLoadingTurns] = useState(false);
+  const [exhausted, setExhausted] = useState(false);
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [found, setFound] = useState<{ q: string; turns: ConversationTurn[] } | null>(null);
+  const [jumpMiss, setJumpMiss] = useState<number | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (searchOpen) searchRef.current?.focus();
-  }, [searchOpen]);
-
-  if (prompts.length === 0) return null;
-  const visible = prompts.filter((p) =>
-    p.toLowerCase().includes(query.trim().toLowerCase()),
+  const loadTurns = useCallback(
+    async (before?: number) => {
+      setLoadingTurns(true);
+      try {
+        const page = await conversation.promptsIndex(projectId, {
+          limit: 20,
+          ...(before ? { before } : {}),
+        });
+        setTurns((prev) => (before ? [...prev, ...page] : page));
+        if (page.length < 20) setExhausted(true);
+      } catch {
+        // The list keeps whatever it already had.
+      } finally {
+        setLoadingTurns(false);
+      }
+    },
+    [projectId],
   );
+
+  function toggleOpen() {
+    const next = !open;
+    setOpen(next);
+    if (!next) return;
+    setTurns([]);
+    setExhausted(false);
+    setExpanded(null);
+    setJumpMiss(null);
+    void loadTurns();
+  }
+
+  useEffect(() => {
+    if (open) searchRef.current?.focus();
+  }, [open]);
+
+  // Debounced server search: two characters minimum, or the index shows.
+  // Only the debounced callback writes state; the searching flag derives.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) return;
+    let cancelled = false;
+    const t = window.setTimeout(() => {
+      conversation
+        .search(projectId, q)
+        .then((r) => {
+          if (!cancelled) setFound({ q, turns: r.turns });
+        })
+        .catch(() => {
+          if (!cancelled) setFound({ q, turns: [] });
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [query, projectId]);
+
+  const searchingUI = query.trim().length >= 2;
+  const results =
+    searchingUI && found && found.q === query.trim() ? found.turns : null;
+  const searching = searchingUI && results === null;
+
+  function jump(id: number) {
+    if (onJump(id)) {
+      setJumpMiss(null);
+      setOpen(false);
+    } else {
+      // Not rendered: trimmed by the page window or still streaming.
+      // Say so instead of pretending.
+      setJumpMiss(id);
+    }
+  }
 
   return (
     <div className="mb-2">
@@ -1738,11 +1980,11 @@ function ChatHistory({
         <button
           type="button"
           aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
+          onClick={toggleOpen}
           className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 text-left transition-colors hover:bg-white/5"
         >
           <span className="gauge">History</span>
-          <span className="gauge tnum">{prompts.length}</span>
+          {turns.length > 0 && <span className="gauge tnum">{turns.length}</span>}
           <svg
             width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--color-ash)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
             className="ml-auto shrink-0 transition-transform duration-300"
@@ -1752,68 +1994,7 @@ function ChatHistory({
             <path d="M6 9l6 6 6-6" />
           </svg>
         </button>
-        <button
-          type="button"
-          title="New chat (clears this project's history)"
-          onClick={onNewChat}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-ash transition-colors hover:bg-white/5 hover:text-mist"
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          aria-label="Search history"
-          aria-expanded={searchOpen}
-          onClick={() => setSearchOpen((v) => !v)}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-ash transition-colors hover:bg-white/5 hover:text-mist"
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-            <circle cx="11" cy="11" r="7" />
-            <path d="M21 21l-4.3-4.3" />
-          </svg>
-        </button>
       </div>
-
-      {searchOpen && (
-        <div className="surface-1 mt-1 flex h-8 items-center gap-1.5 rounded-lg px-2 transition-colors focus-within:bg-[var(--surface-2)]">
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                setSearchOpen(false);
-                setQuery("");
-              }
-            }}
-            placeholder="Search prompts"
-            aria-label="Search prompt history"
-            className="min-w-0 flex-1 bg-transparent text-xs text-mist outline-none placeholder:text-ash"
-          />
-          {(visible.length > 0 || query) && (
-            <button
-              type="button"
-              aria-label="Close history search"
-              onClick={() => {
-                setSearchOpen(false);
-                setQuery("");
-              }}
-              className="flex size-6 shrink-0 items-center justify-center rounded-md text-ash transition-colors hover:text-mist"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </button>
-          )}
-        </div>
-      )}
-      {newChatConfirming && (
-        <p className="mt-1 px-1.5 font-mono text-xs text-fog">
-          Press New chat again to clear this history for good.
-        </p>
-      )}
 
       <div
         className="grid transition-[grid-template-rows,opacity] duration-300"
@@ -1824,24 +2005,171 @@ function ChatHistory({
         }}
       >
         <div className="overflow-hidden">
-          <div className="flex flex-col gap-px py-1">
-            {visible.map((prompt) => (
+          <div className="surface-1 mt-1 flex h-8 items-center gap-1.5 rounded-lg px-2 transition-colors focus-within:bg-[var(--surface-2)]">
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setQuery("");
+              }}
+              placeholder="Search turns and transcript"
+              aria-label="Search history"
+              className="min-w-0 flex-1 bg-transparent text-xs text-mist outline-none placeholder:text-ash"
+            />
+            {searching && <span className="gauge">…</span>}
+          </div>
+
+          <div className="flex max-h-72 flex-col gap-px overflow-y-auto py-1">
+            {!searchingUI &&
+              turns.map((t) => (
+                <TurnRow
+                  key={t.id}
+                  title={t.title || `Turn ${t.id}`}
+                  meta={`${t.mode} · ${t.status}${t.round > 0 ? ` · round ${t.round}` : ""}`}
+                  expanded={expanded === t.id}
+                  onToggle={() => {
+                    setExpanded((v) => (v === t.id ? null : t.id));
+                    setJumpMiss(null);
+                  }}
+                  detail={
+                    <>
+                      <p className="gauge">
+                        {new Date(t.created_at).toLocaleString()}
+                      </p>
+                      <div className="mt-1.5 flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => jump(t.id)}
+                          className="btn h-7 flex-shrink-0 px-2.5 text-xs"
+                        >
+                          Jump to turn
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onReuse(t.title || `Turn ${t.id}`)}
+                          className="btn btn-ghost h-7 flex-shrink-0 px-2.5 text-xs"
+                        >
+                          Reuse
+                        </button>
+                      </div>
+                      {jumpMiss === t.id && (
+                        <p className="mt-1.5 font-mono text-[11px] text-fog">
+                          That turn is not in the loaded transcript.
+                        </p>
+                      )}
+                    </>
+                  }
+                />
+              ))}
+            {!searchingUI && !loadingTurns && turns.length === 0 && (
+              <p className="px-2 py-1.5 text-xs text-ash">No turns yet.</p>
+            )}
+            {!searchingUI && !exhausted && turns.length > 0 && (
               <button
-                key={prompt}
                 type="button"
-                title={prompt}
-                onClick={() => onPick(prompt)}
-                className="flex h-8 min-w-0 items-center rounded-md px-2 text-left transition-colors hover:bg-white/5"
+                disabled={loadingTurns}
+                onClick={() => void loadTurns(turns[turns.length - 1].id)}
+                className="mt-1 h-8 rounded-md text-xs text-fog transition-colors hover:bg-white/5 hover:text-mist disabled:opacity-40"
               >
-                <span className="min-w-0 flex-1 truncate text-xs text-fog transition-colors hover:text-mist">
-                  {prompt}
-                </span>
+                {loadingTurns ? "Loading…" : "Load earlier turns"}
               </button>
-            ))}
-            {visible.length === 0 && (
-              <p className="px-2 py-1.5 text-xs text-ash">No prompts match.</p>
+            )}
+
+            {searchingUI &&
+              (results ?? []).map((t, i) => {
+                const excerpt =
+                  t.blocks
+                    .filter((b) => b.type === "text" && b.text?.trim())
+                    .map((b) => b.text as string)
+                    .join(" ")
+                    .slice(0, 160) || "(no prose in this turn)";
+                const pid = t.prompt_id ?? -1;
+                return (
+                  <TurnRow
+                    key={`${pid}-${i}`}
+                    title={excerpt}
+                    meta={t.role}
+                    expanded={expanded === pid && pid > 0}
+                    onToggle={() => {
+                      setExpanded((v) => (v === pid ? null : pid));
+                      setJumpMiss(null);
+                    }}
+                    detail={
+                      pid > 0 ? (
+                        <div className="mt-1.5 flex gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => jump(pid)}
+                            className="btn h-7 flex-shrink-0 px-2.5 text-xs"
+                          >
+                            Jump to turn
+                          </button>
+                        </div>
+                      ) : undefined
+                    }
+                  />
+                );
+              })}
+            {searchingUI && !searching && (results ?? []).length === 0 && (
+              <p className="px-2 py-1.5 text-xs text-ash">No turns match.</p>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// TurnRow is one history row: title plus meta, folding open into detail.
+// Shared by the turn index and search results so both read the same.
+function TurnRow({
+  title,
+  meta,
+  expanded,
+  onToggle,
+  detail,
+}: {
+  title: string;
+  meta: string;
+  expanded: boolean;
+  onToggle: () => void;
+  detail?: React.ReactNode;
+}) {
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={onToggle}
+        title={title}
+        className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5"
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs text-fog transition-colors hover:text-mist">
+            {title}
+          </span>
+          <span className="gauge mt-0.5 block">{meta}</span>
+        </span>
+        <svg
+          width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--color-ash)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+          className="shrink-0 transition-transform duration-300"
+          style={{ transform: expanded ? "rotate(180deg)" : "rotate(0)" }}
+          aria-hidden
+        >
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-300"
+        style={{
+          gridTemplateRows: expanded ? "1fr" : "0fr",
+          opacity: expanded ? 1 : 0,
+          transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)",
+        }}
+      >
+        <div className="overflow-hidden">
+          <div className="px-2 pb-2 pt-0.5">{detail}</div>
         </div>
       </div>
     </div>
@@ -1950,7 +2278,7 @@ function PlanCard({
   const done = tasks?.filter((t) => t.status === "completed").length ?? 0;
 
   return (
-    <div className="card !p-0 overflow-hidden">
+    <div className="card !p-0 overflow-hidden !shadow-none">
       {/* While the turn builds, the static screen list becomes a live
           checklist: each item ticks pending → in_progress → completed as
           the backend reports it. The count is the honest progress bar. */}
@@ -2094,7 +2422,7 @@ function QuestionCard({
   };
 
   return (
-    <div className="card !p-0 overflow-hidden" style={{ animation: "fade-up 380ms cubic-bezier(0.23,1,0.32,1) both" }}>
+    <div className="card !p-0 overflow-hidden !shadow-none" style={{ animation: "fade-up 380ms cubic-bezier(0.23,1,0.32,1) both" }}>
       <div className="flex items-start gap-2 border-b border-graphite p-3">
         <span className="lamp mt-0.5 flex-shrink-0" data-state="waiting" />
         <div className="min-w-0">

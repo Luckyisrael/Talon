@@ -192,14 +192,24 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// Offering read_skill with an empty library would only ever answer "none".
 	// H6: when the multi-source catalog is attached, read_skill resolves
 	// through it — workspace skills load on demand exactly like embedded ones.
+	// With a plugin registry attached, the per-workspace snapshot layers
+	// pinned plugin skills under the base catalog (base wins clashes), so
+	// the model sees exactly this project's plugins and loads one at a time.
 	var skillLib tools.SkillLibrary
-	if h.skillCatalog != nil {
+	if snap := h.pluginSkillLibrary(workspacePath); snap != nil {
+		skillLib = snap
+	} else if h.skillCatalog != nil {
 		skillLib = catalogLibrary{c: h.skillCatalog}
 	} else if h.knowledge != nil && len(h.knowledge.SkillNames()) > 0 {
 		skillLib = h.knowledge
 	}
 	if skillLib != nil {
 		reg.Register(&tools.ReadSkill{Library: skillLib})
+	}
+	// Plugin reference files: one verified starting point at a time, only
+	// from plugins pinned for this workspace.
+	if pf := h.pluginFileTool(workspacePath); pf != nil {
+		reg.Register(pf)
 	}
 
 	// H9 delegation: scoped children on the same loop. Registered only

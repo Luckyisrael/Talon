@@ -476,6 +476,37 @@ func (s *Store) migrate() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
+		// prompt_attachments holds images and markdown docs attached to a
+		// turn. kind is image | doc. prompt_id starts NULL (uploaded but not
+		// yet sent) and is claimed by exactly one turn — see ClaimAttachments.
+		`CREATE TABLE IF NOT EXISTS prompt_attachments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			prompt_id INTEGER NULL,
+			kind TEXT NOT NULL,
+			name TEXT NOT NULL,
+			mime TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			path TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
+		// refresh_tokens holds opaque session-continuation credentials. Only
+		// the hash is stored — a database read never yields a usable token.
+		// revoked_at marks spent (rotated) or killed tokens; replaced_by
+		// links a rotation for reuse detection.
+		`CREATE TABLE IF NOT EXISTS refresh_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			expires_at DATETIME NOT NULL,
+			revoked_at DATETIME NULL,
+			replaced_by INTEGER NULL,
+			last_used_at DATETIME NULL,
+			device_label TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		)`,
 		// triage_reports holds the Play Billing cutover triage: the decision,
 		// the cutover date, and the dollar exposure in integer cents (exact —
 		// floats never touch money). One row per project, upserted.
@@ -510,6 +541,11 @@ func (s *Store) migrate() error {
 	s.db.Exec("ALTER TABLE projects ADD COLUMN android_package TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE projects ADD COLUMN ios_bundle_id TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE projects ADD COLUMN scheme TEXT DEFAULT ''")
+
+	// Migration: session visibility columns on refresh tokens. Fresh tables
+	// already carry them (see schema above); existing ones grow them here.
+	s.db.Exec("ALTER TABLE refresh_tokens ADD COLUMN last_used_at DATETIME NULL")
+	s.db.Exec("ALTER TABLE refresh_tokens ADD COLUMN device_label TEXT NOT NULL DEFAULT ''")
 
 	// Add uniqueness constraints (ignore errors if already exist)
 	s.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_slug ON projects(slug) WHERE slug != ''")
@@ -992,6 +1028,54 @@ func (s *Store) GetLatestPrompt(projectID int64) (*Prompt, error) {
 		return nil, nil
 	}
 	return p, err
+}
+
+// PromptIndexEntry is one row of the turn index: metadata only, never the
+// full prompt text. History lists render from this; transcripts come from
+// the conversation endpoints.
+type PromptIndexEntry struct {
+	ID        int64     `json:"id"`
+	Mode      string    `json:"mode"`
+	Title     string    `json:"title"`
+	Status    string    `json:"status"`
+	Round     int       `json:"round"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ListPrompts returns the turn index newest first, cursor-paged by id.
+// beforeID <= 0 starts from the newest. limit clamps to 1..100.
+func (s *Store) ListPrompts(projectID, beforeID int64, limit int) ([]PromptIndexEntry, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	var rows *sql.Rows
+	var err error
+	if beforeID > 0 {
+		rows, err = s.db.Query(
+			`SELECT id, mode, title, status, round, created_at FROM prompts
+			 WHERE project_id = ? AND id < ? ORDER BY id DESC LIMIT ?`,
+			projectID, beforeID, limit)
+	} else {
+		rows, err = s.db.Query(
+			`SELECT id, mode, title, status, round, created_at FROM prompts
+			 WHERE project_id = ? ORDER BY id DESC LIMIT ?`,
+			projectID, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PromptIndexEntry
+	for rows.Next() {
+		var e PromptIndexEntry
+		var title sql.NullString
+		if err := rows.Scan(&e.ID, &e.Mode, &title, &e.Status, &e.Round, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		e.Title = title.String
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) UpdatePromptResponse(id int64, response string) error {

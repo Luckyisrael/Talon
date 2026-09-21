@@ -2,10 +2,10 @@
 //
 // Laws:
 //   - Dark until configured: EXPO_PUBLIC_ONESIGNAL_APP_ID absent (or the
-//     native module missing on this build) means push is off — the backend
+//     native module missing on this build) means push is off, the backend
 //     still records the in-app history, and this module stays silent.
 //   - Registration happens once per signed-in session, after the JWT is
-//     stored — the backend needs the Bearer token to bind the device.
+//     stored, the backend needs the Bearer token to bind the device.
 //   - The OneSignal subscription id is the external id the backend pushes
 //     to (POST /v1/users/push-token).
 
@@ -22,7 +22,7 @@ export function pushAvailable(): boolean {
 
 /**
  * Initialize OneSignal and request push permission. Safe to call once per
- * app start; a missing app id is a no-op, not an error — the same dark
+ * app start; a missing app id is a no-op, not an error, the same dark
  * honesty the backend's Noop notifier has.
  */
 export function initPush(): void {
@@ -30,7 +30,7 @@ export function initPush(): void {
   inited = true;
 
   // OneSignal 5.x: initialize + request. Requires privacy consent off in
-  // dev unless the app collects it — this app does not track.
+  // dev unless the app collects it, this app does not track.
   OneSignal.initialize(APP_ID);
   OneSignal.Notifications.requestPermission(false).catch(() => {
     // Permission denied is a user choice, not an error to surface.
@@ -40,7 +40,7 @@ export function initPush(): void {
 /**
  * Bind this device to the signed-in user on the backend. Called after the
  * OAuth exchange stores the JWT. Returns the external id (or '' when push
- * is dark / the id is not ready yet — OneSignal delivers it async).
+ * is dark or the id is not ready yet; OneSignal delivers it async).
  */
 export async function registerPushWithBackend(): Promise<string> {
   if (!pushAvailable()) return '';
@@ -55,7 +55,7 @@ export async function registerPushWithBackend(): Promise<string> {
     await meApi.setPushToken(device);
     return device;
   } catch {
-    // Registration is a courtesy — a failure here never blocks the app.
+    // Registration is a courtesy, a failure here never blocks the app.
     return '';
   }
 }

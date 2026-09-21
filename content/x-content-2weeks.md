@@ -25,6 +25,10 @@
 - **A3 — 3–4 clean screenshots:** the IDE, the agent's trace/steps, a verify pass, a finished screen.
 - **A4 — A brand card:** logo + one-line tagline, for the intro and recap posts.
 - **A5 — The "it fixes its own errors" clip:** the agent hitting a typecheck error and repairing it.
+- **A6 — QR drawer + relay log:** open Test on Phone, scan works, server log shows refused-unauthenticated lines.
+- **A7 — Wallet sign-in clip:** challenge → wallet prompt → signed in (15s).
+- **A8 — The size card:** 252MB → 148MB before/after (one clean graphic).
+- **A9 — The refresh clip:** device live → hit reload → device still there.
 
 ### Discipline on tags & hashtags
 - Tag `@solanamobile` only on genuinely ecosystem-relevant posts (Talon, dApp store, MWA). Don't tag them every day — it reads as begging.
@@ -315,6 +319,117 @@
 > We're just getting to the good part. Early access soon — and I'll keep building in the open the whole way.
 >
 > If you build on Talon, come say hi.
+
+---
+
+# SHIPPED — session material (what we actually built; every claim maps to a commit)
+
+> These are drafted from a real week of engineering. Use them as-is, or swap the hook lines in. Every
+> technical claim below is true in the build — the honesty rule holds.
+
+## S1 — The QR code that carries its own key 🔑
+**Official** · pillar: security differentiator · `[A6: screen recording of QR drawer + token-gated relay log]`
+> Your Talon QR code isn't a location anymore. It's a key.
+>
+> We token-gated the phone relay: every connection must present the session's
+> crypto credential on its very first request, or it's refused before a single
+> byte reaches the app's bundler. The credential dies with the session — a
+> screenshot of yesterday's QR opens nothing today.
+>
+> Physical-device testing without leaving the door open. That's the standard.
+
+**Personal**
+> Fixed a thing today that nobody will ever notice — which is the point.
+>
+> Before: scan the QR, your phone loads the app. Anyone who saw the QR could too.
+> After: the QR carries a one-time key. No key, no connection. Old QR dies with
+> the session that minted it.
+>
+> Security that doesn't ask for thanks.
+
+## S2 — Sign in with your wallet (no email, no password)
+**Official** · pillar: ecosystem-native · `[A7: 15s clip — challenge appears, wallet signs, you're in]`
+> No email. No password. No "connect your wallet to continue."
+>
+> Talon sign-in is now native Solana: we issue a challenge, your wallet signs
+> it, you're in. Same account every time — the wallet IS the identity. And the
+> message is honest: "this will not trigger any blockchain transaction."
+>
+> The product assumes you have a wallet. Now sign-in does too.
+
+**Personal**
+> Spent the day on the least glamorous auth flow in crypto: making sure a
+> wallet signature can't be replayed, re-used, or stolen mid-flight.
+>
+> Single-use challenges. Ten-minute expiry. Wrong key, replay, expired nonce —
+> all refused, and all look identical so a forger learns nothing.
+>
+> Zero new dependencies. The signing math fit in one file.
+
+## S3 — Half the APK, same app 📦
+**Official** · pillar: craft/performance · `[A8: before/after size card — 252MB → 148MB]`
+> We cut the dev client from 252MB to 148MB by deleting what nobody used.
+>
+> Four CPU architectures shipped in every build. Two of them (32-bit ARM
+> and 32-bit x86) ran on exactly zero of our target devices — the emulator
+> is x86_64, the Seeker phone is arm64. Every install paid for dead weight.
+>
+> Same app. Same features. 41% less to download.
+
+**Personal**
+> Fun bug hunt today: set the standard "limit architectures" flag in the
+> build config. Rebuilt. Still 4 architectures. 🤨
+>
+> Turns out React Native's gradle plugin reads its own property and
+> *overrides* the documented one. Set the right knob → the APK dropped
+> 100MB in one build.
+>
+> The docs will tell you where the switch is. The build log tells you if
+> it's wired to anything.
+
+## S4 — The refresh amnesia fix 🔄
+**Official** · pillar: reliability · `[A9: clip — reload page mid-session, device re-attaches instantly]`
+> Reload the page, lose your device?
+>
+> Used to. The IDE kept session state in memory only — one refresh and it
+> forgot the Android emulator you had running, so you'd start a second one.
+> Two devices, one orphaned, nobody the wiser.
+>
+> Now the IDE asks the server what's live before it shows you anything.
+> Reload → re-attach. Your session is where you left it.
+
+**Personal**
+> The most satisfying bug to fix is the one users quietly worked around for
+> weeks. "Just don't refresh" was never in the docs — it was in everyone's
+> muscle memory.
+>
+> Now refresh just works. The session re-attaches. The emulator you had
+> stays.
+
+## S5 — The verify ladder, fully staffed 🔧
+**Official** · pillar: verified output · `[A5 clip re-used — agent typechecks and repairs]`
+> Our agent doesn't just claim the app works. It runs the ladder:
+> typecheck → lint → bundle → boot → vision → interact.
+>
+> Today the ladder got every rung back. Five verification tools that existed
+> but weren't reachable are now in the agent's hands — and the honest rule
+> holds: rungs that need a live device stay hidden until there IS a live
+> device. No fake green checkmarks.
+
+**Personal**
+> Code review found a tool bench with five tools bolted to it and no handles
+> to grab them. The agent's verify ladder literally couldn't reach its own
+> boot test.
+>
+> Now it can. And the rule that stays: a check that can't run doesn't pretend
+> to pass.
+
+## Hook lines added this session (swap into any post)
+- "The QR code that carries its own key."
+- "Sign in with the wallet you already have."
+- "Half the APK. Same app."
+- "Reload the page. Your device is still there."
+- "A check that can't run doesn't pretend to pass."
 
 ---
 

@@ -1,18 +1,46 @@
-import React from 'react';
-import { StyleSheet, View } from 'react-native';
-import Animated, { FadeIn } from 'react-native-reanimated';
-import { useRouter } from 'expo-router';
-import { Screen, UIText } from '@/components/ui';
-import { Colors, Spacing } from '@/constants/theme';
+import React from 'react'
+import { StyleSheet, View } from 'react-native'
+import Animated, { FadeIn } from 'react-native-reanimated'
+import { useRouter } from 'expo-router'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Screen, UIText } from '@/components/ui'
+import { Colors, Spacing } from '@/constants/theme'
+import { getToken, readTrace } from '@/lib/auth'
+import { ONBOARDED_KEY } from '@/stores/app'
 
-// Splash: mark + floor wash, then auto-routes to onboarding. No decisions
-// here — it only covers font/splash load and hands off.
+// Splash: mark + floor wash, then routes once: first launch tours
+// onboarding, afterwards authenticated users land straight on Build and
+// everyone else on sign-in. No tour replays, no signed-in user rewalks it.
 export default function SplashScreen() {
-  const router = useRouter();
+  const router = useRouter()
   React.useEffect(() => {
-    const t = setTimeout(() => router.replace('/onboarding/welcome'), 1200);
-    return () => clearTimeout(t);
-  }, [router]);
+    let alive = true
+    void (async () => {
+      // Replay the auth trace first: SecureStore's own file never appears on
+      // disk while every other prefs file survives, so the failure hides in
+      // its write path. The trace rides AsyncStorage (which persists on this
+      // device) and a cold start replays it, so the evidence outlives the
+      // process that produced it.
+      const prior = await readTrace()
+      if (prior) console.warn(`[auth-trace previous]\n${prior}`)
+      const [seen, token] = await Promise.all([
+        AsyncStorage.getItem(ONBOARDED_KEY).catch(() => null),
+        getToken(),
+        new Promise((resolve) => setTimeout(resolve, 900)),
+      ])
+      if (!alive) return
+      if (seen !== '1') {
+        router.replace('/onboarding/welcome')
+      } else if (token) {
+        router.replace('/(tabs)/build')
+      } else {
+        router.replace('/auth')
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [router])
 
   return (
     <Screen padded={false} style={styles.center}>
@@ -32,7 +60,7 @@ export default function SplashScreen() {
         </UIText>
       </Animated.View>
     </Screen>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -70,4 +98,4 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     backgroundColor: Colors.acidLime,
   },
-});
+})

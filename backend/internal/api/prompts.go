@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/blobstore"
 	"github.com/luckyisrael/talon/backend/internal/devclient"
 	"github.com/luckyisrael/talon/backend/internal/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/approval"
@@ -54,6 +55,9 @@ type PromptHandler struct {
 	// skillCatalog is the H6 multi-source skills catalog, when the
 	// composition attached one; read_skill resolves through it.
 	skillCatalog *skills.Catalog
+	// r2 points attachment images at Cloudflare R2. Nil keeps images on
+	// local disk — see SetR2Store. Markdown docs always stay local.
+	r2 blobstore.Store
 }
 
 func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *knowledge.Registry, n notify.Notifier) *PromptHandler {
@@ -79,6 +83,9 @@ type promptRequest struct {
 	ProjectID int64  `json:"project_id"`
 	Prompt    string `json:"prompt"`
 	Mode      string `json:"mode"`
+	// AttachmentIDs names uploaded files the turn carries. Claimed exactly
+	// once, at send time — see claimAttachments.
+	AttachmentIDs []int64 `json:"attachment_ids"`
 }
 
 const maxPromptLength = 50_000
@@ -138,6 +145,10 @@ func (h *PromptHandler) validate(w http.ResponseWriter, r *http.Request, req *pr
 		writeError(w, http.StatusBadRequest, "mode must be 'plan' or 'build'")
 		return false
 	}
+	if len(req.AttachmentIDs) > 10 {
+		writeError(w, http.StatusBadRequest, "at most 10 attachments per turn")
+		return false
+	}
 	if req.ProjectID <= 0 {
 		writeError(w, http.StatusBadRequest, "project_id is required")
 		return false
@@ -181,13 +192,18 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not save the prompt")
 		return
 	}
+	attachments, ok := h.claimAttachments(w, req.ProjectID, prompt.ID, req.AttachmentIDs)
+	if !ok {
+		h.store.UpdatePromptStatus(prompt.ID, "abandoned", 0)
+		return
+	}
 
 	// The request context, not Background: if the caller hangs up there is no
 	// reason to keep spending tokens on their behalf.
 	ctx := r.Context()
 
 	if req.Mode == "plan" {
-		planResp, err := h.ai.Plan(ctx, h.planPrompt, h.planHistory(req.ProjectID, req.Prompt))
+		planResp, err := h.ai.Plan(ctx, h.planPrompt, h.planHistory(req.ProjectID, h.buildUserTurn(attachments, req.Prompt)))
 		if err != nil {
 			log.Printf("plan failed (user %d, project %d): %v", userID, req.ProjectID, err)
 			h.store.UpdatePromptStatus(prompt.ID, "failed", 0)
@@ -199,7 +215,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respBytes, _ := json.Marshal(planResp)
 		h.store.UpdatePromptResponse(prompt.ID, string(respBytes))
 		h.store.IncrementPrompts(userID)
-		h.persistPlanExchange(req.ProjectID, prompt.ID, req.Prompt, planResp.Message, planJSON(planResp.Plan))
+		h.persistPlanExchange(req.ProjectID, prompt.ID, h.buildUserTurn(attachments, req.Prompt), planResp.Message, planJSON(planResp.Plan))
 		// A plan reply that asks questions instead of settling a plan is not
 		// done — waiting lets the Answer endpoint continue the planning. Same
 		// rule as the streaming path; both doors must classify identically.
@@ -217,7 +233,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	outcome, buildErr := h.runBuild(ctx, req.ProjectID, prompt.ID, userID, req.Prompt, nil,
-		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode})
+		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode, attachments: attachments})
 
 	response := map[string]interface{}{
 		"id":              prompt.ID,
@@ -264,6 +280,12 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not save the prompt")
 		return
 	}
+	attachments, ok := h.claimAttachments(w, req.ProjectID, prompt.ID, req.AttachmentIDs)
+	if !ok {
+		h.store.UpdatePromptStatus(prompt.ID, "abandoned", 0)
+		return
+	}
+	userTurn := h.buildUserTurn(attachments, req.Prompt)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -280,13 +302,13 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if req.Mode == "plan" {
-		h.streamPlan(ctx, w, flusher, prompt.ID, req.ProjectID, userID, req.Prompt)
+		h.streamPlan(ctx, w, flusher, prompt.ID, req.ProjectID, userID, userTurn)
 		h.store.IncrementPrompts(userID)
 		return
 	}
 
 	h.streamBuild(ctx, w, flusher, req.ProjectID, prompt.ID, userID, req.Prompt,
-		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode})
+		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode, attachments: attachments})
 }
 
 // resumePrompt is the synthetic instruction a resumed turn injects. It is not
@@ -506,7 +528,7 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 	// so far (the question already lives in it). Metered like the original
 	// plan turn — this is the second half of one planning exchange.
 	if prompt.Mode == "plan" {
-		h.streamPlan(r.Context(), w, flusher, id, prompt.ProjectID, userID, body.Answer)
+		h.streamPlan(r.Context(), w, flusher, id, prompt.ProjectID, userID, h.buildUserTurn(nil, body.Answer))
 		return
 	}
 	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, body.Answer,
@@ -548,10 +570,10 @@ func (h *PromptHandler) Discard(w http.ResponseWriter, r *http.Request) {
 
 // streamPlan proxies the model's stream to the client, then parses the finished
 // text into a plan.
-func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID, userID int64, userPrompt string) {
+func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID, userID int64, userTurn ai.Message) {
 	// The system prompt was previously omitted here while the output was still
 	// parsed as a plan, so plan mode had no instructions at all.
-	stream := h.ai.ChatStream(ctx, h.planPrompt, h.planHistory(projectID, userPrompt))
+	stream := h.ai.ChatStream(ctx, h.planPrompt, h.planHistory(projectID, userTurn))
 
 	var full strings.Builder
 	sawError := false
@@ -602,13 +624,13 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 		h.savePlan(projectID, &planResp)
 		payload, _ := json.Marshal(planResp)
 		h.store.UpdatePromptResponse(promptID, string(payload))
-		h.persistPlanExchange(projectID, promptID, userPrompt, planResp.Message, planJSON(planResp.Plan))
+		h.persistPlanExchange(projectID, promptID, userTurn, planResp.Message, planJSON(planResp.Plan))
 		writeSSE(w, "plan", planResp)
 	} else if raw != "" {
 		h.store.UpdatePromptResponse(promptID, raw)
 		// The model did not return a parseable plan. Surface its reply verbatim
 		// rather than leaving the chat staring at a blank turn.
-		h.persistPlanExchange(projectID, promptID, userPrompt, raw, nil)
+		h.persistPlanExchange(projectID, promptID, userTurn, raw, nil)
 		writeSSE(w, "text.delta", ai.StreamTextDelta{Text: raw})
 	}
 
@@ -872,6 +894,9 @@ type buildOptions struct {
 	persistUserTurn bool
 	meterPrompt     bool
 	answer          bool
+	// attachments rides fresh turns only: claimed files this turn carries.
+	// Answer, steer, and resume replay stored turns and never set it.
+	attachments []store.Attachment
 	// mode is "plan" or "build": routing classifies the turn from it.
 	mode string
 }
@@ -1035,16 +1060,16 @@ func (h *PromptHandler) turnHistory(projectID, promptID int64, userPrompt string
 	}
 
 	history := h.conversation(projectID)
-	userTurn := ai.UserText(userPrompt)
+	userTurn := h.buildUserTurn(bo.attachments, userPrompt)
 	// A fresh prompt sent while an earlier turn is still waiting on ask_user:
 	// the replay trim drops the trailing orphan tool_use, so without this the
 	// model never sees the question the user may be replying to ("go with your
 	// fallback" is meaningless without it). Carry the pending question forward
 	// inside the fresh prompt it may answer.
 	if q, ok := ai.PendingQuestion(h.storedConversation(projectID)); ok {
-		userTurn = ai.UserText(userPrompt + "\n\n[Context: an earlier turn is still waiting on this " +
+		userTurn.Blocks[0].Text += "\n\n[Context: an earlier turn is still waiting on this " +
 			"question from you: \"" + q + "\" If this message answers or relates to it, act on that " +
-			"connection; otherwise proceed with the message as a new request.]")
+			"connection; otherwise proceed with the message as a new request.]"
 	}
 	// Build receipts: finished builds whose turn is gone surface here, once.
 	// A turn that died mid-gradle (cancel, restart, timeout) leaves a verdict
@@ -1065,13 +1090,16 @@ func (h *PromptHandler) turnHistory(projectID, promptID int64, userPrompt string
 			lines = append(lines, line)
 			ids = append(ids, r.ID)
 		}
-		userTurn = ai.UserText(userTurn.Blocks[0].Text + "\n\n[Build receipts since you last looked — " +
-			"finished builds whose turn is gone. Read before rebuilding:]\n" + strings.Join(lines, "\n"))
+		userTurn.Blocks[0].Text += "\n\n[Build receipts since you last looked — " +
+			"finished builds whose turn is gone. Read before rebuilding:]\n" + strings.Join(lines, "\n")
 		if err := h.store.AckBuildReceipts(ids); err != nil {
 			log.Printf("project %d: could not ack build receipts: %v", projectID, err)
 		}
 	}
-	history = append(history, userTurn)
+	// The loop replays the resolved turn — image bytes included — while the
+	// persisted copy stays reference-only (resolveImages never touches what
+	// persistTurn writes).
+	history = append(history, h.resolveImages(projectID, []ai.Message{userTurn})[0])
 
 	// A fresh turn stores its prompt up front so a crash mid-turn still leaves the
 	// request that began it; an answer that fell through stores its text too (it
@@ -1241,9 +1269,8 @@ func terminalStatus(runErr error) string {
 // a plan card. It mirrors how the build path persists its turns (the user turn,
 // then each round's messages) — without it, the first interactions on a project
 // (planning) vanished on refresh while build turns survived.
-func (h *PromptHandler) persistPlanExchange(projectID, promptID int64, userPrompt, message string, plan json.RawMessage) {
+func (h *PromptHandler) persistPlanExchange(projectID, promptID int64, userTurn ai.Message, message string, plan json.RawMessage) {
 	lg := h.slog.get(h.store, projectID)
-	userTurn := ai.UserText(userPrompt)
 	if err := h.store.AppendMessage(projectID, promptID, userTurn.Role,
 		ai.MarshalBlocks(userTurn.Blocks), 0, 0); err != nil {
 		log.Printf("project %d: could not store the plan prompt: %v", projectID, err)
@@ -1317,7 +1344,7 @@ func truncateLabel(s string, n int) string {
 // round-trip tests before this switch existed.
 func (h *PromptHandler) storedConversation(projectID int64) []ai.Message {
 	if derived := h.deriveFromLog(projectID); derived != nil {
-		return derived
+		return h.resolveImages(projectID, derived)
 	}
 	stored, err := h.store.GetConversation(projectID, historyTurns)
 	if err != nil {
@@ -1333,7 +1360,9 @@ func (h *PromptHandler) storedConversation(projectID int64) []ai.Message {
 		}
 		msgs = append(msgs, ai.Message{Role: m.Role, Blocks: blocks})
 	}
-	return msgs
+	// Stored and derived histories carry attachment references only; hydrate
+	// the in-memory copy with bytes for the provider request.
+	return h.resolveImages(projectID, msgs)
 }
 
 // conversation replays the project's stored turns, trimmed to a shape both
@@ -1347,7 +1376,11 @@ func (h *PromptHandler) conversation(projectID int64) []ai.Message {
 // so only the prose turns are relevant. Before the final user turn, we inject
 // any skills whose triggers match the prompt text — the planner otherwise has
 // zero kit context and falls back to legacy web3.js.
-func (h *PromptHandler) planHistory(projectID int64, userPrompt string) []ai.PromptMessage {
+//
+// Plan mode's flat path carries text only: attached docs arrive inlined in the
+// turn text, attached images by name. The pixels replay in build mode, where
+// the serializers resolve the stored image blocks.
+func (h *PromptHandler) planHistory(projectID int64, userTurn ai.Message) []ai.PromptMessage {
 	var history []ai.PromptMessage
 
 	if summary := h.memorySummary(projectID); summary != "" {
@@ -1367,8 +1400,9 @@ func (h *PromptHandler) planHistory(projectID int64, userPrompt string) []ai.Pro
 		}
 	}
 
+	userText := strings.TrimSpace(userTurn.Text())
 	if h.knowledge != nil {
-		if suggested := h.knowledge.SkillsForPrompt(userPrompt); len(suggested) > 0 {
+		if suggested := h.knowledge.SkillsForPrompt(userText); len(suggested) > 0 {
 			if len(suggested) > 2 {
 				suggested = suggested[:2]
 			}
@@ -1382,7 +1416,7 @@ func (h *PromptHandler) planHistory(projectID int64, userPrompt string) []ai.Pro
 		}
 	}
 
-	return append(history, ai.PromptMessage{Role: "user", Content: userPrompt})
+	return append(history, ai.PromptMessage{Role: "user", Content: userText})
 }
 
 // systemPrompt returns the build-mode system prompt plus the native-module
@@ -1472,7 +1506,9 @@ func (h *PromptHandler) GetMemory(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetConversation returns the stored turns for a project so the IDE can restore
-// the chat after a reload.
+// the chat after a reload. Paged by message seq: the default call returns the
+// tail (latest 60); ?before_seq=N walks older pages. latest_seq rides every
+// response as the "anything new" watermark clients poll on return.
 func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
 	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
 	if err != nil {
@@ -1483,23 +1519,48 @@ func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	stored, err := h.store.GetConversation(projectID, historyTurns)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load the conversation")
-		return
+	limit := historyTurns
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			limit = n
+		}
+	}
+	var stored []store.ConversationMessage
+	if raw := r.URL.Query().Get("before_seq"); raw != "" {
+		before, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || before <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid before_seq")
+			return
+		}
+		stored, err = h.store.GetConversationBefore(projectID, before, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not load the conversation")
+			return
+		}
+	} else {
+		stored, err = h.store.GetConversation(projectID, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not load the conversation")
+			return
+		}
 	}
 
 	type turn struct {
-		Role   string     `json:"role"`
-		Blocks []ai.Block `json:"blocks"`
-		At     string     `json:"at"`
+		PromptID int64      `json:"prompt_id"`
+		Seq      int64      `json:"seq"`
+		Role     string     `json:"role"`
+		Blocks   []ai.Block `json:"blocks"`
+		At       string     `json:"at"`
 	}
 	out := make([]turn, 0, len(stored))
 	for _, m := range stored {
-		out = append(out, turn{Role: m.Role, Blocks: ai.UnmarshalBlocks(m.Blocks), At: m.CreatedAt.Format("2006-01-02T15:04:05Z07:00")})
+		out = append(out, turn{PromptID: m.PromptID, Seq: m.Seq, Role: m.Role, Blocks: ai.UnmarshalBlocks(m.Blocks), At: m.CreatedAt.Format("2006-01-02T15:04:05Z07:00")})
 	}
 
 	resp := map[string]interface{}{"turns": out}
+	if seq, err := h.store.MaxConversationSeq(projectID); err == nil {
+		resp["latest_seq"] = seq
+	}
 
 	// The latest prompt's run status is what the IDE reads to decide whether to
 	// offer "Resume / Discard". A turn left 'running' (server crash), 'cancelled'

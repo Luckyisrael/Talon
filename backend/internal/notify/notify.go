@@ -35,6 +35,7 @@ const (
 	KindBuildFailed  Kind = "build_failed"  // build turn finished, failed
 	KindBuildPaused  Kind = "build_paused"  // reaper paused the session
 	KindBuildDestroy Kind = "build_destroy" // reaper destroyed the idle session
+	KindSignIn       Kind = "sign_in"       // fresh login on a device — theft visibility
 )
 
 // Notifier sends one push to one user's devices. Implementations must be
@@ -56,9 +57,9 @@ func (Noop) Configured() bool                                        { return fa
 // OneSignal delivers through OneSignal's REST API. It holds the app's
 // credentials and an HTTP client with a hard timeout.
 type OneSignal struct {
-	appID  string
+	appID   string
 	restKey string
-	client *http.Client
+	client  *http.Client
 	// subscriberByID resolves a user id to the OneSignal subscription id
 	// (external id) — wired by the caller so this package stays
 	// store-agnostic.
@@ -90,10 +91,10 @@ func (o *OneSignal) Configured() bool { return true }
 // onesignalPayload is the subset of OneSignal's notification body this
 // product needs: one user by external id, plain title+body.
 type onesignalPayload struct {
-	AppID  string `json:"app_id"`
-	IncludeExternalIDs []string `json:"include_external_user_ids"`
-	Headings map[string]string `json:"headings,omitempty"`
-	Contents map[string]string `json:"contents"`
+	AppID              string            `json:"app_id"`
+	IncludeExternalIDs []string          `json:"include_external_user_ids"`
+	Headings           map[string]string `json:"headings,omitempty"`
+	Contents           map[string]string `json:"contents"`
 }
 
 func (o *OneSignal) Send(ctx context.Context, userID int64, kind Kind, title, body string) error {

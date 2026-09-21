@@ -19,7 +19,7 @@ The list is short on purpose. One line per pattern, with the right
 file or class to look at, and a one-line fix. If you find yourself
 adding a long explanation, the explanation belongs in a different
 skill — `rn-best-practices`, `mobile-defaults`, `expo-router-nav`,
-`reanimated-v4`, etc. This skill is the index; the others are the
+`mobile-motion`, etc. This skill is the index; the others are the
 how-to.
 
 ## TypeScript

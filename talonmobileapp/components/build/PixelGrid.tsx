@@ -35,7 +35,7 @@ const GAP = 1.5;
 
 function PixelCell({ delay, dur, round }: { delay: number | null; dur: number; round: boolean }) {
   // Two layers: static fog-dim base + lime overlay flashing opacity as the
-  // wavefront passes — the web's fog-rest/lime-flash read, exactly.
+  // wavefront passes, the web's fog-rest/lime-flash read, exactly.
   const flash = useAnimatedStyle(() => {
     if (delay === null) return { opacity: 0 };
     return {

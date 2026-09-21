@@ -48,7 +48,7 @@ export function FileBrowser({ projectId }: { projectId: number | null }) {
   if (!projectId) {
     return (
       <View style={{ padding: 16 }}>
-        <UIText variant="body" tone="muted">No project yet — create one from the Build tab.</UIText>
+        <UIText variant="body" tone="muted">No project yet. Create one from the Build tab.</UIText>
       </View>
     )
   }
@@ -94,7 +94,7 @@ export function FileBrowser({ projectId }: { projectId: number | null }) {
               <Pressable
                 key={f.path}
                 onPress={() => setSelected(f.path)}
-                style={{ paddingVertical: 8, paddingHorizontal: 10, borderRadius: 6, backgroundColor: Colors.obsidian, borderWidth: 1, borderColor: Colors.graphite }}
+                style={{ paddingVertical: 8, paddingHorizontal: 10, borderRadius: 6, backgroundColor: Colors.obsidian }}
               >
                 <Text style={{ color: Colors.paper, fontSize: Type.body.fontSize }} numberOfLines={1}>{f.path}</Text>
                 <Text style={{ color: Colors.fog, fontSize: Type.monoSm.fontSize }} numberOfLines={1}>{f.content.slice(0, 80).trim() || 'empty file'}</Text>
@@ -108,11 +108,11 @@ export function FileBrowser({ projectId }: { projectId: number | null }) {
         <UIText variant="title">Diff · {diffFiles.length ? `${diffFiles.length} file(s)` : 'no changes'}</UIText>
         <View style={{ height: 8 }} />
         {!diff ? (
-          <UIText variant="bodySm" tone="muted">Against the template baseline — appears after the first turn finishes.</UIText>
+          <UIText variant="bodySm" tone="muted">Against the template baseline. Appears after the first turn finishes.</UIText>
         ) : (
           <View style={{ gap: 8 }}>
             {diffFiles.map((r, i) => (
-              <View key={i} style={{ backgroundColor: Colors.carbon, borderRadius: 6, padding: 10, borderWidth: 1, borderColor: Colors.graphite }}>
+              <View key={i} style={{ backgroundColor: Colors.carbon, borderRadius: 6, padding: 10 }}>
                 <Text style={{ color: Colors.mist, fontSize: Type.monoSm.fontSize }} numberOfLines={1}>{r.header}</Text>
                 <Text style={{ color: Colors.fog, fontSize: Type.label.fontSize }}>+{r.add} −{r.del}</Text>
               </View>

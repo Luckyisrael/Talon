@@ -178,7 +178,7 @@ export const PlanProgress = memo(function PlanProgress({ tasks }: { tasks?: Plan
   const done = tasks.filter((t) => t.status === "completed").length;
 
   return (
-    <div className="my-1.5 rounded-md border border-graphite bg-white/[0.02] px-2 py-1.5">
+    <div className="my-1.5 rounded-md bg-white/[0.02] px-2 py-1.5">
       <div className="mb-1 flex items-baseline justify-between gap-2">
         <span className="font-mono text-xs uppercase tracking-wide text-fog">Build plan</span>
         <span className="font-mono text-xs text-ash">
@@ -661,7 +661,7 @@ function DecisionRow({ decision }: { decision: DecisionCard }) {
   const sub = isADR ? decision.outcome : undefined;
 
   return (
-    <div className="my-1 min-w-0 rounded-xl border border-graphite bg-carbon p-3 shadow-[inset_2px_0_0_var(--color-acid-lime)]">
+    <div className="my-1 min-w-0 rounded-xl bg-white/[0.04] p-3">
       <div className="mb-1.5 flex items-center gap-2">
         <span aria-hidden className="h-2 w-2 flex-shrink-0 rounded-[2px] bg-acid-lime" />
         <span className={`gauge ${tone}`}>{label}</span>

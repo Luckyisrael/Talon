@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/luckyisrael/talon/backend/internal/auth"
+	"github.com/luckyisrael/talon/backend/internal/notify"
 	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
@@ -44,11 +45,17 @@ type OAuthAuthHandler struct {
 	// codes are the single-use session tickets the callback hands to the
 	// client: 60 seconds, one exchange, then dead.
 	codes *oauthFlowStore
+	// notifier carries sign-in alerts. Nil normalizes to dark (in-app
+	// record only) so tests construct without one.
+	notifier notify.Notifier
 }
 
-func NewOAuthAuthHandler(s *store.Store, a *auth.Service, providers map[auth.Provider]auth.OAuthConfig) *OAuthAuthHandler {
+func NewOAuthAuthHandler(s *store.Store, a *auth.Service, providers map[auth.Provider]auth.OAuthConfig, n notify.Notifier) *OAuthAuthHandler {
+	if n == nil {
+		n = notify.Noop{}
+	}
 	return &OAuthAuthHandler{
-		store: s, auth: a, providers: providers,
+		store: s, auth: a, providers: providers, notifier: n,
 		states:    newOAuthFlowStore(),
 		codes:     newOAuthFlowStore(),
 		webOrigin: strings.TrimRight(strings.TrimSpace(os.Getenv("WEB_ORIGIN")), "/"),
@@ -61,6 +68,7 @@ func NewOAuthAuthHandler(s *store.Store, a *auth.Service, providers map[auth.Pro
 // pass through untouched.
 func (h *OAuthAuthHandler) webTarget(redirect string) string {
 	if h.webOrigin == "" ||
+		strings.HasPrefix(redirect, "talon://") ||
 		strings.HasPrefix(redirect, "expokit://") ||
 		!strings.HasPrefix(redirect, "/") {
 		return redirect
@@ -172,6 +180,11 @@ func (h *OAuthAuthHandler) Start(w http.ResponseWriter, r *http.Request) {
 	}
 
 	redirect := sanitizeRedirect(r.URL.Query().Get("redirect"))
+	// TEMPORARY DIAGNOSTIC: the redirect the client registers is the whole
+	// handoff contract — the same string must open the browser session and
+	// receive the provider's return. Log it until the mobile callback is
+	// resolved.
+	log.Printf("oauth %s: start redirect=%q", providerName, redirect)
 	state, err := newFlowToken()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start the sign-in flow")
@@ -183,13 +196,14 @@ func (h *OAuthAuthHandler) Start(w http.ResponseWriter, r *http.Request) {
 }
 
 // sanitizeRedirect allows only same-origin paths and the mobile app scheme —
-// an open redirect on a login flow is a phishing primitive.
+// an open redirect on a login flow is a phishing primitive. talon:// is the
+// production scheme; expokit:// stays accepted so older installs keep working.
 func sanitizeRedirect(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "/"
 	}
-	if strings.HasPrefix(raw, "expokit://") {
+	if strings.HasPrefix(raw, "talon://") || strings.HasPrefix(raw, "expokit://") {
 		return raw
 	}
 	if strings.HasPrefix(raw, "/") && !strings.HasPrefix(raw, "//") {
@@ -316,10 +330,14 @@ func (h *OAuthAuthHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load your account")
 		return
 	}
-	token, err := h.auth.GenerateToken(user.ID, user.Email)
+	token, refresh, _, err := issueSession(h.store, h.auth, user.ID, user.Email, deviceLabel(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start your session")
 		return
 	}
-	writeJSON(w, http.StatusOK, authResponse{Token: token, User: user})
+	// A fresh login is a security event worth recording: if the account
+	// owner did not do this, the sessions screen shows it.
+	notify.Dispatch(h.store, h.notifier, user.ID, notify.KindSignIn,
+		"New sign-in", "A new session started on your account. If this was not you, sign out everywhere from Profile.")
+	writeJSON(w, http.StatusOK, authResponse{Token: token, RefreshToken: refresh, User: user})
 }

@@ -1,14 +1,26 @@
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Field, LimeButton, Screen, UIText } from '@/components/ui';
+import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
+import { Add, ArrowUp, Stop } from 'iconsax-react-native';
+import { Field, GhostButton, Screen, UIText } from '@/components/ui';
+import { StagedAttachments } from '@/components/build/Attachments';
+import { RestoredTranscript, type RestoredTurn } from '@/components/build/Transcript';
 import { TraceRow } from '@/components/build/TraceRow';
 import { PixelGrid } from '@/components/build/PixelGrid';
 import { QuestionCard } from '@/components/build/QuestionCard';
 import { FileBrowser } from '@/components/files/FileBrowser';
 import { Colors, Spacing, Type } from '@/constants/theme';
 import { useActiveProject, usePromptStream } from '@/hooks';
-import { conversationApi, projectsApi } from '@/lib/api';
-import type { PlanTask } from '@/lib/api';
+import { attachmentsApi, conversationApi, type PlanTask } from '@/lib/api';
+import { loadSnapshot, saveSnapshot } from '@/lib/history-cache';
+import {
+  MAX_ATTACHMENTS,
+  classifyPicked,
+  describeSize,
+  type LocalAttachment,
+} from '@/lib/attachments';
 
 // The build tab drives the real prompt stream: send a plan/build prompt,
 // watch tool calls and task updates land live, answer ask_user pauses
@@ -43,43 +55,180 @@ function toolRow(name: string) {
 }
 
 export default function BuildScreen() {
+  const router = useRouter();
+  // The composer belongs to a project: select or create one on the Projects
+  // screen first. The input box only exists under a project, and it pins to
+  // the bottom of this screen in every sub-view.
   const project = useActiveProject();
   const projectId = project?.id ?? null;
-  const { turn, send, answer, stop } = usePromptStream(projectId);
+  const { turn, send, answer, answerPrompt, stop } = usePromptStream(projectId);
   const [draft, setDraft] = React.useState('');
   const [mode, setMode] = React.useState<'plan' | 'build'>('build');
   const [answers, setAnswers] = React.useState<string[]>([]);
   const [subView, setSubView] = React.useState<'chat' | 'files'>('chat');
-  const [newName, setNewName] = React.useState('');
-  const [creating, setCreating] = React.useState(false);
-  const [history, setHistory] = React.useState<{ role: string; text: string }[]>([]);
+  const [staged, setStaged] = React.useState<LocalAttachment[]>([]);
+  const [attError, setAttError] = React.useState<string | null>(null);
+  const [uploading, setUploading] = React.useState(false);
+  const keyRef = React.useRef(0);
+  const [history, setHistory] = React.useState<RestoredTurn[]>([]);
+  const [historyStale, setHistoryStale] = React.useState(false);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [waitingId, setWaitingId] = React.useState<number | null>(null);
+
+  const loadHistory = React.useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (!projectId) return;
+      if (!opts?.silent) setRefreshing(true);
+      try {
+        const r = await conversationApi.get(projectId);
+        setHistory((r.turns ?? []) as RestoredTurn[]);
+        setWaitingId(r.latest?.status === 'waiting' ? (r.latest.id ?? null) : null);
+        setHistoryStale(false);
+        void saveSnapshot(projectId, r.turns ?? []);
+      } catch {
+        // Offline keeps the snapshot with its stale badge; a first-run
+        // failure simply leaves the empty state.
+      } finally {
+        if (!opts?.silent) setRefreshing(false);
+      }
+    },
+    [projectId],
+  );
+
+  // Cold start paints the snapshot instantly, then the network replaces it.
+  // Turn end, project switch, and tab focus re-sync: the server owns truth,
+  // this screen never merges.
   React.useEffect(() => {
-    if (!projectId) return;
-    void conversationApi.get(projectId).then(r => {
-      const turns = (r.turns ?? []).slice(-3).flatMap(t => t.blocks.filter(b => b.text).map(b => ({ role: t.role, text: b.text! })));
-      setHistory(turns);
-    }).catch(() => {});
-  }, [projectId, turn.phase]);
+    if (!projectId) {
+      setHistory([]);
+      return;
+    }
+    let alive = true;
+    void loadSnapshot(projectId).then((snap) => {
+      if (alive && snap && snap.turns.length > 0) {
+        setHistory(snap.turns as RestoredTurn[]);
+        setHistoryStale(true);
+      }
+    });
+    void loadHistory({ silent: true });
+    return () => {
+      alive = false;
+    };
+  }, [projectId, loadHistory]);
+  React.useEffect(() => {
+    if (turn.phase === 'done' || turn.phase === 'error') void loadHistory({ silent: true });
+  }, [turn.phase, loadHistory]);
+  useFocusEffect(
+    React.useCallback(() => {
+      void loadHistory({ silent: true });
+    }, [loadHistory]),
+  );
 
   const busy = turn.phase === 'streaming';
 
-  function submit() {
-    const text = draft.trim();
-    if (!text || projectId == null) return;
-    setDraft('');
-    setAnswers([]);
-    send(mode, text);
+  function addPicked(assets: { uri: string; name?: string | null; mimeType?: string | null; fileSize?: number | null }[]) {
+    if (pendingBlock()) return;
+    const next = [...staged];
+    let err: string | null = null;
+    for (const a of assets) {
+      if (next.length >= MAX_ATTACHMENTS) {
+        err = `at most ${MAX_ATTACHMENTS} files per turn`;
+        break;
+      }
+      const verdict = classifyPicked({ name: a.name, mimeType: a.mimeType, size: a.fileSize });
+      if ('error' in verdict) {
+        err = verdict.error;
+        continue;
+      }
+      keyRef.current += 1;
+      next.push({
+        key: `${Date.now()}-${keyRef.current}`,
+        uri: a.uri,
+        mime: a.mimeType ?? (verdict.kind === 'image' ? 'image/jpeg' : 'text/markdown'),
+        kind: verdict.kind,
+        name: a.name ?? (verdict.kind === 'image' ? 'photo' : 'notes.md'),
+        sizeLabel: a.fileSize != null ? describeSize(a.fileSize) : '',
+      });
+    }
+    setAttError(err);
+    setStaged(next);
   }
 
-  async function createProject() {
-    const name = newName.trim()
-    if (!name) return
-    setCreating(true)
+  // Steering and attachments do not mix: steers carry text to a running
+  // turn, files claim to the next fresh turn.
+  function pendingBlock(): boolean {
+    if (busy) {
+      setAttError('wait for this turn to finish, files send with the next one');
+      return true;
+    }
+    return false;
+  }
+
+  function pickAttach() {
+    if (pendingBlock()) return;
+    Alert.alert('Attach', undefined, [
+      {
+        text: 'Photo',
+        onPress: async () => {
+          const res = await ImagePicker.launchImageLibraryAsync({
+            quality: 0.8,
+            allowsMultipleSelection: true,
+            selectionLimit: MAX_ATTACHMENTS - staged.length,
+          });
+          if (!res.canceled) addPicked(res.assets);
+        },
+      },
+      {
+        text: 'Markdown file',
+        onPress: async () => {
+          const res = await DocumentPicker.getDocumentAsync({
+            type: ['text/markdown', 'text/plain', 'application/octet-stream'],
+            multiple: true,
+            copyToCacheDirectory: true,
+          });
+          if (!res.canceled) addPicked(res.assets);
+        },
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }
+
+  async function submit() {
+    const text = draft.trim();
+    if (busy || uploading) return;
+    if (projectId == null) {
+      setAttError('Pick a project first');
+      return;
+    }
+    if (!text) {
+      if (staged.length > 0) setAttError('describe what the files are for');
+      return;
+    }
+    // Files upload first, then the turn claims them by id. An upload
+    // failure stops the send: a turn whose chips the model never saw
+    // would be a lie.
+    setUploading(true);
+    setAttError(null);
     try {
-      await projectsApi.create(name)
-      setNewName('')
-    } catch {}
-    setCreating(false)
+      const ids: number[] = [];
+      for (const a of staged) {
+        const rec = await attachmentsApi.upload(projectId, {
+          uri: a.uri,
+          name: a.name,
+          type: a.mime,
+        });
+        ids.push(rec.id);
+      }
+      setStaged([]);
+      setDraft('');
+      setAttError(null);
+      setAnswers([]);
+      send(mode, text, ids, projectId);
+    } catch (e) {
+      setAttError(e instanceof Error ? e.message : 'could not start the turn');
+    } finally {
+      setUploading(false);
+    }
   }
 
   return (
@@ -128,28 +277,44 @@ export default function BuildScreen() {
       </View>
 
       {projectId == null ? (
-        <View style={{ gap: 12, paddingVertical: 16 }}>
-          <UIText variant="body" tone="muted" style={styles.empty}>No project yet — create one to start building.</UIText>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <View style={{ flex: 1 }}>
-              <Field value={newName} onChangeText={setNewName} placeholder="My app" />
-            </View>
-            <LimeButton title={creating ? '…' : 'Create'} onPress={createProject} disabled={!newName.trim() || creating} style={{ minWidth: 88 }} />
-          </View>
+        <View style={styles.gate}>
+          <UIText variant="title" tone="hero" style={styles.center}>
+            No project selected.
+          </UIText>
+          <UIText variant="body" tone="muted" style={styles.center}>
+            Pick one from Projects to describe your app. Creating happens there too.
+          </UIText>
+          <GhostButton title="Open projects" onPress={() => router.push('/menu/projects')} />
         </View>
       ) : subView === 'files' ? (
         <View style={{ flex: 1, marginTop: Spacing.s12 }}>
           <FileBrowser projectId={projectId} />
         </View>
       ) : (
-      <ScrollView style={styles.stream} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.stream}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadHistory()} tintColor={Colors.fog} />}
+      >
         <View style={styles.stack}>
-          {history.length > 0 && turn.phase === 'idle' && (
-            <View style={{ gap: 8, padding: 10, backgroundColor: Colors.obsidian, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: Colors.graphite }}>
-              <UIText variant="label" tone="faint">Recent</UIText>
-              {history.map((h, i) => (
-                <Text key={i} style={{ color: h.role === 'user' ? Colors.fog : Colors.mist, fontSize: Type.bodySm.fontSize }} numberOfLines={2}>{h.role === 'user' ? 'You: ' : 'Agent: '}{h.text.slice(0, 160)}</Text>
-              ))}
+          {turn.phase === 'idle' && history.length > 0 && (
+            <View style={styles.recent}>
+              <View style={styles.recentHead}>
+                <UIText variant="label" tone="faint">Transcript</UIText>
+                {historyStale && (
+                  <UIText variant="monoSm" tone="faint">
+                    offline snapshot
+                  </UIText>
+                )}
+              </View>
+              {projectId != null && (
+                <RestoredTranscript
+                  turns={history}
+                  projectId={projectId}
+                  waitingPromptId={waitingId}
+                  onAnswer={(pid, text) => void answerPrompt(pid, text)}
+                />
+              )}
             </View>
           )}
           {turn.phase === 'idle' && history.length === 0 && (
@@ -158,7 +323,7 @@ export default function BuildScreen() {
             </UIText>
           )}
 
-          {/* Live task updates — the plan shape the agent is working to. */}
+          {/* Live task updates, the plan shape the agent is working to. */}
           {turn.tasks.map((t: PlanTask) => (
             <View key={t.id} style={styles.taskRow}>
               <View style={[styles.taskBox, t.status === 'completed' && styles.taskBoxDone]}>
@@ -191,7 +356,7 @@ export default function BuildScreen() {
             );
           })}
 
-          {/* The ask_user pause — the negotiation-first law, mobile side. */}
+          {/* The ask_user pause, the negotiation-first law, mobile side. */}
           {turn.phase === 'waiting' && turn.question && (
             <QuestionCard
               question={turn.question}
@@ -220,21 +385,56 @@ export default function BuildScreen() {
       </ScrollView>
       )}
 
-      {subView === 'chat' && (
+      {projectId != null && (
       <View style={styles.composer}>
-        <Field
-          value={draft}
-          onChangeText={setDraft}
-          placeholder={projectId == null ? 'Create a project first…' : 'Tell the agent what to do…'}
-          multiline
-          style={styles.input}
+        <StagedAttachments
+          items={staged}
+          onRemove={(key) => setStaged((prev) => prev.filter((a) => a.key !== key))}
+          error={attError}
         />
-        <LimeButton
-          title={busy ? 'Stop' : 'Send'}
-          style={styles.send}
-          disabled={!busy && (!draft.trim() || projectId == null)}
-          onPress={busy ? stop : submit}
-        />
+        <View style={styles.composerRow}>
+          <Pressable
+            onPress={pickAttach}
+            disabled={busy || uploading}
+            accessibilityLabel="Attach a photo or markdown file"
+            style={({ pressed }) => [
+              styles.attachBtn,
+              pressed && !(busy || uploading) && styles.pressed,
+              (busy || uploading) && styles.btnOff,
+            ]}
+          >
+            <Add size={20} color={Colors.mist} variant="Linear" />
+          </Pressable>
+          <Field
+            value={draft}
+            onChangeText={setDraft}
+            placeholder="Tell the agent what to do…"
+            multiline
+            style={styles.input}
+          />
+          {busy ? (
+            <Pressable
+              onPress={stop}
+              accessibilityLabel="Stop this turn"
+              style={({ pressed }) => [styles.stopBtn, pressed && styles.pressed]}
+            >
+              <Stop size={20} color={Colors.coralRed} variant="Bold" />
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={submit}
+              disabled={!draft.trim() || uploading}
+              accessibilityLabel="Send"
+              style={({ pressed }) => [
+                styles.sendBtn,
+                pressed && styles.pressed,
+                (!draft.trim() || uploading) && styles.btnOff,
+              ]}
+            >
+              <ArrowUp size={20} color={Colors.acidLimeInk} variant="Linear" />
+            </Pressable>
+          )}
+        </View>
       </View>
       )}
     </Screen>
@@ -249,16 +449,17 @@ const styles = StyleSheet.create({
   modeTab: { paddingHorizontal: 8, paddingVertical: 4 },
   modeTabOn: {
     color: Colors.acidLime,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.acidLime,
+    backgroundColor: Colors.obsidian,
     borderRadius: 4,
   },
   subTabs: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  subTab: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 9999, backgroundColor: Colors.carbon, borderWidth: StyleSheet.hairlineWidth, borderColor: Colors.graphite },
-  subTabOn: { backgroundColor: Colors.graphite, borderColor: Colors.mist },
+  subTab: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 9999, backgroundColor: Colors.carbon },
+  subTabOn: { backgroundColor: Colors.graphite },
   stream: { flex: 1, marginTop: Spacing.s12 },
   stack: { gap: Spacing.s12, paddingBottom: Spacing.s16 },
   empty: { textAlign: 'center', paddingVertical: Spacing.s16 },
+  gate: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.s12, paddingHorizontal: Spacing.s16 },
+  center: { textAlign: 'center' },
   taskRow: { flexDirection: 'row', gap: Spacing.s12, minHeight: 40 },
   taskBox: {
     width: 20,
@@ -278,7 +479,38 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     padding: Spacing.s12,
   },
-  composer: { flexDirection: 'row', gap: Spacing.s8, paddingTop: Spacing.s8 },
+  composer: { gap: Spacing.s8, paddingTop: Spacing.s8 },
+  composerRow: { flexDirection: 'row', gap: Spacing.s8, alignItems: 'flex-end' },
   input: { flex: 1 },
-  send: { minWidth: 88 },
+  attachBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: Colors.obsidian,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  sendBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: Colors.acidLime,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  stopBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: Colors.obsidian,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  pressed: { opacity: 0.7 },
+  btnOff: { opacity: 0.35 },
+  recent: { gap: 8, padding: 10, backgroundColor: Colors.obsidian, borderRadius: 8 },
+  recentHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 });

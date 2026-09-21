@@ -1,4 +1,5 @@
 const TOKEN_KEY = "token";
+const REFRESH_KEY = "refresh_token";
 const EMAIL_KEY = "email";
 
 export function getToken(): string | null {
@@ -8,6 +9,17 @@ export function getToken(): string | null {
 
 export function setToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token);
+}
+
+/** The long-lived session credential. Stored beside the access token,
+ *  rotated on every refresh, revoked on sign-out. */
+export function getRefreshToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(REFRESH_KEY);
+}
+
+export function setRefreshToken(token: string): void {
+  localStorage.setItem(REFRESH_KEY, token);
 }
 
 // The authoritative source for "who is signed in" is now GET /v1/me. We still
@@ -26,6 +38,7 @@ export function setEmail(email: string): void {
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_KEY);
   localStorage.removeItem(EMAIL_KEY);
 }
 

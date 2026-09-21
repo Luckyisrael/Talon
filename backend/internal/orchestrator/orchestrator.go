@@ -71,6 +71,13 @@ type Orchestrator struct {
 	// manifest from knowledge.Registry; non-nil, the manifest lists workspace
 	// skills too (bodies still load only via read_skill).
 	skills *skills.Catalog
+	// pluginReg resolves per-project plugin pins (<root>/.talon/plugins.json)
+	// through the public directory. hasPluginReg reports whether the
+	// composition provided one; without it, workspace pins are ignored and
+	// the catalog behaves exactly as before.
+	pluginReg    skills.RegistryProvider
+	pluginSnaps  *skills.SnapshotCache
+	hasPluginReg bool
 	// instructionsFor is the H6 AGENTS.md chain factory: workspace path →
 	// chain text. Nil disables the chain; non-nil, its text is appended to
 	// the cached prompt prefix and re-read at each enrichment (the
@@ -536,6 +543,33 @@ func (o *Orchestrator) AttachSkills(c *skills.Catalog) {
 // SkillCatalog returns the attached catalog (nil when none) — the api layer
 // resolves read_skill through it.
 func (o *Orchestrator) SkillCatalog() *skills.Catalog { return o.skills }
+
+// AttachPluginRegistry provides the per-project plugin resolver: workspace
+// pins in .talon/plugins.json resolve through reg, memoized for ttl per
+// workspace. The pin file is the approval — a plugin only loads for a
+// project whose pins name its exact version — and every resolution is
+// logged, which is the audit trail.
+func (o *Orchestrator) AttachPluginRegistry(reg skills.RegistryProvider, ttl time.Duration) {
+	o.pluginReg = reg
+	o.pluginSnaps = skills.NewSnapshotCache(reg, ttl)
+	o.hasPluginReg = true
+}
+
+// PluginSnapshot returns the skill view for one workspace: the base catalog
+// plus its pinned plugin overlay. Nil when no plugin registry is attached
+// or the workspace is empty — callers fall back to the base catalog.
+func (o *Orchestrator) PluginSnapshot(workspacePath string) *skills.Snapshot {
+	if !o.hasPluginReg || o.pluginSnaps == nil || strings.TrimSpace(workspacePath) == "" {
+		return nil
+	}
+	return o.pluginSnaps.ForRoot(o.skills, workspacePath)
+}
+
+// PluginRegistry exposes the attached resolver so the api layer can serve
+// reference-file fetches through the same verified cache.
+func (o *Orchestrator) PluginRegistry() (skills.RegistryProvider, bool) {
+	return o.pluginReg, o.hasPluginReg
+}
 
 // AttachInstructions provides the H6 AGENTS.md chain factory; nil disables
 // the chain. The factory reads the workspace's chain fresh per call.
@@ -2515,10 +2549,17 @@ func (o *Orchestrator) enrichPromptWithContext(sess *SessionState, systemPrompt 
 		// H6: the multi-source catalog, when attached, replaces the
 		// embedded-only manifest — workspace skills listed alongside
 		// embedded ones (bodies still load through read_skill only).
+		// With a plugin registry attached, the per-workspace snapshot
+		// layers pinned plugin skills under the base catalog: the base
+		// always wins name clashes, and the model loads exactly one skill
+		// at a time via read_skill when its description matches the job.
 		reg.Register(promptsec.Section{
 			Name:   "skills/catalog",
 			Weight: promptsec.WeightSkills,
 			Render: func() string {
+				if snap := o.PluginSnapshot(sess.WorkspacePath); snap != nil {
+					return snap.Manifest()
+				}
 				if o.skills != nil {
 					return o.skills.Manifest()
 				}

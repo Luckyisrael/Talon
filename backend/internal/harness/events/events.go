@@ -109,7 +109,7 @@ type MessagePayload struct {
 // without importing the ai package — the taxonomy owns its own wire shapes so
 // harness components never depend on the provider layer.
 type BlockPayload struct {
-	Type      string   `json:"type"` // text | thinking | tool_use | tool_result | plan
+	Type      string   `json:"type"` // text | thinking | tool_use | tool_result | plan | image
 	Text      string   `json:"text,omitempty"`
 	ID        string   `json:"id,omitempty"`
 	Name      string   `json:"name,omitempty"`
@@ -120,6 +120,10 @@ type BlockPayload struct {
 	// Plan carries a structured plan block (raw JSON) — persisted for the
 	// restore path, deliberately not a provider-facing shape.
 	Plan *RawJSON `json:"plan,omitempty"`
+	// Image attachments ride by reference (never bytes): the id resolves to
+	// the file at send time. Omit-empty keeps every existing log byte-identical.
+	AttachmentID int64  `json:"attachment_id,omitempty"`
+	Mime         string `json:"mime,omitempty"`
 }
 
 // RawJSON is raw JSON carried verbatim through the log. Marshals as-is.
@@ -238,6 +242,6 @@ type RetryPayload struct {
 
 // SkillsPayload is the body of skills/suggested.
 type SkillsPayload struct {
-	Skills []string `json:"skills"`
-	PromptID int64  `json:"prompt_id,omitempty"`
+	Skills   []string `json:"skills"`
+	PromptID int64    `json:"prompt_id,omitempty"`
 }

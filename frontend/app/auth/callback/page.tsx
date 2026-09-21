@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { auth } from "@/lib/api";
-import { setToken, setEmail as persistEmail } from "@/lib/auth";
+import { setRefreshToken, setToken, setEmail as persistEmail } from "@/lib/auth";
 
 /**
  * The OAuth landing page: the provider redirected here with a single-use
@@ -54,6 +54,7 @@ export default function AuthCallbackPage() {
     exchangeWithTimeout
       .then((data) => {
         setToken(data.token);
+        if (data.refresh_token) setRefreshToken(data.refresh_token);
         // The email cache is what the top bar reads instantly on load; /me
         // remains the truth it is reconciled against.
         if (data.user?.email) persistEmail(data.user.email);

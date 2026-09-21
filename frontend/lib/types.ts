@@ -117,6 +117,13 @@ export interface ChatMessage {
   files?: FileEntry[];
   buildResult?: unknown;
   timestamp: number;
+  /** Owning turn for history-drawer scroll mapping. Restored turns only;
+   *  live turns have none until they persist. */
+  promptId?: number;
+  /** Files sent with this turn. Images render as thumbnails; docs inlined
+   *  into the prompt text, so only their chips render. previewUrl rides
+   *  optimistic (just-sent) bubbles; restored turns load bytes via the API. */
+  attachments?: { id: number; name: string; mime: string; previewUrl?: string }[];
   /** H2: true when this user message was delivered to a running build as a
    * mid-turn steer rather than starting a new turn. Steers render dimmed with
    * a "steer" label — honest about not being a fresh prompt. */
@@ -133,6 +140,7 @@ export interface ChatMessage {
 
 export interface AuthResponse {
   token: string;
+  refresh_token?: string;
   user: User;
 }
 
@@ -338,6 +346,8 @@ export interface StreamMessage {
   id: string;
   role: "assistant";
   traceRows: TraceRow[];
+  /** Owning turn for history-drawer scroll mapping. Restored turns only. */
+  promptId?: number;
   /** Live build-plan progress, keyed and upserted from `task_update` events whose
       id starts with `plan:`. Rendered as a compact checklist so the developer sees
       screens and features get checked off as the agent builds them. */

@@ -1,78 +1,69 @@
-import React from 'react';
-import { StyleSheet, View } from 'react-native';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { useRouter } from 'expo-router';
-import { Lamp, Layer, Wallet } from 'iconsax-react-native';
-import { GhostButton, LimeButton, Screen, UIText } from '@/components/ui';
-import { Colors, Spacing } from '@/constants/theme';
+import React from 'react'
+import { StyleSheet, View } from 'react-native'
+import Animated, { FadeInDown } from 'react-native-reanimated'
+import { useRouter } from 'expo-router'
+import { Code, Mobile, TaskSquare } from 'iconsax-react-native'
+import { GhostButton, LimeButton, Screen, ShotSlot, UIText } from '@/components/ui'
+import { Colors, Spacing } from '@/constants/theme'
+import { useAppStore } from '@/stores/app'
 
-function StepCaps({ of }: { of: string }) {
+// Onboarding, second pass: the product shot sits in the middle, half height,
+// dissolving into the void at its base. Type leads, the button closes.
+// Progress is a compact segment group pinned top right. Screenshot slots are
+// labeled placements with their expected size, captions below the frame.
+
+function Progress({ step }: { step: 1 | 2 | 3 }) {
   return (
-    <UIText variant="micro" tone="faint">
-      {of} OF 3
-    </UIText>
-  );
+    <View style={styles.progressRow} accessibilityLabel={`Step ${step} of 3`}>
+      <View style={styles.progress}>
+        {[1, 2, 3].map((i) => (
+          <View key={i} style={[styles.seg, i <= step && styles.segOn]} />
+        ))}
+      </View>
+    </View>
+  )
 }
 
 const styles = StyleSheet.create({
-  body: { flex: 1, justifyContent: 'flex-end', paddingBottom: Spacing.s32, gap: Spacing.s16 },
-  foot: { gap: Spacing.s12, marginTop: Spacing.s8 },
-  cards: { gap: Spacing.s12 },
-  featureRow: { gap: 2 },
-  medallion: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: Colors.carbon,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.graphite,
+  body: { flex: 1, gap: Spacing.s16, paddingBottom: Spacing.s32 },
+  progressRow: { flexDirection: 'row', justifyContent: 'flex-end' },
+  progress: { flexDirection: 'row', gap: 6, width: 72 },
+  seg: { flex: 1, height: 3, borderRadius: 2, backgroundColor: Colors.graphite },
+  segOn: { backgroundColor: Colors.acidLime },
+  middle: { flex: 1, justifyContent: 'center' },
+  foot: { gap: Spacing.s12, marginTop: 'auto' },
+  rows: { gap: Spacing.s16 },
+  howRow: { flexDirection: 'row', gap: Spacing.s12, alignItems: 'flex-start' },
+  howIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: Colors.obsidian,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: Spacing.s16,
+    flexShrink: 0,
   },
-  mockCard: {
-    borderRadius: 12,
-    backgroundColor: Colors.carbon,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.graphite,
-    padding: Spacing.s12,
-    gap: Spacing.s8,
-  },
-  mockLine: { flexDirection: 'row', alignItems: 'center', gap: Spacing.s8 },
-  mockDot: { width: 6, height: 6, borderRadius: 3 },
-  mockBar: { height: 8, borderRadius: 4, backgroundColor: Colors.graphite, flex: 1 },
-});
+  howText: { flex: 1, gap: 2 },
+})
 
-// Medallion: carbon circle, hairline border, fog glyph  the visual anchor
-// that keeps onboarding from being buttons on void.
-function Medallion({ icon }: { icon: 'welcome' | 'features' | 'connect' }) {
-  const glyph = { welcome: Lamp, features: Layer, connect: Wallet } as const;
-  const Glyph = glyph[icon];
-  return (
-    <View style={styles.medallion}>
-      <Glyph size={30} color={Colors.fog} variant="Linear" />
-    </View>
-  );
-}
-
-// ── Screen 1: Welcome ─────────────────────────────────────────────
+// Screen 1: the promise, shown before told.
 export function WelcomeScreen() {
-  const router = useRouter();
+  const router = useRouter()
   return (
     <Screen>
-      <Animated.View entering={FadeIn.duration(400)}>
-        <StepCaps of="1" />
-      </Animated.View>
+      <Progress step={1} />
       <View style={styles.body}>
+        <Animated.View entering={FadeInDown.duration(450)} style={styles.middle}>
+          <ShotSlot fill shot="build-stream.png" size="1170×2532" source={require('../../assets/build-stream.png')} />
+        </Animated.View>
         <Animated.View entering={FadeInDown.duration(450).delay(80)}>
-          <Medallion icon="welcome" />
           <UIText variant="display" tone="hero">
             Build Solana apps by talking.
           </UIText>
         </Animated.View>
         <Animated.View entering={FadeInDown.duration(450).delay(160)}>
           <UIText variant="body" tone="muted">
-            Describe the app. The agent plans it, writes it, and installs it on hardware you watch and approve.
+            Describe the app. The agent plans it, writes it, and verifies it on hardware.
           </UIText>
         </Animated.View>
         <Animated.View entering={FadeInDown.duration(450).delay(240)} style={styles.foot}>
@@ -80,85 +71,110 @@ export function WelcomeScreen() {
         </Animated.View>
       </View>
     </Screen>
-  );
+  )
 }
 
-// ── Screen 2: Features ────────────────────────────────────────────
-const FEATURES = [
-  { name: 'Plan', desc: 'Checklists of screens and features, settled before a line is written.' },
-  { name: 'Build', desc: 'The agent writes code, verifies it, heals it. You watch the trace.' },
-  { name: 'Device', desc: 'APKs install on real hardware. Boot, vision, and wallet gates run there.' },
-];
+// Screen 2: how it works, three rows with icons, never numbered. The order
+// on screen is the product order, no markers needed.
+const HOW = [
+  {
+    icon: TaskSquare,
+    name: 'Plan',
+    desc: 'Screens and features settled into a checklist before a line is written.',
+  },
+  {
+    icon: Code,
+    name: 'Build',
+    desc: 'The agent writes the code and verifies it. You watch the trace.',
+  },
+  {
+    icon: Mobile,
+    name: 'Device',
+    desc: 'The dev client on your phone reloads from Metro after each turn.',
+  },
+]
 
 export function FeaturesScreen() {
-  const router = useRouter();
+  const router = useRouter()
   return (
     <Screen>
-      <StepCaps of="2" />
+      <Progress step={2} />
       <View style={styles.body}>
-        <Medallion icon="features" />
-        <UIText variant="heading" tone="hero">
-          Three moves.
-        </UIText>
-        <View style={styles.cards}>
-          {FEATURES.map((f, i) => (
-            <Animated.View
-              key={f.name}
-              entering={FadeInDown.duration(400).delay(i * 90)}
-              style={styles.featureRow}
-            >
-              <UIText variant="title" tone="hero">
-                {f.name}
-              </UIText>
-              <UIText variant="bodySm" tone="muted">
-                {f.desc}
-              </UIText>
-            </Animated.View>
-          ))}
+        <Animated.View entering={FadeInDown.duration(450)} style={styles.middle}>
+          <ShotSlot fill shot="how-it-works.png" size="1170×2532" source={require('../../assets/how-it-works.png')} />
+        </Animated.View>
+        <Animated.View entering={FadeInDown.duration(450).delay(80)}>
+          <UIText variant="heading" tone="hero">
+            Three moves.
+          </UIText>
+        </Animated.View>
+        <View style={styles.rows}>
+          {HOW.map((f, i) => {
+            const Icon = f.icon
+            return (
+              <Animated.View key={f.name} entering={FadeInDown.duration(400).delay(140 + i * 90)} style={styles.howRow}>
+                <View style={styles.howIcon}>
+                  <Icon size={20} color={Colors.mist} variant="Bulk" />
+                </View>
+                <View style={styles.howText}>
+                  <UIText variant="title" tone="hero">
+                    {f.name}
+                  </UIText>
+                  <UIText variant="bodySm" tone="muted">
+                    {f.desc}
+                  </UIText>
+                </View>
+              </Animated.View>
+            )
+          })}
         </View>
-        <View style={styles.foot}>
+        <Animated.View entering={FadeInDown.duration(400).delay(420)} style={styles.foot}>
           <LimeButton title="Continue" onPress={() => router.push('/onboarding/connect')} />
           <GhostButton title="Skip" onPress={() => router.push('/onboarding/connect')} />
-        </View>
+        </Animated.View>
       </View>
     </Screen>
-  );
+  )
 }
 
-// ── Screen 3: Connect ─────────────────────────────────────────────
+// Screen 3: the wallet handshake. The approve sheet is shown, never drawn:
+// a labeled slot holds its place until the real screenshot lands.
 export function ConnectScreen() {
-  const router = useRouter();
+  const router = useRouter()
+  const markOnboarded = useAppStore((s) => s.markOnboarded)
+  function leave(next: '/auth') {
+    void markOnboarded().finally(() => router.push(next))
+  }
   return (
     <Screen>
-      <StepCaps of="3" />
+      <Progress step={3} />
       <View style={styles.body}>
-        <Medallion icon="connect" />
-        <UIText variant="heading" tone="hero">
-          One wallet to sign them.
+        <Animated.View entering={FadeInDown.duration(450)} style={styles.middle}>
+          <ShotSlot
+            fill
+            shot="wallet-approve.png"
+            size="1170×2532"
+            source={require('../../assets/wallet-approve.png')}
+          />
+        </Animated.View>
+        <Animated.View entering={FadeInDown.duration(450).delay(80)}>
+          <UIText variant="heading" tone="hero">
+            Sign with your wallet.
+          </UIText>
+        </Animated.View>
+        <Animated.View entering={FadeInDown.duration(450).delay(160)}>
+          <UIText variant="body" tone="muted">
+            Talon asks your wallet app to sign through Mobile Wallet Adapter. Keys never leave the wallet.
+          </UIText>
+        </Animated.View>
+        <Animated.View entering={FadeInDown.duration(450).delay(240)} style={styles.foot}>
+          <LimeButton title="Connect wallet" onPress={() => leave('/auth')} />
+          <GhostButton title="Later" onPress={() => leave('/auth')} />
+        </Animated.View>
+        <UIText variant="caption" tone="faint">
+          Phantom, Solflare, or any MWA wallet works.
         </UIText>
-        {/* Product fragment: a mini approve sheet, the thing MWA shows. */}
-        <View style={styles.mockCard}>
-          <View style={styles.mockLine}>
-            <View style={[styles.mockDot, { backgroundColor: Colors.acidLime }]} />
-            <UIText variant="monoSm" tone="muted">
-              approve · 0.42 SOL → 8x…3fQ2
-            </UIText>
-          </View>
-          <View style={[styles.mockBar, { marginRight: 60 }]} />
-          <View style={[styles.mockBar, { marginRight: 110 }]} />
-        </View>
-        <UIText variant="body" tone="muted">
-          Talon talks to the wallet app on your device through Mobile Wallet Adapter. Your keys never leave the wallet the app only ever asks it to sign.
-        </UIText>
-        <View style={styles.foot}>
-          {/* Dummy: MWA wiring lands with the auth milestone. */}
-          <LimeButton title="Connect wallet" onPress={() => router.push('/auth')} />
-          <GhostButton title="Later" onPress={() => router.push('/auth')} />
-        </View>
       </View>
-      <UIText variant="caption" tone="faint" style={{ color: Colors.ash }}>
-        Phantom, Solflare, or any MWA wallet works.
-      </UIText>
     </Screen>
-  );
+  )
 }

@@ -1,4 +1,4 @@
-import { clearToken, getToken } from "./auth";
+import { clearToken, getRefreshToken, getToken, setRefreshToken, setToken } from "./auth";
 import type {
   ArchitectureDecision,
   AuthResponse,
@@ -119,8 +119,32 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
 
+  // An expired access token fails once with a 401 — if a refresh token
+  // exists and this is not itself an auth call, rotate silently and retry
+  // once before treating the session as dead. Only a dead session signs
+  // out; any other status returns as-is, even after a refresh.
+  if (res.status === 401 && token && !path.startsWith("/v1/auth/")) {
+    let fresh: string | null = null;
+    try {
+      fresh = await refreshAccessToken();
+    } catch {
+      fresh = null;
+    }
+    if (fresh) {
+      headers.Authorization = `Bearer ${fresh}`;
+      const retry = await fetch(`${BASE}${path}`, { ...options, headers });
+      if (retry.ok || retry.status !== 401) return parseResponse<T>(retry);
+    }
+    handleExpiredSession();
+    const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    throw new APIError(res.status, body.error || `Request failed (${res.status})`);
+  }
+
+  return parseResponse<T>(res);
+}
+
+async function parseResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    if (res.status === 401 && token) handleExpiredSession();
     const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
     throw new APIError(res.status, body.error || `Request failed (${res.status})`);
   }
@@ -132,6 +156,33 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const text = await res.text();
   if (!text) return undefined as T;
   return JSON.parse(text) as T;
+}
+
+// refreshAccessToken spends the stored refresh token for a new pair.
+// Single-flight: concurrent 401s share one rotation instead of racing it
+// (the loser of a rotation race fails closed server-side).
+let refreshInflight: Promise<string> | null = null;
+
+export function refreshAccessToken(): Promise<string> {
+  if (!refreshInflight) {
+    refreshInflight = (async () => {
+      const refresh = getRefreshToken();
+      if (!refresh) throw new Error("no refresh token");
+      const res = await fetch(`${BASE}/v1/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      if (!res.ok) throw new Error(`refresh failed (${res.status})`);
+      const body = await res.json();
+      setToken(body.token);
+      setRefreshToken(body.refresh_token);
+      return body.token as string;
+    })().finally(() => {
+      refreshInflight = null;
+    });
+  }
+  return refreshInflight;
 }
 
 // ── Auth ──────────────────────────────────────────────
@@ -152,6 +203,28 @@ export const auth = {
       method: "POST",
       body: JSON.stringify({ code }),
     });
+  },
+
+  /** Spends the refresh token for a new pair. Used by the request layer,
+   *  not called directly by screens. */
+  refresh() {
+    return refreshAccessToken();
+  },
+
+  /** Ends one device session server-side. Best-effort: sign-out clears
+   *  local tokens regardless. */
+  async revoke(): Promise<void> {
+    const refresh = getRefreshToken();
+    if (!refresh) return;
+    try {
+      await fetch(`${BASE}/v1/auth/logout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+    } catch {
+      // Offline sign-out still signs out.
+    }
   },
 
   /** Where the browser goes to start a provider flow. Server derives origin. */
@@ -206,7 +279,7 @@ export const projects = {
 
 /** One stored turn, in the provider-neutral block shape the backend persists. */
 export interface ConversationBlock {
-  type: "text" | "thinking" | "tool_use" | "tool_result" | "plan";
+  type: "text" | "thinking" | "tool_use" | "tool_result" | "plan" | "image" | "doc";
   text?: string;
   id?: string;
   name?: string;
@@ -214,6 +287,13 @@ export interface ConversationBlock {
   tool_use_id?: string;
   content?: string;
   is_error?: boolean;
+  // Image blocks reference a prompt attachment by id — the bytes live on the
+  // server and resolve at send time, so the transcript never holds pixels.
+  // Steer deliveries persist as marker blocks carrying the redirect text.
+  // Serializers drop them (the model consumed the words live); the chat
+  // restores the dimmed redirect bubble from the marker.
+  attachment_id?: number;
+  mime?: string;
   // Plan-mode turns carry the structured plan here so the chat can rebuild its
   // plan card on reload. Present only on assistant "plan" blocks.
   plan?: {
@@ -228,6 +308,20 @@ export interface ConversationTurn {
   role: "user" | "assistant";
   blocks: ConversationBlock[];
   at: string;
+  /** Owning turn and message sequence: scroll mapping for the history
+   *  drawer. Absent only on legacy rows predating the fields. */
+  prompt_id?: number;
+  seq?: number;
+}
+
+/** One row of the turn index: metadata only, never prompt text. */
+export interface TurnIndexEntry {
+  id: number;
+  mode: string;
+  title: string;
+  status: string;
+  round: number;
+  created_at: string;
 }
 
 /**
@@ -268,15 +362,22 @@ export function isResumable(latest: LatestPrompt | null): boolean {
 export const conversation = {
   async get(
     projectId: number,
+    opts?: { beforeSeq?: number; limit?: number },
   ): Promise<{
     turns: ConversationTurn[];
     latest: LatestPrompt | null;
+    latest_seq?: number;
     usage?: { in: number; out: number; cache_read: number };
     planTasks?: PlanTask[];
   }> {
+    const params = new URLSearchParams();
+    if (opts?.beforeSeq) params.set("before_seq", String(opts.beforeSeq));
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    const query = params.toString();
     const res = await request<{
       turns: ConversationTurn[] | null;
       latest?: LatestPrompt;
+      latest_seq?: number;
       usage?: { in: number; out: number; cache_read: number };
       planTasks?: {
         id: string;
@@ -284,10 +385,11 @@ export const conversation = {
         status: string;
         result?: string;
       }[];
-    }>(`/v1/projects/${projectId}/conversation`);
+    }>(`/v1/projects/${projectId}/conversation${query ? `?${query}` : ""}`);
     return {
       turns: res?.turns ?? [],
       latest: res?.latest ?? null,
+      latest_seq: res?.latest_seq,
       usage: res?.usage,
       // The durable plan backlog: every plan: task's persisted status, so the
       // checklist survives a reload instead of waiting for the next SSE frame.
@@ -312,6 +414,26 @@ export const conversation = {
   diff(projectId: number) {
     return request<{ diff: string; note?: string }>(
       `/v1/projects/${projectId}/diff`,
+    );
+  },
+
+  /** Turn index, newest first, cursor-paged. Metadata only. */
+  promptsIndex(projectId: number, opts?: { before?: number; limit?: number }) {
+    const params = new URLSearchParams();
+    if (opts?.before) params.set("before", String(opts.before));
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    const query = params.toString();
+    return request<TurnIndexEntry[]>(
+      `/v1/projects/${projectId}/prompts${query ? `?${query}` : ""}`,
+    );
+  },
+
+  /** Substring search over stored turns, newest first. Whole turns with
+   *  prompt ids, so results scroll somewhere instead of stranding. */
+  search(projectId: number, q: string, limit = 20) {
+    const params = new URLSearchParams({ q, limit: String(limit) });
+    return request<{ turns: ConversationTurn[] }>(
+      `/v1/projects/${projectId}/conversation/search?${params.toString()}`,
     );
   },
 
@@ -562,10 +684,11 @@ export function streamPrompt(
   mode: "plan" | "build",
   onEvent: (event: StreamEvent) => void,
   onError?: (error: Error) => void,
+  attachmentIds: number[] = [],
 ): AbortController {
   return openEventStream(
     "/v1/prompts/stream",
-    { project_id: projectId, prompt, mode },
+    { project_id: projectId, prompt, mode, attachment_ids: attachmentIds },
     onEvent,
     onError,
   );
@@ -588,15 +711,32 @@ function openEventStream(
 
   (async () => {
     try {
-      const res = await fetch(`${BASE}${path}`, {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+      let res = await fetch(`${BASE}${path}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       });
+
+      // Streams open rarely but live long: a 401 here gets the same silent
+      // rotation as request(), once, before the session is treated as dead.
+      if (res.status === 401 && token) {
+        try {
+          const fresh = await refreshAccessToken();
+          res = await fetch(`${BASE}${path}`, {
+            method: "POST",
+            headers: { ...headers, Authorization: `Bearer ${fresh}` },
+            body: body === undefined ? undefined : JSON.stringify(body),
+            signal: controller.signal,
+          });
+        } catch {
+          // Refresh failed: the handling below reports it.
+        }
+      }
 
       if (!res.ok) {
         if (res.status === 401 && token) handleExpiredSession();
@@ -877,6 +1017,54 @@ export const exportApi = {
   },
   async listAssets(projectId: number) {
     return request<ProjectAsset[]>(`/v1/projects/${projectId}/assets`);
+  },
+};
+
+// ── Prompt attachments ─────────────────────────────
+// Images and markdown docs a turn carries. Uploaded unclaimed, claimed once
+// by the send that names their ids.
+
+export interface Attachment {
+  id: number;
+  project_id: number;
+  prompt_id?: number;
+  kind: "image" | "doc";
+  name: string;
+  mime: string;
+  size: number;
+}
+
+export const attachments = {
+  async upload(projectId: number, file: File): Promise<Attachment> {
+    const token = getToken();
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${BASE}/v1/projects/${projectId}/attachments`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `upload failed (${res.status})`);
+    }
+    return res.json();
+  },
+  /** load fetches bytes with the bearer token and mints an object URL.
+   *  <img> tags cannot set headers, so thumbnails go through here. The
+   *  caller revokes the URL when it unmounts. */
+  async load(projectId: number, id: number): Promise<string> {
+    const token = getToken();
+    const res = await fetch(`${BASE}/v1/projects/${projectId}/attachments/${id}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`attachment ${id} unavailable (${res.status})`);
+    return URL.createObjectURL(await res.blob());
+  },
+  /** url is the unauthenticated shape — kept for parity with exportApi.
+   *  Attachment reads require auth, so prefer load() in components. */
+  url(projectId: number, id: number) {
+    return `${BASE}/v1/projects/${projectId}/attachments/${id}`;
   },
 };
 

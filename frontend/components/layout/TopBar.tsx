@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { StatusBadge } from "@/components/ui";
+import { auth as authApi } from "@/lib/api";
 import { getEmail, signOut } from "@/lib/auth";
 
 interface TopBarProps {
@@ -23,8 +24,11 @@ export default function TopBar({ tier = "free" }: TopBarProps) {
   );
 
   function handleSignOut() {
-    signOut();
-    router.push("/login");
+    // Revoke server-side best-effort; local tokens clear regardless.
+    void authApi.revoke().finally(() => {
+      signOut();
+      router.push("/login");
+    });
   }
 
   return (

@@ -33,3 +33,13 @@ device.
   notes, MMKV (AsyncStorage is what the template ships), and the Appllama
   MCP research tooling (the study-before-you-draw *method* is kept; the paid
   MCP is not wired into Talon's agent).
+
+## 2026-09-21 addition — invisible details (Emil Kowalski, MIT)
+
+- **Source:** https://github.com/emilkowalski/skills — `skills/emil-design-eng/SKILL.md` (component principles, blur-bridge, stagger, remedial order)
+- **What changed.** A short closing section distilled from the 674-line
+  original: press-in feedback, no-`scale(0)` entrances, trigger-anchored
+  origins, blur-bridged crossfades, 30–80 ms staggers, delete-first
+  remediation. Deliberately excluded: gesture physics and spring tables
+  (owned by `mobile-motion`), clip-path tricks, Sonner doctrine, and all
+  web-only material (WAAPI, hover media queries, Framer shorthands).

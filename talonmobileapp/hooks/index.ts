@@ -1,5 +1,5 @@
 // TanStack Query hooks: the mobile app's data layer. Each hook names its
-// query key honestly and mirrors the web client's surface exactly — same
+// query key honestly and mirrors the web client's surface exactly, same
 // routes, same shapes. Mutations invalidate exactly the queries they touch.
 //
 // Laws that hold across every hook here:
@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAppStore } from '@/stores/app';
 import {
   exportApi,
   meApi,
@@ -32,7 +33,7 @@ import { getToken } from '@/lib/auth';
 
 // ── Auth bootstrap ─────────────────────────────────────
 
-/** True once SecureStore answered — the router gates on this, never on a
+/** True once SecureStore answered, the router gates on this, never on a
  *  guess, so a cold start never flashes the signed-out screens at a
  *  signed-in user. */
 export function useAuthBootstrap() {
@@ -58,11 +59,20 @@ export function useProjects() {
   return useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.list() });
 }
 
-/** The project the build/plan/device tabs operate on: the most recent, or a
- *  user-pinned choice. Lives in the query cache so every tab agrees. */
+/** The project the build/diff/device tabs operate on: the pinned choice, or
+ *  the most recent when nothing is pinned. The pin lives in the app store,
+ *  one source of truth, persisted, so a tap on the dashboard loads every
+ *  tab at once. */
 export function useActiveProject() {
   const { data: projects } = useProjects();
-  return projects && projects.length > 0 ? projects[0] : null;
+  const pinnedId = useAppStore((s) => s.activeProjectId);
+  if (!projects || projects.length === 0) return null;
+  return projects.find((p) => p.id === pinnedId) ?? projects[0];
+}
+
+/** Pin the active project. The projects screen calls this on tap. */
+export function useSetActiveProject() {
+  return useAppStore((s) => s.setActiveProjectId);
 }
 
 export function useCreateProject() {
@@ -149,7 +159,7 @@ function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
 /**
  * Drives a plan or build turn. Returns the live turn state and actions:
  * send() starts a turn, answer() feeds an ask_user reply. The stream is a
- * subscription — no polling, close on unmount.
+ * subscription, never polled, closed on unmount.
  */
 export function usePromptStream(projectId: number | null) {
   const [turn, setTurn] = useState<TurnState>(initialTurn);
@@ -165,25 +175,32 @@ export function usePromptStream(projectId: number | null) {
     };
   }
 
-  async function send(mode: 'plan' | 'build', prompt: string) {
+  async function send(mode: 'plan' | 'build', prompt: string, attachmentIds: number[] = [], explicitProjectId?: number) {
+    const pid = explicitProjectId ?? projectId;
+    if (pid == null) return;
     closeRef.current?.();
     setTurn({ ...initialTurn, phase: 'streaming' });
     closeRef.current = await promptsApi.stream(
-      projectId!,
+      pid,
       mode,
       prompt,
       applyEvents(() => {}),
       (err) => setTurn((prev) => ({ ...prev, phase: 'error', error: err.message })),
+      attachmentIds,
     );
   }
 
   async function answer(text: string) {
     const pid = turn.questionPromptId;
     if (!pid) return;
+    return answerPrompt(pid, text);
+  }
+
+  async function answerPrompt(promptId: number, text: string) {
     setTurn((prev) => ({ ...prev, phase: 'streaming', question: undefined, questionPromptId: undefined }));
     closeRef.current?.();
     closeRef.current = await promptsApi.answer(
-      pid,
+      promptId,
       text,
       applyEvents(() => {}),
       (err) => setTurn((prev) => ({ ...prev, phase: 'error', error: err.message })),
@@ -197,7 +214,7 @@ export function usePromptStream(projectId: number | null) {
     qc.invalidateQueries({ queryKey: ['projects'] });
   }
 
-  return { turn, send, answer, stop };
+  return { turn, send, answer, answerPrompt, stop };
 }
 
 // ── Device session ────────────────────────────────────

@@ -3,8 +3,8 @@ import { Pressable, StyleSheet, TextInput, View, type TextInputProps, type ViewP
 import { Colors, Layout, Radii, Spacing, Type } from '@/constants/theme';
 import { UIText } from './Text';
 
-// Card is the showcase surface: carbon fill, 12px radius, hairline graphite
-// border. No shadows — the border is the elevation, same as web.
+// Card is the showcase surface: carbon fill, 12px radius, no border.
+// Separation is tonal (carbon on void), never an outline, web Taste B rule.
 export function Card({ children, style, ...rest }: ViewProps) {
   return (
     <View style={[styles.card, style]} {...rest}>
@@ -74,13 +74,17 @@ export function Badge({ label, tone = 'neutral' }: { label: string; tone?: Badge
 }
 
 // Field is the form input: 16px minimum (iOS zooms smaller on focus),
-// 48px tall, mist text, graphite hairline that brightens on focus.
-export function Field(props: TextInputProps) {
+// 48px tall, mist text, graphite hairline that brightens on focus. The style
+// prop layers onto the base, it never replaces it: spreading props after
+// style used to wipe the text color, which is how the composer once typed
+// invisible black on void.
+export function Field({ style, ...props }: TextInputProps) {
   const [focused, setFocused] = React.useState(false);
   return (
     <TextInput
       placeholderTextColor={Colors.fog}
       selectionColor={Colors.acidLime}
+      cursorColor={Colors.acidLime}
       onFocus={(e) => {
         setFocused(true);
         props.onFocus?.(e);
@@ -89,7 +93,7 @@ export function Field(props: TextInputProps) {
         setFocused(false);
         props.onBlur?.(e);
       }}
-      style={[styles.field, focused && styles.fieldFocused, props.style]}
+      style={[styles.field, focused && styles.fieldFocused, style]}
       {...props}
     />
   );
@@ -99,8 +103,6 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: Colors.carbon,
     borderRadius: Radii.cards,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.graphite,
     padding: Layout.cardPadding,
   },
   subtle: {

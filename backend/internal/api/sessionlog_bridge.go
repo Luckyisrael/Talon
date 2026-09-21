@@ -136,6 +136,14 @@ func appendLoggedUser(l *sessionlog.Log, m ai.Message, promptID int64) {
 			continue
 		}
 		blocks = append(blocks, events.BlockPayload{Type: b.Type, Text: b.Text})
+		// Image blocks ride the log by reference (id, name, mime) — never
+		// bytes — so the derive path replays the same attachment the legacy
+		// table path replays.
+		if b.Type == "image" {
+			blocks[len(blocks)-1].AttachmentID = b.AttachmentID
+			blocks[len(blocks)-1].Name = b.Name
+			blocks[len(blocks)-1].Mime = b.Mime
+		}
 	}
 	if len(blocks) > 0 {
 		if _, err := l.Append(events.UserMessage, events.MessagePayload{
@@ -157,6 +165,7 @@ func deriveToAIMessages(derived []sessionlog.DerivedMessage) []ai.Message {
 				Type: b.Type, Text: b.Text, ID: b.ID, Name: b.Name,
 				Input: json.RawMessage(b.Input), Content: b.Content,
 				IsError: b.IsError, ThoughtSignature: b.Signature,
+				AttachmentID: b.AttachmentID, Mime: b.Mime,
 			}
 			// A derived tool_result block carries the pairing id in ID (the
 			// taxonomy field); ai.Block pairs results through ToolUseID.

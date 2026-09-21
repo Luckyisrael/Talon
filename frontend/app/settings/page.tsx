@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppShell from "@/components/layout/AppShell";
 import { PillButton, StatusBadge } from "@/components/ui";
-import { me as meApi, usage as usageApi, billing as billingApi, git as gitApi } from "@/lib/api";
+import { auth, me as meApi, usage as usageApi, billing as billingApi, git as gitApi } from "@/lib/api";
 import { isAuthenticated, signOut } from "@/lib/auth";
 import type { GitStatus, MeProfile, Usage } from "@/lib/types";
 
@@ -153,8 +153,11 @@ export default function SettingsPage() {
   }, [router]);
 
   function handleSignOut() {
-    signOut();
-    router.push("/login");
+    // Revoke server-side best-effort; local tokens clear regardless.
+    void auth.revoke().finally(() => {
+      signOut();
+      router.push("/login");
+    });
   }
 
   async function handleSaveName() {

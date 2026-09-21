@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -80,6 +81,80 @@ func (s *Store) GetConversation(projectID int64, limit int) ([]ConversationMessa
 		msgs[i], msgs[j] = msgs[j], msgs[i]
 	}
 	return msgs, nil
+}
+
+// scanConversationRows drains message rows in chronological order.
+func scanConversationRows(rows *sql.Rows) ([]ConversationMessage, error) {
+	var msgs []ConversationMessage
+	for rows.Next() {
+		var m ConversationMessage
+		if err := rows.Scan(&m.ID, &m.ProjectID, &m.PromptID, &m.Seq, &m.Role,
+			&m.Blocks, &m.InputTokens, &m.OutputTokens, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	return msgs, nil
+}
+
+// GetConversationBefore returns up to `limit` messages older than beforeSeq,
+// chronological. The pager for long transcripts: page one is the tail,
+// earlier pages walk back by seq.
+func (s *Store) GetConversationBefore(projectID, beforeSeq int64, limit int) ([]ConversationMessage, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 60
+	}
+	rows, err := s.db.Query(
+		`SELECT id, project_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at
+		 FROM conversation_messages WHERE project_id = ? AND seq < ?
+		 ORDER BY seq DESC LIMIT ?`, projectID, beforeSeq, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanConversationRows(rows)
+}
+
+// MaxConversationSeq is the watermark clients poll for "anything new": the
+// highest stored seq, or 0 for a fresh project.
+func (s *Store) MaxConversationSeq(projectID int64) (int64, error) {
+	var seq sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT MAX(seq) FROM conversation_messages WHERE project_id = ?`, projectID,
+	).Scan(&seq)
+	if err != nil {
+		return 0, err
+	}
+	if !seq.Valid {
+		return 0, nil
+	}
+	return seq.Int64, nil
+}
+
+// SearchConversationBlocks finds turns whose stored blocks mention q
+// (case-insensitive substring over the raw JSON). LIKE metacharacters in q
+// are escaped so a query for "100%" does not become a wildcard. Returns
+// whole turns newest first, capped — excerpts, not a dump.
+func (s *Store) SearchConversationBlocks(projectID int64, q string, limit int) ([]ConversationMessage, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
+	rows, err := s.db.Query(
+		`SELECT id, project_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at
+		 FROM conversation_messages WHERE project_id = ? AND blocks LIKE ? ESCAPE '\'
+		 ORDER BY seq DESC LIMIT ?`, projectID, "%"+esc+"%", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanConversationRows(rows)
 }
 
 // TrimConversation archives then deletes all but the newest `keep` messages.

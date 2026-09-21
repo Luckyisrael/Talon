@@ -1,292 +1,172 @@
 # Talon
 
-A browser-based "Vibe Coding" IDE for the Solana Mobile ecosystem. Users describe their app in natural language, AI plans screens/features, generates React Native/Expo code, builds APK, deploys to an Android emulator, and streams live preview to the browser.
+> Previously named **SeekerStudio** — renamed to Talon over a naming and keyword conflict.
+
+A browser IDE, a companion mobile app, and an AI build agent for the Solana Mobile ecosystem. Describe an app in plain language and the agent plans the screens, writes React Native/Expo code, verifies it through typecheck, lint, device boot, vision, and interaction gates, and ships it to a live device or your phone over Metro.
 
 ![Status](https://img.shields.io/badge/status-Alpha-orange)
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)
 ![Next.js](https://img.shields.io/badge/Next.js-16.3-black?logo=next.js)
-![React Native](https://img.shields.io/badge/React_Native-0.83.6-61DAFB?logo=react)
 ![Expo](https://img.shields.io/badge/Expo_SDK-55-000020?logo=expo)
 
 ---
 
+## What it is
+
+- **Web IDE** (`frontend/`) — chat-driven agent workspace: conversation with live tool trace, plan approval cards, changed-files diffs, code editor, terminal, command palette, and a device panel with emulator stream or Metro relay to a real phone.
+- **Companion app** (`talonmobileapp/`) — the same agent in your pocket: Build with streaming trace and attachments, per-file Diff, Metro-connected Device tab, project dashboard, history, settings, help, and docs. Android only.
+- **Build agent** (`backend/`) — Go orchestrator running plan and build turns: tool calling with guardrails, verify ladder (static, runtime, vision, interact), self-healing, checkpoints and undo, conversation persistence with resume, steer, and ask-user pauses.
+- **Auth** — GitHub/Google OAuth plus Solana wallet sign-in, short-lived access tokens with rotating refresh tokens, per-device sessions with revocation.
+- **Attachments** — images and markdown docs ride turns end to end: client validation and downscale, hash-pinned storage (Cloudflare R2 for images, local disk fallback), provider-native image parts in build turns.
+- **History** — server-owned transcripts on every device: paged conversation API, turn index, full-text search, jump-to-turn, offline snapshots on mobile. Conversations are never deleted; removing a project removes its transcript with it.
+- **Plugins** — public packs the agent fetches at build time ([talon-plugin-directory](https://github.com/Luckyisrael/talon-plugin-directory)): web3 components today, more Solana packs as they land. Documented under Docs, Plugins in the web app.
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                  WEB FRONTEND (Next.js 16)              │
-│   Monaco Editor · AI Chat · Canvas Streaming · xterm.js│
-└──────────────┬──────────────────────┬───────────────────┘
-               │ REST / SSE           │ WebSocket
-┌──────────────▼──────────────┐  ┌────▼────────────────────┐
+┌──────────────────────────────────────────────────────────┐
+│              WEB FRONTEND (Next.js 16)                   │
+│  AI chat · trace · plan cards · diffs · editor · terminal│
+│  PhonePreview (emulator stream / Metro relay + QR pair)  │
+└──────────────┬───────────────────────┬───────────────────┘
+               │ REST / SSE            │ WebSocket
+┌──────────────▼──────────────┐  ┌─────▼───────────────────┐
 │    AI ORCHESTRATOR (Go)     │  │   STREAMING GATEWAY     │
-│  AgentRouter · tool_use     │  │  JPEG · frame-diff      │
-│  typecheck/lint gates       │  │  touch input via ADB    │
-│  self-healing (max 3)      │  └────────────┬────────────┘
-│  vision verification       │               │
-└──────────────┬──────────────┘  ┌────────────▼────────────┐
-               │ writes code     │   REDROID CONTAINER      │
-┌──────────────▼─────────────────│   Android 14 · 1080×2400│
-│         METRO SERVER          │   Docker on Linux       │
-│  per-session · auto port      └─────────────────────────┘
-│  adb reverse · hot reload     │
-└───────────────────────────────┘
+│  plan/build loops · tools   │  │  emulator frames · adb  │
+│  guardrails · verify ladder │  │  input · terminal       │
+│  attachments · history      │  └────────────┬────────────┘
+└──────────────┬──────────────┘               │
+               │ writes code      ┌───────────▼───────────┐
+┌──────────────▼─────────┐       │   REDROID CONTAINER   │
+│   METRO (per session)  │       │  Android 14 · Docker  │
+│   bundler · HMR relay ─┼──────►│                       │
+│   phone deep links     │       └───────────────────────┘
+└────────────────────────┘
+         ▲                              ▲
+         └────── COMPANION APP ──────────┘
+         (Expo 55 · same API · SecureStore sessions)
 ```
 
-## Features
-
-- **AI-Powered Code Generation** — Describe your app in plain English, AI generates React Native/Expo code
-- **Plan Mode** — AI designs screens, features, navigation, and packages before writing code
-- **Build Mode** — Full agentic coding with tool-use: write files, install packages, typecheck, lint, build APK
-- **Live Preview** — Screenshot-based streaming from Android emulator to browser canvas (10 FPS)
-- **Touch Input** — Click on the preview to tap the emulated device screen
-- **Terminal Access** — Full ADB shell access via web terminal (xterm.js)
-- **Self-Healing** — AI automatically fixes typecheck/lint errors (up to 3 attempts)
-- **Vision Verification** — AI screenshots the emulator and verifies the UI matches the user's intent
-- **Atomic File Changes** — Files staged in temp directory, only promoted after all checks pass
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Backend | Go 1.25, chi router, modernc.org/sqlite, gorilla/websocket |
-| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS, Zustand |
-| Editor | Monaco Editor (`@monaco-editor/react`) |
-| AI | AgentRouter (Anthropic-compatible, `claude-opus-5`) |
-| Android | Redroid 14 (Docker), ADB, Expo SDK 55 |
-| Terminal | xterm.js |
-
-## Project Structure
+## Project structure
 
 ```
 Talon/
-├── backend/                     # Go API server
-│   ├── cmd/server/              # Entrypoint
+├── backend/               # Go API server
+│   ├── cmd/server/        # Entrypoint, route wiring
 │   ├── internal/
-│   │   ├── adb/                 # ADB command proxy (tap, swipe, key, screenshot)
-│   │   ├── ai/                  # AgentRouter client, agentic loop, vision
-│   │   ├── api/                 # HTTP handlers (auth, projects, prompts, sessions)
-│   │   ├── auth/                # JWT authentication
-│   │   ├── events/              # SSE event emitter
-│   │   ├── guardrails/          # ReactNativeOnly, NoSecrets, ExpoVersionPin
-│   │   ├── metro/               # Metro bundler lifecycle manager
-│   │   ├── orchestrator/        # State machine, verification gates, self-healing
-│   │   ├── staging/             # Atomic file staging
-│   │   ├── store/               # SQLite database
-│   │   ├── tools/               # 15+ tools (read, write, grep, build, etc.)
-│   │   └── ws/                  # WebSocket handlers (terminal, stream)
-│   ├── template/                # Expo 55 project scaffold
-│   └── scripts/                 # SDK install/verify scripts
-├── frontend/                    # Next.js web app
-│   ├── app/                     # Pages (landing, auth, dashboard, IDE)
-│   ├── components/
-│   │   ├── dashboard/           # Project management
-│   │   ├── ide/                 # IDE components (chat, editor, preview, terminal)
-│   │   └── ui/                  # Shared UI components
-│   └── lib/                     # API client, store, types
-├── contracts/                   # API endpoint definitions
-├── docs/                        # Guides and specs
-├── infra/                       # Infrastructure (Redroid, Docker)
-└── talon-studio-example/       # Reference Expo project
+│   │   ├── ai/            # Provider clients, message blocks, serializers, compaction
+│   │   ├── api/           # Handlers: auth, prompts/stream, conversation, history,
+│   │   │                  #   attachments, sessions, metro, test-info, export, memory
+│   │   ├── auth/          # JWT access + rotating refresh tokens
+│   │   ├── blobstore/     # Attachment bytes: Cloudflare R2, local fallback
+│   │   ├── harness/       # Agent loop, skills catalog, instructions, guardrails,
+│   │   │                  #   session log, sandbox, workflow, compaction
+│   │   ├── knowledge/     # Embedded skills (mobile-craft/motion, wallet-mwa,
+│   │   │                  #   solana-dev, motion-review, …) with attribution
+│   │   ├── orchestrator/  # Build sessions, verify gates, self-healing, checkpoints
+│   │   ├── store/         # SQLite: projects, prompts, transcripts, sessions,
+│   │   │                  #   attachments, refresh tokens, billing, memory
+│   │   ├── tools/         # read/write/edit, shell, git, metro, wallet, skills…
+│   │   └── ws/            # Terminal, device stream, input sockets
+│   ├── template/          # Expo 55 project scaffold provisioned per project
+│   └── e2e/               # End-to-end harness
+├── frontend/              # Next.js web app (landing, auth, dashboard, IDE, docs)
+├── talonmobileapp/        # Expo companion app (build, diff, device, more, menu)
+├── infra/                 # Infrastructure (Redroid, Docker)
+├── content/               # Marketing/changelog content
+└── ROADMAP.md             # Deferred work with reasons
 ```
 
 ## Prerequisites
 
-- Docker CE (native Linux installation)
-- [Android SDK](https://developer.android.com/studio) (for ADB)
-- [JDK 17](https://adoptium.net/)
+- Docker CE (native Linux installation, for Redroid)
+- [Android SDK](https://developer.android.com/studio) platform-tools (for ADB)
 - [Node.js 22](https://nodejs.org/)
 - [Go 1.25+](https://go.dev/dl/)
-- [ADB](https://developer.android.com/tools/adb) (platform-tools)
+- [Expo](https://expo.dev/) tooling for the companion app (`npx expo`)
 
-## Quick Start
+## Quick start
 
-### 1. Clone the repository
+### 1. Clone and configure
 
 ```bash
 git clone git@github.com:Luckyisrael/Talon.git
 cd Talon
-```
-
-### 2. Install dependencies
-
-```bash
-cd backend && go mod download && cd ../frontend && npm install
-```
-
-### 3. Configure your environment
-
-Everything the stack needs lives in **one file**: `backend/.env`. The Go server
-loads it, and the dev launcher reads it to derive the frontend's API URL — so
-there is no second file to keep in sync.
-
-```bash
 cp backend/.env.example backend/.env
 ```
 
-Then edit `backend/.env` and set the four things that matter:
+Edit `backend/.env` — the model, your LAN IP (phones and LAN browsers reach
+the studio here), and secrets:
 
 ```bash
-AI_MODEL=nvidia/nemotron-3.5-lightning:free  # any OpenRouter model slug
-AI_API_KEY=sk-or-v1-...                       # your OpenRouter key
-PUBLIC_HOST=192.168.1.6                       # your LAN IP — phones and LAN
-                                              # browsers reach the studio here
+AI_MODEL=nvidia/nemotron-3.5-lightning:free
+AI_API_KEY=sk-or-v1-...
+PUBLIC_HOST=192.168.1.6
+JWT_SECRET=openssl-rand-hex-32-output-here
+# Attachments: images to Cloudflare R2 when all four are set, else local disk
+# R2_ACCOUNT_ID=... R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=... R2_BUCKET=...
 ```
 
-The model is swappable in those two lines. Anthropic's native API works too:
-`AI_PROTOCOL=anthropic`, `AI_BASE_URL=https://api.anthropic.com`.
-
-### 4. Start the whole stack
+### 2. Start the stack
 
 ```bash
 ./dev.sh
 ```
 
-That is it. Both servers come up from `backend/.env`:
-
 ```
-▸ backend  :8080  (model: nvidia/nemotron-3.5-lightning:free)
+▸ backend  :8080
 ▸ frontend :3000  → API at http://192.168.1.6:8080
 
 Talon is up:
   web     http://localhost:3000
   web LAN http://192.168.1.6:3000
   api     http://localhost:8080
-  model   nvidia/nemotron-3.5-lightning:free via https://openrouter.ai/api/v1
-  logs    .dev-logs/{backend,frontend}.log
 ```
 
-`./dev.sh stop` stops both, `./dev.sh status` reports them, and
-`./dev.sh backend` or `./dev.sh frontend` starts one half. Logs land in
-`.dev-logs/`.
+`./dev.sh stop` stops both; logs land in `.dev-logs/`.
 
-### 5. Start Redroid (Android emulator)
+### 3. Open the IDE
 
-The preview pane needs a device. Start one before (or after) the stack —
-`./dev.sh` does not require it:
+Sign in (GitHub, Google, or Solana wallet), create a project, describe the
+app. Approve the plan, watch the build stream, answer the agent when it
+pauses with a question. Attach a photo when words fall short, a markdown
+file when the spec already exists.
+
+### 4. Companion app
 
 ```bash
-docker run -d --name redroid-talon-dev \
-  --privileged \
-  -p 5555:5555 \
-  -v redroid-data:/data \
-  redroid/redroid:14.0.0_64only-latest \
-  androidboot.use_memfd=1
-
-adb connect localhost:5555
+cd talonmobileapp
+cp .env.example .env   # point EXPO_PUBLIC_API_URL at your LAN backend
+npx expo run:android   # dev build (OAuth needs a real build, not Expo Go)
 ```
 
-### 6. Open the IDE
+## Key API surfaces
 
-Navigate to `http://localhost:3000` (or your LAN IP from a phone or second
-machine), sign in, create a project, and start building.
+| Area | Endpoints |
+|---|---|
+| Auth | `POST /v1/auth/{github,google}/start`, `GET */callback`, `POST /v1/auth/exchange`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET/DELETE /v1/auth/sessions`, wallet challenge/verify |
+| Turns | `POST /v1/prompts`, `/stream`, `/{id}/answer`, `/{id}/resume`, `/{id}/steer`, `/{id}/discard` |
+| History | `GET /v1/projects/{id}/conversation` (paged), `/conversation/search`, `GET /v1/projects/{id}/prompts` |
+| Attachments | `POST/GET /v1/projects/{id}/attachments[/{attID}]` |
+| Devices | `POST/GET/DELETE /v1/sessions`, Metro SSE, `/test-info`, pairing QR, dev-client APK |
+| Projects | CRUD plus files, git status/diff/push, checkpoints, memory, export/assets, triage |
 
-## Environment Variables
-
-### Backend
+## Testing
 
 ```bash
-# Required
-AI_PROVIDER=agentrouter
-ANTHROPIC_AUTH_TOKEN=sk-your-api-key
-ANTHROPIC_BASE_URL=https://agentrouter.org
-ANTHROPIC_MODEL=claude-opus-5
-
-# Optional
-PORT=9191                    # Default: 9191
-DB_PATH=./talon.db   # SQLite database path
-WORKSPACE_DIR=./workspaces   # Project workspaces
-TEMPLATE_DIR=./backend/template
+cd backend && go build ./... && go test ./...
+cd ../frontend && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/vitest run
+cd ../talonmobileapp && ./node_modules/.bin/tsc --noEmit   # plus eslint; no test runner yet (see ROADMAP.md)
 ```
 
-### Frontend
+CI gates pushes and pull requests (backend vet plus race-detector tests and guards).
 
-```bash
-NEXT_PUBLIC_API_URL=http://localhost:9191
-```
+## Known limitations
 
-## API Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/healthz` | Health check |
-| `POST` | `/v1/auth/register` | Create account |
-| `POST` | `/v1/auth/login` | Login (returns JWT) |
-| `POST` | `/v1/projects` | Create project |
-| `GET` | `/v1/projects` | List projects |
-| `GET` | `/v1/projects/:id` | Project details |
-| `GET` | `/v1/projects/:id/files` | List project files |
-| `PUT` | `/v1/projects/:id/files` | Write files |
-| `DELETE` | `/v1/projects/:id/files` | Delete file |
-| `DELETE` | `/v1/projects/:id` | Delete project |
-| `POST` | `/v1/prompts/stream` | Submit prompt (SSE streaming) |
-| `POST` | `/v1/sessions` | Create session (starts Metro) |
-| `DELETE` | `/v1/sessions/:id` | Destroy session |
-| `WS` | `/v1/sessions/:id/terminal` | ADB shell terminal |
-| `WS` | `/v1/sessions/:id/stream` | Screen stream + touch input |
-
-## How It Works
-
-### 1. User describes app
-> "Build a wallet connection screen with a Solana logo and connect button"
-
-### 2. AI plans the app (Plan Mode)
-AI designs screens, features, navigation, and required packages.
-
-### 3. AI builds the app (Build Mode)
-AI generates code through tool calls:
-- `write_file` — Create/modify source files
-- `read_file` / `grep` — Inspect existing code
-- `install_package` — Add dependencies
-- `typecheck` / `lint` — Verify code quality
-- `build_apk` — Build and install APK
-
-### 4. Verification gates
-- TypeScript type checking (`tsc --noEmit`)
-- ESLint linting
-- Vision verification (screenshot → AI check)
-
-### 5. Live preview
-- Backend screenshots the emulator every ~100ms
-- PNG → JPEG encoding with frame-diffing
-- Streams to browser canvas via WebSocket
-- Click on canvas → tap on device
-
-## Freemium Model
-
-| Feature | Free | Pro ($59/mo) |
-|---|---|---|
-| AI Prompts | 20 | 500 |
-| Device Minutes | 60 | 1,500 |
-| Projects | 3 | Unlimited |
-
-## Development
-
-### Run tests
-
-```bash
-cd backend
-go test ./...
-```
-
-### Lint
-
-```bash
-cd frontend
-npm run lint
-```
-
-### Build for production
-
-```bash
-cd frontend
-npm run build
-```
-
-## Known Limitations
-
-- **Redroid video encoding** — Hardware codec (`media.swcodec`) unavailable; uses screenshot-based streaming
-- **No Mock MWA Wallet** — Wallet testing requires manual APK installation
+- Billing is a test-mode mock behind a deliberate provider swap.
+- Mobile checkout UI is an honest stub until billing lands.
+- Plan-mode turns see attachment names and docs; pixels replay in build turns.
+- No mobile test runner yet.
 
 ## Contributing
 
@@ -303,7 +183,6 @@ Private — All rights reserved.
 ## Acknowledgments
 
 - [Solana Mobile](https://solanamobile.com/) for the Seeker device ecosystem
-- [AgentRouter](https://agentrouter.org/) for AI infrastructure
-- [Redroid](https://github.com/remote-android/redroid-doc) for Android emulation
 - [Expo](https://expo.dev/) for React Native tooling
-
+- [Redroid](https://github.com/remote-android/redroid-doc) for Android emulation
+- Appllama and Emil Kowalski for MIT-licensed design knowledge adapted into the agent harness (see each skill's `ATTRIBUTION.md`)

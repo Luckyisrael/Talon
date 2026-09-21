@@ -198,3 +198,26 @@ health): one deliberate confirmation animation beats three decorative ones
 - **Type discipline.** One family for UI, one mono for numerals — max four
   sizes, two weights. Hierarchy comes from size, weight, and opacity steps
   (100/80/60), never from bolding everything.
+
+## Invisible details — the compound interest
+
+Most of what makes software feel great is never consciously noticed. When a
+control behaves exactly as assumed, attention stays on the task — that is
+the goal. Each rule below is small; together they are the difference between
+built and crafted. (Distilled from Emil Kowalski's design-engineering notes;
+motion specifics live in `mobile-motion`.)
+
+- **Presses answer on press-in.** Scale 0.97 over 100–160 ms on any
+  pressable, commit visuals on release. Waiting for the tap to complete
+  before showing anything reads as dead.
+- **Nothing appears from nothing.** Entrances start at `scale(0.95)` plus
+  fade, never `scale(0)`. Popovers and menus grow from their trigger
+  (`transform-origin` at the trigger); modals stay centered.
+- **Bridge ugly crossfades with blur.** Two states overlapping read as two
+  objects swapping; a 2 px blur during the transition blends them into one
+  perceived change. Keep blur small — heavy blur is expensive on device.
+- **Stagger entrances 30–80 ms apart**, never all at once, never blocking
+  interaction while the cascade plays.
+- **Remedial order when motion feels off:** delete it first; then reduce
+  (shorter, smaller, fewer properties); then fix the easing; then the
+  origin; then make it interruptible. Never start by adding more motion.

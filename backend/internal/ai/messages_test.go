@@ -405,3 +405,133 @@ func TestTrimSupersededOnlyTouchesReadOnlyTools(t *testing.T) {
 		t.Error("a write_file result was collapsed; only read_file/list_files are supersedable")
 	}
 }
+
+func imageBlock() Block {
+	return Block{Type: "image", AttachmentID: 7, Name: "shot.png", Mime: "image/png", Data: "aGVsbG8="}
+}
+
+// A resolved image block serialises to a native image part on both providers:
+// Anthropic base64 source blocks, OpenAI image_url data URLs. The text stays
+// first so the prompt reads before the pixels.
+func TestImageBlockSerialisesToBothProviders(t *testing.T) {
+	history := []Message{
+		msg("user", text("look at this"), imageBlock()),
+	}
+
+	anth := toAnthropic(history, -1)
+	if len(anth) != 1 {
+		t.Fatalf("want 1 anthropic message, got %d", len(anth))
+	}
+	if len(anth[0].Content) != 2 {
+		t.Fatalf("want text+image blocks, got %+v", anth[0].Content)
+	}
+	img := anth[0].Content[1]
+	if img.Type != "image" || img.Source == nil {
+		t.Fatalf("second block is not an image source block: %+v", img)
+	}
+	if img.Source.MediaType != "image/png" || img.Source.Data != "aGVsbG8=" || img.Source.Type != "base64" {
+		t.Errorf("image source = %+v, want base64 image/png aGVsbG8=", img.Source)
+	}
+
+	open := toOpenAI("", history)
+	if len(open) != 1 || open[0].Role != "user" {
+		t.Fatalf("want 1 user message, got %+v", open)
+	}
+	raw, err := json.Marshal(open[0].Content)
+	if err != nil {
+		t.Fatalf("marshal user content: %v", err)
+	}
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		t.Fatalf("user content is not a content-parts array: %v\n%s", err, raw)
+	}
+	if len(parts) != 2 || parts[0].Type != "text" || parts[0].Text != "look at this" {
+		t.Errorf("first part = %+v, want the prompt text", parts)
+	}
+	if parts[1].Type != "image_url" || parts[1].ImageURL.URL != "data:image/png;base64,aGVsbG8=" {
+		t.Errorf("second part = %+v, want the data URL", parts[1])
+	}
+}
+
+// An image block that lost its file (deleted attachment) must not fail the
+// whole request: Anthropic gets a named text note, OpenAI drops the part.
+func TestUnresolvedImageBlockDegrades(t *testing.T) {
+	history := []Message{
+		msg("user", text("look"), Block{Type: "image", AttachmentID: 9, Name: "gone.png", Mime: "image/png"}),
+	}
+
+	anth := toAnthropic(history, -1)
+	if len(anth) != 1 || len(anth[0].Content) != 2 {
+		t.Fatalf("want text+fallback blocks, got %+v", anth)
+	}
+	if got := anth[0].Content[1].Text; !strings.Contains(got, "gone.png") {
+		t.Errorf("fallback text = %q, want it to name the missing file", got)
+	}
+
+	open := toOpenAI("", history)
+	if len(open) != 1 {
+		t.Fatalf("want the user turn to survive, got %+v", open)
+	}
+	if s, ok := open[0].Content.(string); !ok || s != "look" {
+		t.Errorf("user content = %#v, want the plain prompt text", open[0].Content)
+	}
+}
+
+// Doc blocks are display references only: both serializers drop them, so
+// attached markdown never reaches the provider twice (its text is inlined)
+// and a doc-only turn still replays cleanly.
+func TestDocBlocksDroppedBySerializers(t *testing.T) {
+	history := []Message{
+		msg("user", text("wire it"), Block{Type: "doc", AttachmentID: 3, Name: "n.md", Mime: "text/markdown"}),
+		msg("assistant", text("done")),
+	}
+
+	anth := toAnthropic(history, -1)
+	if len(anth) != 2 || len(anth[0].Content) != 1 || anth[0].Content[0].Text != "wire it" {
+		t.Errorf("anthropic replay = %+v, want the doc block dropped", anth)
+	}
+	open := toOpenAI("", history)
+	if len(open) != 2 {
+		t.Fatalf("openai replay = %+v, want 2 messages", open)
+	}
+	if s, ok := open[0].Content.(string); !ok || s != "wire it" {
+		t.Errorf("user content = %#v, want the plain prompt text", open[0].Content)
+	}
+	if got := TrimToValidHistory(history); len(got) != 2 {
+		t.Errorf("kept %d turns, want 2", len(got))
+	}
+}
+
+// Pixel bytes are request-scoped: MarshalBlocks must never persist them, or
+// the transcript table would hold megabytes per image turn.
+func TestMarshalBlocksNeverPersistsImageData(t *testing.T) {
+	raw := MarshalBlocks([]Block{text("look"), imageBlock()})
+	if strings.Contains(raw, "aGVsbG8=") {
+		t.Errorf("marshalled blocks contain image bytes: %s", raw)
+	}
+	var back []Block
+	if err := json.Unmarshal([]byte(raw), &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(back) != 2 || back[1].AttachmentID != 7 || back[1].Name != "shot.png" {
+		t.Errorf("reference did not survive the round trip: %+v", back)
+	}
+}
+
+// Image blocks are inert to history trimming: they carry no tool pairing, so
+// a turn that attached images trims exactly like a text turn.
+func TestTrimKeepsImageTurns(t *testing.T) {
+	history := []Message{
+		msg("user", text("look"), imageBlock()),
+		msg("assistant", text("seen")),
+	}
+	if got := TrimToValidHistory(history); len(got) != 2 {
+		t.Errorf("kept %d turns, want 2", len(got))
+	}
+}

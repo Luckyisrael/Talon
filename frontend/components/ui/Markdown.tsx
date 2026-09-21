@@ -13,7 +13,8 @@ import { copyText } from "@/lib/clipboard";
  * This builds React nodes rather than HTML strings. Nothing the model writes can
  * become markup, which matters because the model quotes web pages it fetched and
  * files it read. It covers the subset the agent actually produces: fenced code,
- * inline code, bold, italic, links, headings, lists, blockquotes, rules.
+ * inline code, bold, italic, links, images, tables, task lists, headings,
+ * lists, blockquotes, rules.
  */
 
 type Block =
@@ -23,6 +24,8 @@ type Block =
   | { kind: "ul"; items: string[] }
   | { kind: "ol"; items: string[] }
   | { kind: "quote"; text: string }
+  | { kind: "table"; head: string[]; rows: string[][] }
+  | { kind: "img"; alt: string; src: string }
   | { kind: "hr" };
 
 const FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([\w.+-]*)\s*$/;
@@ -31,6 +34,25 @@ const RULE = /^\s{0,3}([-*_])\s*(?:\1\s*){2,}$/;
 const BULLET = /^\s*[-*+]\s+(.*)$/;
 const NUMBER = /^\s*\d{1,9}[.)]\s+(.*)$/;
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
+const BLOCK_IMAGE = /^\s*!\[([^\]\n]*)\]\(([^()\s]*(?:\([^()\s]*\)[^()\s]*)*)\)\s*$/;
+const TASK_ITEM = /^\[( |x|X)\]\s+(.*)$/;
+
+// A table is a header line containing pipes immediately followed by a
+// delimiter row (| --- | :---: | ---: |). Both halves are required: a line
+// with pipes but no delimiter below stays an ordinary paragraph, so shell
+// snippets and prose mentioning `a | b` never become tables by accident.
+function splitTableRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+
+function isDelimiterRow(line: string): boolean {
+  const cells = splitTableRow(line);
+  if (cells.length === 0) return false;
+  return cells.every((c) => /^:?-{3,}:?$/.test(c));
+}
 
 function parseBlocks(src: string): Block[] {
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
@@ -90,6 +112,38 @@ function parseBlocks(src: string): Block[] {
       continue;
     }
 
+    // A lone image line renders as a linked figure rather than a paragraph
+    // carrying image syntax. Unsafe destinations fall back to alt text.
+    const blockImage = line.match(BLOCK_IMAGE);
+    if (blockImage) {
+      blocks.push({ kind: "img", alt: blockImage[1], src: blockImage[2] });
+      i++;
+      continue;
+    }
+
+    if (
+      line.includes("|") &&
+      i + 1 < lines.length &&
+      splitTableRow(lines[i + 1]).length === splitTableRow(line).length &&
+      isDelimiterRow(lines[i + 1])
+    ) {
+      const head = splitTableRow(line);
+      i += 2;
+      const rows: string[][] = [];
+      // Body rows keep coming while lines are non-blank and carry pipes. A
+      // ragged row is padded to the header width so columns never shift.
+      while (i < lines.length) {
+        const l = lines[i];
+        if (l.trim() === "" || !l.includes("|")) break;
+        const cells = splitTableRow(l);
+        while (cells.length < head.length) cells.push("");
+        rows.push(cells.slice(0, head.length));
+        i++;
+      }
+      blocks.push({ kind: "table", head, rows });
+      continue;
+    }
+
     if (BULLET.test(line) || NUMBER.test(line)) {
       const ordered = !BULLET.test(line);
       const items: string[] = [];
@@ -127,7 +181,12 @@ function parseBlocks(src: string): Block[] {
         RULE.test(l) ||
         BULLET.test(l) ||
         NUMBER.test(l) ||
-        QUOTE.test(l)
+        QUOTE.test(l) ||
+        BLOCK_IMAGE.test(l) ||
+        (l.includes("|") &&
+          i + 1 < lines.length &&
+          splitTableRow(lines[i + 1]).length === splitTableRow(l).length &&
+          isDelimiterRow(lines[i + 1]))
       ) {
         break;
       }
@@ -159,6 +218,22 @@ const INLINE_RULES: Rule[] = [
     // Code spans win over everything: `**not bold**` is literal inside them.
     re: /`([^`\n]+)`/,
     render: (m, key) => <code key={key}>{m[1]}</code>,
+  },
+  {
+    // Images before links: the link pattern would otherwise eat the
+    // `[alt](src)` half of `![alt](src)` and leave a stray `!`.
+    // The destination allows one level of balanced parens so URLs like
+    // `…/shot(1).png` — and hostile `javascript:alert(1)` — match whole.
+    re: /!\[([^\]\n]*)\]\(([^()\s]*(?:\([^()\s]*\)[^()\s]*)*)\)/,
+    render: (m, key) => {
+      const href = safeHref(m[2]);
+      if (!href) return <Fragment key={key}>{m[1] || m[2]}</Fragment>;
+      return (
+        <a key={key} href={href} target="_blank" rel="noopener noreferrer" title="Open full size">
+          <img src={href} alt={m[1]} loading="lazy" />
+        </a>
+      );
+    },
   },
   {
     re: /\[([^\]\n]*)\]\(([^)\s]+)\)/,
@@ -236,6 +311,36 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   return out;
 }
 
+function MarkdownImage({ alt, src }: { alt: string; src: string }) {
+  const href = safeHref(src);
+  // An unsafe destination (javascript:, data:) renders as its alt text —
+  // never as a clickable or loadable resource.
+  if (!href) return <>{alt}</>;
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" title="Open full size">
+      <img src={href} alt={alt} loading="lazy" />
+    </a>
+  );
+}
+
+function TaskItem({ item, idPrefix }: { item: string; idPrefix: string }) {
+  const task = item.match(TASK_ITEM);
+  if (!task) return <>{renderInline(item, idPrefix)}</>;
+  const checked = task[1].toLowerCase() === "x";
+  return (
+    <>
+      <input
+        type="checkbox"
+        checked={checked}
+        readOnly
+        tabIndex={-1}
+        aria-label={checked ? "done" : "not done"}
+      />
+      {renderInline(task[2], idPrefix)}
+    </>
+  );
+}
+
 function CodeBlock({ lang, body }: { lang: string; body: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -288,7 +393,9 @@ function Markdown({ children, className }: { children: string; className?: strin
             return (
               <ul key={key}>
                 {block.items.map((item, j) => (
-                  <li key={`${key}-${j}`}>{renderInline(item, `${key}-${j}`)}</li>
+                  <li key={`${key}-${j}`}>
+                    <TaskItem item={item} idPrefix={`${key}-${j}`} />
+                  </li>
                 ))}
               </ul>
             );
@@ -300,6 +407,31 @@ function Markdown({ children, className }: { children: string; className?: strin
                 ))}
               </ol>
             );
+          case "table":
+            return (
+              <table key={key}>
+                <thead>
+                  <tr>
+                    {block.head.map((cell, j) => (
+                      <th key={`${key}-h${j}`}>{renderInline(cell, `${key}-h${j}`)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                {block.rows.length > 0 ? (
+                  <tbody>
+                    {block.rows.map((row, r) => (
+                      <tr key={`${key}-r${r}`}>
+                        {row.map((cell, j) => (
+                          <td key={`${key}-r${r}c${j}`}>{renderInline(cell, `${key}-r${r}c${j}`)}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                ) : null}
+              </table>
+            );
+          case "img":
+            return <MarkdownImage key={key} alt={block.alt} src={block.src} />;
           default:
             return <p key={key}>{renderInline(block.text, key)}</p>;
         }

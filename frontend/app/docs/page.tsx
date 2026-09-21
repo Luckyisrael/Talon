@@ -14,6 +14,7 @@ const toc = [
   { id: "getting-started", label: "Getting started" },
   { id: "how-it-works", label: "How it works" },
   { id: "solana-mobile", label: "Solana Mobile" },
+  { id: "plugins", label: "Plugins" },
   { id: "quotas", label: "Quotas & limits" },
 ];
 
@@ -107,6 +108,70 @@ export default function DocsPage() {
                   Wallet connections go through the Mobile Wallet Adapter, and the device&apos;s
                   Seed Vault or wallet app holds all key material. Your app requests a signature;
                   the wallet decides. Key custody never touches the builder.
+                </p>
+              </div>
+            </section>
+
+            <section id="plugins" className="scroll-mt-8">
+              <h2 className="text-[22px] font-medium tracking-tight text-paper mb-4">Plugins</h2>
+              <p className="text-sm text-fog leading-relaxed mb-4">
+                Plugins are public repos that teach the agent a specialty: premade
+                web3 components, a new Solana API, a design pack. The agent fetches
+                a plugin when your task touches its area and adapts its patterns to
+                your screens. Nothing installs itself and nothing runs unseen.
+              </p>
+              <h3 className="text-[15px] font-medium text-paper mb-2 mt-6">Using plugins</h3>
+              <p className="text-sm text-fog leading-relaxed mb-4">
+                Pin the plugin for your project in{" "}
+                <span className="font-mono text-[13px] text-mist">.talon/plugins.json</span>
+                {" "}— that file is the approval, and nothing loads without it:{" "}
+                <span className="font-mono text-[13px] text-mist">talon-mobile-ui@1.0.0</span>.
+                Then just describe what you want. Ask for a wallet screen and the agent
+                loads the one matching skill itself — connect, balance, or send —
+                one at a time, never several just in case. The first time a new plugin loads,
+                you approve its manifest, license, and pinned version. State-changing
+                mainnet calls always ask you in the UI before anything is sent.
+                Updates never land silently: your build keeps serving the pinned
+                version and tells you the exact version to adopt when the directory
+                publishes something newer.
+              </p>
+              <h3 className="text-[15px] font-medium text-paper mb-2 mt-6">Building a plugin</h3>
+              <p className="text-sm text-fog leading-relaxed mb-4">
+                A plugin is a folder in the{" "}
+                <a
+                  href="https://github.com/Luckyisrael/talon-plugin-directory"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-mist underline underline-offset-2 hover:text-paper transition-colors"
+                >
+                  public plugin directory
+                </a>{" "}
+                with a <span className="font-mono text-[13px] text-mist">talon-plugin.json</span> manifest
+                plus <span className="font-mono text-[13px] text-mist">skills/*/SKILL.md</span> files
+                carrying <span className="font-mono text-[13px] text-mist">name</span>, <span className="font-mono text-[13px] text-mist">description</span>,{" "}
+                <span className="font-mono text-[13px] text-mist">version</span>, and <span className="font-mono text-[13px] text-mist">triggers</span>.
+                Write guidance plus code templates, never executables. Pin exact
+                dependency versions, keep an MIT license at the root, and put
+                working starting points under <span className="font-mono text-[13px] text-mist">references/</span>.
+                The reference implementation is{" "}
+                <a
+                  href="https://github.com/Luckyisrael/talon-plugin-directory/tree/main/plugins/talon-mobile-ui"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-mist underline underline-offset-2 hover:text-paper transition-colors"
+                >
+                  talon-mobile-ui in the plugin directory
+                </a>
+                : connect, balance, and send skills with version 1.0.0 pinned.
+              </p>
+              <div className="card-subtle p-5!">
+                <h3 className="text-sm font-medium text-paper mb-2">Trust rules</h3>
+                <p className="text-sm text-fog leading-relaxed">
+                  Plugin bodies load on demand and never auto-apply rules. File
+                  hashes pin every version, and updates need your approval.
+                  Dependencies resolve through the normal install flow, and
+                  everything the agent borrows lands in your workspace where
+                  you can read it.
                 </p>
               </div>
             </section>

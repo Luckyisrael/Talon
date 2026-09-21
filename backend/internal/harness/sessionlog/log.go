@@ -230,15 +230,17 @@ type DerivedMessage struct {
 
 // DerivedBlock is one content block of a derived message.
 type DerivedBlock struct {
-	Type      string
-	Text      string
-	ID        string
-	Name      string
-	Input     json.RawMessage
-	Content   string
-	IsError   bool
-	Signature string
-	Plan      json.RawMessage
+	Type         string
+	Text         string
+	ID           string
+	Name         string
+	Input        json.RawMessage
+	Content      string
+	IsError      bool
+	Signature    string
+	Plan         json.RawMessage
+	AttachmentID int64
+	Mime         string
 }
 
 // DeriveMessages projects the log into the ordered, model-visible surface:
@@ -263,7 +265,7 @@ func (l *Log) DeriveMessages() []DerivedMessage {
 		m.Interrupted = p.Interrupted
 		m.Blocks = make([]DerivedBlock, 0, len(p.Blocks))
 		for _, b := range p.Blocks {
-			db := DerivedBlock{Type: b.Type, Text: b.Text, ID: b.ID, Name: b.Name, Content: b.Content, IsError: b.IsError, Signature: b.Signature}
+			db := DerivedBlock{Type: b.Type, Text: b.Text, ID: b.ID, Name: b.Name, Content: b.Content, IsError: b.IsError, Signature: b.Signature, AttachmentID: b.AttachmentID, Mime: b.Mime}
 			if b.Input != nil {
 				db.Input = json.RawMessage(*b.Input)
 			}

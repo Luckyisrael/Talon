@@ -5,7 +5,7 @@ import { Spacing } from '@/constants/theme';
 
 // QuestionCard is the approval surface: the agent's question in bodyLg,
 // choices as stacked full-width ghost buttons (never side-by-side), optional
-// free-text field on top. Dummy in Phase 2 — onAnswer just records locally.
+// free-text field on top. Dummy in Phase 2, onAnswer just records locally.
 export function QuestionCard({
   question,
   choices,
@@ -46,7 +46,7 @@ export function QuestionCard({
         ))}
         {answered !== null && (
           <UIText variant="caption" tone="faint">
-            Answered: {answered} (dummy — wires to /answer in the live build)
+            Answered: {answered}
           </UIText>
         )}
       </View>

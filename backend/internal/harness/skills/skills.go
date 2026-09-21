@@ -215,8 +215,9 @@ func (c *Catalog) Manifest() string {
 	sort.Strings(names)
 	var b strings.Builder
 	b.WriteString("## Skills available\n\n")
-	b.WriteString("Detailed, version-pinned how-tos for this project's stack. Call `read_skill` with " +
-		"a name to load one before working in its area; some attach automatically when relevant.\n\n")
+	b.WriteString("Detailed, version-pinned how-tos for this project's stack. Load one skill at a time " +
+		"with `read_skill` only when its description matches the current job; never preload several " +
+		"\"just in case\". Some attach automatically when relevant.\n\n")
 	for _, n := range names {
 		s := c.merged[n]
 		line := fmt.Sprintf("- **%s** — %s", s.Name, s.Description)

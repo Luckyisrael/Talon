@@ -3,7 +3,7 @@ import { isAuthenticated } from './auth';
 import * as SecureStore from 'expo-secure-store';
 
 // useSession resolves the auth gate for routing: 'checking' while SecureStore
-// is read, then 'authed' or 'guest'. Screens mount on it — the hook itself
+// is read, then 'authed' or 'guest'. Screens mount on it, the hook itself
 // creates no routes.
 export function useSession(): 'checking' | 'authed' | 'guest' {
   const [state, setState] = useState<'checking' | 'authed' | 'guest'>('checking');
@@ -22,7 +22,7 @@ export function useSession(): 'checking' | 'authed' | 'guest' {
 // ── Per-project device-session id ──────────────────────
 // The backend exposes sessions by id only (the web IDE holds the id in
 // client state too); the mobile app persists the id per project so the
-// device tab survives restarts. SecureStore: it is a capability — knowing
+// device tab survives restarts. SecureStore: it is a capability, knowing
 // it grants the session's screenshot/relay surface.
 
 const sessionKey = (projectId: number) => `talon.session.${projectId}`;
@@ -42,7 +42,7 @@ export async function setSessionId(projectId: number, id: number | null): Promis
     try {
       await SecureStore.deleteItemAsync(key);
     } catch {
-      // Already gone — clearing is idempotent.
+      // Already gone, clearing is idempotent.
     }
     return;
   }

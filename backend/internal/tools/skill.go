@@ -31,8 +31,9 @@ func (t *ReadSkill) Description() string {
 			names = strings.Join(n, ", ")
 		}
 	}
-	return "Load a project skill: a detailed, version-pinned how-to for part of this stack. " +
-		"Read the relevant skill before working in its area — the guidance is current for the exact " +
+	return "Load one project skill: a detailed, version-pinned how-to for part of this stack. " +
+		"Load a single skill at a time, only when its manifest description matches the current job — " +
+		"never preload several. The guidance is current for the exact " +
 		"versions installed here, which are newer than most training data. Available skills: " + names + "."
 }
 

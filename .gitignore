@@ -110,3 +110,8 @@ e2e/live-run*.log
 .gopath/
 .gradle-tmp/
 vendored-skills-reference/
+
+# Local agent skill mirrors and assistant settings (machine-local, rebuildable)
+agent/
+.agents/
+.claude/

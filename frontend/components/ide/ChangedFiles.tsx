@@ -170,7 +170,7 @@ export default function ChangedFiles({ projectId, filesTouched }: ChangedFilesPr
       <div className="flex items-center justify-between">
         <h2>Changed files</h2>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-fog">{rows.length} file{rows.length === 1 ? "" : "s"} · +{rows.reduce((a, r) => a + r.add, 0)} −{rows.reduce((a, r) => a + r.del, 0)}</span>
+          <span className="text-xs text-fog">{rows.length} file{rows.length === 1 ? "" : "s"} · <span className="text-pulse-green">+{rows.reduce((a, r) => a + r.add, 0)}</span> <span className="text-coral-red">−{rows.reduce((a, r) => a + r.del, 0)}</span></span>
           <PushToGitHub projectId={projectId} />
         </div>
       </div>
@@ -194,9 +194,8 @@ export default function ChangedFiles({ projectId, filesTouched }: ChangedFilesPr
                 </svg>
               </span>
               <span className="path">{path}</span>
-              <span className={`delta ${del > add ? "del" : "add"}`}>
-                +{add} −{del}
-              </span>
+              <span className="delta add">+{add}</span>
+              <span className="delta del">−{del}</span>
               <span className="ico chev" aria-hidden>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                   <path d="M9 18l6-6-6-6" />

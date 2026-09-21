@@ -4,7 +4,7 @@ import { Colors, Type, type TextStyleName } from '@/constants/theme';
 import { useAppFonts } from '@/lib/fonts';
 
 // UIText renders any design-system text style. `tone` picks the color;
-// `family` resolves loaded Inter (or the system fallback — never blocks).
+// `family` resolves loaded Inter (or the system fallback, never blocks).
 export function UIText({
   variant = 'body',
   tone = 'body',

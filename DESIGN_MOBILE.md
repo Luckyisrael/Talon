@@ -92,33 +92,33 @@ Screen widths kill the web's 48–72px display sizes. Cap display at 40px; every
 
 | Role | Size | Weight | Line Height | Tracking (pt) | Token | Use |
 |------|------|--------|-------------|---------------|-------|-----|
-| display | 40 | 500 | 1.05 | -0.88 | `Type.display` | Onboarding hero headline only |
-| heading | 32 | 500 | 1.1 | -0.7 | `Type.heading` | Screen titles, empty-state headlines |
-| subheading | 24 | 500 | 1.25 | -0.29 | `Type.subheading` | Section titles, card titles |
-| title | 20 | 500 | 1.3 | -0.24 | `Type.title` | List headers, sheet titles |
-| body-lg | 17 | 400 | 1.5 | 0 | `Type.bodyLg` | Emphasis blocks, question cards |
-| body | 16 | 400 | 1.5 | 0 | `Type.body` | Default body copy |
-| body-sm | 15 | 400 | 1.55 | -0.17 | `Type.bodySm` | Secondary copy, trace rows |
-| caption | 13 | 400 | 1.35 | 0 | `Type.caption` | Metadata under titles |
-| label | 12 | 400 | 1.4 | 0 | `Type.label` | Tab labels, badges, eyebrow labels |
-| micro | 10 | 500 | 1.5 | +0.4 | `Type.micro` | Eyebrow kickers (`BUILD 42`, `GATE: BOOT`), letter-spaced caps |
-| mono | 12 | 400 (JB Mono) | 1.5 | 0 | `Type.mono` | Hashes, IDs, token counts |
-| mono-sm | 10 | 400 (JB Mono) | 1.5 | 0 | `Type.monoSm` | Timestamps, round numbers |
+| display | 28 | 500 | 1.05 | -0.62 | `Type.display` | Onboarding hero headline only |
+| heading | 22 | 500 | 1.1 | -0.48 | `Type.heading` | Screen titles, empty-state headlines |
+| subheading | 18 | 500 | 1.25 | -0.22 | `Type.subheading` | Section titles, card titles |
+| title | 16 | 500 | 1.3 | -0.19 | `Type.title` | List headers, sheet titles |
+| body-lg | 14 | 400 | 1.5 | 0 | `Type.bodyLg` | Emphasis blocks, question cards |
+| body | 13 | 400 | 1.5 | 0 | `Type.body` | Default body copy |
+| body-sm | 12 | 400 | 1.55 | -0.14 | `Type.bodySm` | Secondary copy, trace rows |
+| caption | 11 | 400 | 1.35 | 0 | `Type.caption` | Metadata under titles |
+| label | 10 | 400 | 1.4 | 0 | `Type.label` | Tab labels, badges, eyebrow labels |
+| micro | 8 | 500 | 1.5 | +0.32 | `Type.micro` | Eyebrow kickers (`BUILD 42`, `GATE: BOOT`), letter-spaced caps |
+| mono | 10 | 400 (JB Mono) | 1.5 | 0 | `Type.mono` | Hashes, IDs, token counts |
+| mono-sm | 8 | 400 (JB Mono) | 1.5 | 0 | `Type.monoSm` | Timestamps, round numbers |
 
 ```ts
 export const Type = {
-  display:    { fontSize: 40, lineHeight: 42, letterSpacing: -0.88, fontWeight: '500' },
-  heading:    { fontSize: 32, lineHeight: 35, letterSpacing: -0.7,  fontWeight: '500' },
-  subheading: { fontSize: 24, lineHeight: 30, letterSpacing: -0.29, fontWeight: '500' },
-  title:      { fontSize: 20, lineHeight: 26, letterSpacing: -0.24, fontWeight: '500' },
-  bodyLg:     { fontSize: 17, lineHeight: 26, fontWeight: '400' },
-  body:       { fontSize: 16, lineHeight: 24, fontWeight: '400' },
-  bodySm:     { fontSize: 15, lineHeight: 23, letterSpacing: -0.17, fontWeight: '400' },
-  caption:    { fontSize: 13, lineHeight: 18, fontWeight: '400' },
-  label:      { fontSize: 12, lineHeight: 17, fontWeight: '400' },
-  micro:      { fontSize: 10, lineHeight: 15, letterSpacing: 0.4, fontWeight: '500' },
-  mono:       { fontSize: 12, lineHeight: 18, fontFamily: 'JetBrainsMono_400Regular' },
-  monoSm:     { fontSize: 10, lineHeight: 15, fontFamily: 'JetBrainsMono_400Regular' },
+  display:    { fontSize: 28, lineHeight: 32, letterSpacing: -0.62, fontWeight: '500' },
+  heading:    { fontSize: 22, lineHeight: 26, letterSpacing: -0.48, fontWeight: '500' },
+  subheading: { fontSize: 18, lineHeight: 23, letterSpacing: -0.22, fontWeight: '500' },
+  title:      { fontSize: 16, lineHeight: 21, letterSpacing: -0.19, fontWeight: '500' },
+  bodyLg:     { fontSize: 14, lineHeight: 21, fontWeight: '400' },
+  body:       { fontSize: 13, lineHeight: 19, fontWeight: '400' },
+  bodySm:     { fontSize: 12, lineHeight: 18, letterSpacing: -0.14, fontWeight: '400' },
+  caption:    { fontSize: 11, lineHeight: 15, fontWeight: '400' },
+  label:      { fontSize: 10, lineHeight: 14, fontWeight: '400' },
+  micro:      { fontSize: 8,  lineHeight: 11, letterSpacing: 0.32, fontWeight: '500' },
+  mono:       { fontSize: 10, lineHeight: 15, fontFamily: 'JetBrainsMono_400Regular' },
+  monoSm:     { fontSize: 8,  lineHeight: 12, fontFamily: 'JetBrainsMono_400Regular' },
 } as const;
 ```
 
@@ -175,7 +175,7 @@ Transparent, 1px `graphite` border (hairlineWidth on small buttons), text `mist`
 `bg rgba(255,255,255,0.05)`, text `fog`, radius badges(4), padding 2px 6px, Inter 12px. Status variants: `pulseGreen` dot + text for pass/verified, `coralRed` for fail, `acidLime` dot (never full fill) for running/in-progress, `fog` for pending/skipped.
 
 ### Bottom Tab Bar
-`bg carbon` with top hairline `graphite`, 4 tabs: **Build** (agent + trace), **Plan** (checklist), **Device** (preview/screenshot), **More** (memory, export, settings). Active: `acidLime` 2px top indicator + `paper` icon; inactive: `ash` icon + 12px label. Height 56px + safe-area inset. No badges with counts except a single lime dot for "build running".
+`bg carbon` with top hairline `graphite`, 4 tabs: **Build** (agent + trace + composer attachments), **Diff** (working tree against the template baseline), **Device** (Metro connection details, pairing QR), **More** (usage, triage, memory, workspace links). Active: `acidLime` 2px top indicator + `paper` icon; inactive: `ash` icon + 12px label. Height 56px + safe-area inset. No badges with counts except a single lime dot for "build running".
 
 ### Build Status Header (per screen top)
 Eyebrow `micro` caps (`BUILD 42 · ROUND 7`), 32px heading (project name), caption row (`verified (static only — boot could not run)` in amber when gates skipped — mirrors the web's partial-verified state). This is the mobile equivalent of the web command bar.
@@ -210,11 +210,17 @@ app/
     login.tsx            Email input + acid-lime Continue (16px inputs, no OAuth buttons v1)
     verify.tsx           6-box code entry (48px boxes, mono 20px, auto-advance)
   (tabs)/
-    _layout.tsx          Bottom tabs: Build / Plan / Device / More
+    _layout.tsx          Tabs: Build / Diff / Device / More, plus the push drawer (profile, history, settings, help, docs)
     build.tsx            Status header + streaming trace + composer (multiline input + lime send)
-    plan.tsx             Plan checklist sections + triage card (decision/date/exposure)
-    device.tsx           Phone-framed preview, screenshot button, gate verdict list
-    more.tsx             Memory list, export panel entry, tier badge, sign out
+    diff.tsx             Per-file working-tree diff with expandable hunks, same endpoint as web
+    device.tsx           Metro connection details, session controls, pairing QR, Metro activity
+    more.tsx             Usage, identity, billing triage, workspace links, memory, sign out
+  menu/
+    profile.tsx          Identity from /v1/me, sign out
+    history.tsx          Turn list for the active project, newest first
+    settings.tsx         Connection truth, push state, about
+    help.tsx             Offline FAQ plus a way into the guides
+    docs.tsx             Bundled guides rendered in the midnight voice
   project/[id].tsx       Project switcher sheet (bottom sheet, carbon, radius 12 top)
   session/[id].tsx       Deep link: session with device attached (from push)
 ```

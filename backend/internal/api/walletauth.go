@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/luckyisrael/talon/backend/internal/auth"
+	"github.com/luckyisrael/talon/backend/internal/notify"
 	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
@@ -23,12 +24,16 @@ import (
 // provider identity, (provider='solana', provider_id=pubkey), linked to
 // the existing account when one exists and creating one when none does.
 type WalletAuthHandler struct {
-	store *store.Store
-	auth  *auth.Service
+	store    *store.Store
+	auth     *auth.Service
+	notifier notify.Notifier
 }
 
-func NewWalletAuthHandler(s *store.Store, svc *auth.Service) *WalletAuthHandler {
-	return &WalletAuthHandler{store: s, auth: svc}
+func NewWalletAuthHandler(s *store.Store, svc *auth.Service, n notify.Notifier) *WalletAuthHandler {
+	if n == nil {
+		n = notify.Noop{}
+	}
+	return &WalletAuthHandler{store: s, auth: svc, notifier: n}
 }
 
 // Challenge issues the message the wallet must sign. Public: the whole
@@ -75,9 +80,9 @@ func (h *WalletAuthHandler) Challenge(w http.ResponseWriter, r *http.Request) {
 // failed attempt cannot be retried with a corrected guess.
 func (h *WalletAuthHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Wallet     string `json:"wallet"`
-		Nonce      string `json:"nonce"`
-		Signature  string `json:"signature"` // base64, as Phantom/Backpack signMessage return
+		Wallet    string `json:"wallet"`
+		Nonce     string `json:"nonce"`
+		Signature string `json:"signature"` // base64, as Phantom/Backpack signMessage return
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
 		req.Wallet == "" || req.Nonce == "" || req.Signature == "" {
@@ -123,13 +128,16 @@ func (h *WalletAuthHandler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.auth.GenerateToken(user.ID, user.Email)
+	token, refresh, _, err := issueSession(h.store, h.auth, user.ID, user.Email, deviceLabel(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not mint session")
 		return
 	}
+	notify.Dispatch(h.store, h.notifier, user.ID, notify.KindSignIn,
+		"New sign-in", "A new session started on your account. If this was not you, sign out everywhere from Profile.")
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"token": token,
+		"token":         token,
+		"refresh_token": refresh,
 		"user": map[string]interface{}{
 			"id":           user.ID,
 			"email":        user.Email,

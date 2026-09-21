@@ -1,111 +1,101 @@
-import React from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { Camera, Refresh, Send } from 'iconsax-react-native';
-import QRCodeStyled from 'react-native-qrcode-styled';
-import { Badge, Screen, UIText } from '@/components/ui';
-import { Colors, Spacing } from '@/constants/theme';
-import { useActiveProject, useCreateSession, useDestroySession, useTestInfo } from '@/hooks';
-import { getSessionId, setSessionId } from '@/lib/session';
-import { openMetroStream, type MetroEvent } from '@/lib/api';
+import React from 'react'
+import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import Clipboard from '@react-native-clipboard/clipboard'
+import QRCodeStyled from 'react-native-qrcode-styled'
+import { Badge, LimeButton, Screen, UIText } from '@/components/ui'
+import { Colors, Spacing } from '@/constants/theme'
+import { useActiveProject, useCreateSession, useDestroySession, useDeviceSession, useTestInfo } from '@/hooks'
+import { getSessionId, setSessionId } from '@/lib/session'
+import { openMetroStream, type MetroEvent } from '@/lib/api'
 
-// Device tab: the project's live device session — the frame, the session
-// state badge, real lifecycle controls (start/destroy), the honest logs
-// surface, and the pairing QR encoding this project's deep link. Every
-// value comes from the backend; the FauxQr placeholder and LOG_LINES seed
-// data are gone.
+// Device tab: Metro-first connection details for the phone in your hand.
+// This phone runs the installed dev client and reloads from Metro, so there
+// is no streamed preview here and no phone mockup. What this tab shows is
+// what helps: Metro state, the session behind the relay, the deep link with
+// copy and open actions, the APK for first installs, the pairing QR for
+// other phones, and the recent Metro events. Every value comes from the
+// backend.
 
-function IconButton({
-  icon,
-  label,
-  primary,
-  onPress,
-  disabled,
-}: {
-  icon: typeof Camera;
-  label: string;
-  primary?: boolean;
-  onPress: () => void;
-  disabled?: boolean;
-}) {
-  const Icon = icon;
-  return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      accessibilityLabel={label}
-      style={({ pressed }) => [
-        styles.iconBtn,
-        primary && styles.iconBtnPrimary,
-        pressed && !disabled && styles.iconBtnPressed,
-        disabled && styles.iconBtnOff,
-      ]}
-    >
-      <Icon
-        size={22}
-        color={disabled ? Colors.ash : primary ? Colors.acidLimeInk : Colors.mist}
-        variant="Linear"
-      />
-    </Pressable>
-  );
+function metroLabel(metro: MetroEvent | null): string {
+  if (!metro) return 'metro idle'
+  switch (metro.kind) {
+    case 'bundle_progress':
+      return `bundling ${metro.progress}%`
+    case 'bundle_start':
+      return 'bundling…'
+    case 'bundle_done':
+      return 'bundle ready'
+    case 'reloaded':
+      return 'reloaded'
+    case 'error':
+      return metro.text.slice(0, 40) || 'bundler error'
+    default:
+      return metro.text.slice(0, 30) || metro.kind
+  }
 }
 
 export default function DeviceScreen() {
-  const project = useActiveProject();
-  const projectId = project?.id ?? null;
-  const createSession = useCreateSession();
-  const destroySession = useDestroySession();
+  const project = useActiveProject()
+  const projectId = project?.id ?? null
+  const createSession = useCreateSession()
+  const destroySession = useDestroySession()
 
   // The session id persists across tab switches; the row is the truth.
-  const [sessionId, setLocalSessionId] = React.useState<number | null>(null);
+  const [sessionId, setLocalSessionId] = React.useState<number | null>(null)
   React.useEffect(() => {
-    let alive = true;
+    let alive = true
     if (projectId != null) {
       getSessionId(projectId).then((id) => {
-        if (alive && id != null) setLocalSessionId(id);
-      });
+        if (alive && id != null) setLocalSessionId(id)
+      })
     }
     return () => {
-      alive = false;
-    };
-  }, [projectId]);
+      alive = false
+    }
+  }, [projectId])
 
-  const { data: testInfo } = useTestInfo(projectId);
+  const { data: session } = useDeviceSession(sessionId)
+  const { data: testInfo } = useTestInfo(projectId)
 
-  // Metro badge — no video stream, just bundler events. Installed APK reloads from Metro.
-  const [metro, setMetro] = React.useState<MetroEvent | null>(null);
+  // Metro events: the bundler's voice, kept as a short recent list.
+  const [metroEvents, setMetroEvents] = React.useState<MetroEvent[]>([])
   React.useEffect(() => {
-    if (projectId == null) return;
-    let close: (() => void) | undefined;
+    if (projectId == null) return
+    let close: (() => void) | undefined
     void openMetroStream(
       projectId,
-      ev => setMetro(ev),
+      (ev) => setMetroEvents((prev) => [...prev.slice(-7), ev]),
       () => {},
-    ).then(c => (close = c));
-    return () => close?.();
-  }, [projectId]);
+    ).then((c) => (close = c))
+    return () => close?.()
+  }, [projectId])
+  const metro = metroEvents.length > 0 ? metroEvents[metroEvents.length - 1] : null
+  const metroError = metro?.kind === 'error' ? metro : null
 
-  async function startSession() {
-    if (projectId == null) return;
-    const s = await createSession.mutateAsync(projectId);
-    setLocalSessionId(s.id);
-    await setSessionId(projectId, s.id);
+  const [copied, setCopied] = React.useState(false)
+  function copyLink() {
+    if (!testInfo?.deep_link) return
+    Clipboard.setString(testInfo.deep_link)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
   }
 
-  const badgeTone =
-    sessionId == null ? 'neutral' : 'success';
-  const badgeLabel = sessionId == null ? 'no session' : 'live';
+  async function startSession() {
+    if (projectId == null) return
+    const s = await createSession.mutateAsync(projectId)
+    setLocalSessionId(s.id)
+    await setSessionId(projectId, s.id)
+  }
 
-  const metroLabel =
-    !metro ? 'metro idle'
-    : metro.kind === 'bundle_progress' ? `bundling ${metro.progress}%`
-    : metro.kind === 'bundle_start' ? 'bundling…'
-    : metro.kind === 'bundle_done' ? 'bundle ready'
-    : metro.kind === 'reloaded' ? 'reloaded ✓'
-    : metro.kind === 'error' ? `⚠ ${metro.text.slice(0, 40)}`
-    : metro.text.slice(0, 30) || metro.kind;
+  async function endSession() {
+    if (sessionId == null) return
+    await destroySession.mutateAsync(sessionId)
+    if (projectId != null) await setSessionId(projectId, null)
+    setLocalSessionId(null)
+  }
 
   return (
-    <Screen>
+    <Screen topInset={false}>
       <View style={styles.head}>
         <View style={styles.titles}>
           <UIText variant="micro" tone="faint">
@@ -115,97 +105,121 @@ export default function DeviceScreen() {
             Device
           </UIText>
         </View>
-        <Badge label={badgeLabel} tone={badgeTone as 'success'} />
+        <Badge
+          label={sessionId == null ? 'no session' : (session?.state ?? 'live')}
+          tone={sessionId == null ? 'neutral' : 'success'}
+        />
       </View>
 
       <View style={styles.metroBadge}>
-        <UIText variant="monoSm" tone="faint">{metroLabel}</UIText>
+        <UIText variant="monoSm" tone={metroError ? 'danger' : 'faint'}>
+          {metroLabel(metro)}
+        </UIText>
       </View>
 
       <ScrollView style={styles.stream} showsVerticalScrollIndicator={false}>
         <View style={styles.stack}>
-          <View style={styles.frame}>
-            {sessionId == null ? (
-              <View style={styles.frameEmpty}>
-                <UIText variant="title" tone="faint">
-                  {project ? project.name : 'No project'}
+          {/* This phone: Metro connects the installed app to the workspace.
+              No streaming, the screen in your hand is the render. */}
+          <View style={styles.card}>
+            <UIText variant="title" tone="hero">
+              This phone
+            </UIText>
+            <UIText variant="bodySm" tone="muted">
+              Install the dev client once. Metro connects it to the workspace and reloads after each turn.
+            </UIText>
+            {testInfo?.metro_url ? (
+              <UIText variant="monoSm" tone="faint" numberOfLines={1}>
+                {testInfo.metro_url}
+              </UIText>
+            ) : null}
+            {testInfo?.deep_link ? (
+              <View style={styles.linkRow}>
+                <UIText variant="monoSm" tone="body" numberOfLines={1} style={styles.linkText}>
+                  {testInfo.deep_link}
                 </UIText>
-                <UIText variant="caption" tone="faint">
-                  No device session. Start one to boot a live Android.
-                </UIText>
-                <Pressable
-                  onPress={startSession}
-                  disabled={projectId == null || createSession.isPending}
-                  style={({ pressed }) => [
-                    styles.startBtn,
-                    pressed && styles.iconBtnPressed,
-                    (projectId == null || createSession.isPending) && styles.iconBtnOff,
-                  ]}
-                >
-                  <UIText variant="label" tone="hero">
-                    {createSession.isPending ? 'Claiming a device…' : 'Start session'}
+                <Pressable onPress={copyLink} style={styles.miniBtn} accessibilityLabel="Copy deep link">
+                  <UIText variant="label" tone="body">
+                    {copied ? 'copied' : 'copy'}
                   </UIText>
                 </Pressable>
+              </View>
+            ) : null}
+            <View style={styles.actions}>
+              {testInfo?.deep_link ? (
+                <LimeButton title="Open on this phone" onPress={() => void Linking.openURL(testInfo.deep_link!)} />
+              ) : null}
+              {testInfo?.dev_client_url ? (
+                <Pressable onPress={() => void Linking.openURL(testInfo.dev_client_url!)}>
+                  <UIText variant="label" tone="muted" style={styles.underline}>
+                    Download the dev client (APK)
+                  </UIText>
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+
+          {/* Session: the relay behind the QR. Optional cloud device for
+              turns that need one; your phone does not need it. */}
+          <View style={styles.card}>
+            <UIText variant="title" tone="hero">
+              Session
+            </UIText>
+            {sessionId == null ? (
+              <>
+                <UIText variant="bodySm" tone="muted">
+                  No session. The pairing QR and Metro relay appear with one.
+                </UIText>
+                <LimeButton
+                  title={createSession.isPending ? 'Claiming a device…' : 'Start session'}
+                  disabled={projectId == null || createSession.isPending}
+                  onPress={startSession}
+                />
                 {createSession.isError && (
-                  <UIText variant="caption" tone="muted" style={{ color: Colors.coralRed }}>
-                    {createSession.error instanceof Error
-                      ? createSession.error.message
-                      : 'could not start the session'}
+                  <UIText variant="caption" style={{ color: Colors.coralRed }}>
+                    {createSession.error instanceof Error ? createSession.error.message : 'could not start the session'}
                   </UIText>
                 )}
-              </View>
+              </>
             ) : (
-              <View style={styles.frameLive}>
-                <UIText variant="title" tone="hero">
-                  Session #{sessionId}
-                </UIText>
-                <UIText variant="caption" tone="muted">
-                  Optional cloud device. For your phone, install the APK once — Metro reloads after each turn.
-                </UIText>
+              <>
+                <View style={styles.kvRow}>
+                  <UIText variant="caption" tone="muted">
+                    Session
+                  </UIText>
+                  <UIText variant="monoSm" tone="body">
+                    #{sessionId}
+                  </UIText>
+                </View>
+                <View style={styles.kvRow}>
+                  <UIText variant="caption" tone="muted">
+                    State
+                  </UIText>
+                  <UIText variant="monoSm" tone="body">
+                    {session?.state ?? 'live'}
+                  </UIText>
+                </View>
                 <Pressable
-                  onPress={async () => {
-                    await destroySession.mutateAsync(sessionId);
-                    if (projectId != null) await setSessionId(projectId, null);
-                    setLocalSessionId(null);
-                  }}
+                  onPress={endSession}
                   disabled={destroySession.isPending}
-                  style={({ pressed }) => [
-                    styles.stopBtn,
-                    pressed && styles.iconBtnPressed,
-                    destroySession.isPending && styles.iconBtnOff,
-                  ]}
+                  style={styles.destroyBtn}
+                  accessibilityLabel="Destroy session"
                 >
-                  <UIText variant="label" tone="hero" style={{ color: Colors.coralRed }}>
+                  <UIText variant="label" style={{ color: Colors.coralRed }}>
                     {destroySession.isPending ? 'Destroying…' : 'Destroy session'}
                   </UIText>
                 </Pressable>
-              </View>
+              </>
             )}
           </View>
 
-          {/* Toolbar: capture is the screenshot endpoint; rotate/install are
-              IDE-side actions — honest-disabled until a session exists. */}
-          <View style={styles.toolbar}>
-            <IconButton
-              icon={Camera}
-              label="Capture screenshot"
-              primary
-              disabled={sessionId == null}
-              onPress={() => {
-                // Screenshot fetch → share sheet lands with the relay work;
-                // the button is disabled-honest until then.
-              }}
-            />
-            <IconButton icon={Refresh} label="Rotate display" disabled={sessionId == null} onPress={() => {}} />
-            <IconButton icon={Send} label="Install current build" disabled={sessionId == null} onPress={() => {}} />
-          </View>
-
-          <UIText variant="title" tone="hero" style={styles.section}>
-            Test on this phone
-          </UIText>
-          <View style={styles.qrCard}>
+          {/* Pairing QR for other phones. */}
+          <View style={styles.card}>
+            <UIText variant="title" tone="hero">
+              Pair another phone
+            </UIText>
             {testInfo?.deep_link ? (
-              <>
+              <View style={styles.qrWrap}>
                 <QRCodeStyled
                   data={testInfo.deep_link}
                   padding={8}
@@ -213,51 +227,48 @@ export default function DeviceScreen() {
                   color={Colors.paper}
                   style={{ borderRadius: 8, backgroundColor: Colors.void }}
                 />
-                {/* P17: the deep-link handoff. This phone has the app — the
-                    QR is for OTHER phones. Pressing opens the exp:// link
-                    straight into the dev client: same credential, no
-                    camera dance. */}
-                <Pressable
-                  onPress={() => void Linking.openURL(testInfo.deep_link!)}
-                  style={({ pressed }) => [
-                    styles.openBtn,
-                    pressed && styles.iconBtnPressed,
-                  ]}
-                >
-                  <UIText variant="label" tone="hero">
-                    Open on this phone
-                  </UIText>
-                </Pressable>
-              </>
-            ) : (
-              <View style={styles.qrEmpty}>
-                <UIText variant="caption" tone="faint">
-                  {testInfo
-                    ? testInfo.reason || 'not available yet — build the project first'
-                    : 'loading…'}
+                <UIText variant="caption" tone="muted" style={styles.center}>
+                  Scan with the other phone camera, or open it in the dev client there.
                 </UIText>
               </View>
-            )}
-            <UIText variant="caption" tone="muted" style={styles.qrCaption}>
-              {testInfo?.deep_link
-                ? 'Install the APK once, then Open — Metro connects to the workspace and reloads after each turn. No streaming.'
-                : 'The pairing QR appears when the project has a testable build.'}
-            </UIText>
-            {testInfo?.metro_url ? (
-              <UIText variant="monoSm" tone="faint" style={{ textAlign: 'center' }}>
-                Metro: {testInfo.metro_url}
+            ) : (
+              <UIText variant="caption" tone="faint" style={styles.center}>
+                {testInfo ? testInfo.reason || 'Not available yet. Build the project first.' : 'Loading…'}
               </UIText>
-            ) : null}
-            {testInfo?.dev_client_url ? (
-              <Pressable onPress={() => void Linking.openURL(testInfo.dev_client_url!)}>
-                <UIText variant="label" tone="muted" style={{ textDecorationLine: 'underline' }}>Download APK</UIText>
-              </Pressable>
-            ) : null}
+            )}
           </View>
+
+          {/* Recent Metro events: what the bundler just did. */}
+          {metroEvents.length > 0 && (
+            <View style={styles.card}>
+              <UIText variant="title" tone="hero">
+                Metro activity
+              </UIText>
+              {metroEvents
+                .slice(-6)
+                .reverse()
+                .map((ev, i) => (
+                  <View key={`${i}-${ev.kind}`} style={styles.metroRow}>
+                    <UIText variant="monoSm" tone={ev.kind === 'error' ? 'danger' : 'faint'}>
+                      {ev.kind.replaceAll('_', ' ')}
+                    </UIText>
+                    {ev.text ? (
+                      <UIText variant="caption" tone="muted" numberOfLines={1} style={styles.metroText}>
+                        {ev.text}
+                      </UIText>
+                    ) : null}
+                  </View>
+                ))}
+            </View>
+          )}
+
+          <UIText variant="caption" tone="faint" style={styles.center}>
+            On your own device the agent cannot see the screen or logs. Changes you test there are yours to verify.
+          </UIText>
         </View>
       </ScrollView>
     </Screen>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -268,91 +279,53 @@ const styles = StyleSheet.create({
     gap: Spacing.s12,
     marginBottom: Spacing.s4,
   },
+  titles: { gap: 8, flex: 1 },
   metroBadge: {
     alignSelf: 'flex-start',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 9999,
     backgroundColor: Colors.carbon,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.graphite,
     marginTop: 6,
     marginBottom: 4,
   },
-  titles: { gap: 8, flex: 1 },
   stream: { flex: 1, marginTop: Spacing.s12 },
-  stack: { gap: Spacing.s16, paddingBottom: Spacing.s32 },
-  frame: {
-    aspectRatio: 9 / 16,
+  stack: { gap: Spacing.s12, paddingBottom: Spacing.s32 },
+  card: {
+    backgroundColor: Colors.carbon,
     borderRadius: 12,
-    backgroundColor: Colors.carbon,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.graphite,
-    alignItems: 'center',
-    justifyContent: 'center',
     padding: Spacing.s16,
-  },
-  frameEmpty: { alignItems: 'center', gap: Spacing.s8 },
-  frameLive: { alignItems: 'center', gap: Spacing.s12 },
-  startBtn: {
-    marginTop: Spacing.s8,
-    paddingHorizontal: 16,
-    minHeight: 44,
-    borderRadius: 10,
-    backgroundColor: Colors.acidLime,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stopBtn: {
-    marginTop: Spacing.s8,
-    paddingHorizontal: 16,
-    minHeight: 44,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.coralRed,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toolbar: { flexDirection: 'row', gap: Spacing.s12, alignItems: 'center' },
-  iconBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: Colors.carbon,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.graphite,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconBtnPrimary: { backgroundColor: Colors.acidLime, borderColor: Colors.acidLime },
-  iconBtnPressed: { opacity: 0.7 },
-  iconBtnOff: { opacity: 0.35 },
-  section: { marginTop: Spacing.s8 },
-  qrCard: {
-    borderRadius: 12,
-    backgroundColor: Colors.carbon,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.graphite,
-    padding: Spacing.s16,
-    alignItems: 'center',
     gap: Spacing.s12,
   },
-  qrEmpty: {
-    width: 168,
-    height: 168,
+  linkRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.void,
+    gap: Spacing.s8,
+    backgroundColor: Colors.obsidian,
     borderRadius: 8,
-    padding: Spacing.s12,
+    padding: 6,
   },
-  openBtn: {
-    minHeight: 44,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    backgroundColor: Colors.acidLime,
+  linkText: { flex: 1, paddingHorizontal: 6 },
+  miniBtn: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: Colors.graphite,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  qrCaption: { textAlign: 'center' },
-});
+  actions: { gap: Spacing.s8, alignItems: 'stretch' },
+  underline: { textDecorationLine: 'underline', textAlign: 'center' },
+  kvRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  destroyBtn: {
+    minHeight: 44,
+    borderRadius: 10,
+    backgroundColor: Colors.obsidian,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qrWrap: { alignItems: 'center', gap: Spacing.s12 },
+  center: { textAlign: 'center' },
+  metroRow: { flexDirection: 'row', alignItems: 'baseline', gap: Spacing.s8 },
+  metroText: { flex: 1 },
+})

@@ -13,3 +13,4 @@ func (t *InspectPackage) ReadOnly() bool { return true }
 func (t *FindFiles) ReadOnly() bool      { return true }
 func (t *Explore) ReadOnly() bool        { return true }
 func (t *ReadMemory) ReadOnly() bool     { return true }
+func (t *ReadPluginFile) ReadOnly() bool  { return true }
