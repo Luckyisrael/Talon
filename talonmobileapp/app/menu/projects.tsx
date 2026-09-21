@@ -2,9 +2,11 @@ import React from 'react'
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { MenuScreen } from '@/components/nav/MenuScreen'
-import { Badge, Field, LimeButton, UIText } from '@/components/ui'
+import { Badge, Field, LimeButton, SubtleCard, UIText } from '@/components/ui'
 import { Colors, Spacing } from '@/constants/theme'
 import { useActiveProject, useCreateProject, useProjects, useSetActiveProject } from '@/hooks'
+import { memoryApi } from '@/lib/api'
+import { useQuery } from '@tanstack/react-query'
 
 // Projects: every app on this account, the mobile dashboard. Tapping one
 // pins it active across Build, Diff, and Device, then returns to Build.
@@ -15,6 +17,13 @@ export default function ProjectsScreen() {
   const setActiveProject = useSetActiveProject()
   const createProject = useCreateProject()
   const [name, setName] = React.useState('')
+  const activeId = active?.id ?? null
+  const { data: memory } = useQuery({
+    queryKey: ['memory', activeId],
+    enabled: activeId != null,
+    queryFn: () => memoryApi.get(activeId!),
+  })
+  const memories = memory?.memories ?? []
 
   async function create() {
     const trimmed = name.trim()
@@ -91,6 +100,28 @@ export default function ProjectsScreen() {
           })}
         </View>
       </ScrollView>
+      {/* Agent memory belongs to the active project, so it lives here with
+          it: what the agent knows, readable anywhere, written only by turns. */}
+      {activeId != null && (
+        <UIText variant="title" tone="hero" style={styles.memHead}>
+          Agent memory
+        </UIText>
+      )}
+      {activeId != null && memories.length === 0 && (
+        <UIText variant="bodySm" tone="muted" style={styles.empty}>
+          The agent has not written any memories for this project yet.
+        </UIText>
+      )}
+      {memories.map((m) => (
+        <SubtleCard key={m.id}>
+          <UIText variant="label" tone="faint" style={styles.memType}>
+            {m.kind.toUpperCase()}
+          </UIText>
+          <UIText variant="bodySm" tone="body">
+            {m.text}
+          </UIText>
+        </SubtleCard>
+      ))}
     </MenuScreen>
   )
 }
@@ -113,4 +144,6 @@ const styles = StyleSheet.create({
   },
   meta: { gap: 2, flex: 1 },
   pressed: { opacity: 0.7 },
+  memHead: { marginTop: Spacing.s8 },
+  memType: { marginBottom: 2 },
 })

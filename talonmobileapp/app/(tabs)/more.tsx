@@ -1,12 +1,11 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Badge, Card, Field, GhostButton, LimeButton, Screen, SubtleCard, UIText } from '@/components/ui';
+import { Badge, Card, Field, GhostButton, LimeButton, Screen, UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
-import { useActiveProject, useMe, useNotifications, useSaveTriage, useTriage, useUsage } from '@/hooks';
-import { authApi, memoryApi } from '@/lib/api';
+import { useActiveProject, useMe, useSaveTriage, useTriage, useUsage } from '@/hooks';
+import { authApi } from '@/lib/api';
 import { clearToken } from '@/lib/auth';
-import { useQuery } from '@tanstack/react-query';
 
 const MENU_LINKS = [
   { label: 'Projects', route: '/menu/projects' },
@@ -18,9 +17,10 @@ const MENU_LINKS = [
   { label: 'Documentation', route: '/menu/docs' },
 ] as const;
 
-// More tab: usage (real cents), profile tier, billing triage, project memory
-// (what the agent knows), notifications (OneSignal-backed in-app history),
-// and sign-out. No dummy meters, no seed memories.
+// More tab: the account hub. Usage (real cents), profile tier, the billing
+// triage for the active project, workspace links, and sign-out.
+// Notifications live behind the bell in the top bar; agent memory lives
+// on the Projects screen with the project it belongs to.
 
 const TRIAGE_DECISIONS = ['Undecided', 'Cut over now', 'Cut over on a date', 'Stay on simulator'];
 
@@ -30,22 +30,14 @@ export default function MoreScreen() {
   const projectId = project?.id ?? null;
   const { data: usage } = useUsage();
   const { data: me } = useMe();
-  const { data: notifications } = useNotifications();
   const { data: triage } = useTriage(projectId);
   const saveTriage = useSaveTriage(projectId ?? 0);
-  const { data: memory } = useQuery({
-    queryKey: ['memory', projectId],
-    enabled: projectId != null,
-    queryFn: () => memoryApi.get(projectId!),
-  });
 
   const used = usage?.prompts_used ?? 0;
   const limit = usage?.prompts_limit ?? 0;
   const unlimited = limit < 0;
   const pct = unlimited || limit <= 0 ? 0 : Math.max(0, Math.min(100, Math.round((used / limit) * 100)));
   const deviceMinutes = usage?.device_minutes ?? 0;
-
-  const memories = memory?.memories ?? [];
 
   const [decision, setDecision] = React.useState('');
   const [date, setDate] = React.useState('');
@@ -178,26 +170,6 @@ export default function MoreScreen() {
             </Card>
           )}
 
-          {/* Notifications: the in-app history of what OneSignal pushed. */}
-          <UIText variant="title" tone="hero">
-            Notifications
-          </UIText>
-          {(notifications ?? []).length === 0 && (
-            <UIText variant="bodySm" tone="muted" style={styles.empty}>
-              Nothing yet. Input-needed pauses and build finishes land here.
-            </UIText>
-          )}
-          {(notifications ?? []).map((n) => (
-            <SubtleCard key={n.id}>
-              <UIText variant="label" tone="faint" style={styles.memType}>
-                {n.kind.toUpperCase()}
-              </UIText>
-              <UIText variant="bodySm" tone="body" numberOfLines={4}>
-                {n.payload}
-              </UIText>
-            </SubtleCard>
-          ))}
-
           <UIText variant="title" tone="hero">
             Workspace
           </UIText>
@@ -218,30 +190,6 @@ export default function MoreScreen() {
               </Pressable>
             ))}
           </View>
-
-          <UIText variant="title" tone="hero">
-            Memory
-          </UIText>
-          {projectId == null && (
-            <UIText variant="bodySm" tone="muted" style={styles.empty}>
-              No project. Memory follows the active project.
-            </UIText>
-          )}
-          {projectId != null && memories.length === 0 && (
-            <UIText variant="bodySm" tone="muted" style={styles.empty}>
-              The agent has not written any memories for this project yet.
-            </UIText>
-          )}
-          {memories.map((m) => (
-            <SubtleCard key={m.id}>
-              <UIText variant="label" tone="faint" style={styles.memType}>
-                {m.kind.toUpperCase()}
-              </UIText>
-              <UIText variant="bodySm" tone="body">
-                {m.text}
-              </UIText>
-            </SubtleCard>
-          ))}
 
           <GhostButton title="Sign out" onPress={signOut} />
         </View>

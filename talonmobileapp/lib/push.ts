@@ -21,20 +21,47 @@ export function pushAvailable(): boolean {
 }
 
 /**
- * Initialize OneSignal and request push permission. Safe to call once per
- * app start; a missing app id is a no-op, not an error, the same dark
- * honesty the backend's Noop notifier has.
+ * Initialize OneSignal without prompting. The permission dialog belongs to
+ * the setup screen (app/notification-setup.tsx), never to app start: the
+ * person grants it knowing why, not as a cold open ambush.
  */
 export function initPush(): void {
   if (inited || !pushAvailable()) return;
   inited = true;
 
-  // OneSignal 5.x: initialize + request. Requires privacy consent off in
+  // OneSignal 5.x: initialize only. Requires privacy consent off in
   // dev unless the app collects it, this app does not track.
   OneSignal.initialize(APP_ID);
-  OneSignal.Notifications.requestPermission(false).catch(() => {
-    // Permission denied is a user choice, not an error to surface.
-  });
+}
+
+/** Whether the OS permission currently reads granted. False when push is
+ *  dark (no app id) so callers show setup, never a dead toggle. */
+export async function pushPermissionGranted(): Promise<boolean> {
+  if (!pushAvailable()) return false;
+  try {
+    return await OneSignal.Notifications.getPermissionAsync();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ask for push permission from the setup screen, then bind the device.
+ * Returns true only when the OS granted and the backend holds the token.
+ * A denial is a user choice: the in-app history keeps working regardless.
+ */
+export async function requestPushPermission(): Promise<boolean> {
+  if (!pushAvailable()) return false;
+  initPush();
+  let granted = false;
+  try {
+    granted = await OneSignal.Notifications.requestPermission(true);
+  } catch {
+    granted = false;
+  }
+  if (!granted) return false;
+  const id = await registerPushWithBackend();
+  return id !== '';
 }
 
 /**

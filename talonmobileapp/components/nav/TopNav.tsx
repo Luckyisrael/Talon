@@ -2,9 +2,10 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { User } from 'iconsax-react-native';
+import { Notification, User } from 'iconsax-react-native';
 import { UIText } from '@/components/ui';
 import { Colors, Radii, Spacing } from '@/constants/theme';
+import { useNotifications } from '@/hooks';
 
 const TABS = [
   { segment: 'build', label: 'Build' },
@@ -21,6 +22,8 @@ export function TopNav({ onProfilePress }: { onProfilePress: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { data: notifications } = useNotifications();
+  const unread = (notifications ?? []).filter((n) => !n.read_at).length;
 
   return (
     <View style={[styles.bar, { paddingTop: insets.top + Spacing.s8 }]}>
@@ -54,6 +57,15 @@ export function TopNav({ onProfilePress }: { onProfilePress: () => void }) {
           );
         })}
       </View>
+      <Pressable
+        onPress={() => router.push('/menu/notifications')}
+        accessibilityLabel="Open notifications"
+        accessibilityRole="button"
+        style={({ pressed }) => [styles.bell, pressed && styles.pressed]}
+      >
+        <Notification size={18} color={Colors.mist} variant="Bulk" />
+        {unread > 0 && <View style={styles.unreadDot} />}
+      </Pressable>
     </View>
   );
 }
@@ -76,6 +88,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pressed: { opacity: 0.6 },
+  bell: {
+    width: 40,
+    minHeight: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.carbon,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadDot: {
+    position: 'absolute',
+    top: 9,
+    right: 10,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.acidLime,
+  },
   items: { flexDirection: 'row', gap: Spacing.s8, flex: 1 },
   item: {
     flexDirection: 'row',

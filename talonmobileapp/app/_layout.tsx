@@ -38,6 +38,8 @@ export default function RootLayout() {
         <Stack.Screen name="menu/projects" options={{ headerShown: false }} />
         <Stack.Screen name="menu/upgrade" options={{ headerShown: false }} />
         <Stack.Screen name="menu/history" options={{ headerShown: false }} />
+        <Stack.Screen name="menu/notifications" options={{ headerShown: false }} />
+        <Stack.Screen name="notification-setup" options={{ headerShown: false }} />
         <Stack.Screen name="menu/settings" options={{ headerShown: false }} />
         <Stack.Screen name="menu/help" options={{ headerShown: false }} />
         <Stack.Screen name="menu/docs" options={{ headerShown: false }} />
