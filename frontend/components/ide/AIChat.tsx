@@ -1742,6 +1742,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               rate limit, not a stall
             </p>
           ) : null}
+          <ComposerAttachments items={staged} onRemove={removeStaged} error={attError} />
           <form
             onSubmit={handleSubmit}
             className={`composer-in${dragging ? " drag" : ""}`}
@@ -1764,8 +1765,6 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               if (files && files.length > 0) addFiles(files);
             }}
           >
-            <ComposerAttachments items={staged} onRemove={removeStaged} error={attError} />
-            <div className="composer-row">
             <textarea
               ref={textareaRef}
               rows={1}
@@ -1889,7 +1888,6 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                   <path d="M12 19V5M5 12l7-7 7 7" />
                 </svg>
               </button>
-            </div>
             </div>
           </form>
           {/* The meta row: the session's honesty — live state, token budget,
