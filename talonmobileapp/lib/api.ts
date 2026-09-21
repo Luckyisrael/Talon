@@ -277,18 +277,30 @@ export const projectsApi = {
 
 // ── Conversation (history + diff) ─────────────────────────
 export const conversationApi = {
-  get(projectId: number, opts?: { beforeSeq?: number; limit?: number }) {
+  async get(projectId: number, opts?: { beforeSeq?: number; limit?: number }) {
     const params = new URLSearchParams()
     if (opts?.beforeSeq) params.set('before_seq', String(opts.beforeSeq))
     if (opts?.limit) params.set('limit', String(opts.limit))
     const query = params.toString()
-    return request<{
+    const res = await request<{
       turns: { role: string; blocks: ConversationBlock[]; prompt_id?: number; seq?: number; at: string }[] | null
       latest?: { id: number; status: string } | null
       latest_seq?: number
       usage?: Usage | null
       planTasks?: PlanTask[] | null
     }>(`/v1/projects/${projectId}/conversation${query ? `?${query}` : ''}`)
+    // The wire format names the block discriminator `type`; this app reads
+    // `kind` everywhere. Normalize once here so every consumer (transcript,
+    // snapshot cache, search) sees one shape. Without this every turn
+    // filters to nothing and the Build tab shows an empty Transcript label.
+    for (const t of res.turns ?? []) {
+      for (const b of t.blocks ?? []) {
+        if (!b.kind && typeof (b as unknown as { type?: unknown }).type === 'string') {
+          b.kind = (b as unknown as { type: string }).type
+        }
+      }
+    }
+    return res
   },
   diff(projectId: number) {
     return request<{ diff: string; note?: string }>(`/v1/projects/${projectId}/diff`)
