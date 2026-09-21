@@ -23,6 +23,96 @@ type ConversationMessage struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// Conversation is one chat thread within a project. A project can hold many;
+// EnsureDefaultConversation keeps every pre-existing project working with
+// exactly one, unlabeled, so this is additive — nothing that only knew
+// project_id has to change to keep working.
+type Conversation struct {
+	ID           int64     `json:"id"`
+	ProjectID    int64     `json:"project_id"`
+	Title        string    `json:"title"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastActiveAt time.Time `json:"last_active_at"`
+}
+
+// CreateConversation starts a new, empty chat thread in the project — the
+// "new chat" action.
+func (s *Store) CreateConversation(projectID int64, title string) (*Conversation, error) {
+	res, err := s.db.Exec(
+		"INSERT INTO conversations (project_id, title) VALUES (?, ?)",
+		projectID, title,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetConversationByID(id)
+}
+
+// GetConversationByID reads one conversation row.
+func (s *Store) GetConversationByID(id int64) (*Conversation, error) {
+	var c Conversation
+	err := s.db.QueryRow(
+		`SELECT id, project_id, title, created_at, last_active_at FROM conversations WHERE id = ?`, id,
+	).Scan(&c.ID, &c.ProjectID, &c.Title, &c.CreatedAt, &c.LastActiveAt)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// ListConversations returns a project's chat threads, most recently active
+// first — the sidebar's expand-under-project list.
+func (s *Store) ListConversations(projectID int64) ([]Conversation, error) {
+	rows, err := s.db.Query(
+		`SELECT id, project_id, title, created_at, last_active_at
+		 FROM conversations WHERE project_id = ? ORDER BY last_active_at DESC`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Conversation
+	for rows.Next() {
+		var c Conversation
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Title, &c.CreatedAt, &c.LastActiveAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// EnsureDefaultConversation returns the project's most recently active
+// conversation, creating the project's first one if it has none yet. Every
+// prompt needs a conversation_id; a caller that does not name one (an older
+// client, or a request that just wants "the current chat") lands here
+// instead of failing.
+func (s *Store) EnsureDefaultConversation(projectID int64) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(
+		`SELECT id FROM conversations WHERE project_id = ? ORDER BY last_active_at DESC LIMIT 1`, projectID,
+	).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+	c, err := s.CreateConversation(projectID, "")
+	if err != nil {
+		return 0, err
+	}
+	return c.ID, nil
+}
+
+// TouchConversation bumps last_active_at — called whenever a prompt lands in
+// the thread, so ListConversations' ordering reflects real recency.
+func (s *Store) TouchConversation(id int64) error {
+	_, err := s.db.Exec("UPDATE conversations SET last_active_at = CURRENT_TIMESTAMP WHERE id = ?", id)
+	return err
+}
+
 // AppendMessage stores one turn at the next sequence number for the project.
 // user_id is denormalized from projects for per-tenant RLS — every row is
 // tagged with its owner so a DB-level filter can enforce isolation.
@@ -85,6 +175,46 @@ func (s *Store) GetConversation(projectID int64, limit int) ([]ConversationMessa
 
 // scanConversationRows drains message rows in chronological order.
 func scanConversationRows(rows *sql.Rows) ([]ConversationMessage, error) {
+	var msgs []ConversationMessage
+	for rows.Next() {
+		var m ConversationMessage
+		if err := rows.Scan(&m.ID, &m.ProjectID, &m.PromptID, &m.Seq, &m.Role,
+			&m.Blocks, &m.InputTokens, &m.OutputTokens, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	return msgs, nil
+}
+
+// GetConversationThread is GetConversation scoped to one chat thread instead
+// of the whole project. It joins through prompts (which carries
+// conversation_id) rather than adding the column to conversation_messages
+// itself — AppendMessage is called deep in the streaming turn loop, and this
+// keeps that path untouched.
+func (s *Store) GetConversationThread(conversationID int64, limit int) ([]ConversationMessage, error) {
+	q := `SELECT cm.id, cm.project_id, cm.prompt_id, cm.seq, cm.role, cm.blocks, cm.input_tokens, cm.output_tokens, cm.created_at
+	      FROM conversation_messages cm
+	      JOIN prompts p ON p.id = cm.prompt_id
+	      WHERE p.conversation_id = ?
+	      ORDER BY cm.seq DESC`
+	args := []any{conversationID}
+	if limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
 	var msgs []ConversationMessage
 	for rows.Next() {
 		var m ConversationMessage

@@ -448,7 +448,7 @@ export default function PhonePreview({
     : "1080 / 2400";
 
   return (
-    <section className="relative flex h-full min-h-0 flex-col overflow-hidden bg-void">
+    <section className="relative flex h-full min-h-0 flex-col overflow-hidden">
       <div
         className="relative flex min-h-0 flex-1 items-center justify-center p-3"
         // The stage is a query container so the phone can measure the real
@@ -468,8 +468,8 @@ export default function PhonePreview({
           // session starts, not as a small placeholder.
           style={
             landscape
-              ? { aspectRatio: aspect, height: "100%", maxWidth: "100%" }
-              : { aspectRatio: aspect, width: "100%", maxHeight: "100%" }
+              ? { aspectRatio: aspect, height: "100%", maxWidth: "100%", maxHeight: 420, minHeight: 200 }
+              : { aspectRatio: aspect, width: "100%", maxHeight: "100%", maxWidth: 420, minWidth: 200 }
           }
         >
             {/* ── Device frame ──

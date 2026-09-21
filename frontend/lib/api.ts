@@ -3,6 +3,7 @@ import type {
   ArchitectureDecision,
   AuthResponse,
   Checkout,
+  Conversation,
   ExportJob,
   FileEntry,
   GitPushResult,
@@ -362,7 +363,7 @@ export function isResumable(latest: LatestPrompt | null): boolean {
 export const conversation = {
   async get(
     projectId: number,
-    opts?: { beforeSeq?: number; limit?: number },
+    opts?: { beforeSeq?: number; limit?: number; conversationId?: number },
   ): Promise<{
     turns: ConversationTurn[];
     latest: LatestPrompt | null;
@@ -373,6 +374,8 @@ export const conversation = {
     const params = new URLSearchParams();
     if (opts?.beforeSeq) params.set("before_seq", String(opts.beforeSeq));
     if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.conversationId)
+      params.set("conversation_id", String(opts.conversationId));
     const query = params.toString();
     const res = await request<{
       turns: ConversationTurn[] | null;
@@ -462,6 +465,21 @@ export const conversation = {
     return request<{ items: { messageId: string; rating: number; comment: string; at: string }[] }>(
       `/v1/projects/${projectId}/feedback`,
     );
+  },
+};
+
+// ── Chat threads: multiple chats per project ───────────
+
+export const conversations = {
+  list(projectId: number) {
+    return request<Conversation[]>(`/v1/projects/${projectId}/conversations`);
+  },
+
+  create(projectId: number, title?: string) {
+    return request<Conversation>(`/v1/projects/${projectId}/conversations`, {
+      method: "POST",
+      body: JSON.stringify({ title: title ?? "" }),
+    });
   },
 };
 
@@ -684,11 +702,17 @@ export function streamPrompt(
   mode: "plan" | "build",
   onEvent: (event: StreamEvent) => void,
   onError?: (error: Error) => void,
-  attachmentIds: number[] = [],
+  opts: { attachmentIds?: number[]; conversationId?: number } = {},
 ): AbortController {
   return openEventStream(
     "/v1/prompts/stream",
-    { project_id: projectId, prompt, mode, attachment_ids: attachmentIds },
+    {
+      project_id: projectId,
+      conversation_id: opts.conversationId || undefined,
+      prompt,
+      mode,
+      attachment_ids: opts.attachmentIds ?? [],
+    },
     onEvent,
     onError,
   );

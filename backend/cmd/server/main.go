@@ -251,7 +251,7 @@ func main() {
 		log.Print("attachments: R2 env absent — images stay on local disk")
 	}
 	var warmPool *redroid.Pool
-	if warmPoolSize > 0 {
+	if warmPoolSize > 0 && containerMgr != nil {
 		warmPool = redroid.NewPool(containerMgr, warmPoolSize)
 	}
 	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, relayAlloc, warmPool, workspaceDir, devClientMgr, walletMgr, pushNotifier)
@@ -422,6 +422,10 @@ func main() {
 		// Uploaded unclaimed, claimed exactly once by the send.
 		r.Post("/v1/projects/{id}/attachments", promptHandler.UploadAttachment)
 		r.Get("/v1/projects/{id}/attachments/{attID}", promptHandler.DownloadAttachment)
+
+		// Chat threads — multiple chats per project.
+		r.Get("/v1/projects/{projectID}/conversations", promptHandler.ListConversations)
+		r.Post("/v1/projects/{projectID}/conversations", promptHandler.CreateConversation)
 
 		// Checkpoints — undo for anything the agent changed.
 		r.Get("/v1/projects/{projectID}/checkpoints", promptHandler.ListCheckpoints)

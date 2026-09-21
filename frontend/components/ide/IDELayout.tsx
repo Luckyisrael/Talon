@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { git, projects, sessions } from "@/lib/api";
 import { useIDEStore } from "@/lib/store";
 import type { PlanData } from "@/lib/types";
@@ -27,6 +27,17 @@ interface IDELayoutProps {
   onExit: () => void;
 }
 
+/** The five things that can dock on the right, opened from the topbar. */
+export type DockPanel = "files" | "terminal" | "memory" | "triage" | "device";
+
+const DOCK_TITLES: Record<DockPanel, string> = {
+  files: "Changed files",
+  terminal: "Terminal",
+  memory: "Memory",
+  triage: "Triage",
+  device: "Device preview",
+};
+
 export default function IDELayout({
   projectId,
   projectName,
@@ -35,10 +46,10 @@ export default function IDELayout({
 }: IDELayoutProps) {
   const store = useIDEStore();
   const aiChatRef = useRef<AIChatHandle>(null);
-  // §7: the live turn's trace, lifted from AIChat so the centre pane's
-  // AgentWorkspace renders the full-fidelity transcript alongside the
-  // compact rail. Stable identity keeps AIChat's lift effect from
-  // refiring every render.
+  // Which chat thread within this project is open. undefined = the
+  // project's default thread — every project that predates multi-chat, or
+  // one nobody has started a second chat in yet.
+  const [conversationId, setConversationId] = useState<number | undefined>(undefined);
   const [liveTrace, setLiveTrace] = useState<TraceRow[]>([]);
   const [liveTouchedFiles, setLiveTouchedFiles] = useState<string[]>([]);
   const [livePlanTasks, setLivePlanTasks] = useState<PlanTask[]>([]);
@@ -50,7 +61,6 @@ export default function IDELayout({
     },
     [],
   );
-  const [leftTab, setLeftTab] = useState<"chat" | "files" | "memory" | "triage">("chat");
   const [gitMeta, setGitMeta] = useState<null | { branch: string; dirty: number; ahead: number; behind: number; last_commit: string }>(null);
   const refreshGit = useCallback(async () => {
     try {
@@ -68,22 +78,126 @@ export default function IDELayout({
     if (liveTouchedFiles.length > 0) void refreshGit();
   }, [liveTouchedFiles, refreshGit]);
 
-  // Below md the agent panel is a slide-over drawer rather than a fixed column.
-  // isDesktop gates which one mounts, so there is only ever one AIChat instance
-  // and a build stream is never duplicated or torn down by the switch.
+  // ── Dock: Files/Terminal/Memory/Triage/Device, opened from the topbar.
+  // Device starts open — it's the product's core feature, not an
+  // opt-in extra. Two or more open at once can tile stacked or side by
+  // side (dockSplit), the same pattern as Claude Desktop's multi-panel view.
+  const [openPanels, setOpenPanels] = useState<Record<DockPanel, boolean>>({
+    files: false,
+    terminal: false,
+    memory: false,
+    triage: false,
+    device: true,
+  });
+  const [dockSplit, setDockSplit] = useState<"col" | "row">("col");
+  // Explicit pixel sizes for open dock panels, set only once someone drags a
+  // split handle — until then every panel is an even 1fr and this stays
+  // empty. Cleared whenever the open set or the split axis changes, since a
+  // size measured under the old layout means nothing under the new one.
+  const [panelFlex, setPanelFlex] = useState<Partial<Record<DockPanel, number>>>({});
+  const sectionRefs = useRef<Partial<Record<DockPanel, HTMLElement | null>>>({});
+  const togglePanel = useCallback((panel: DockPanel) => {
+    setOpenPanels((prev) => ({ ...prev, [panel]: !prev[panel] }));
+    setPanelFlex({});
+  }, []);
+  const openCount = Object.values(openPanels).filter(Boolean).length;
+  const [deviceTab, setDeviceTab] = useState<"device" | "app">("device");
+
   const isDesktop = useIsDesktop();
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
-  // On narrow screens the device panel is a drawer; this is whether it is
-  // slid in. Harmless above 1180px, where the media query ignores it.
-  const [devicePeek, setDevicePeek] = useState(false);
 
-  // On a phone, picking a file should reveal the editor behind the drawer.
-  // Harmless on desktop, where the drawer state is never shown.
-  const selectFile = useCallback((path: string) => {
-    useIDEStore.getState().selectFile(path);
-    setMobilePanelOpen(false);
+  const [dockWidth, setDockWidth] = useState(392);
+  const [isDragging, setIsDragging] = useState(false);
+  const startXDock = useRef(0);
+  const startWidthDock = useRef(0);
+
+  // ── Rail resize: drag the handle at its right edge. Dragging it thin
+  // auto-collapses (matching a click on the rail's own toggle); dragging a
+  // collapsed rail back out past the threshold re-expands it — the same
+  // thresholds the design sample established.
+  const [railWidth, setRailWidth] = useState(212);
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  const [isDraggingRail, setIsDraggingRail] = useState(false);
+  const startXRail = useRef(0);
+  const startWidthRail = useRef(0);
+  const draggingRailRef = useRef(false);
+
+  // ── Dock split-drag: the handle between two open panels, dragged along
+  // whichever axis dockSplit runs. Sizes are read off the live DOM at
+  // pointerdown (not stored state), so the very first drag of a session
+  // starts from each panel's real on-screen size instead of an invented one.
+  const splitDrag = useRef<{
+    a: DockPanel;
+    b: DockPanel;
+    axis: "row" | "col";
+    startPos: number;
+    startA: number;
+    total: number;
+  } | null>(null);
+  const [isDraggingSplit, setIsDraggingSplit] = useState(false);
+
+  useEffect(() => {
+    function onPointerMove(e: PointerEvent) {
+      if (startWidthDock.current > 0) {
+        let newWidth = startWidthDock.current - (e.clientX - startXDock.current);
+        if (newWidth < 280) newWidth = 280;
+        if (newWidth > window.innerWidth * 0.7) newWidth = window.innerWidth * 0.7;
+        setDockWidth(newWidth);
+      }
+      if (draggingRailRef.current) {
+        const newWidth = startWidthRail.current + (e.clientX - startXRail.current);
+        setRailCollapsed(newWidth <= 50);
+        setRailWidth(Math.max(64, Math.min(480, newWidth)));
+      }
+      const split = splitDrag.current;
+      if (split) {
+        const pos = split.axis === "row" ? e.clientX : e.clientY;
+        const delta = pos - split.startPos;
+        const minSize = 80;
+        const newA = Math.max(minSize, Math.min(split.total - minSize, split.startA + delta));
+        setPanelFlex((prev) => ({ ...prev, [split.a]: newA, [split.b]: split.total - newA }));
+      }
+    }
+    function onPointerUp() {
+      if (startWidthDock.current > 0) {
+        startWidthDock.current = 0;
+        setIsDragging(false);
+        document.body.style.cursor = "";
+      }
+      if (draggingRailRef.current) {
+        draggingRailRef.current = false;
+        setIsDraggingRail(false);
+        document.body.style.cursor = "";
+      }
+      if (splitDrag.current) {
+        splitDrag.current = null;
+        setIsDraggingSplit(false);
+        document.body.style.cursor = "";
+      }
+    }
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
   }, []);
 
+  const startSplitDrag = useCallback(
+    (a: DockPanel, b: DockPanel, axis: "row" | "col", clientPos: number) => {
+      const elA = sectionRefs.current[a];
+      const elB = sectionRefs.current[b];
+      if (!elA || !elB) return;
+      const rectA = elA.getBoundingClientRect();
+      const rectB = elB.getBoundingClientRect();
+      const sizeA = axis === "row" ? rectA.width : rectA.height;
+      const sizeB = axis === "row" ? rectB.width : rectB.height;
+      splitDrag.current = { a, b, axis, startPos: clientPos, startA: sizeA, total: sizeA + sizeB };
+      setIsDraggingSplit(true);
+      document.body.style.cursor = axis === "row" ? "col-resize" : "row-resize";
+    },
+    [],
+  );
   // ── Files ──
 
   const refetchFiles = useCallback(async () => {
@@ -99,18 +213,22 @@ export default function IDELayout({
     void refetchFiles();
   }, [refetchFiles]);
 
-  // A finished turn reports which paths it touched. Refetching their real
-  // content is the fix for what used to happen: the paths were inserted with
-  // empty content, so opening a file the agent had just written showed a blank
-  // editor over the top of working code.
+  // Switching projects (a keyed route remount doesn't happen here — the
+  // sidebar navigates via router.push, not a prop change) resets to that
+  // project's default thread rather than carrying over a stale id. Adjusted
+  // during render, not in an effect, per the same pattern as IconRail.
+  const [seenProjectId, setSeenProjectId] = useState(projectId);
+  if (projectId !== seenProjectId) {
+    setSeenProjectId(projectId);
+    setConversationId(undefined);
+  }
+
   const handleFilesTouched = useCallback(
     async (paths: string[]) => {
       if (paths.length === 0) return;
       await refetchFiles();
       const state = useIDEStore.getState();
       if (!state.selectedFile && paths.length > 0) {
-        // Show the person what just got written instead of leaving the centre
-        // panel on its empty state.
         const first = paths.find((p) => /\.(tsx?|jsx?|json|css|md)$/.test(p)) ?? paths[0];
         state.selectFile(first);
       }
@@ -133,12 +251,6 @@ export default function IDELayout({
     }
   }, [projectId]);
 
-  // The refresh lifeline: on mount, ask the server whether this project
-  // already has a live device before anything shows "idle". A session id
-  // lives only in memory (by design — the stream state dies with the tab),
-  // so a reload used to amnesia the device and the user started a second
-  // one. Running → re-attach and stream; paused → re-attach and un-pause
-  // (the user just came back to it); none → idle, as before.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -150,8 +262,6 @@ export default function IDELayout({
         state.setAdbTarget(live.adb_port ? `localhost:${live.adb_port}` : null);
         state.setPreviewStatus("streaming");
         if (live.state === "paused") {
-          // The user came back; the reaper paused it for being unwatched.
-          // Un-pause so the stream has something to show.
           try {
             await sessions.resume(live.id);
           } catch {
@@ -167,7 +277,6 @@ export default function IDELayout({
     return () => {
       cancelled = true;
     };
-    // Mount-only: a project switch remounts the layout (keyed route).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -191,18 +300,11 @@ export default function IDELayout({
     useIDEStore.getState().setCurrentPlan({ plan, message });
   }, []);
 
-  // One approval path, reachable from the card in the chat and from the full
-  // plan in the centre panel.
   const approvePlan = useCallback(
     async (plan: PlanData) => {
       const state = useIDEStore.getState();
       state.setCurrentPlan(null);
       const screens = (plan.screens ?? []).map((s) => s.name).filter(Boolean);
-      // §7 DSH plan flow: approval writes the plan to PLAN.md — the task
-      // file. The build works from the durable artifact (reload, resume, and
-      // the checklist all read the same record), not from a chat message's
-      // short-lived wording. A failed write still builds: the plan is in the
-      // conversation too; the file is the durable copy, not the only one.
       const lines = ["# Build plan", ""];
       if (screens.length > 0) {
         lines.push("## Screens");
@@ -240,62 +342,6 @@ export default function IDELayout({
     [projectId],
   );
 
-  // ── File operations ──
-
-  const handleNewFile = useCallback(
-    async (parentPath: string, name: string) => {
-      const filePath = parentPath ? `${parentPath}/${name}` : name;
-      await projects.writeFiles(projectId, [{ path: filePath, content: "" }]);
-      const state = useIDEStore.getState();
-      state.addFiles([{ path: filePath, content: "" }]);
-      state.selectFile(filePath);
-    },
-    [projectId],
-  );
-
-  const handleNewFolder = useCallback(
-    async (parentPath: string, name: string) => {
-      const folderPath = parentPath ? `${parentPath}/${name}` : name;
-      // Git and the workspace walker both ignore empty directories, so the
-      // folder only exists once something is in it.
-      const gitkeep = `${folderPath}/.gitkeep`;
-      await projects.writeFiles(projectId, [{ path: gitkeep, content: "" }]);
-      useIDEStore.getState().addFiles([{ path: gitkeep, content: "" }]);
-    },
-    [projectId],
-  );
-
-  const handleRename = useCallback(
-    async (oldPath: string, newName: string) => {
-      const parts = oldPath.split("/");
-      parts[parts.length - 1] = newName;
-      const newPath = parts.join("/");
-      if (newPath === oldPath) return;
-
-      const state = useIDEStore.getState();
-      // Prefer the unsaved draft: renaming a file should not quietly discard
-      // the edit that is on screen.
-      const body = state.drafts[oldPath] ?? state.fileContents[oldPath] ?? "";
-
-      await projects.writeFiles(projectId, [{ path: newPath, content: body }]);
-      await projects.deleteFile(projectId, oldPath);
-
-      const wasOpen = state.selectedFile === oldPath;
-      state.removeFileByPath(oldPath);
-      state.addFiles([{ path: newPath, content: body }]);
-      if (wasOpen) state.selectFile(newPath);
-    },
-    [projectId],
-  );
-
-  const handleDelete = useCallback(
-    async (path: string) => {
-      await projects.deleteFile(projectId, path);
-      useIDEStore.getState().removeFileByPath(path);
-    },
-    [projectId],
-  );
-
   // ── Shortcuts ──
 
   useEffect(() => {
@@ -307,45 +353,25 @@ export default function IDELayout({
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
         e.preventDefault();
-        const state = useIDEStore.getState();
-        state.setTerminalOpen(!state.terminalOpen);
+        togglePanel("terminal");
       }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [togglePanel]);
 
-  const selectedContent = store.selectedFile
-    ? store.fileContents[store.selectedFile]
-    : undefined;
+  const selectedContent = store.selectedFile ? store.fileContents[store.selectedFile] : undefined;
   const deviceLive = store.previewStatus === "streaming";
-  const deviceTab = store.deviceTab;
 
-  // The canvas body — one instance, rendered inside the grid cell at md+ or
-  // inside the slide-over drawer below it. Keeping it a single element means
-  // the AIChat inside it, and its build stream, is never duplicated across
-  // the two mounts.
-  //
-  // The canvas is ONE surface now: the conversation is the canvas, the trace
-  // folds into the stream, and the plan viewer rides above it rather than
-  // replacing the workspace. The terminal is a drawer over the top.
+  // ── Canvas: chat, or a selected file taking its place. ──
   const canvasContent = (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {/* On a phone the canvas is a drawer with no rail above it, so it
-          carries a way out. Hidden at md+, where the rail owns navigation. */}
       <div className="surface-2 flex flex-shrink-0 items-center justify-between gap-2 p-2 md:hidden">
-        <button
-          type="button"
-          onClick={() => setMobilePanelOpen(false)}
-          className="btn btn-ghost"
-          aria-label="Close the panel"
-        >
+        <button type="button" onClick={() => setMobilePanelOpen(false)} className="btn btn-ghost" aria-label="Close the panel">
           Close
         </button>
       </div>
 
-      {/* The plan, when one is awaiting approval, rides above the stream —
-          it is part of the conversation, not a replacement for the canvas. */}
       {store.currentPlan ? (
         <div className="surface-2 flex-shrink-0 overflow-y-auto p-3 shadow-[0_1px_0_var(--seam)]">
           <PlanViewer
@@ -357,13 +383,12 @@ export default function IDELayout({
         </div>
       ) : null}
 
-      {/* The stream. All views stay mounted: switching to the tree mid-build
-          must not tear down the stream that is writing the files. */}
-      <div className={leftTab === "chat" ? "flex min-h-0 flex-1" : "hidden"}>
+      <div className={store.selectedFile ? "hidden" : "flex min-h-0 flex-1"}>
         <div className="min-h-0 flex-1">
           <AIChat
             ref={aiChatRef}
             projectId={projectId}
+            conversationId={conversationId}
             onFilesTouched={handleFilesTouched}
             onPlan={handlePlan}
             onApprovePlan={approvePlan}
@@ -372,106 +397,96 @@ export default function IDELayout({
         </div>
       </div>
 
-      {/* The files view — the changed files with expandable inline diffs.
-          Selecting a file opens it as a reader; the tree stays reachable
-          through the selected-file path so the canvas is never a dead end. */}
-      <div className={leftTab === "files" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-        {store.selectedFile ? (
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="bay-head justify-between">
-              <button
-                type="button"
-                onClick={() => store.selectFile(null)}
-                className="btn btn-ghost h-7 px-2 font-mono text-xs"
-              >
-                ← Changed files
-              </button>
-              <span className="gauge truncate" title={store.selectedFile}>
-                {store.selectedFile.split("/").pop()}
-              </span>
+      {store.selectedFile ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="bay-head justify-between">
+            <button type="button" onClick={() => store.selectFile(null)} className="btn btn-ghost h-7 px-2 font-mono text-xs">
+              ← Back to chat
+            </button>
+            <span className="gauge truncate" title={store.selectedFile}>
+              {store.selectedFile.split("/").pop()}
+            </span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {selectedContent !== undefined && !store.selectedFile.endsWith(".md") ? (
+              <CodeEditor projectId={projectId} filePath={store.selectedFile} content={selectedContent} />
+            ) : (
+              <div className="h-full overflow-y-auto px-6 py-6">
+                <div className="mx-auto max-w-2xl">
+                  <Markdown>{selectedContent ?? ""}</Markdown>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const dockPaneBody = (panel: DockPanel) => {
+    switch (panel) {
+      case "files":
+        return <ChangedFiles projectId={projectId} filesTouched={liveTouchedFiles} />;
+      case "terminal":
+        return <Terminal sessionId={store.sessionId} />;
+      case "memory":
+        return <MemoryPanel projectId={projectId} active={openPanels.memory} />;
+      case "triage":
+        return <TriageForm projectId={projectId} />;
+      case "device":
+        return (
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="flex flex-shrink-0 gap-1 rounded-[10px] bg-panel-3 p-[3px]">
+              {(["device", "app"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={deviceTab === tab}
+                  onClick={() => setDeviceTab(tab)}
+                  className={`h-7 flex-1 rounded-[7px] text-xs font-semibold transition-colors duration-150 ease-out ${
+                    deviceTab === tab ? "bg-smoke text-paper" : "text-ash hover:text-mist"
+                  }`}
+                >
+                  {tab === "device" ? "Device" : "Get the app"}
+                </button>
+              ))}
             </div>
-            <div className="min-h-0 flex-1 overflow-hidden">
-              {selectedContent !== undefined && !store.selectedFile.endsWith(".md") ? (
-                <CodeEditor
+            <div className="mt-2 min-h-0 flex-1">
+              {deviceTab === "device" ? (
+                <PhonePreview
+                  status={store.previewStatus}
+                  sessionId={store.sessionId}
                   projectId={projectId}
-                  filePath={store.selectedFile}
-                  content={selectedContent}
+                  adbTarget={store.adbTarget}
+                  onStartSession={startSession}
                 />
               ) : (
-                <div className="h-full overflow-y-auto px-6 py-6">
-                  <div className="mx-auto max-w-2xl">
-                    <Markdown>{selectedContent ?? ""}</Markdown>
-                  </div>
+                <div className="h-full overflow-y-auto overscroll-contain">
+                  <TestOnPhone projectId={projectId} epoch={store.sessionId ?? 0} />
                 </div>
               )}
             </div>
           </div>
-        ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <ChangedFiles projectId={projectId} filesTouched={liveTouchedFiles} />
-          </div>
-        )}
-      </div>
+        );
+    }
+  };
 
-      <div className={leftTab === "memory" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-        <MemoryPanel projectId={projectId} active={leftTab === "memory"} />
-      </div>
-
-      <div className={leftTab === "triage" ? "flex min-h-0 flex-1 flex-col overflow-y-auto" : "hidden"}>
-        <TriageForm projectId={projectId} />
-      </div>
-
-      {/* ── Terminal drawer ── Slides up over the canvas on demand. Mounted
-          once and never unmounted, so the websocket survives the toggle —
-          the drawer only translates, it does not tear anything down. */}
-      <div
-        className={`pointer-events-none absolute inset-x-0 bottom-0 z-40 ${
-          store.terminalOpen ? "pointer-events-auto" : ""
-        }`}
-      >
-        <section
-          className={`term-drawer ${store.terminalOpen ? "open" : ""}`}
-          aria-expanded={store.terminalOpen}
-        >
-          <button
-            type="button"
-            onClick={() => store.setTerminalOpen(!store.terminalOpen)}
-            aria-expanded={store.terminalOpen}
-            className="term-bar w-full"
-          >
-            <svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="4" width="18" height="16" rx="2.5" />
-              <path d="M7 9l3.5 3L7 15M13 15h4" />
-            </svg>
-            <span className="t">
-              {store.adbTarget ? `terminal · ${store.adbTarget}` : "terminal · no device"}
-            </span>
-            <span className="hint">⌘J · click to toggle</span>
-            <span className="ico chev">
-              <svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 15l-6-6-6 6" />
-              </svg>
-            </span>
-          </button>
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <Terminal sessionId={store.sessionId} />
-          </div>
-        </section>
-      </div>
-    </div>
-  );
+  const dockOrder: DockPanel[] = ["device", "files", "terminal", "memory", "triage"];
+  const openOrder = dockOrder.filter((p) => openPanels[p]);
 
   return (
     <div
       className="device-grid grid h-full min-h-0 overflow-hidden bg-[var(--bg)]"
       style={{
+        // The dock spans both rows — it starts flush with the top of the
+        // window, not below the topbar. The topbar itself only stretches
+        // over the rail and canvas columns, matching the design sample.
         gridTemplateRows: "48px 1fr",
-        gridTemplateColumns: "var(--rail-w) 1fr var(--device-w)",
-        gridTemplateAreas: `"top top device" "rail canvas device"`,
+        gridTemplateColumns: "auto 1fr auto",
+        gridTemplateAreas: `"top top dock" "rail canvas dock"`,
       }}
     >
-      {/* ── Topbar ── Spans the rail and the canvas only. The device column
-          runs floor to ceiling, so the phone gets every pixel of height. */}
       <div style={{ gridArea: "top" }}>
         <Topbar
           projectName={projectName}
@@ -482,31 +497,51 @@ export default function IDELayout({
             gitMeta ? (gitMeta.ahead || gitMeta.behind ? `${gitMeta.ahead}↑ ${gitMeta.behind}↓` : null) : null
           }
           onExit={onExit}
-          onToggleTerminal={() => store.setTerminalOpen(!store.terminalOpen)}
           onOpenPalette={() => store.setCommandPaletteOpen(true)}
+          openPanels={openPanels}
+          onTogglePanel={togglePanel}
+          changedCount={liveTouchedFiles.length}
+          dockSplit={dockSplit}
+          onToggleSplit={() => {
+            setDockSplit((d) => (d === "col" ? "row" : "col"));
+            setPanelFlex({});
+          }}
         />
       </div>
 
-      {/* ── Icon rail ── Five icons, one accent bar for the active view.
-          The grid item stretches; the nav inside fills it. */}
-      <nav style={{ gridArea: "rail" }} className="min-h-0">
-        <div className="h-full">
-          <IconRail
-            view={leftTab}
-            onView={setLeftTab}
-            onToggleTerminal={() => store.setTerminalOpen(!store.terminalOpen)}
-            onOpenPalette={() => store.setCommandPaletteOpen(true)}
-            changedCount={liveTouchedFiles.length}
-            terminalOpen={store.terminalOpen}
-          />
-        </div>
-      </nav>
+      <div style={{ gridArea: "rail" }} className="relative min-h-0">
+        <IconRail
+          projectId={projectId}
+          projectName={projectName}
+          conversationId={conversationId}
+          onSelectConversation={setConversationId}
+          width={railWidth}
+          collapsed={railCollapsed}
+          onToggleCollapsed={() => {
+            setRailCollapsed((c) => !c);
+            setRailWidth((w) => (w <= 64 ? 212 : w));
+          }}
+          isResizing={isDraggingRail}
+        />
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          className="absolute inset-y-0 -right-0.5 z-30 w-2 cursor-col-resize opacity-0 transition-opacity hover:bg-[var(--accent)] hover:opacity-50"
+          onPointerDown={(e) => {
+            draggingRailRef.current = true;
+            setIsDraggingRail(true);
+            startXRail.current = e.clientX;
+            // Dragging out from collapsed starts from its real 64px edge,
+            // not the last expanded width — otherwise the first pixel of
+            // drag would snap the rail wide open.
+            startWidthRail.current = railCollapsed ? 64 : railWidth;
+            document.body.style.cursor = "col-resize";
+            e.preventDefault();
+          }}
+        />
+      </div>
 
-      {/* ── Canvas ── One unified surface: the conversation IS the canvas.
-          The trace folds into the stream as tool rows, the verify ladder
-          rides under the prose, and the composer floats at the bottom.
-          Below md the whole panel becomes a drawer; it stays mounted while
-          closed — translated off-screen — so a build keeps streaming. */}
       {isDesktop ? (
         <main style={{ gridArea: "canvas" }} className="canvas-wrap min-h-0">
           {canvasContent}
@@ -533,57 +568,82 @@ export default function IDELayout({
         </>
       )}
 
-      {/* ── Device panel ── Edge to edge, floor to ceiling, two tabs. Below
-          1180px it becomes a drawer; picking a tab peeks it in. */}
+      {/* ── Dock: every open panel tiles inside one column, stacked or
+          side by side (dockSplit). Closed entirely, it takes no width —
+          nothing false-advertises as "always there" the way the old fixed
+          device column did. */}
+      {openCount > 0 && isDesktop && (
+        <div
+          style={{ gridArea: "dock", justifySelf: "start", marginLeft: "-4px" }}
+          className="relative z-30 w-2 cursor-col-resize hover:bg-[var(--accent)] opacity-0 hover:opacity-50 transition-opacity"
+          onPointerDown={(e) => {
+            setIsDragging(true);
+            startXDock.current = e.clientX;
+            startWidthDock.current = dockWidth;
+            document.body.style.cursor = "col-resize";
+            e.preventDefault();
+          }}
+        />
+      )}
       <aside
-        style={{ gridArea: "device" }}
-        className={`surface-1 device-panel relative z-20 flex min-h-0 flex-col overflow-hidden shadow-[1px_0_0_var(--seam)] ${
-          devicePeek ? "peek" : ""
-        }`}
-        onClick={(e) => {
-          // Clicking the panel's own backdrop area closes it on narrow screens.
-          if (e.target === e.currentTarget) setDevicePeek(false);
+        style={{ 
+          gridArea: "dock",
+          width: openCount > 0 ? dockWidth + "px" : 0,
+          transition: isDragging ? "none" : "width 300ms cubic-bezier(0.34, 1.56, 0.64, 1)"
         }}
+        className={`bg-panel-2 relative z-20 flex min-h-0 flex-col overflow-hidden shadow-[1px_0_0_var(--seam)]`}
       >
-        <div className="surface-2 flex h-12 flex-shrink-0 items-center px-3.5 py-2.5">
-          <div className="flex w-full gap-1 rounded-[10px] p-[3px]">
-            {(["device", "app"] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                role="tab"
-                aria-selected={deviceTab === tab}
-                onClick={() => {
-                  store.setDeviceTab(tab);
-                  setDevicePeek(true);
-                }}
-                className={`h-7 flex-1 rounded-[7px] text-xs font-semibold transition-colors duration-150 ease-out ${
-                  deviceTab === tab
-                    ? "surface-3 text-paper"
-                    : "text-ash hover:text-mist"
-                }`}
-              >
-                {tab === "device" ? "Device" : "Get the app"}
-              </button>
+        {openCount > 0 ? (
+          <div className={`flex min-h-0 flex-1 ${dockSplit === "row" ? "flex-row" : "flex-col"}`}>
+            {openOrder.map((panel, i) => (
+              <Fragment key={panel}>
+                <section
+                  ref={(el) => {
+                    sectionRefs.current[panel] = el;
+                  }}
+                  style={{
+                    flex: panelFlex[panel] != null ? `${panelFlex[panel]} 0 0px` : "1 1 0px",
+                    transition: isDraggingSplit ? "none" : undefined,
+                  }}
+                  className={`flex min-h-0 min-w-0 flex-col ${
+                    dockSplit === "row" ? "border-l border-[var(--seam)] first:border-l-0" : "border-t border-[var(--seam)] first:border-t-0"
+                  }`}
+                >
+                  <header className="flex h-9 flex-shrink-0 items-center gap-2 px-3">
+                    <span className="gauge">{DOCK_TITLES[panel]}</span>
+                    {panel === "device" && deviceLive ? <span className="lamp" data-state="live" /> : null}
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={() => togglePanel(panel)}
+                      aria-label={`Close ${DOCK_TITLES[panel]}`}
+                      className="grid size-6 place-items-center rounded-md text-[var(--label-4)] transition-colors duration-150 hover:bg-[var(--surface-2)] hover:text-[var(--label-2)]"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                        <path d="M18 6 6 18M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </header>
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-3">{dockPaneBody(panel)}</div>
+                </section>
+                {i < openOrder.length - 1 && (
+                  <div
+                    role="separator"
+                    aria-orientation={dockSplit === "row" ? "vertical" : "horizontal"}
+                    aria-label={`Resize between ${DOCK_TITLES[panel]} and ${DOCK_TITLES[openOrder[i + 1]]}`}
+                    className={`z-10 flex-none opacity-0 transition-opacity hover:bg-[var(--accent)] hover:opacity-50 ${
+                      dockSplit === "row" ? "-mx-[3px] w-[7px] cursor-col-resize" : "-my-[3px] h-[7px] cursor-row-resize"
+                    }`}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      startSplitDrag(panel, openOrder[i + 1], dockSplit, dockSplit === "row" ? e.clientX : e.clientY);
+                    }}
+                  />
+                )}
+              </Fragment>
             ))}
           </div>
-        </div>
-
-        {deviceTab === "device" ? (
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            <PhonePreview
-              status={store.previewStatus}
-              sessionId={store.sessionId}
-              projectId={projectId}
-              adbTarget={store.adbTarget}
-              onStartSession={startSession}
-            />
-          </div>
-        ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            <TestOnPhone projectId={projectId} epoch={store.sessionId ?? 0} />
-          </div>
-        )}
+        ) : null}
       </aside>
 
       <CommandPalette
@@ -591,30 +651,15 @@ export default function IDELayout({
         onClose={() => store.setCommandPaletteOpen(false)}
         files={store.files}
         onOpenFile={store.selectFile}
-        onSwitchToChat={() => setLeftTab("chat")}
-        onSwitchToFiles={() => setLeftTab("files")}
-        onToggleTerminal={() => store.setTerminalOpen(!store.terminalOpen)}
+        onSwitchToChat={() => store.selectFile(null)}
+        onSwitchToFiles={() => setOpenPanels((p) => ({ ...p, files: true }))}
+        onToggleTerminal={() => togglePanel("terminal")}
         onStartSession={startSession}
       />
     </div>
   );
 }
-function countFiles(nodes: { type: "file" | "folder"; children?: { type: "file" | "folder" }[] }[]): number {
-  let n = 0;
-  for (const node of nodes) {
-    if (node.type === "file") n++;
-    else if (node.children) n += countFiles(node.children as typeof nodes);
-  }
-  return n;
-}
 
-// Tracks the md breakpoint (768px, Tailwind's md) so the layout can *mount* the
-// agent panel two different ways — a resizable column above it, a slide-over
-// drawer below it — rather than restyle one element. ResizablePanel forces its
-// width with an inline style, so CSS alone can't turn it into a drawer.
-// Defaults to true so the server render and first client paint agree on the
-// desktop markup (no hydration mismatch); the effect corrects it on a phone
-// before anything interactive happens.
 function useIsDesktop(): boolean {
   const [isDesktop, setIsDesktop] = useState(true);
   useEffect(() => {
