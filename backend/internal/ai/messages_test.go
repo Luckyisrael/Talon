@@ -571,3 +571,45 @@ func TestTurnEndMarkerIsLogOnly(t *testing.T) {
 		t.Errorf("marker fields lost in the round trip: %+v", back)
 	}
 }
+
+// Context blocks are machine guidance, not user prose. They must replay to the
+// provider (the model needs the words) but never appear as a chat bubble: a
+// skill body or a lint report rendered as user text is what put a 400-line
+// document in the middle of the conversation.
+func TestContextBlockReplaysButIsNotUserText(t *testing.T) {
+	body := "# Navigation with expo-router\n\nRouting is file-based..."
+	ctx := Context("skill", "Applied the expo-router skill", body)
+	history := []Message{
+		msg("user", text("make a screen")),
+		msg("assistant", text("ok")),
+		// The injected guidance rides a user-role turn.
+		{Role: "user", Blocks: []Block{ctx}},
+	}
+
+	// It replays as plain text to both providers — the model still sees it.
+	anth := toAnthropic(history, -1)
+	var sawAnth bool
+	for _, b := range anth[2].Content {
+		if b.Type == "text" && strings.Contains(b.Text, "expo-router") {
+			sawAnth = true
+		}
+	}
+	if !sawAnth {
+		t.Error("anthropic replay dropped the context body; the model must still see it")
+	}
+	open := toOpenAI("", history)
+	if s, ok := open[2].Content.(string); !ok || !strings.Contains(s, "expo-router") {
+		t.Errorf("openai replay dropped the context body: %#v", open[2].Content)
+	}
+
+	// But it is not user text: the transcript path keys on the block type, and
+	// a text block is the only thing that renders as a bubble.
+	if ctx.Type == "text" {
+		t.Error("a context block must not carry the text type or it renders as a chat bubble")
+	}
+	// The title is the one line the transcript shows, and it must not be the
+	// body — otherwise the collapse has nothing to collapse.
+	if ctx.Title == "" || strings.Contains(ctx.Title, "file-based") {
+		t.Errorf("title should be a one-line label, got %q", ctx.Title)
+	}
+}

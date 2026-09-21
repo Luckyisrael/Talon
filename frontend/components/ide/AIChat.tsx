@@ -310,6 +310,17 @@ function turnsToEntries(
           rounds: block.rounds,
         });
       }
+      if (block.type === "context") {
+        // Machine guidance, not a user message: renders as a single line so a
+        // skill body or lint report never again owns the scroll.
+        rows.push({
+          id: `restored-ctx-${i}-${j}`,
+          kind: "context",
+          title: block.title ?? "Applied guidance",
+          body: block.body,
+          ctxKind: block.kind,
+        });
+      }
       if (block.type === "tool_use") {
         const input = (block.input ?? {}) as {
           path?: string;

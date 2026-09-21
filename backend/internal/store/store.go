@@ -1173,6 +1173,150 @@ func (s *Store) MarkInterruptedPrompts() ([]int64, error) {
 	return ids, nil
 }
 
+// MigrateInjectedContext rewrites the orchestrator's injected guidance — auto-
+// attached skill bodies and verify-gate repair notes — that older turns stored
+// as ordinary user text. Those blocks render as chat bubbles, which put a
+// 400-line skill document in the middle of the conversation; as context blocks
+// the transcript shows one line and keeps the body a tap away.
+//
+// Detection is by the exact prefixes the orchestrator emits. These are machine
+// texts with a stable shape, so a prefix match cannot touch real user prose.
+// Idempotent: a context block is never rewritten, and a text block that no
+// longer starts with a prefix is left alone.
+func (s *Store) MigrateInjectedContext() (rewritten int, err error) {
+	prefixes := []string{
+		"A project skill applies to what you just did.",
+		"The code compiles, but ESLint reports problems:",
+	}
+	args := make([]any, 0, len(prefixes))
+	for _, p := range prefixes {
+		args = append(args, p+"%")
+	}
+	rows, err := s.db.Query(`SELECT rowid, blocks FROM conversation_messages
+		WHERE json_extract(blocks, '$[0].type') = 'text'
+		AND (`+prefixClause(len(prefixes))+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	var rowids []int64
+	var blocksList []string
+	for rows.Next() {
+		var rid int64
+		var blocks string
+		if err := rows.Scan(&rid, &blocks); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		rowids = append(rowids, rid)
+		blocksList = append(blocksList, blocks)
+	}
+	rows.Close()
+
+	for i, rid := range rowids {
+		updated, ok := rewriteOneContext(blocksList[i], prefixes)
+		if !ok {
+			continue
+		}
+		if _, err := s.db.Exec("UPDATE conversation_messages SET blocks = ? WHERE rowid = ?", updated, rid); err != nil {
+			return i, err
+		}
+	}
+	return len(rowids), nil
+}
+
+func prefixClause(n int) string {
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = "json_extract(blocks, '$[0].text') LIKE ?"
+	}
+	return joinOr(parts)
+}
+
+func joinOr(parts []string) string {
+	out := parts[0]
+	for _, p := range parts[1:] {
+		out += " OR " + p
+	}
+	return out
+}
+
+// rewriteOneContext converts a leading injected-text block into a context block
+// carrying a one-line title. The body keeps the full text so the model's replay
+// and the expandable UI still have it.
+func rewriteOneContext(blocksJSON string, prefixes []string) (string, bool) {
+	var blocks []map[string]any
+	if json.Unmarshal([]byte(blocksJSON), &blocks) != nil || len(blocks) == 0 {
+		return "", false
+	}
+	first, _ := blocks[0]["type"].(string)
+	if first != "text" {
+		return "", false
+	}
+	text, _ := blocks[0]["text"].(string)
+	if text == "" {
+		return "", false
+	}
+	title := ""
+	matched := ""
+	for _, p := range prefixes {
+		if strings.HasPrefix(text, p) {
+			title = contextTitle(p, text)
+			matched = p
+			break
+		}
+	}
+	if title == "" {
+		return "", false
+	}
+	blocks[0] = map[string]any{
+		"type":  "context",
+		"kind":  contextKind(matched),
+		"title": title,
+		"body":  text,
+	}
+	out, err := json.Marshal(blocks)
+	if err != nil {
+		return "", false
+	}
+	return string(out), true
+}
+
+func contextTitle(prefix, text string) string {
+	switch {
+	case strings.HasPrefix(prefix, "A project skill applies"):
+		// The skill's own heading follows the fixed intro line; take the first
+		// heading line as the title so the chip names the actual skill.
+		rest := strings.TrimPrefix(text, "A project skill applies to what you just did. Follow it for the rest of this work:")
+		for _, line := range strings.Split(rest, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			line = strings.TrimLeft(line, "# ")
+			if line != "" {
+				return "Applied skill: " + line
+			}
+		}
+		return "Applied a project skill"
+	case strings.HasPrefix(prefix, "The code compiles"):
+		return "Verification failed — ESLint"
+	default:
+		return "Applied guidance"
+	}
+}
+
+// contextKind reports the injection family for a prefix, for the chip icon.
+func contextKind(prefix string) string {
+	switch {
+	case strings.HasPrefix(prefix, "A project skill applies"):
+		return "skill"
+	case strings.HasPrefix(prefix, "The code compiles"):
+		return "verify"
+	default:
+		return "skill"
+	}
+}
+
 // ScopeDeviceBuild is the turn_approvals scope unlocking build_apk.
 const ScopeDeviceBuild = "device_build"
 

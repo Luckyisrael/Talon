@@ -104,6 +104,13 @@ export interface ConversationBlock {
   status?: string
   error?: string
   rounds?: number
+  /** context: machine guidance the orchestrator injects (a skill body, or the
+   *  repair note after a verify gate fails). The model needs it verbatim, but
+   *  the user never typed it — rendering it as a chat bubble is what put a
+   *  400-line skill document in the middle of the conversation. title is the
+   *  one line the transcript shows; body stays collapsed until asked for. */
+  title?: string
+  body?: string
 }
 
 export interface Project {

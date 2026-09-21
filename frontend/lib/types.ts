@@ -314,7 +314,7 @@ export interface DecisionCard {
 
 export interface TraceRow {
   id: string;
-  kind: "narration" | "thinking" | "tool" | "group" | "decision" | "end";
+  kind: "narration" | "thinking" | "tool" | "group" | "decision" | "end" | "context";
   // Narration / thinking
   text?: string;
   streaming?: boolean;
@@ -336,6 +336,12 @@ export interface TraceRow {
   // adds no noise.
   ending?: "completed" | "failed" | "cancelled" | "interrupted" | "stalled";
   rounds?: number;
+  // Context — machine guidance (a skill body, a verify-gate repair note) that
+  // the model needed verbatim but the user never typed. Renders as a single
+  // line; body is a click away. kind is "skill" | "verify".
+  title?: string;
+  body?: string;
+  ctxKind?: string;
   // Group
   children?: TraceRow[];
   collapsed?: boolean;

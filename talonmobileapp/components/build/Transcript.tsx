@@ -1,5 +1,5 @@
 import React from 'react'
-import { StyleSheet, View } from 'react-native'
+import { StyleSheet, TouchableOpacity, View } from 'react-native'
 import { MarkdownView } from '@/components/ui'
 import { TraceRow } from '@/components/build/TraceRow'
 import { QuestionCard } from '@/components/build/QuestionCard'
@@ -8,6 +8,11 @@ import { UIText } from '@/components/ui'
 import { Colors, Spacing } from '@/constants/theme'
 import { stripInlineDocs, type SentAttachment } from '@/lib/attachments'
 import type { ConversationBlock } from '@/lib/api'
+
+// A block longer than this renders clamped behind a Show-more toggle. Six is
+// enough to read a normal sentence or two; anything past it is a document, and
+// a document does not get to own the scroll.
+const MAX_LINES = 6
 
 export interface RestoredTurn {
   role: string
@@ -56,17 +61,21 @@ export function RestoredTranscript({
           const atts: SentAttachment[] = (t.blocks ?? [])
             .filter((b) => (b.kind === 'image' || b.kind === 'doc') && typeof b.attachment_id === 'number')
             .map((b) => ({ id: b.attachment_id!, name: b.name ?? 'file', mime: b.mime ?? 'application/octet-stream' }))
+          // Machine guidance rides the same user-role turn but is not chat.
+          // Rendered as a chip, it takes one line instead of 400.
+          const ctxs = (t.blocks ?? []).filter((b) => b.kind === 'context' && b.title)
           const shown = stripInlineDocs(text)
-          if (!shown && atts.length === 0) return null
+          if (!shown && atts.length === 0 && ctxs.length === 0) return null
           return (
             <View key={i} style={styles.userWrap}>
               {shown ? (
                 <View style={styles.bubble}>
-                  <UIText variant="body" tone="hero">
-                    {shown}
-                  </UIText>
+                  <CollapsibleText text={shown} variant="body" tone="hero" />
                 </View>
               ) : null}
+              {ctxs.map((c, j) => (
+                <ContextRow key={`ctx-${j}`} block={c} />
+              ))}
               {atts.length > 0 ? <TurnAttachments projectId={projectId} items={atts} /> : null}
             </View>
           )
@@ -123,6 +132,67 @@ function inputOf(b: ConversationBlock, key: string): unknown {
 // there with nothing to say they stopped, so it read as still in flight. DSH
 // shows the same thing as its turn-tail; a clean turn renders nothing here so
 // the transcript does not gain a line of noise per prompt.
+// CollapsibleText caps a block at MAX_LINES and grows on demand. It is the
+// backstop: machine text is already a chip, but anything genuinely long that
+// still renders — a verbose assistant reply, an attached doc that survived
+// stripping — should never again dominate the scroll.
+function CollapsibleText({
+  text,
+  variant,
+  tone,
+}: {
+  text: string
+  variant: Parameters<typeof UIText>[0]['variant']
+  tone?: Parameters<typeof UIText>[0]['tone']
+}) {
+  const [expanded, setExpanded] = React.useState(false)
+  const lines = text.split('\n')
+  const clamped = !expanded && lines.length > MAX_LINES
+  const shown = clamped ? lines.slice(0, MAX_LINES).join('\n') : text
+  return (
+    <View>
+      <UIText variant={variant} tone={tone} numberOfLines={clamped ? MAX_LINES : undefined}>
+        {shown}
+      </UIText>
+      {lines.length > MAX_LINES ? (
+        <TouchableOpacity onPress={() => setExpanded((v) => !v)} style={styles.moreBtn}>
+          <UIText variant="caption" tone="faint">
+            {expanded ? 'Show less' : `Show ${lines.length - MAX_LINES} more lines`}
+          </UIText>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  )
+}
+
+// ContextRow renders machine guidance as a single-line chip. A skill body or a
+// lint report is context the model needed, not a message the user sent; shown
+// as a bubble it put a 400-line document in the middle of the conversation.
+// The body is a tap away, never on by default.
+function ContextRow({ block }: { block: ConversationBlock }) {
+  const [open, setOpen] = React.useState(false)
+  const title = block.title ?? 'Applied guidance'
+  const body = block.body ?? ''
+  return (
+    <View style={styles.ctx}>
+      <TouchableOpacity onPress={() => setOpen((v) => !v)} style={styles.ctxHead}>
+        <UIText variant="caption" tone="faint" numberOfLines={1} style={styles.ctxTitle}>
+          {block.kind === 'verify' ? '⚠ ' : '◆ '}
+          {title}
+        </UIText>
+        <UIText variant="caption" tone="faint">
+          {open ? '−' : '+'}
+        </UIText>
+      </TouchableOpacity>
+      {open && body ? (
+        <View style={styles.ctxBody}>
+          <CollapsibleText text={body} variant="caption" tone="muted" />
+        </View>
+      ) : null}
+    </View>
+  )
+}
+
 function TurnEndRow({ block }: { block: ConversationBlock }) {
   const status = block.status ?? ''
   // A turn that completed cleanly needs no announcement: the assistant text
@@ -200,6 +270,17 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   assistantWrap: { gap: Spacing.s8 },
+  moreBtn: { paddingTop: 2, alignSelf: 'flex-start' },
+  ctx: {
+    maxWidth: '88%',
+    borderRadius: 10,
+    paddingHorizontal: Spacing.s12,
+    paddingVertical: Spacing.s8,
+    gap: Spacing.s4,
+  },
+  ctxHead: { flexDirection: 'row', alignItems: 'center', gap: Spacing.s8 },
+  ctxTitle: { flex: 1 },
+  ctxBody: { paddingTop: Spacing.s4 },
   turnEnd: {
     borderLeftWidth: 2,
     borderLeftColor: Colors.coralRed,

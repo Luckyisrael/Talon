@@ -280,7 +280,16 @@ export const projects = {
 
 /** One stored turn, in the provider-neutral block shape the backend persists. */
 export interface ConversationBlock {
-  type: "text" | "thinking" | "tool_use" | "tool_result" | "plan" | "image" | "doc" | "turn_end";
+  type:
+    | "text"
+    | "thinking"
+    | "tool_use"
+    | "tool_result"
+    | "plan"
+    | "image"
+    | "doc"
+    | "turn_end"
+    | "context";
   text?: string;
   id?: string;
   name?: string;
@@ -294,6 +303,12 @@ export interface ConversationBlock {
   status?: string;
   error?: string;
   rounds?: number;
+  // context: machine guidance the orchestrator injected (a skill body, or the
+  // repair note after a verify gate fails). title is the one line the transcript
+  // shows; body stays collapsed. kind is "skill" | "verify".
+  title?: string;
+  body?: string;
+  kind?: string;
   // Image blocks reference a prompt attachment by id — the bytes live on the
   // server and resolve at send time, so the transcript never holds pixels.
   // Steer deliveries persist as marker blocks carrying the redirect text.

@@ -1169,17 +1169,22 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			// results: skills auto-attached by what the model just did, and, if the
 			// response was cut off, a truncation nudge. Folding both into one message
 			// keeps the tool_results→user shape both providers expect.
+			//
+			// Skill guidance rides as context blocks — real guidance, not a user
+			// message — so it replays verbatim to the model but never renders as a
+			// chat bubble. The truncation nudge stays plain text: it is short, and
+			// the model benefits from it reading as a direct instruction.
+			skillBlocks := o.autoAttachSkills(sess, result.ToolUses)
 			var followUp strings.Builder
-			followUp.WriteString(o.autoAttachSkills(sess, result.ToolUses))
 			if result.StopReason == "max_tokens" {
-				if followUp.Len() > 0 {
-					followUp.WriteString("\n\n")
-				}
 				followUp.WriteString("Your previous response hit the output limit and was truncated. " +
 					"Continue from where you stopped — work in smaller steps.")
 			}
-			if followUp.Len() > 0 {
-				nudge := ai.UserText(followUp.String())
+			if followUp.Len() > 0 || len(skillBlocks) > 0 {
+				nudge := ai.Message{Role: "user", Blocks: skillBlocks}
+				if followUp.Len() > 0 {
+					nudge.Blocks = append(nudge.Blocks, ai.Block{Type: "text", Text: followUp.String()})
+				}
 				conversation = append(conversation, nudge)
 				outcome.Messages = append(outcome.Messages, nudge)
 			}
@@ -1270,7 +1275,22 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 
 		sess.IncrementVerifyAttempt()
 		sess.TransitionTo(PhaseGenerate)
-		feedback := ai.UserText(verdict.feedback)
+		// The repair guidance rides as a context block: the model needs the
+		// failing gate's output verbatim, but a full lint report rendered as a
+		// user bubble is what dumped thousands of characters into the chat.
+		// The title is the one line the transcript shows.
+		stage := ""
+		if len(outcome.SkippedGates) > 0 {
+			stage = outcome.SkippedGates[0]
+		}
+		title := "Verification failed"
+		if stage != "" {
+			title += " — " + stage
+		}
+		feedback := ai.Message{
+			Role:   "user",
+			Blocks: []ai.Block{ai.Context("verify", title, verdict.feedback)},
+		}
 		conversation = append(conversation, feedback)
 		outcome.Messages = append(outcome.Messages, feedback)
 	}
@@ -2228,27 +2248,34 @@ func (o *Orchestrator) approved(promptID int64) bool {
 // Handing the model the current, version-pinned guidance the moment it acts in a
 // skill's area is what holds quality up on models that would not otherwise know
 // the exact API shipped here.
-func (o *Orchestrator) autoAttachSkills(sess *SessionState, calls []ai.ToolUseBlock) string {
+//
+// Returns context blocks rather than a text blob: the skill body is guidance
+// the model needs verbatim, but a user never typed it, and rendering it as a
+// chat bubble put a 400-line skill document in the middle of the conversation.
+// One block per skill, titled with the skill name, so the transcript shows a
+// single line and the body stays collapsed until it is asked for.
+func (o *Orchestrator) autoAttachSkills(sess *SessionState, calls []ai.ToolUseBlock) []ai.Block {
 	if o.knowledge == nil {
-		return ""
+		return nil
 	}
-	var bodies []string
+	var out []ai.Block
 	for _, call := range calls {
 		for _, s := range o.knowledge.AutoAttachFor(call.Name, call.Input) {
 			if !sess.MarkSkillSeen(s.Name) {
 				continue // already delivered this session
 			}
-			bodies = append(bodies, s.Body)
-			// Show it in the trace: an auto-attached skill is a real thing that
-			// happened, and the timeline should say so rather than inject silently.
+			body := s.Body
+			if body == "" {
+				continue
+			}
+			out = append(out, ai.Context("skill", "Applied the "+s.Name+" skill", body))
+			// Show it in the trace too: an auto-attached skill is a real thing
+			// that happened, and the timeline should say so rather than inject
+			// silently.
 			sess.Emitter.EmitToolCall("", "read_skill", "", "Applied the "+s.Name+" skill", "completed")
 		}
 	}
-	if len(bodies) == 0 {
-		return ""
-	}
-	return "A project skill applies to what you just did. Follow it for the rest of this work:\n\n" +
-		strings.Join(bodies, "\n\n---\n\n")
+	return out
 }
 
 type verifyVerdict struct {

@@ -57,6 +57,19 @@ type Block struct {
 	Status string `json:"status,omitempty"`
 	Error  string `json:"error,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
+
+	// context is machine text the orchestrator injects to steer the model —
+	// an auto-attached skill body, or the repair feedback after a verify gate
+	// fails. It is real context the model needs and must replay verbatim, but
+	// it is not a message from the user, and rendering it as a chat bubble is
+	// what put a 400-line skill document in the middle of the conversation.
+	// The transcript shows only the one-line Title; Body replays to the model
+	// and opens on demand.
+	Title string `json:"title,omitempty"`
+	Body  string `json:"body,omitempty"`
+	// Kind names the injection source: "skill" for an auto-attached skill,
+	// "verify" for a failed-gate repair note.
+	Kind string `json:"kind,omitempty"`
 }
 
 // Message is one conversation turn.
@@ -105,6 +118,16 @@ func AssistantPlan(message string, planJSON json.RawMessage) Message {
 // the previous turn to be answered before the next assistant turn.
 func ToolResults(results []Block) Message {
 	return Message{Role: "user", Blocks: results}
+}
+
+// Context is an orchestrator injection — skill guidance or verify-gate repair
+// feedback — that the model needs verbatim but the user never typed. It rides
+// a user-role turn so the providers accept it in the tool_results→user shape,
+// but the block is what keeps it out of the chat bubble: the transcript shows
+// only the one-line Title, and Body stays collapsed until it is asked for.
+// Kind is "skill" or "verify".
+func Context(kind, title, body string) Block {
+	return Block{Type: "context", Kind: kind, Title: title, Body: body}
 }
 
 // Text concatenates the message's text blocks.
@@ -229,6 +252,12 @@ func toAnthropic(msgs []Message, cacheBreakpoint int) []anthropicBlockMessage {
 					Type:   "image",
 					Source: &anthropicImageSource{Type: "base64", MediaType: mime, Data: b.Data},
 				})
+			case "context":
+				// Real guidance the model must see, just not chat. Replay the body
+				// as plain text; the title is already its first line.
+				if b.Body != "" {
+					blocks = append(blocks, anthropicContentBlock{Type: "text", Text: b.Body})
+				}
 			}
 		}
 		if len(blocks) == 0 {
@@ -340,6 +369,12 @@ func toOpenAI(system string, msgs []Message) []openaiChatMessage {
 				results = append(results, openaiChatMessage{
 					Role: "tool", Content: content, ToolCallID: b.ToolUseID,
 				})
+			case "context":
+				// Real guidance the model must see, just not chat: replay the
+				// body as ordinary user text.
+				if b.Body != "" {
+					text += b.Body
+				}
 			case "image":
 				// Unresolved images (missing file) are dropped here; the
 				// Anthropic path names them instead. A user turn always

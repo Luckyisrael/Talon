@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/ai"
 	"github.com/luckyisrael/talon/backend/internal/events"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
@@ -41,11 +41,14 @@ func TestAutoAttachSkillsDedup(t *testing.T) {
 		`{"path":"components/Card.tsx","content":"import Animated from 'react-native-reanimated';"}`)
 
 	first := o.autoAttachSkills(sess, call)
-	if first == "" || !strings.Contains(first, "Reanimated") {
-		t.Fatalf("expected the reanimated skill injected the first time, got: %q", first)
+	if len(first) == 0 || !strings.Contains(first[0].Body, "Reanimated") {
+		t.Fatalf("expected the reanimated skill injected the first time, got: %+v", first)
 	}
-	if second := o.autoAttachSkills(sess, call); second != "" {
-		t.Errorf("expected dedup on the second trigger, got: %q", second)
+	if first[0].Type != "context" || first[0].Kind != "skill" {
+		t.Fatalf("expected a skill context block, got: %+v", first[0])
+	}
+	if second := o.autoAttachSkills(sess, call); len(second) != 0 {
+		t.Errorf("expected dedup on the second trigger, got: %+v", second)
 	}
 }
 
@@ -62,8 +65,8 @@ func TestAutoAttachSkipsExplicitlyReadSkill(t *testing.T) {
 	sess.MarkSkillSeen("talon-mobile")
 
 	call := toolCall("install_package", `{"name":"@solana-mobile/mobile-wallet-adapter-protocol-web3js"}`)
-	if got := o.autoAttachSkills(sess, call); got != "" {
-		t.Errorf("expected no injection for an already-seen skill, got: %q", got)
+	if got := o.autoAttachSkills(sess, call); len(got) != 0 {
+		t.Errorf("expected no injection for an already-seen skill, got: %+v", got)
 	}
 }
 
@@ -71,8 +74,8 @@ func TestAutoAttachNoTrigger(t *testing.T) {
 	o := New(nil, nil, loadKnowledge(t))
 	sess := newTestSession(t)
 	call := toolCall("write_file", `{"path":"lib/util.ts","content":"export const x = 1;"}`)
-	if got := o.autoAttachSkills(sess, call); got != "" {
-		t.Errorf("expected no injection without a trigger, got: %q", got)
+	if got := o.autoAttachSkills(sess, call); len(got) != 0 {
+		t.Errorf("expected no injection without a trigger, got: %+v", got)
 	}
 }
 
@@ -80,8 +83,8 @@ func TestAutoAttachNilKnowledge(t *testing.T) {
 	o := New(nil, nil, nil)
 	sess := newTestSession(t)
 	call := toolCall("write_file", `{"path":"app/index.tsx","content":"import 'react-native-reanimated';"}`)
-	if got := o.autoAttachSkills(sess, call); got != "" {
-		t.Errorf("nil knowledge must inject nothing, got: %q", got)
+	if got := o.autoAttachSkills(sess, call); len(got) != 0 {
+		t.Errorf("nil knowledge must inject nothing, got: %+v", got)
 	}
 }
 
@@ -301,7 +304,6 @@ func TestBackfillMissingResults(t *testing.T) {
 		t.Errorf("backfill must not overwrite a result a run already set, got %+v", results[1])
 	}
 }
-
 
 // ── the verification ladder ───────────────────────────
 

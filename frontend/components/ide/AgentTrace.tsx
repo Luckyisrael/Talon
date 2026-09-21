@@ -334,11 +334,51 @@ function TraceRowItem({ row }: { row: TraceRow }) {
       return row.ending && row.ending !== "completed" ? (
         <EndRow ending={row.ending} error={row.text} rounds={row.rounds} />
       ) : null;
+    case "context":
+      return row.title ? <ContextRow title={row.title} body={row.body} kind={row.ctxKind} /> : null;
     case "group":
       return <GroupRow row={row} />;
     default:
       return null;
   }
+}
+
+// ── Context — machine guidance, not a user message ──
+//
+// The orchestrator injects skill bodies and verify-gate repair notes into the
+// conversation so the model has the guidance verbatim. Rendered as a user
+// message, a 400-line skill document landed in the middle of the chat. This
+// row shows the one-line title and keeps the body a click away, so the
+// information survives without owning the scroll.
+function ContextRow({
+  title,
+  body,
+  kind,
+}: {
+  title: string;
+  body?: string;
+  kind?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const icon = kind === "verify" ? "⚠" : "◆";
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs text-dim transition-colors hover:bg-border/40"
+      >
+        <span aria-hidden>{icon}</span>
+        <span className="truncate">{title}</span>
+        {body ? <span className="shrink-0 opacity-60">{open ? "−" : "+"}</span> : null}
+      </button>
+      {open && body ? (
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-border/20 p-2 text-xs text-dim">
+          {body}
+        </pre>
+      ) : null}
+    </div>
+  );
 }
 
 // ── End — the terminal marker, DSH's turn-tail ──
