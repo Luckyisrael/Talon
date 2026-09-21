@@ -3,6 +3,7 @@ import type {
   ArchitectureDecision,
   AuthResponse,
   Checkout,
+  Conversation,
   ExportJob,
   FileEntry,
   GitPushResult,
@@ -268,12 +269,14 @@ export function isResumable(latest: LatestPrompt | null): boolean {
 export const conversation = {
   async get(
     projectId: number,
+    conversationId?: number,
   ): Promise<{
     turns: ConversationTurn[];
     latest: LatestPrompt | null;
     usage?: { in: number; out: number; cache_read: number };
     planTasks?: PlanTask[];
   }> {
+    const qs = conversationId ? `?conversation_id=${conversationId}` : "";
     const res = await request<{
       turns: ConversationTurn[] | null;
       latest?: LatestPrompt;
@@ -284,7 +287,7 @@ export const conversation = {
         status: string;
         result?: string;
       }[];
-    }>(`/v1/projects/${projectId}/conversation`);
+    }>(`/v1/projects/${projectId}/conversation${qs}`);
     return {
       turns: res?.turns ?? [],
       latest: res?.latest ?? null,
@@ -318,6 +321,21 @@ export const conversation = {
   clear(projectId: number) {
     return request<{ status: string }>(`/v1/projects/${projectId}/conversation`, {
       method: "DELETE",
+    });
+  },
+};
+
+// ── Chat threads: multiple chats per project ───────────
+
+export const conversations = {
+  list(projectId: number) {
+    return request<Conversation[]>(`/v1/projects/${projectId}/conversations`);
+  },
+
+  create(projectId: number, title?: string) {
+    return request<Conversation>(`/v1/projects/${projectId}/conversations`, {
+      method: "POST",
+      body: JSON.stringify({ title: title ?? "" }),
     });
   },
 };
@@ -537,10 +555,11 @@ export function streamPrompt(
   mode: "plan" | "build",
   onEvent: (event: StreamEvent) => void,
   onError?: (error: Error) => void,
+  conversationId?: number,
 ): AbortController {
   return openEventStream(
     "/v1/prompts/stream",
-    { project_id: projectId, prompt, mode },
+    { project_id: projectId, conversation_id: conversationId || undefined, prompt, mode },
     onEvent,
     onError,
   );

@@ -198,6 +198,14 @@ func (s *Store) migrate() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS conversations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			title TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_active_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
 		`CREATE TABLE IF NOT EXISTS prompts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			project_id INTEGER NOT NULL,
@@ -495,6 +503,11 @@ func (s *Store) migrate() error {
 	s.db.Exec("ALTER TABLE sessions ADD COLUMN container_name TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE sessions ADD COLUMN adb_port INTEGER DEFAULT 0")
 	s.db.Exec("ALTER TABLE sessions ADD COLUMN container_state TEXT DEFAULT ''")
+
+	// Migration: multiple chats per project. 0 means "not yet assigned" —
+	// pre-migration rows and any caller that skips the field both read as
+	// the project's whole flat history, exactly today's behavior.
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN conversation_id INTEGER DEFAULT 0")
 
 	// Migration: per-prompt token accounting
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN input_tokens INTEGER DEFAULT 0")
@@ -813,18 +826,37 @@ func (s *Store) CreatePrompt(projectID int64, mode, prompt string) (*Prompt, err
 // CreateTitledPrompt stores a prompt with its session title. Empty title
 // degrades to the truncated prompt — the list line is never blank.
 func (s *Store) CreateTitledPrompt(projectID int64, mode, prompt, title string) (*Prompt, error) {
+	return s.CreateTitledPromptInConversation(projectID, 0, mode, prompt, title)
+}
+
+// CreateTitledPromptInConversation is CreateTitledPrompt with an explicit
+// thread. conversationID <= 0 resolves to the project's default thread
+// (EnsureDefaultConversation) — the one-conversation-per-project behavior
+// every existing caller still gets for free.
+func (s *Store) CreateTitledPromptInConversation(projectID, conversationID int64, mode, prompt, title string) (*Prompt, error) {
 	if strings.TrimSpace(title) == "" {
 		title = truncateTitleForList(prompt)
+	}
+	if conversationID <= 0 {
+		id, err := s.EnsureDefaultConversation(projectID)
+		if err != nil {
+			return nil, err
+		}
+		conversationID = id
 	}
 	// New prompts start 'running': the turn is about to drive the agent loop, and
 	// the terminal status is written when it ends. This overrides the column's
 	// backfill default of 'completed', which only ever applies to rows that
 	// predate the status column.
-	res, err := s.db.Exec("INSERT INTO prompts (project_id, mode, prompt, status, title) VALUES (?, ?, ?, 'running', ?)", projectID, mode, prompt, title)
+	res, err := s.db.Exec(
+		"INSERT INTO prompts (project_id, conversation_id, mode, prompt, status, title) VALUES (?, ?, ?, ?, 'running', ?)",
+		projectID, conversationID, mode, prompt, title,
+	)
 	if err != nil {
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
+	_ = s.TouchConversation(conversationID)
 	return s.GetPrompt(id)
 }
 

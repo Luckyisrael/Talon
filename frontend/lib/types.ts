@@ -15,6 +15,17 @@ export interface Project {
   created_at: string;
 }
 
+/** One chat thread within a project. A project with no conversations yet
+    (predates multi-chat) still works — the default thread is created lazily
+    on first use, server-side. */
+export interface Conversation {
+  id: number;
+  project_id: number;
+  title: string;
+  created_at: string;
+  last_active_at: string;
+}
+
 export interface Usage {
   prompts_used: number;
   prompts_limit: number;

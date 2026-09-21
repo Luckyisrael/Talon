@@ -76,9 +76,13 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir st
 }
 
 type promptRequest struct {
-	ProjectID int64  `json:"project_id"`
-	Prompt    string `json:"prompt"`
-	Mode      string `json:"mode"`
+	ProjectID int64 `json:"project_id"`
+	// ConversationID names which chat thread this turn belongs to. <= 0
+	// resolves to the project's default thread — every caller that predates
+	// multi-chat, and any request that just means "the current chat".
+	ConversationID int64  `json:"conversation_id"`
+	Prompt         string `json:"prompt"`
+	Mode           string `json:"mode"`
 }
 
 const maxPromptLength = 50_000
@@ -176,7 +180,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// prompt) is stored synchronously — instant, no model call — and the LLM
 	// title upgrades it after the turn, so the title never consumes the
 	// turn's first model response or blocks the request.
-	prompt, err := h.store.CreateTitledPrompt(req.ProjectID, req.Mode, req.Prompt, h.SessionTitleFallback(req.Prompt))
+	prompt, err := h.store.CreateTitledPromptInConversation(req.ProjectID, req.ConversationID, req.Mode, req.Prompt, h.SessionTitleFallback(req.Prompt))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not save the prompt")
 		return
@@ -259,7 +263,7 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// H13: title the turn from its own prompt — see Create.
-	prompt, err := h.store.CreateTitledPrompt(req.ProjectID, req.Mode, req.Prompt, h.SessionTitleFallback(req.Prompt))
+	prompt, err := h.store.CreateTitledPromptInConversation(req.ProjectID, req.ConversationID, req.Mode, req.Prompt, h.SessionTitleFallback(req.Prompt))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not save the prompt")
 		return
@@ -1464,7 +1468,20 @@ func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	stored, err := h.store.GetConversation(projectID, historyTurns)
+	// An explicit ?conversation_id scopes the replayed turns to one thread;
+	// omitted, this is the pre-multi-chat behavior — the project's whole
+	// flat history.
+	var stored []store.ConversationMessage
+	if cidStr := r.URL.Query().Get("conversation_id"); cidStr != "" {
+		cid, perr := strconv.ParseInt(cidStr, 10, 64)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "invalid conversation_id")
+			return
+		}
+		stored, err = h.store.GetConversationThread(cid, historyTurns)
+	} else {
+		stored, err = h.store.GetConversation(projectID, historyTurns)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load the conversation")
 		return
@@ -1567,6 +1584,57 @@ func (h *PromptHandler) ClearConversation(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+}
+
+// ── Chat threads ────────────────────────────────────────
+// Multiple chats per project: the sidebar's expand-under-project list and
+// its "new chat" button.
+
+// ListConversations returns a project's chat threads, most recently active
+// first.
+func (h *PromptHandler) ListConversations(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	if _, ok := h.ownedProject(w, r, projectID); !ok {
+		return
+	}
+	list, err := h.store.ListConversations(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load conversations")
+		return
+	}
+	// A project predating multi-chat has none yet — the default thread is
+	// created lazily on first use (EnsureDefaultConversation), not eagerly
+	// here, so listing stays read-only.
+	writeJSON(w, http.StatusOK, list)
+}
+
+type createConversationRequest struct {
+	Title string `json:"title"`
+}
+
+// CreateConversation starts a new, empty chat thread in the project.
+func (h *PromptHandler) CreateConversation(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	if _, ok := h.ownedProject(w, r, projectID); !ok {
+		return
+	}
+	var req createConversationRequest
+	_ = json.NewDecoder(r.Body).Decode(&req) // an empty/absent body just means "untitled"
+
+	c, err := h.store.CreateConversation(projectID, strings.TrimSpace(req.Title))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not start a new chat")
+		return
+	}
+	writeJSON(w, http.StatusCreated, c)
 }
 
 // ── Checkpoints ───────────────────────────────────────

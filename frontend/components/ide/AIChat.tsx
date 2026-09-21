@@ -29,6 +29,10 @@ import LoadingState from "@/components/ui/LoadingState";
 
 interface AIChatProps {
   projectId: number;
+  /** Which chat thread within the project this is. Omitted (or 0) means the
+      project's default thread — every call site that predates multi-chat
+      keeps working unchanged. */
+  conversationId?: number;
   /** Called with the paths a finished turn changed, so the tree can refetch. */
   onFilesTouched?: (paths: string[]) => void;
   /** A plan arrived — the layout puts it in the centre panel to be read. */
@@ -289,15 +293,17 @@ function firstLine(s: string): string {
 }
 
 const AIChat = forwardRef<AIChatHandle, AIChatProps>(
-  ({ projectId, onFilesTouched, onPlan, onApprovePlan, onLiveTrace }, ref) => {
+  ({ projectId, conversationId, onFilesTouched, onPlan, onApprovePlan, onLiveTrace }, ref) => {
     const [messages, setMessages] = useState<Entry[]>([]);
     const [input, setInput] = useState("");
     const [mode, setMode] = useState<"plan" | "build">("plan");
-    // Which project's history has finished loading. Derived into `restoring`
-    // rather than flipped on in the effect, so switching projects reads as
-    // restoring immediately instead of after an extra render pass.
-    const [restoredFor, setRestoredFor] = useState<number | null>(null);
-    const restoring = restoredFor !== projectId;
+    // Which thread's history has finished loading. Derived into `restoring`
+    // rather than flipped on in the effect, so switching projects — or
+    // switching chats within the same project — reads as restoring
+    // immediately instead of after an extra render pass.
+    const restoreKey = `${projectId}:${conversationId ?? 0}`;
+    const [restoredFor, setRestoredFor] = useState<string | null>(null);
+    const restoring = restoredFor !== restoreKey;
     const [confirmClear, setConfirmClear] = useState(false);
     // The last turn, when it ended without finishing cleanly — the chat offers
     // to resume or discard it. Null once resumed, discarded, or superseded by a
@@ -358,7 +364,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     useEffect(() => {
       let cancelled = false;
       conversation
-        .get(projectId)
+        .get(projectId, conversationId)
         .then(({ turns, latest, usage, planTasks }) => {
           if (cancelled) return;
           if (usage) setSessionUsage(usage);
@@ -376,14 +382,15 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           // panel the person can still type into.
         })
         .finally(() => {
-          // Marks this project restored either way: a failed fetch still ends
+          // Marks this thread restored either way: a failed fetch still ends
           // the restoring state, or the panel would spin forever.
-          if (!cancelled) setRestoredFor(projectId);
+          if (!cancelled) setRestoredFor(restoreKey);
         });
       return () => {
         cancelled = true;
       };
-    }, [projectId]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [projectId, conversationId]);
 
     useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -412,14 +419,17 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       [messages],
     );
 
-    // A turn paused on ask_user and still unanswered. While one is open the main
-    // composer defers to the question card, so typing a fresh prompt cannot
-    // orphan the paused turn on the server.
+    // A turn paused on ask_user and still unanswered — the actual question,
+    // not just whether one exists, so it can render anchored above the
+    // composer (see the canvas's own JSX). While one is open the main
+    // composer also defers to it, so typing a fresh prompt cannot orphan the
+    // paused turn on the server.
     const pendingQuestion = useMemo(
       () =>
-        messages.some(
-          (m) => isAssistant(m) && m.question !== undefined && m.question.answered === undefined,
-        ),
+        messages.find(
+          (m): m is StreamMessage =>
+            isAssistant(m) && m.question !== undefined && m.question.answered === undefined,
+        )?.question,
       [messages],
     );
 
@@ -929,7 +939,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               // without rebuilding (and flickering) the just-streamed transcript.
               if (d.status === "paused") {
                 conversation
-                  .get(projectId)
+                  .get(projectId, conversationId)
                   .then(({ latest }) =>
                     setResumable(isResumable(latest) ? latest : null),
                   )
@@ -939,7 +949,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
             }
           }
         },
-      [onFilesTouched, onPlan, projectId],
+      [onFilesTouched, onPlan, projectId, conversationId],
     );
 
     // ── Sending ──
@@ -988,9 +998,10 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           forcedMode ?? mode,
           handleEvent(streamId, patch),
           (err) => patch((prev) => ({ ...prev, isStreaming: false, error: err.message })),
+          conversationId,
         );
       },
-      [handleEvent, isStreaming, mode, projectId],
+      [handleEvent, isStreaming, mode, projectId, conversationId],
     );
 
     // Resume the interrupted turn: no new user message, since this continues the
@@ -1389,6 +1400,22 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           </div>
         )}
 
+        {/* The agent's question anchors here, above the composer — a decision
+            waiting on the person, not another line of scrollback. This is
+            the one place it renders while unanswered; AssistantEntry only
+            shows the small "answer sent" receipt once it settles. */}
+        {pendingQuestion && (
+          <div className="px-7 pb-2">
+            <div className="mx-auto max-w-[760px]">
+              <QuestionCard
+                question={pendingQuestion}
+                busy={isStreaming}
+                onAnswer={(reply) => answerQuestion(pendingQuestion.promptId, reply)}
+              />
+            </div>
+          </div>
+        )}
+
         {/* An interrupted turn waits on a human decision: continue it from where
             it stopped, or set it aside. Neutral, not fault — the work
             is not broken, it is paused. Hidden while streaming, when the status
@@ -1457,7 +1484,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                         : "What should I build?"
               }
               className="min-h-4 flex-1 resize-none bg-transparent text-sm leading-[22px] text-[var(--label)] outline-none placeholder:text-[var(--label-4)]"
-              disabled={pendingQuestion}
+              disabled={!!pendingQuestion}
               aria-label="Chat prompt"
             />
             <div className="right flex items-center gap-1.5">
@@ -1530,7 +1557,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                       : "Build"
                 }
                 aria-label="Send"
-                disabled={!input.trim() || pendingQuestion || (!isStreaming && pendingQuestion)}
+                disabled={!input.trim() || !!pendingQuestion}
                 className="send-btn flex-shrink-0"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1748,7 +1775,13 @@ function AssistantEntry({
         />
       )}
 
-      {question && (
+      {/* A pending question anchors above the composer instead (see the
+          canvas's own render, just below the message list) — Claude
+          Desktop's pattern for "the agent needs something from you": a
+          question is a decision waiting on the person, not another line of
+          scrollback. Once answered it settles into this small receipt,
+          exactly where the exchange happened. */}
+      {question && question.answered !== undefined && (
         <QuestionCard
           question={question}
           busy={busy}

@@ -17,23 +17,21 @@
  */
 
 :root {
-  /* ── Linear surfaces ─────────────────────────────────────────── */
+  /* ── Linear Strict surfaces ──────────────────────────────────────── */
   --color-void: #08090a;
   --color-carbon: #0f1011;
   --color-obsidian: #161718;
   --color-graphite: #23252a;
   --color-smoke: #383b3f;
 
-  /* ── Linear text ─────────────────────────────────────────────── */
+  /* ── Linear Strict text ────────────────────────────────────────── */
   --color-ash: #62666d;
   --color-fog: #8a8f98;
   --color-mist: #d0d6e0;
   --color-bone: #e5e5e6;
   --color-paper: #ffffff;
 
-  /* ── Linear accents ────────────────────────────────────────────
-     Acid lime is the ONLY chromatic action colour. The supporting hues are
-     for tags, outlines, and status — never for buttons or CTAs. */
+  /* ── Linear Strict accents ────────────────────────────────────── */
   --color-acid-lime: #e4f222;
   --color-pulse-green: #27a644;
   --color-coral-red: #eb5757;
@@ -62,11 +60,11 @@
      IDE was carrying five to six nested hairline rectangles per chat row
      before this. A line is the exception (a seam, a divider), never the
      default way to separate two surfaces. */
-  --surface-1: #0e1013;
-  --surface-2: #14171c;
-  --surface-3: #1b1f26;
-  --surface-4: #232833;
-  --inset: #0b0c0f;
+  --surface-1: #201e1c;
+  --surface-2: #292624;
+  --surface-3: #322e2b;
+  --surface-4: #3c3733;
+  --inset: #171615;
   --seam: rgb(255 255 255 / 5%);
   --seam-strong: rgb(255 255 255 / 9%);
   --hairline-inset: inset 0 0 0 1px rgb(255 255 255 / 6%);
@@ -91,8 +89,8 @@
   --label-3: var(--color-fog);
   --label-4: var(--color-ash);
   --accent: var(--color-acid-lime);
-  --accent-2: #eef75c;
-  --accent-soft: rgb(228 242 34 / 13%);
+  --accent-2: #f0f970;
+  --accent-soft: rgba(228, 242, 34, 0.16);
   --ok: var(--color-pulse-green);
   --err: var(--color-coral-red);
   --warn: #f2b234;
@@ -324,7 +322,7 @@ body {
 
 .lamp[data-state="working"] {
   background: var(--color-acid-lime);
-  box-shadow: 0 0 0 3px rgba(228, 242, 34, 0.16);
+  box-shadow: 0 0 0 3px rgba(204, 120, 92, 0.18);
 }
 
 .lamp[data-state="waiting"] {
@@ -373,7 +371,7 @@ body {
 .btn-go {
   background: var(--color-acid-lime);
   border-color: var(--color-acid-lime);
-  color: #08090a;
+  color: #241611;
   font-weight: 510;
   box-shadow:
     rgba(0, 0, 0, 0.01) 0px 5px 2px 0px,
@@ -382,9 +380,9 @@ body {
 }
 
 .btn-go:hover:not(:disabled) {
-  background: #eef75c;
-  border-color: #eef75c;
-  color: #08090a;
+  background: #e0a084;
+  border-color: #e0a084;
+  color: #241611;
 }
 
 .btn-stop {
@@ -514,7 +512,7 @@ body {
 
 /* ── Keyboard focus: one visible ring ──────────────────────────── */
 :focus-visible {
-  outline: 2px solid rgba(228, 242, 34, 0.7);
+  outline: 2px solid rgba(204, 120, 92, 0.7);
   outline-offset: 1px;
   border-radius: var(--radius-sm);
 }
@@ -523,7 +521,7 @@ body {
    The only decorative gradient in the system: atmospheric base under the
    product screenshot, dark wash grounding floating UI against the void. */
 .hero-floor {
-  background: linear-gradient(to bottom, rgb(8, 9, 10) 10%, rgb(20, 22, 26) 100%);
+  background: linear-gradient(to bottom, rgb(26, 25, 24) 10%, rgb(42, 39, 37) 100%);
 }
 
 /* ── Scrollbars ────────────────────────────────────────────────── */
@@ -718,7 +716,7 @@ body {
   color: #4cc069;
 }
 .chip[data-state="live"] {
-  background: rgba(228, 242, 34, 0.13);
+  background: rgba(204, 120, 92, 0.14);
   color: var(--color-acid-lime);
 }
 .chip[data-state="fail"] {
@@ -761,7 +759,9 @@ body {
    ───────────────────────────────────────────────────────────────────────── */
 
 /* The canvas is the deepest tone; the faint top glow is the only decorative
-   flourish, and it is very faint. */
+   flourish, and it is very faint. Tinted from --accent itself, not a
+   hardcoded hex, so it always matches whatever the current accent actually
+   is instead of drifting out of sync with it. */
 .canvas-wrap {
   position: relative;
   overflow: hidden;
@@ -774,7 +774,7 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(900px 420px at 50% -8%, rgb(79 124 246 / 7%), transparent 62%);
+  background: radial-gradient(900px 420px at 50% -8%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 62%);
 }
 
 /* The stream — a single column of turns, capped for readability. */
@@ -946,7 +946,7 @@ body {
   transition: box-shadow var(--dur-out) ease-out;
 }
 .composer-in:focus-within {
-  box-shadow: 0 10px 44px rgb(0 0 0 / 44%), inset 0 0 0 1px rgb(79 124 246 / 40%);
+  box-shadow: 0 10px 44px rgb(0 0 0 / 44%), inset 0 0 0 1px rgb(204 120 92 / 40%);
 }
 .composer textarea {
   flex: 1; min-height: 22px; max-height: 160px; resize: none;

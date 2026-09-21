@@ -227,7 +227,7 @@ func main() {
 	})
 	promptHandler := api.NewPromptHandler(s, aiClient, workspaceDir, templateDir, orchestratorSvc, devClientMgr, knowledge, pushNotifier)
 	var warmPool *redroid.Pool
-	if warmPoolSize > 0 {
+	if warmPoolSize > 0 && containerMgr != nil {
 		warmPool = redroid.NewPool(containerMgr, warmPoolSize)
 	}
 	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, relayAlloc, warmPool, workspaceDir, devClientMgr, walletMgr, pushNotifier)
@@ -386,6 +386,10 @@ func main() {
 		r.Get("/v1/projects/{projectID}/test-info", testInfoHandler.Info)
 		r.Get("/v1/projects/{projectID}/dev-client.apk", testInfoHandler.DevClientAPK)
 		r.Delete("/v1/projects/{projectID}/conversation", promptHandler.ClearConversation)
+
+		// Chat threads — multiple chats per project.
+		r.Get("/v1/projects/{projectID}/conversations", promptHandler.ListConversations)
+		r.Post("/v1/projects/{projectID}/conversations", promptHandler.CreateConversation)
 
 		// Checkpoints — undo for anything the agent changed.
 		r.Get("/v1/projects/{projectID}/checkpoints", promptHandler.ListCheckpoints)
