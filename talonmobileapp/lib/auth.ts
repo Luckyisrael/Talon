@@ -1,5 +1,4 @@
 import * as SecureStore from 'expo-secure-store';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // JWT storage. SecureStore, not AsyncStorage: the token is a bearer
 // credential, and this is the one place AsyncStorage isn't honest.
@@ -17,81 +16,28 @@ const REFRESH_KEY = 'talon.refresh';
 // at least observable in dev instead of vanishing.
 let lastReadError: string | null = null;
 
-// The trace. SecureStore's own file never appears on disk while every other
-// prefs file survives, so the failure is somewhere in its write path and
-// logcat is not a reliable channel for it. AsyncStorage persists reliably on
-// this device (the onboarding flag survives), so the trace rides there: each
-// step appends, and the next cold start replays it through getToken, which
-// means the evidence outlives the process that produced it.
-const TRACE_KEY = 'talon.auth.trace';
-
-async function trace(step: string) {
-  console.warn(`[auth] ${step}`);
-  try {
-    const prev = await AsyncStorage.getItem(TRACE_KEY);
-    const line = `${new Date().toISOString()} ${step}`;
-    await AsyncStorage.setItem(TRACE_KEY, prev ? `${prev}\n${line}` : line);
-  } catch {
-    // A trace that cannot record is not worth failing a sign-in over.
-  }
-}
-
-export async function readTrace(): Promise<string | null> {
-  try {
-    return await AsyncStorage.getItem(TRACE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export async function clearTrace(): Promise<void> {
-  try {
-    await AsyncStorage.removeItem(TRACE_KEY);
-  } catch {
-    // same
-  }
-}
-
 export function secureStoreFault(): string | null {
   return lastReadError;
 }
 
 export async function getToken(): Promise<string | null> {
   try {
-    const v = await SecureStore.getItemAsync(TOKEN_KEY);
-    lastReadError = null;
-    await trace(`getToken → ${v ? 'token present' : 'NULL (no stored value)'}`);
-    return v;
+    return await SecureStore.getItemAsync(TOKEN_KEY);
   } catch (e) {
     lastReadError = e instanceof Error ? e.message : String(e);
-    await trace(`getToken THREW: ${lastReadError}`);
     return null;
   }
 }
 
 export async function setToken(token: string): Promise<void> {
-  await trace('setToken: calling setItemAsync…');
-  let threw: string | null = null;
-  try {
-    await SecureStore.setItemAsync(TOKEN_KEY, token);
-  } catch (e) {
-    threw = e instanceof Error ? `${e.message} ${e.stack ?? ''}` : String(e);
-    await trace(`setToken setItemAsync THREW: ${threw}`);
-    throw e;
-  }
-  // Verify the write landed in the store the next read will use. A commit()
-  // that reports success but leaves nothing on disk is the failure mode
-  // that looks exactly like a sign-out, so check it here.
-  let back: string | null = null;
-  try {
-    back = await SecureStore.getItemAsync(TOKEN_KEY);
-  } catch (e) {
-    await trace(`setToken read-back THREW: ${e instanceof Error ? e.message : String(e)}`);
-    throw e;
-  }
-  await trace(`setToken read-back: ${back === token ? 'OK' : 'MISMATCH — write did not land'}`);
+  await SecureStore.setItemAsync(TOKEN_KEY, token);
+  // Read the write back from the same store the next cold start will read.
+  // A commit() that reports success while leaving nothing on disk looks
+  // exactly like a sign-out, and this is the only place that can tell the
+  // two apart.
+  const back = await SecureStore.getItemAsync(TOKEN_KEY);
   if (back !== token) {
-    throw new Error('the token write did not land in SecureStore');
+    throw new Error('the session did not persist on this device. Set a device lock screen, then sign in again.');
   }
 }
 
@@ -99,13 +45,9 @@ export async function setToken(token: string): Promise<void> {
  *  on sign-out. Same SecureStore treatment as the access token. */
 export async function getRefreshToken(): Promise<string | null> {
   try {
-    const v = await SecureStore.getItemAsync(REFRESH_KEY);
-    lastReadError = null;
-    await trace(`getRefreshToken → ${v ? 'present' : 'NULL'}`);
-    return v;
+    return await SecureStore.getItemAsync(REFRESH_KEY);
   } catch (e) {
     lastReadError = e instanceof Error ? e.message : String(e);
-    await trace(`getRefreshToken THREW: ${lastReadError}`);
     return null;
   }
 }

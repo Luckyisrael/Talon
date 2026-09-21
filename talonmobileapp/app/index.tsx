@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Screen, UIText } from '@/components/ui'
 import { Colors, Spacing } from '@/constants/theme'
-import { getToken, readTrace } from '@/lib/auth'
+import { getToken } from '@/lib/auth'
 import { ONBOARDED_KEY } from '@/stores/app'
 
 // Splash: mark + floor wash, then routes once: first launch tours
@@ -16,13 +16,6 @@ export default function SplashScreen() {
   React.useEffect(() => {
     let alive = true
     void (async () => {
-      // Replay the auth trace first: SecureStore's own file never appears on
-      // disk while every other prefs file survives, so the failure hides in
-      // its write path. The trace rides AsyncStorage (which persists on this
-      // device) and a cold start replays it, so the evidence outlives the
-      // process that produced it.
-      const prior = await readTrace()
-      if (prior) console.warn(`[auth-trace previous]\n${prior}`)
       const [seen, token] = await Promise.all([
         AsyncStorage.getItem(ONBOARDED_KEY).catch(() => null),
         getToken(),

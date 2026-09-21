@@ -180,11 +180,6 @@ func (h *OAuthAuthHandler) Start(w http.ResponseWriter, r *http.Request) {
 	}
 
 	redirect := sanitizeRedirect(r.URL.Query().Get("redirect"))
-	// TEMPORARY DIAGNOSTIC: the redirect the client registers is the whole
-	// handoff contract — the same string must open the browser session and
-	// receive the provider's return. Log it until the mobile callback is
-	// resolved.
-	log.Printf("oauth %s: start redirect=%q", providerName, redirect)
 	state, err := newFlowToken()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start the sign-in flow")
