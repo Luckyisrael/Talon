@@ -21,7 +21,6 @@ import {
   type ConversationTurn,
   type LatestPrompt,
   type StreamEvent,
-  type TurnIndexEntry,
 } from "@/lib/api";
 import {
   classifyFile,
@@ -60,6 +59,9 @@ interface AIChatProps {
     filesTouched: string[],
     planTasks: PlanTask[],
   ) => void;
+  /** Start a new chat thread — owned by the layout, which selects it.
+      The history block's new-chat button calls this; threads never delete. */
+  onNewThread?: () => void;
 }
 
 export interface AIChatHandle {
@@ -401,7 +403,7 @@ function firstLine(s: string): string {
 }
 
 const AIChat = forwardRef<AIChatHandle, AIChatProps>(
-  ({ projectId, conversationId, onFilesTouched, onPlan, onApprovePlan, onLiveTrace }, ref) => {
+  ({ projectId, conversationId, onFilesTouched, onPlan, onApprovePlan, onLiveTrace, onNewThread }, ref) => {
     const [messages, setMessages] = useState<Entry[]>([]);
     const [input, setInput] = useState("");
     const [mode, setMode] = useState<"plan" | "build">("plan");
@@ -422,6 +424,20 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     const restoreKey = `${projectId}:${conversationId ?? 0}`;
     const [restoredFor, setRestoredFor] = useState<string | null>(null);
     const restoring = restoredFor !== restoreKey;
+    // Past user prompts for the history block: most recent first, deduped,
+    // capped. Real transcript data — nothing invented.
+    const pastPrompts = useMemo(() => {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (let i = messages.length - 1; i >= 0 && out.length < 10; i--) {
+        const m = messages[i];
+        if (!isAssistant(m) && m.content.trim() && !seen.has(m.content)) {
+          seen.add(m.content);
+          out.push(m.content);
+        }
+      }
+      return out;
+    }, [messages]);
     // The last turn, when it ended without finishing cleanly — the chat offers
     // to resume or discard it. Null once resumed, discarded, or superseded by a
     // new prompt. Derived from server truth on every load, so it never claims a
@@ -1482,13 +1498,15 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           className="stream"
         >
           <ChatHistory
-            key={projectId}
+            key={restoreKey}
             projectId={projectId}
-            onJump={jumpToTurn}
-            onReuse={(text) => {
+            prompts={pastPrompts}
+            onPick={(text) => {
               setInput(text);
               textareaRef.current?.focus();
             }}
+            onNewChat={() => onNewThread?.()}
+            onJump={jumpToTurn}
           />
           {restoring && messages.length === 0 && (
             <p className="gauge py-4 text-center">Loading this project&rsquo;s history</p>
@@ -1903,67 +1921,39 @@ AIChat.displayName = "AIChat";
 export default AIChat;
 
 // ── Chat history ──
-// The transcript's index: turn titles from the server (never prompt text),
-// server search across stored turns, and per-turn jump back into the stream.
-// History is never deleted from here: removing a project deletes its
-// transcript with it.
+// Past prompts for reuse, plus server search across stored turns with
+// jump-to-turn. New chats are threads (the rail lists them), so the button
+// starts a thread instead of clearing anything — nothing here deletes.
 function ChatHistory({
   projectId,
+  prompts,
+  onPick,
+  onNewChat,
   onJump,
-  onReuse,
 }: {
   projectId: number;
+  /** Past user prompts, most recent first. Tap refills the composer. */
+  prompts: string[];
+  onPick: (text: string) => void;
+  /** Start a new chat thread for this project. */
+  onNewChat: () => void;
   /** Scroll the stream to the turn; returns whether it is rendered. */
   onJump: (promptId: number) => boolean;
-  /** Refill the composer with the turn's title. */
-  onReuse: (text: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [turns, setTurns] = useState<TurnIndexEntry[]>([]);
-  const [loadingTurns, setLoadingTurns] = useState(false);
-  const [exhausted, setExhausted] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [found, setFound] = useState<{ q: string; turns: ConversationTurn[] } | null>(null);
   const [jumpMiss, setJumpMiss] = useState<number | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const loadTurns = useCallback(
-    async (before?: number) => {
-      setLoadingTurns(true);
-      try {
-        const page = await conversation.promptsIndex(projectId, {
-          limit: 20,
-          ...(before ? { before } : {}),
-        });
-        setTurns((prev) => (before ? [...prev, ...page] : page));
-        if (page.length < 20) setExhausted(true);
-      } catch {
-        // The list keeps whatever it already had.
-      } finally {
-        setLoadingTurns(false);
-      }
-    },
-    [projectId],
-  );
-
-  function toggleOpen() {
-    const next = !open;
-    setOpen(next);
-    if (!next) return;
-    setTurns([]);
-    setExhausted(false);
-    setExpanded(null);
-    setJumpMiss(null);
-    void loadTurns();
-  }
-
   useEffect(() => {
-    if (open) searchRef.current?.focus();
-  }, [open]);
+    if (searchOpen) searchRef.current?.focus();
+  }, [searchOpen]);
 
-  // Debounced server search: two characters minimum, or the index shows.
-  // Only the debounced callback writes state; the searching flag derives.
+  // Debounced server search: two characters minimum. Only the debounced
+  // callback writes state; the searching flag derives.
   useEffect(() => {
     const q = query.trim();
     if (q.length < 2) return;
@@ -1984,6 +1974,10 @@ function ChatHistory({
     };
   }, [query, projectId]);
 
+  if (prompts.length === 0) return null;
+  const visible = prompts.filter((pr) =>
+    pr.toLowerCase().includes(query.trim().toLowerCase()),
+  );
   const searchingUI = query.trim().length >= 2;
   const results =
     searchingUI && found && found.q === query.trim() ? found.turns : null;
@@ -2006,11 +2000,11 @@ function ChatHistory({
         <button
           type="button"
           aria-expanded={open}
-          onClick={toggleOpen}
+          onClick={() => setOpen((v) => !v)}
           className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 text-left transition-colors hover:bg-white/5"
         >
           <span className="gauge">History</span>
-          {turns.length > 0 && <span className="gauge tnum">{turns.length}</span>}
+          <span className="gauge tnum">{prompts.length}</span>
           <svg
             width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--color-ash)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
             className="ml-auto shrink-0 transition-transform duration-300"
@@ -2020,7 +2014,64 @@ function ChatHistory({
             <path d="M6 9l6 6 6-6" />
           </svg>
         </button>
+        <button
+          type="button"
+          title="New chat in this project"
+          aria-label="New chat in this project"
+          onClick={onNewChat}
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-ash transition-colors hover:bg-white/5 hover:text-mist"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          aria-label="Search history"
+          aria-expanded={searchOpen}
+          onClick={() => setSearchOpen((v) => !v)}
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-ash transition-colors hover:bg-white/5 hover:text-mist"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3" />
+          </svg>
+        </button>
       </div>
+
+      {searchOpen && (
+        <div className="surface-1 mt-1 flex h-8 items-center gap-1.5 rounded-lg px-2 transition-colors focus-within:bg-[var(--surface-2)]">
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setSearchOpen(false);
+                setQuery("");
+              }
+            }}
+            placeholder="Search prompts and turns"
+            aria-label="Search prompt history"
+            className="min-w-0 flex-1 bg-transparent text-xs text-mist outline-none placeholder:text-ash"
+          />
+          {(visible.length > 0 || query) && (
+            <button
+              type="button"
+              aria-label="Close history search"
+              onClick={() => {
+                setSearchOpen(false);
+                setQuery("");
+              }}
+              className="flex size-6 shrink-0 items-center justify-center rounded-md text-ash transition-colors hover:text-mist"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
 
       <div
         className="grid transition-[grid-template-rows,opacity] duration-300"
@@ -2031,114 +2082,70 @@ function ChatHistory({
         }}
       >
         <div className="overflow-hidden">
-          <div className="surface-1 mt-1 flex h-8 items-center gap-1.5 rounded-lg px-2 transition-colors focus-within:bg-[var(--surface-2)]">
-            <input
-              ref={searchRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setQuery("");
-              }}
-              placeholder="Search turns and transcript"
-              aria-label="Search history"
-              className="min-w-0 flex-1 bg-transparent text-xs text-mist outline-none placeholder:text-ash"
-            />
-            {searching && <span className="gauge">…</span>}
-          </div>
-
-          <div className="flex max-h-72 flex-col gap-px overflow-y-auto py-1">
-            {!searchingUI &&
-              turns.map((t) => (
-                <TurnRow
-                  key={t.id}
-                  title={t.title || `Turn ${t.id}`}
-                  meta={`${t.mode} · ${t.status}${t.round > 0 ? ` · round ${t.round}` : ""}`}
-                  expanded={expanded === t.id}
-                  onToggle={() => {
-                    setExpanded((v) => (v === t.id ? null : t.id));
-                    setJumpMiss(null);
-                  }}
-                  detail={
-                    <>
-                      <p className="gauge">
-                        {new Date(t.created_at).toLocaleString()}
-                      </p>
-                      <div className="mt-1.5 flex gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => jump(t.id)}
-                          className="btn h-7 flex-shrink-0 px-2.5 text-xs"
-                        >
-                          Jump to turn
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onReuse(t.title || `Turn ${t.id}`)}
-                          className="btn btn-ghost h-7 flex-shrink-0 px-2.5 text-xs"
-                        >
-                          Reuse
-                        </button>
-                      </div>
-                      {jumpMiss === t.id && (
-                        <p className="mt-1.5 font-mono text-[11px] text-fog">
-                          That turn is not in the loaded transcript.
-                        </p>
-                      )}
-                    </>
-                  }
-                />
-              ))}
-            {!searchingUI && !loadingTurns && turns.length === 0 && (
-              <p className="px-2 py-1.5 text-xs text-ash">No turns yet.</p>
-            )}
-            {!searchingUI && !exhausted && turns.length > 0 && (
+          <div className="flex flex-col gap-px py-1">
+            {visible.map((prompt) => (
               <button
+                key={prompt}
                 type="button"
-                disabled={loadingTurns}
-                onClick={() => void loadTurns(turns[turns.length - 1].id)}
-                className="mt-1 h-8 rounded-md text-xs text-fog transition-colors hover:bg-white/5 hover:text-mist disabled:opacity-40"
+                title={prompt}
+                onClick={() => onPick(prompt)}
+                className="flex h-8 min-w-0 items-center rounded-md px-2 text-left transition-colors hover:bg-white/5"
               >
-                {loadingTurns ? "Loading…" : "Load earlier turns"}
+                <span className="min-w-0 flex-1 truncate text-xs text-fog transition-colors hover:text-mist">
+                  {prompt}
+                </span>
               </button>
+            ))}
+            {visible.length === 0 && !searchingUI && (
+              <p className="px-2 py-1.5 text-xs text-ash">No prompts match.</p>
             )}
-
-            {searchingUI &&
-              (results ?? []).map((t, i) => {
-                const excerpt =
-                  t.blocks
-                    .filter((b) => b.type === "text" && b.text?.trim())
-                    .map((b) => b.text as string)
-                    .join(" ")
-                    .slice(0, 160) || "(no prose in this turn)";
-                const pid = t.prompt_id ?? -1;
-                return (
-                  <TurnRow
-                    key={`${pid}-${i}`}
-                    title={excerpt}
-                    meta={t.role}
-                    expanded={expanded === pid && pid > 0}
-                    onToggle={() => {
-                      setExpanded((v) => (v === pid ? null : pid));
-                      setJumpMiss(null);
-                    }}
-                    detail={
-                      pid > 0 ? (
-                        <div className="mt-1.5 flex gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => jump(pid)}
-                            className="btn h-7 flex-shrink-0 px-2.5 text-xs"
-                          >
-                            Jump to turn
-                          </button>
-                        </div>
-                      ) : undefined
-                    }
-                  />
-                );
-              })}
-            {searchingUI && !searching && (results ?? []).length === 0 && (
-              <p className="px-2 py-1.5 text-xs text-ash">No turns match.</p>
+            {searchingUI && (
+              <div className="mt-1 border-t border-white/5 pt-1">
+                <p className="gauge px-2 py-1">Matches in stored turns</p>
+                {searching && <p className="gauge px-2 py-1">…</p>}
+                {(results ?? []).map((t, i) => {
+                  const excerpt =
+                    t.blocks
+                      .filter((b) => b.type === "text" && b.text?.trim())
+                      .map((b) => b.text as string)
+                      .join(" ")
+                      .slice(0, 160) || "(no prose in this turn)";
+                  const pid = t.prompt_id ?? -1;
+                  return (
+                    <TurnRow
+                      key={`${pid}-${i}`}
+                      title={excerpt}
+                      meta={t.role}
+                      expanded={expanded === pid && pid > 0}
+                      onToggle={() => {
+                        setExpanded((v) => (v === pid ? null : pid));
+                        setJumpMiss(null);
+                      }}
+                      detail={
+                        pid > 0 ? (
+                          <div className="mt-1.5 flex gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => jump(pid)}
+                              className="btn h-7 flex-shrink-0 px-2.5 text-xs"
+                            >
+                              Jump to turn
+                            </button>
+                            {jumpMiss === pid && (
+                              <p className="mt-1.5 font-mono text-[11px] text-fog">
+                                That turn is not in the loaded transcript.
+                              </p>
+                            )}
+                          </div>
+                        ) : undefined
+                      }
+                    />
+                  );
+                })}
+                {searchingUI && !searching && (results ?? []).length === 0 && (
+                  <p className="px-2 py-1.5 text-xs text-ash">No turns match.</p>
+                )}
+              </div>
             )}
           </div>
         </div>

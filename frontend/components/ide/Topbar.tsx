@@ -79,9 +79,7 @@ export default function Topbar({
           <span className="block truncate text-sm font-semibold text-[var(--label)]">{projectName}</span>
         </span>
       </button>
-      {projectStatus ? (
-        <span className="gauge hidden flex-shrink-0 sm:inline">{projectStatus}</span>
-      ) : null}
+      {projectStatus ? <span className="gauge hidden flex-shrink-0 sm:inline">{projectStatus}</span> : null}
       {gitBranch ? (
         <span
           className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-2)] px-2.5 py-0.5 font-mono text-xs text-[var(--label-2)]"

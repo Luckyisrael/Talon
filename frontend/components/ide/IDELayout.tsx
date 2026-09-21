@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { git, projects, sessions } from "@/lib/api";
+import { conversations, git, projects, sessions } from "@/lib/api";
 import { useIDEStore } from "@/lib/store";
 import type { PlanData } from "@/lib/types";
 import AIChat, { type AIChatHandle } from "./AIChat";
@@ -393,6 +393,12 @@ export default function IDELayout({
             onPlan={handlePlan}
             onApprovePlan={approvePlan}
             onLiveTrace={handleLiveTrace}
+            onNewThread={() => {
+              conversations
+                .create(projectId)
+                .then((c) => setConversationId(c.id))
+                .catch(() => {});
+            }}
           />
         </div>
       </div>
