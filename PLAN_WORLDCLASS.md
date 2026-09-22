@@ -619,16 +619,16 @@ W14 loop extraction + composition (last; consumes everything)
 
 | # | Verified finding | Closed by |
 |---|---|---|
-| 1 | `make evals` red — copylock `client.go:222,233`; lying comment | **W0** |
-| 2 | Uncommitted AI-core WIP (+323/−27) | **W0** |
-| 3 | `PLAN_HARNESS.md` status overstated | **W0** |
+| 1 | `make evals` red — copylock `client.go:222,233`; lying comment | **W0** ✅ landed (`cb80d59`) |
+| 2 | Uncommitted AI-core WIP (+323/−27) | **W0** ✅ landed (`f517661`) |
+| 3 | `PLAN_HARNESS.md` status overstated | **W0** ✅ landed (`cb80d59`) |
 | 4 | Trim deletes history; archive write-only | **W1.1** |
-| 5 | Spill one-way (no `read_spill`) | **W1.2** |
+| 5 | Spill one-way (no `read_spill`) | **W1.2** ✅ landed — via `read_file` locator resolution (repo-native; see notes) |
 | 6 | Conversation search = LIKE not FTS | **W1.3** |
-| 7 | `run_gate` defined, unregistered | **W1.4** |
+| 7 | `run_gate` defined, unregistered | **W1.4** ✅ landed (`ef736f3`) |
 | 8 | `Fork`/`delegate_fork` unused | **W1.5**, **W12** |
 | 9 | Approval Seam/`Escalate` dead; tier-2 = ask-only | **W1.6**, **W9** |
-| 10 | `AI_MODEL_TIER` undocumented | **W1.7** |
+| 10 | `AI_MODEL_TIER` undocumented | **W1.7** ✅ no change — already documented in `.env.example:27-29` (audit error) |
 | 11 | Event log write-only (derive flag off) | **W2** |
 | 12 | Plan mode blind (no tools/map/instructions) | **W3** |
 | 13 | Plan not a durable artifact | **W3.4** |

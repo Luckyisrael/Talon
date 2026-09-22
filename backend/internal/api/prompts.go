@@ -18,6 +18,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/devclient"
 	"github.com/luckyisrael/talon/backend/internal/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/approval"
+	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	"github.com/luckyisrael/talon/backend/internal/harness/tooltimeout"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
@@ -58,6 +59,11 @@ type PromptHandler struct {
 	// r2 points attachment images at Cloudflare R2. Nil keeps images on
 	// local disk — see SetR2Store. Markdown docs always stay local.
 	r2 blobstore.Store
+	// spill is the H8 oversized-output store, when the composition attached
+	// one — read_file resolves spill locators through it so filed outputs
+	// come back verbatim (W1.2). Nil disables resolution: reads behave as
+	// before. See AttachSpill.
+	spill *compaction.SpillStore
 }
 
 func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *knowledge.Registry, n notify.Notifier) *PromptHandler {
@@ -77,6 +83,15 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir st
 		planPrompt:   ai.PlanSystemPrompt(preinstalled),
 		slog:         newSessionLogCache(),
 	}
+}
+
+// AttachSpill provides the H8 spill store to the file tools: read_file
+// resolves spill locators through it, so an oversized output the loop filed
+// to disk comes back verbatim when the model re-reads it (W1.2). Main
+// attaches the same store the orchestrator spills through; nil keeps reads
+// unchanged.
+func (h *PromptHandler) AttachSpill(s *compaction.SpillStore) {
+	h.spill = s
 }
 
 type promptRequest struct {

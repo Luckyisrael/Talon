@@ -2,53 +2,53 @@ package evals
 
 import (
 	"bytes"
-	"errors"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"fmt"
+	"github.com/luckyisrael/talon/backend/internal/api"
 	"github.com/luckyisrael/talon/backend/internal/build"
 	"github.com/luckyisrael/talon/backend/internal/guardrails"
 	harnessagent "github.com/luckyisrael/talon/backend/internal/harness/agent"
 	"github.com/luckyisrael/talon/backend/internal/harness/approval"
 	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
-	"github.com/luckyisrael/talon/backend/internal/harness/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/composition"
+	"github.com/luckyisrael/talon/backend/internal/harness/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/goals"
 	"github.com/luckyisrael/talon/backend/internal/harness/instructions"
 	"github.com/luckyisrael/talon/backend/internal/harness/pipeline"
 	"github.com/luckyisrael/talon/backend/internal/harness/promptsec"
 	"github.com/luckyisrael/talon/backend/internal/harness/ralph"
-	"fmt"
-	"io"
-	"net"
-	"github.com/luckyisrael/talon/backend/internal/api"
+	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
+	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
+	"github.com/luckyisrael/talon/backend/internal/harness/settings"
+	"github.com/luckyisrael/talon/backend/internal/harness/skills"
+	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
+	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/metro"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/redroid"
 	"github.com/luckyisrael/talon/backend/internal/relay"
-	"github.com/luckyisrael/talon/backend/internal/tools"
-	"github.com/luckyisrael/talon/backend/internal/ws"
-	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
-	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
-	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
-	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
-	"github.com/luckyisrael/talon/backend/internal/harness/settings"
-	"github.com/luckyisrael/talon/backend/internal/harness/skills"
-	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/runtime"
 	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/tools"
 	"github.com/luckyisrael/talon/backend/internal/verify"
+	"github.com/luckyisrael/talon/backend/internal/ws"
+	"io"
+	"net"
 )
 
 // The phase-guard set: one eval per PLAN.md phase. Each case asserts both
@@ -792,7 +792,7 @@ func TestPhaseH10Workflow(t *testing.T) {
 		t.Error("fault: empty phase passed validation")
 	}
 	good := workflow.Spec{
-		Name:   "check",
+		Name: "check",
 		Phases: []workflow.Phase{
 			{Title: "p", Parallel: []workflow.Item{{Prompt: "a"}, {Prompt: "b"}, {Prompt: "c"}}},
 			{Title: "agg", Prompt: "summarize"},
@@ -809,7 +809,11 @@ func TestPhaseH10Workflow(t *testing.T) {
 			return subagent.Result{Errored: true, Err: "child b failed"}
 		}
 		return subagent.Result{FinalText: `{"ok": true}`}
-	}, onLive: func(n int) { if n > peak { peak = n } }}
+	}, onLive: func(n int) {
+		if n > peak {
+			peak = n
+		}
+	}}
 	svc := subagent.NewService(runner, 4)
 	var narrated int
 	eng := workflow.NewEngine(svc, func(string) { narrated++ })
@@ -835,12 +839,12 @@ func TestPhaseH10Workflow(t *testing.T) {
 
 // h10Runner is the workflow evals stub with overlap tracking.
 type h10Runner struct {
-	mu        sync.Mutex
-	live      int
-	peakSeen  int
+	mu         sync.Mutex
+	live       int
+	peakSeen   int
 	lastPrompt string
-	answer    func(string) subagent.Result
-	onLive    func(int)
+	answer     func(string) subagent.Result
+	onLive     func(int)
 }
 
 func (r *h10Runner) RunChild(_ context.Context, s subagent.Spec) subagent.Result {
@@ -1350,5 +1354,64 @@ func TestPhaseW0GateGreen(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go vet ./internal/ai is red — the merge gate must be green: %v\n%s", err, out)
+	}
+}
+
+// W1.2: H8's retrieval half — compaction/README.md has always promised that
+// "read_file on it returns the body verbatim", but nothing resolved the
+// locator: spill files live outside the workspace FS root and read_file
+// passed paths straight to FS.Read. Oversized output was one-way. Now
+// read_file resolves through the spill store's own containment check: the
+// full body comes back (the window names the true line total), the bare
+// path resolves the same file, and a path outside the store never does.
+func TestPhaseW1SpillReadBack(t *testing.T) {
+	s, err := compaction.NewSpillStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("spill store: %v", err)
+	}
+	body := strings.Repeat("spilled-line\n", 40000) // ~480 KB: over the 256 KiB threshold
+	rep, spilled, err := s.Spill("run_shell", body)
+	if err != nil || !spilled {
+		t.Fatalf("spill: %v %v", spilled, err)
+	}
+
+	rf := &tools.ReadFile{FS: tools.NewFS(t.TempDir()), Spill: s}
+
+	// 1. The full locator line, as the model saw it in the tool result.
+	res, err := rf.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"path":%q}`, rep)))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("read back errored: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "of 40001") {
+		t.Errorf("whole body not parsed (want line total 40001): %.120s", res.Content)
+	}
+	if !strings.Contains(res.Content, "spilled-line") {
+		t.Errorf("body content missing: %.120s", res.Content)
+	}
+
+	// 2. The bare spill path resolves the same file, paged like any read.
+	locPath := s.LocatorPath(rep)
+	if locPath == "" {
+		t.Fatal("locator did not extract a path")
+	}
+	page, err := rf.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"path":%q,"offset":40000}`, locPath)))
+	if err != nil || page.IsError {
+		t.Fatalf("bare-path page: %v %s", err, page.Content)
+	}
+	if !strings.Contains(page.Content, "40000\tspilled-line") {
+		t.Errorf("offset paging on spilled body broken: %.120s", page.Content)
+	}
+
+	// 3. A path outside the store never resolves through the seam: the
+	// locator check says no, and FS.Read keeps its own boundary.
+	outside, err := rf.Execute(context.Background(), json.RawMessage(`{"path":"/etc/passwd"}`))
+	if err != nil {
+		t.Fatalf("outside read: %v", err)
+	}
+	if strings.Contains(outside.Content, "root:") {
+		t.Errorf("spill resolution leaked an outside file: %.120s", outside.Content)
 	}
 }

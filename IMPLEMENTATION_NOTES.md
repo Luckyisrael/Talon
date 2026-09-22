@@ -60,3 +60,69 @@ raw trace verb.
 - **`PLAN_HARNESS.md`** — errata header: the "all green" status was false at
   audit time; phase laws that landed dark are itemized with pointers here.
 - *No API surface change → no frontend/mobile work in this phase.*
+
+### W1.4 — run_gate registered (2026-09-22)
+
+- **The break:** `run_gate` (the verify-chain report tool) was defined, unit-
+  tested, and documented since the G4 ladder — but never landed in any
+  registry, so the model asking "what did the verify chain report?" always got
+  "No tool named run_gate".
+- **`tools/verify.go`** — empty accumulator now renders the honest "no chain
+  run yet" (the accumulator is non-nil from construction; the old nil check
+  would have claimed "chain pass: empty" for gates that never ran).
+  **`tools/readonly.go`** — `RunGate` classifies read-only (concurrent with
+  other reads).
+- **`orchestrator/orchestrator.go`** — exported `LastVerifyReport()`; fixed
+  the latent verdict bug wiring exposed: `resetVerifyReport` zeroed
+  `OverallPassed` while `New` initializes it true, and `appendVerifyGate`
+  multiplies the carried verdict — after the first chain every report would
+  have read "fail" even when all gates passed. Nothing read it until now.
+- **`api/buildsession.go`** — registered with a provider closure over
+  `h.orch`, nil-guarded (the testinfo handler shape has no orchestrator).
+- **Tests:** `orchestrator/verify_report_test.go` (lifecycle: fail sticks /
+  reset restores the passing baseline / unavailable never flips / late fail
+  flips), `api/run_gate_wiring_test.go` (registration, model-visible def,
+  read-only class, both handler shapes).
+- *Client impact: none — no endpoint or event changed. The tool changes what
+  the model can ask mid-build ("what's green?"), surfacing as an ordinary
+  tool result in the web trace; mobile's headline status is unchanged.*
+
+### W1.2 — spill read-back (2026-09-22)
+
+- **The break:** H8 files oversized tool outputs to `backend/spill/<hash>.txt`
+  and replaces the content with a locator line telling the model to "re-read
+  with read_file on that path" — but `read_file` resolved paths only inside
+  the workspace root, and the spill dir sits beside the database, outside it.
+  Retrieval was one-way: the body was written and unreachable.
+- **`harness/compaction`** — new `ResolvePath(candidate)`: the locator line
+  the model saw *or* the bare path resolves, both through one `inStore` check
+  (lexical containment in the store dir + the `.txt` name `Spill` writes).
+  `/etc/passwd`, `..` hops, and wrong suffixes never resolve — a locator is a
+  pointer at one filed output, not an arbitrary file-read token.
+  `LocatorPath` now shares the same check.
+- **`tools/read.go`** — `ReadFile` gains an optional `Spill SpillResolver`
+  (interface: tools stays dependency-free; `SpillStore` satisfies it).
+  Resolved bodies are read with `os.ReadFile` — outside the workspace root
+  *and* outside `FS.Read`'s 256 KB cap, which is exactly why the output
+  spilled — then rendered through the shared line-window helper, so
+  `offset`/`limit` paging works on a spilled body. Same schema (no tool-cache
+  churn beyond the one-time description update).
+- **Wiring:** `PromptHandler.AttachSpill` (house `Set*`/`Attach*` pattern);
+  `main.go` attaches the *same* store the orchestrator spills through;
+  `newBuildSession` passes it to `read_file` (child sessions included — they
+  share `newBuildSession`).
+- **Decision recorded:** H8's spec phrase was `read_spill(locator)`, but every
+  repository artifact — the compaction README, the locator replacement text,
+  `LocatorPath`'s "the read tools resolve locators through this" — names
+  `read_file`. Resolution landed through `read_file` (no new tool name, no
+  catalog churn, the replacement text the model holds stays true), paging is
+  line-based via `offset`/`limit` (spill bodies are line-oriented tool
+  output). A separate `read_spill` tool would have contradicted the instruction
+  the model is currently following.
+- **Client impact: none** — tool results only. Web trace shows the read-back
+  like any file read; mobile turn status unchanged.
+- **Tests:** `compaction/TestResolvePath` (locator / wrapped / bare / outside
+  / traversal / wrong-suffix), `tools/TestReadFileResolvesSpillLocators`
+  (verbatim window, paging, past-end names the filed path, nil resolver
+  unchanged), `evals/TestPhaseW1SpillReadBack` (full chain: Spill → locator →
+  read_file → line window with true total; outside path does not leak).

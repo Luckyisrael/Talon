@@ -117,6 +117,49 @@ func TestLocatorScoping(t *testing.T) {
 	}
 }
 
+// ResolvePath is the read tools' seam onto the store (W1.2): the locator line
+// the model saw and the bare spill path both resolve to the filed body;
+// anything outside the store — including a lexical hop via .. — does not.
+// This is what makes the compaction README's promise ("read_file on it
+// returns the body verbatim") true without turning a locator into an
+// arbitrary file-read token.
+func TestResolvePath(t *testing.T) {
+	s, err := NewSpillStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Repeat("x", SpillThresholdBytes+10)
+	rep, spilled, err := s.Spill("run_shell", body)
+	if err != nil || !spilled {
+		t.Fatalf("spill: %v %v", spilled, err)
+	}
+
+	byLocator := s.ResolvePath(rep)
+	if byLocator == "" {
+		t.Fatal("locator line did not resolve")
+	}
+	if byPath := s.ResolvePath(byLocator); byPath != byLocator {
+		t.Errorf("bare path resolved to %q, want %q", byPath, byLocator)
+	}
+	// The locator as it lands in a transcript: wrapped in surrounding text
+	// and whitespace.
+	if got := s.ResolvePath("turn result:\n  " + rep + "\n"); got != byLocator {
+		t.Errorf("wrapped locator resolved to %q, want %q", got, byLocator)
+	}
+
+	for _, bad := range []string{
+		"",
+		"no locator here",
+		"[saved to /etc/passwd]",
+		s.dir + "/../escape.txt", // lexical hop out of the store
+		s.dir + "/notes.md",      // wrong suffix — not a spill file
+	} {
+		if got := s.ResolvePath(bad); got != "" {
+			t.Errorf("ResolvePath(%q) = %q, want empty", bad, got)
+		}
+	}
+}
+
 func readFileForTest(p string) (string, error) {
 	b, err := os.ReadFile(p)
 	return string(b), err

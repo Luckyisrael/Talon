@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -119,12 +120,44 @@ func (s *SpillStore) LocatorPath(text string) string {
 		return ""
 	}
 	p := rest[:end]
-	// Only paths inside the store resolve — a locator is not an arbitrary
-	// file-read token.
-	if filepath.Dir(p) != s.dir {
+	// Only spill files inside the store resolve — a locator is not an
+	// arbitrary file-read token.
+	if !s.inStore(p) {
 		return ""
 	}
 	return p
+}
+
+// inStore reports whether p names a file this store owns: lexically inside its
+// directory, with the .txt name Spill writes. Both resolution entry points
+// (locator line, bare path) go through it — the store's directory check is the
+// containment boundary, not the workspace sandbox, which by design has no
+// relationship to where the spill dir lives (W1.2).
+func (s *SpillStore) inStore(p string) bool {
+	if s == nil || p == "" || s.dir == "" {
+		return false
+	}
+	return filepath.Dir(filepath.Clean(p)) == s.dir && strings.HasSuffix(p, ".txt")
+}
+
+// ResolvePath resolves what a read tool was handed back: either the locator
+// line the model saw verbatim ("… N bytes saved to /path/hash.txt] …") or the
+// bare spill path itself. "" means the candidate names nothing in this store —
+// outside paths never resolve. This is H8's retrieval half (W1.2): the
+// compaction README has always promised read_file returns the body verbatim,
+// and this is the seam that makes the promise true.
+func (s *SpillStore) ResolvePath(candidate string) string {
+	if s == nil || candidate == "" {
+		return ""
+	}
+	if p := s.LocatorPath(candidate); p != "" {
+		return p
+	}
+	p := filepath.Clean(strings.TrimSpace(candidate))
+	if s.inStore(p) {
+		return p
+	}
+	return ""
 }
 
 func indexOf(s, sub string) int {

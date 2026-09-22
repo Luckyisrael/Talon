@@ -157,9 +157,13 @@ func main() {
 	// inspect_package, and friends) under a locator instead of truncating
 	// them destructively. Rooted beside the database so it shares its
 	// lifetime; a failure to create degrades to today's hard cap, logged.
-	if spillStore, err := compaction.NewSpillStore(filepath.Join(filepath.Dir(dbPath), "spill")); err != nil {
+	// Hoisted out of the if: the same store is attached to the prompt
+	// handler below so read_file can resolve the locators back (W1.2).
+	var spillStore *compaction.SpillStore
+	if ss, err := compaction.NewSpillStore(filepath.Join(filepath.Dir(dbPath), "spill")); err != nil {
 		log.Printf("WARNING: spill store unavailable (%v) — oversized outputs keep the hard cap", err)
 	} else {
+		spillStore = ss
 		orchestratorSvc.AttachSpill(spillStore)
 	}
 
@@ -249,6 +253,11 @@ func main() {
 		log.Print("attachments: images to Cloudflare R2")
 	} else {
 		log.Print("attachments: R2 env absent — images stay on local disk")
+	}
+	// H8 retrieval (W1.2): read_file resolves spill locators through the
+	// same store the loop writes into — filed outputs come back verbatim.
+	if spillStore != nil {
+		promptHandler.AttachSpill(spillStore)
 	}
 	var warmPool *redroid.Pool
 	if warmPoolSize > 0 && containerMgr != nil {

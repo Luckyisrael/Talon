@@ -106,9 +106,11 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 		bs.children = subagent.NewService(childRunnerFor(h, workspacePath, projectID, adbTarget, output), 2)
 	}
 
-	// Reading and searching.
+	// Reading and searching. read_file also resolves spill locators (W1.2):
+	// the loop's filed oversized outputs come back through the same tool the
+	// model already knows, gated by the spill store's own containment check.
 	reg.Register(&tools.ListFiles{FS: fs})
-	reg.Register(&tools.ReadFile{FS: fs})
+	reg.Register(&tools.ReadFile{FS: fs, Spill: h.spill})
 	reg.Register(&tools.GrepCodebase{FS: fs})
 	// search_files is a name-alias for grep_codebase (see tools/read.go) so
 	// models that reach for the more familiar name get the same implementation

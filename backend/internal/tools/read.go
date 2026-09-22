@@ -13,13 +13,27 @@ import (
 
 // ── read_file ─────────────────────────────────────────
 
-type ReadFile struct{ FS *FS }
+// SpillResolver resolves a spill locator — the replacement line the model was
+// given for an oversized tool output, or its bare path — to the file inside
+// the spill store. compaction.SpillStore implements it. A nil resolver (no
+// store wired: headless runs, tests) disables resolution; spill paths then
+// simply do not exist for read_file, exactly as before W1.2.
+type SpillResolver interface {
+	ResolvePath(candidate string) string
+}
+
+type ReadFile struct {
+	FS    *FS
+	Spill SpillResolver
+}
 
 func (t *ReadFile) Name() string { return "read_file" }
 
 func (t *ReadFile) Description() string {
 	return "Read a file from the project. Output is prefixed with line numbers so you can quote exact " +
-		"text back to edit_file. Reads up to 2000 lines; use offset and limit for longer files."
+		"text back to edit_file. Reads up to 2000 lines; use offset and limit for longer files. " +
+		"Oversized tool outputs that were spilled to disk are read back the same way: pass the " +
+		"locator line you were shown (or its path) as the path."
 }
 
 func (t *ReadFile) InputSchema() json.RawMessage {
@@ -46,6 +60,23 @@ func (t *ReadFile) Execute(ctx context.Context, args json.RawMessage) (ToolResul
 		return errResult("invalid arguments: %v", err), nil
 	}
 
+	// H8 retrieval (W1.2): an oversized tool output was filed to disk and
+	// replaced by a locator line. The model reads it back by handing that
+	// locator — or its bare path — straight to read_file. Resolution goes
+	// through the spill store's own containment check (its directory, .txt
+	// only), so a locator is never an arbitrary file-read token, and the
+	// body is read outside the workspace root and outside FS.Read's 256 KB
+	// cap: that cap is exactly why the output spilled.
+	if t.Spill != nil {
+		if resolved := t.Spill.ResolvePath(a.Path); resolved != "" {
+			raw, rerr := os.ReadFile(resolved)
+			if rerr != nil {
+				return errResult("could not read the spilled output: %v", rerr), nil
+			}
+			return renderReadWindow(string(raw), false, a.Offset, a.Limit, resolved), nil
+		}
+	}
+
 	content, truncated, err := t.FS.Read(a.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -53,16 +84,22 @@ func (t *ReadFile) Execute(ctx context.Context, args json.RawMessage) (ToolResul
 		}
 		return errResult("could not read %s: %v", a.Path, err), nil
 	}
+	return renderReadWindow(content, truncated, a.Offset, a.Limit, a.Path), nil
+}
 
+// renderReadWindow is read_file's line window, shared by workspace reads and
+// spill read-backs so both render identically: 1-based offset, default
+// 2000-line limit, a continuation nudge naming the true line total, and — for
+// clipped workspace reads — the cap notice.
+func renderReadWindow(content string, clipped bool, offset, limit int, name string) ToolResult {
 	lines := strings.Split(content, "\n")
-	start := a.Offset
+	start := offset
 	if start < 1 {
 		start = 1
 	}
 	if start > len(lines) {
-		return errResult("offset %d is past the end of %s (%d lines)", start, a.Path, len(lines)), nil
+		return errResult("offset %d is past the end of %s (%d lines)", start, name, len(lines))
 	}
-	limit := a.Limit
 	if limit <= 0 {
 		limit = defaultReadLimit
 	}
@@ -78,11 +115,10 @@ func (t *ReadFile) Execute(ctx context.Context, args json.RawMessage) (ToolResul
 	if end < len(lines) {
 		fmt.Fprintf(&b, "\n[showing lines %d-%d of %d — pass offset=%d to continue]\n", start, end, len(lines), end+1)
 	}
-	if truncated {
+	if clipped {
 		b.WriteString("\n[file exceeds the 256 KB read cap and was clipped]\n")
 	}
-
-	return ToolResult{Content: b.String()}, nil
+	return ToolResult{Content: b.String()}
 }
 
 // ── list_files ────────────────────────────────────────
