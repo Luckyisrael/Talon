@@ -214,12 +214,38 @@ func (c *Client) PacingInterval() time.Duration {
 	return c.pacer.interval
 }
 
+// clone returns an independent Client sharing the read-only pieces (http
+// client, workspace dir, pacer, retry hook) and a *snapshot* of the health
+// state, taken under the lock so a clone racing a noteFailure reads a
+// consistent pair instead of a torn one. Built field-by-field, never
+// struct-copied: a struct copy duplicates the health mutex — rejected by
+// copylocks vet (W0), and two mutexes around one client's lastErr is exactly
+// the split-brain the single mutex exists to prevent.
+func (c *Client) clone() Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return Client{
+		protocol:     c.protocol,
+		baseURL:      c.baseURL,
+		apiKey:       c.apiKey,
+		model:        c.model,
+		httpClient:   c.httpClient,
+		workspaceDir: c.workspaceDir,
+		lastErr:      c.lastErr,
+		lastErrAt:    c.lastErrAt,
+		pacer:        c.pacer,
+		retryHook:    c.retryHook,
+	}
+}
+
 // WithModel returns a client pointed at a different model on the same
 // endpoint with the same credentials. Routing picks models per turn; the copy
-// shares only the (read-only) http client. Constructed field-by-field, never
-// struct-copied, so the health mutex is never duplicated.
+// shares the (read-only) http client, the workspace, the pacer and any retry
+// hook, and starts from the original's health snapshot. Constructed
+// field-by-field via clone, never struct-copied, so the health mutex is
+// never duplicated.
 func (c *Client) WithModel(model string) *Client {
-	cp := *c // shallow copy carries the pacer and the retry hook with it
+	cp := c.clone()
 	cp.model = model
 	return &cp
 }
@@ -230,7 +256,7 @@ func (c *Client) WithModel(model string) *Client {
 // is, so the caller can surface it instead of looking hung. A nil hook keeps the
 // existing stdout-only behaviour.
 func (c *Client) WithRetryHook(fn func(attempt, maxRetries int, reason string, after time.Duration)) *Client {
-	cp := *c
+	cp := c.clone()
 	cp.retryHook = fn
 	return &cp
 }

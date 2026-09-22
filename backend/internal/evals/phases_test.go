@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"context"
 	"encoding/json"
@@ -1332,5 +1333,22 @@ func TestPhaseDV5E2EGate(t *testing.T) {
 	}
 	if !out.Passed || !strings.Contains(out.Summary, "skipped") {
 		t.Errorf("fault: no-device run_e2e = passed=%v summary=%q", out.Passed, out.Summary)
+	}
+}
+
+// W0: the merge gate is the constitution. client.go's WithModel/WithRetryHook
+// struct-copied the Client — and with it a sync.Mutex — so tests stayed green
+// while `go vet` (step one of both `make evals` and the CI backend job) went
+// red on commit 75c6ef8: every merge silently blocked on a lie. Run vet
+// in-test on the package that broke, so a bare `go test ./...` can never miss
+// a reintroduced copylock again. Healthy polarity: vet passes. Fault polarity
+// is the historical commit itself (75c6ef8..f517661 stayed red until W0).
+func TestPhaseW0GateGreen(t *testing.T) {
+	// Tests run from backend/internal/evals; the module root is two up.
+	cmd := exec.Command("go", "vet", "./internal/ai")
+	cmd.Dir = "../.."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go vet ./internal/ai is red — the merge gate must be green: %v\n%s", err, out)
 	}
 }

@@ -3,6 +3,17 @@
 **Status:** EXECUTED — all 15 phases (H1–H14 + the §7 IDE refit) landed and green.
 Each phase shipped behind its flag, eval-gated in `make evals`
 (TestPhaseH1…TestPhaseH14), committed separately; no regressions.
+
+> **Errata — 2026-09-22 (W-series audit, `PLAN_WORLDCLASS.md` §1.2):** the "all
+> green" claim above was false at audit time. `go vet` was red — copylock in
+> `internal/ai/client.go` (`WithModel`/`WithRetryHook` struct-copied the health
+> mutex) — fixed in **W0** with `TestPhaseW0GateGreen` keeping it fixed. Several
+> phase *laws* also landed dark rather than flipped: `TrimConversation` still
+> deletes instead of shadowing (H1), no `read_spill` tool (H8), the approval Seam
+> has no callers (H4), and `SESSIONLOG`/`SUBAGENTS`/`PIPELINE` remain unset while
+> `harness/{composition,settings,ralph}` are unwired (H9–H12 tail). The phase
+> *machinery* did land and its tests are green; see `PLAN_WORLDCLASS.md` §5 for
+> the item-by-item register of what remains.
 **Sources of truth:** this document, distilled from the DeepSeek Harness (DSH) architecture
 (its published package contracts, the base-bundle composition, and the agent-loop/session
 design) mapped against this repository's actual current state (backend, frontend, infra,

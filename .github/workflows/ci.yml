@@ -38,6 +38,14 @@ jobs:
       - name: Tests (with race detector)
         run: go test -count=1 -race ./...
 
+      # The suite must be read-only with respect to the repo: a test (or
+      # build step) that rewrites a tracked file is drift waiting to be
+      # committed by whoever ran the gate. Fails on any modified tracked
+      # file; untracked scratch is already covered by .gitignore.
+      - name: Tree guard (gate must not modify tracked files)
+        working-directory: ${{ github.workspace }}
+        run: git diff --exit-code
+
       - name: Rename guard (demowallet/demodapp)
         working-directory: ${{ github.workspace }}
         run: |
