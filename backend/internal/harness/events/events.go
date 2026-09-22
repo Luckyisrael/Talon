@@ -126,6 +126,12 @@ type BlockPayload struct {
 	// Plan carries a structured plan block (raw JSON) — persisted for the
 	// restore path, deliberately not a provider-facing shape.
 	Plan *RawJSON `json:"plan,omitempty"`
+	// turn_end marker fields: the terminal status row (status/error/rounds)
+	// must project or a cancelled/failed turn reads as alive after the W2
+	// flip. Omit-empty keeps every existing log byte identical.
+	Status string `json:"status,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Rounds int    `json:"rounds,omitempty"`
 	// Image attachments ride by reference (never bytes): the id resolves to
 	// the file at send time. Omit-empty keeps every existing log byte-identical.
 	AttachmentID int64  `json:"attachment_id,omitempty"`

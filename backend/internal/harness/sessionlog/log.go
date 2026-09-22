@@ -37,9 +37,13 @@ type Log struct {
 	store Store
 	key   string
 	rows  []Event
-	// repairOnLoad closes an interrupted final turn when the log is loaded. It
-	// is on by default; tests that want to inspect a crashed tail construct a
-	// log with it off. See crash.go.
+	// repairOnLoad closes an interrupted final turn when the log is loaded —
+	// the integrity gate for derivation (W2.4): the projection is only ever
+	// taken from a repaired tail, so a crash can never hand the provider an
+	// unanswered tool_use or a turn missing its terminal marker, and legacy
+	// and derived reads agree after a restart. It is on by default; tests
+	// that want to inspect a crashed tail construct a log with it off. See
+	// crash.go.
 	repairOnLoad bool
 	// shadowSeq, when > 0, is the highest seq shadowed for derivation: every
 	// surface event at or before it is replaced by the summary in
@@ -296,6 +300,10 @@ type DerivedBlock struct {
 	Plan         json.RawMessage
 	AttachmentID int64
 	Mime         string
+	// turn_end marker fields — parity with the legacy row's status row.
+	Status string
+	Error  string
+	Rounds int
 }
 
 // DeriveMessages projects the log into the ordered, model-visible surface:
@@ -320,7 +328,7 @@ func (l *Log) DeriveMessages() []DerivedMessage {
 		m.Interrupted = p.Interrupted
 		m.Blocks = make([]DerivedBlock, 0, len(p.Blocks))
 		for _, b := range p.Blocks {
-			db := DerivedBlock{Type: b.Type, Text: b.Text, ID: b.ID, Name: b.Name, Content: b.Content, IsError: b.IsError, Signature: b.Signature, AttachmentID: b.AttachmentID, Mime: b.Mime}
+			db := DerivedBlock{Type: b.Type, Text: b.Text, ID: b.ID, Name: b.Name, Content: b.Content, IsError: b.IsError, Signature: b.Signature, AttachmentID: b.AttachmentID, Mime: b.Mime, Status: b.Status, Error: b.Error, Rounds: b.Rounds}
 			if b.Input != nil {
 				db.Input = json.RawMessage(*b.Input)
 			}
@@ -347,7 +355,7 @@ func (l *Log) DeriveMessages() []DerivedMessage {
 				continue
 			}
 			out = append(out, DerivedMessage{Role: "user", Blocks: []DerivedBlock{{
-				Type: "tool_result", ID: p.CallID, Content: p.Content, IsError: p.IsError,
+				Type: "tool_result", ID: p.CallID, Name: p.Name, Content: p.Content, IsError: p.IsError,
 			}}})
 		case events.QuestionAsked:
 			var p events.QuestionPayload

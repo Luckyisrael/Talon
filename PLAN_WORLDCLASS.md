@@ -629,7 +629,7 @@ W14 loop extraction + composition (last; consumes everything)
 | 8 | `Fork`/`delegate_fork` unused | **W1.5** ✅ landed — `delegate_fork` registered behind `TALONSTUDIO_SUBAGENTS`; `sessionlog.Fork` production-wired (child log = parent prefix + `session/forked` lineage in both logs; gate: `TestDelegateForkSeedsChildFromParentPrefix` + `TestPhaseW1DelegateFork`); **W12** |
 | 9 | Approval Seam/`Escalate` dead; tier-2 = ask-only | **W1.6** ✅ landed — tier-2 shell escalates through `Capability.Escalate` → the seam (one strictly-wider ask, one audit event per decision, `turn_approvals` binding via the new `tier2_shell` consent scope); push/export audit through the same seam; root cause of "dead" found and fixed: `newBuildSession` returned a fresh struct that dropped sandbox/promptID/seam, so the H4 ring and build receipts were dark too (gate: `TestPhaseW1SeamWiring` + `TestTier2ShellGrantFlowAuditsOnce` + `TestRunShellTier2SeamOutcomes`); **W9** |
 | 10 | `AI_MODEL_TIER` undocumented | **W1.7** ✅ no change — already documented in `.env.example:27-29` (audit error) |
-| 11 | Event log write-only (derive flag off) | **W2** |
+| 11 | Event log write-only (derive flag off) | **W2** — parity harness ✅ landed (`api/TestPhaseW2ReadParity`: 7 shapes incl. replay-determinism; found and closed 4 projection gaps — turn_end status/error/rounds, plan block, tool_result name, doc attachment refs); **W2.4** ✅ (`repairOnLoad` documented as the derivation integrity gate); **W2.2** flip (deferred: plan requires two green CI weeks) + **W2.3** derived pagination remain |
 | 12 | Plan mode blind (no tools/map/instructions) | **W3** |
 | 13 | Plan not a durable artifact | **W3.4** |
 | 14 | No semantic index; `embedding` placeholder | **W4** |

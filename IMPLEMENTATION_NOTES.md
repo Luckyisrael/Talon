@@ -451,3 +451,71 @@ candidate for a later H8/W14 follow-through, not scheduled work.
 **Status:** register row 39 ✅. No tests/gates — nothing changed; the W1.6
 gates (package tests, `make evals`, `-race`) remain the last green run on
 this tree.
+
+---
+
+## W2 — Read-path parity harness (W2.1 + W2.4); flip/pagination deferred
+
+**What shipped.** `PLAN_WORLDCLASS:264-266` asks for a parity harness proving
+`deriveFromLog()` ≡ legacy `GetConversation` message-for-message across
+normal / interrupted / answered / compacted / trimmed transcripts, plus
+H1's replay-determinism gate promoted permanently (`make evals` runs it —
+it lives in the api package's standard test set). `api/TestPhaseW2ReadParity`
+is that gate: seven subtests, all green.
+
+**How the fixtures stay honest.** Every message is written through the
+production dual-write pair (one `conversation_messages` row via
+`store.AppendMessage` + the same `ai.Message` through `appendLoggedUser`/
+`appendLoggedAssistant` — the exact `runLoop Persist` sequence at
+`prompts.go:1020-1035`), interrupted/plan rows go through the real
+`persistTurnEnd` / `persistPlanExchange`, and **both reads run the production
+read function** (`storedConversation`) in its two flag states
+(`TALONSTUDIO_SESSIONLOG` legacy vs derive) — the literal pre/post-flip
+model histories. Shadow shapes compare the post-boundary window under the
+summary head (the projection's honest form of the same history); a pairing
+walk asserts every `tool_result` references an earlier `tool_use`.
+
+**The harness found 4 real projection gaps — all closed:**
+1. **`turn_end` marker fields** (status/error/rounds): `events.BlockPayload`
+   had no fields for them, so the terminal row projected as a bare
+   `{"type":"turn_end"}` — after the flip a cancelled/failed turn would read
+   as alive. Fixed by extending `BlockPayload` + `DerivedBlock` + both
+   mapping sites (omitempty keeps every existing log byte identical).
+2. **Plan block dropped on read**: `deriveToAIMessages` never copied
+   `Plan` (the bridge test's "plan blocks preserved" claim asserted only the
+   text block). Plan cards would silently rebuild empty post-flip.
+3. **`tool_result` name dropped in projection**: `ToolResultPayload` stored
+   `Name` all along; `DeriveMessages`' ToolResult case discarded it —
+   projection-only fix, retroactive for all existing rows.
+4. **Doc attachment refs dropped on write**: `appendLoggedUser` copied
+   attachment refs only for `Type == "image"`; doc blocks lost id/name/mime
+   in the log. Now any block carrying an attachment id rides by reference.
+
+**Honest caveat (for the W2.2 flip review):** fixes 1, 2, 3 are
+retroactive (fields were always in the legacy row or payload); fix 4 and the
+turn_end fields are **write-side schema evolution** — log rows written
+*before* this commit never carried them, so those specific historical turns
+project without them until they age out of the 60-turn window or a shadow.
+Bounded, UI restore still reads the legacy table until W2.3, and the flip
+itself is deferred.
+
+**W2.4:** `repairOnLoad` (`log.go:74`, comment at the field) is now named
+the derivation integrity gate — load-time `Repair()` closes an interrupted
+tail *before* anyone derives, so neither read path can replay an unanswered
+`tool_use` after a crash. Already correct; documented per plan.
+
+**Not done (deferred, recorded in row 11):** **W2.2** default flip — the
+plan itself gates it on "two green CI weeks" (`:273`); it is a deployment
+act with `TALONSTUDIO_SESSIONLOG=legacy` as the documented rollback, not
+something to do silently mid-session. **W2.3** derived pagination
+(log-backed `before_seq`, jump-to-turn, search reading the same projection)
+is the next slice — it is what makes the flip safe for the *UI* read path
+(HTTP `GetConversation` still reads the legacy table today).
+
+**Connection:** no endpoint/SSE changes; production behavior today is
+unchanged (flag dark → both the old and the fixed projection are reachable
+only under `SESSIONLOG=derive`); web/mobile need no client work — restore
+and search keep reading legacy until W2.3 flips them with the same gate.
+
+**Gates (all green, local = CI):** package tests (21 pkts) → `make evals`
+→ `go test -race ./...` (41 pkts).
