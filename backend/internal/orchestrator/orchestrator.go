@@ -30,6 +30,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/tooltimeout"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/metrics"
+	"github.com/luckyisrael/talon/backend/internal/planfile"
 	"github.com/luckyisrael/talon/backend/internal/runtime"
 	"github.com/luckyisrael/talon/backend/internal/store"
 	"github.com/luckyisrael/talon/backend/internal/tools"
@@ -150,14 +151,10 @@ func (o *Orchestrator) CreateSession(id, projectID int64, workspacePath string) 
 	sess := NewSession(id, projectID, workspacePath, emitter)
 
 	// Durable backlog mirror: every MarkPlanTask write-through lands in
-	// plan_task_status keyed by this session's prompt id (attribution).
-	sess.AttachTaskPersistence(func(pid int64, t Task, byPrompt int64) {
-		if err := o.store.UpsertPlanTask(pid, store.PlanTask{
-			TaskID: t.ID, Description: t.Description, Status: t.Status, Result: t.Result, CompletedByPrompt: byPrompt,
-		}); err != nil {
-			log.Printf("orchestrator: could not persist plan task %s (project %d): %v", t.ID, pid, err)
-		}
-	})
+	// plan_task_status keyed by this session's prompt id (attribution) — and,
+	// W3.4, mirrors into the workspace artifact, since this hook is the one
+	// place every status flip flows through.
+	sess.AttachTaskPersistence(o.taskPersistence(sess))
 
 	o.mu.Lock()
 	o.sessions[id] = sess
@@ -289,23 +286,52 @@ func (o *Orchestrator) seedPlanTasks(sess *SessionState, projectID int64) {
 			persisted[r.TaskID] = r
 		}
 	}
+	// One derivation serves the backlog, the prompt checklist, and the
+	// .talon/plan.md artifact — IDs and descriptions cannot drift between
+	// the store, the model, and the file.
+	planRows := PlanTaskRows(&plan)
+	// W3.4: reconcile the workspace artifact with the backlog before anything
+	// seeds from it — the file→system direction (see reconcilePlanArtifact).
+	o.reconcilePlanArtifact(sess, projectID, &plan, planRows, persisted)
+
 	var liveIDs []string
-	seed := func(id, desc string) {
-		liveIDs = append(liveIDs, id)
+	seed := func(row planfile.Row) {
+		liveIDs = append(liveIDs, row.ID)
 		// Persist the seed row so the table holds the full backlog — not
 		// only terminal states — and SupersedeMissingPlanTasks can see drift.
 		// A row already present keeps its status (the conflict update only
 		// refreshes the description).
 		if o.store != nil {
-			_ = o.store.UpsertPlanTask(projectID, store.PlanTask{TaskID: id, Description: desc, Status: "pending"})
+			_ = o.store.UpsertPlanTask(projectID, store.PlanTask{TaskID: row.ID, Description: row.Description, Status: "pending"})
 		}
-		sess.AddTask(id, desc)
-		if p, ok := persisted[id]; ok && p.Status != "superseded" {
+		sess.AddTask(row.ID, row.Description)
+		if p, ok := persisted[row.ID]; ok && p.Status != "superseded" {
 			// Restore the recorded state without re-emitting (EmitPlanSeed
 			// delivers the full list after seeding completes).
-			_ = sess.TaskTracker.UpdateTask(id, p.Status, p.Result)
+			_ = sess.TaskTracker.UpdateTask(row.ID, p.Status, p.Result)
 		}
 	}
+	for _, row := range planRows {
+		seed(row)
+	}
+	// A plan edit that dropped work leaves stale rows: mark them superseded
+	// (kept for the audit trail), never deleted.
+	if n, err := o.store.SupersedeMissingPlanTasks(projectID, liveIDs); err == nil && n > 0 {
+		log.Printf("orchestrator: %d plan task(s) superseded by a plan edit (project %d)", n, projectID)
+	}
+}
+
+// PlanTaskRows derives a plan's checklist rows — the single derivation behind
+// the seeded backlog, the prompt checklist, and the .talon/plan.md artifact
+// (W3.4). Screens first (id = plan:screen: + slugged base name), then features
+// (id = plan:feature: + index); empty names are skipped exactly as seeding
+// always has. The Description is the artifact's join key: prompt checklist,
+// store rows, and checkbox lines all carry this exact string.
+func PlanTaskRows(plan *ai.AppPlan) []planfile.Row {
+	if plan == nil {
+		return nil
+	}
+	var rows []planfile.Row
 	for _, sc := range plan.Screens {
 		name := strings.TrimSpace(sc.Name)
 		if name == "" {
@@ -319,19 +345,140 @@ func (o *Orchestrator) seedPlanTasks(sess *SessionState, projectID int64) {
 		// that never appear in route file names. Slug the base name so the
 		// file heuristic can match portfolio.tsx to the Portfolio screen; the
 		// full name stays in the description the model sees.
-		seed("plan:screen:"+planSlug(screenBaseName(name)), desc)
+		rows = append(rows, planfile.Row{ID: "plan:screen:" + planSlug(screenBaseName(name)), Description: desc})
 	}
 	for i, ft := range plan.Features {
 		ft = strings.TrimSpace(ft)
 		if ft == "" {
 			continue
 		}
-		seed(fmt.Sprintf("plan:feature:%d", i), "Feature: "+ft)
+		rows = append(rows, planfile.Row{ID: fmt.Sprintf("plan:feature:%d", i), Description: "Feature: " + ft})
 	}
-	// A plan edit that dropped work leaves stale rows: mark them superseded
-	// (kept for the audit trail), never deleted.
-	if n, err := o.store.SupersedeMissingPlanTasks(projectID, liveIDs); err == nil && n > 0 {
-		log.Printf("orchestrator: %d plan task(s) superseded by a plan edit (project %d)", n, projectID)
+	return rows
+}
+
+// reconcilePlanArtifact is W3.4's file→system direction, run once at build
+// start before anything seeds from the backlog:
+//
+//   - missing file → backfill a render of plan + persisted statuses (projects
+//     that predate the artifact, or the first build after the flag comes on);
+//   - our file (marker hash matches) → re-render, which repairs a stale marker
+//     after a checkpoint restore and a file a plan edit has outgrown — a byte
+//     no-op when nothing moved;
+//   - the user's file (marker missing or hash mismatch) → import its checkbox
+//     states into plan_task_status and into persisted, the map the restore
+//     pass below reads; their text is left alone (it stands until the next
+//     status flip, whose Sync adopts it and re-seals).
+//
+// Import is unconditional by design: a human unchecking a completed box must
+// reopen the row — UpsertPlanTask's terminal-status protection exists to stop a
+// seeding sweep from clobbering completions, and this is not that. A line the
+// user reworded matches no description and imports nothing — stale-but-honest:
+// the store keeps what it knows instead of guessing at a mapping.
+func (o *Orchestrator) reconcilePlanArtifact(sess *SessionState, projectID int64, plan *ai.AppPlan, rows []planfile.Row, persisted map[string]store.PlanTask) {
+	if !planfile.Enabled() || sess == nil || sess.WorkspacePath == "" || o.store == nil {
+		return
+	}
+	content, existed, err := planfile.Read(sess.WorkspacePath)
+	if err != nil {
+		log.Printf("orchestrator: plan artifact unreadable (project %d): %v", projectID, err)
+		return
+	}
+	if !existed || !planfile.Edited(content) {
+		statuses := map[string]string{}
+		for _, row := range rows {
+			if p, ok := persisted[row.ID]; ok {
+				statuses[row.Description] = p.Status
+			}
+		}
+		if _, err := planfile.Write(sess.WorkspacePath, planfile.Render(plan, rows, statuses)); err != nil {
+			log.Printf("orchestrator: could not write the plan artifact (project %d): %v", projectID, err)
+		}
+		return
+	}
+	fileStatuses := planfile.ParseStatuses(content)
+	for _, row := range rows {
+		status, ok := fileStatuses[row.Description]
+		if !ok {
+			continue // reworded line: imports nothing rather than the wrong row
+		}
+		if p, ok := persisted[row.ID]; ok && p.Status == status {
+			continue
+		}
+		if err := o.store.ImportPlanTaskStatus(projectID, row.ID, row.Description, status); err != nil {
+			log.Printf("orchestrator: could not import plan checkbox %s (project %d): %v", row.ID, projectID, err)
+			continue
+		}
+		persisted[row.ID] = store.PlanTask{TaskID: row.ID, Description: row.Description, Status: status}
+	}
+	// Deliberately no write here: the user's text stands until the next flip.
+}
+
+// taskPersistence is the write-through CreateSession attaches: every flip
+// lands in the durable backlog, then mirrors into .talon/plan.md (W3.4) — the
+// hook is the one place all status changes flow through, so the file can lag a
+// flip by at most the write that was already happening. Extracted so tests
+// exercise the real wiring rather than a copy of it.
+func (o *Orchestrator) taskPersistence(sess *SessionState) func(pid int64, t Task, byPrompt int64) {
+	return func(pid int64, t Task, byPrompt int64) {
+		if err := o.store.UpsertPlanTask(pid, store.PlanTask{
+			TaskID: t.ID, Description: t.Description, Status: t.Status, Result: t.Result, CompletedByPrompt: byPrompt,
+		}); err != nil {
+			log.Printf("orchestrator: could not persist plan task %s (project %d): %v", t.ID, pid, err)
+			return
+		}
+		o.syncPlanArtifact(sess, pid, t.ID)
+	}
+}
+
+// syncPlanArtifact is W3.4's system→file half: a flip reaches the artifact
+// through the persistence hook above. One concession first — if the user edited
+// the file, every row EXCEPT the one that just flipped imports its checkbox
+// state, so a mid-turn manual check survives this write, while the flipped row
+// keeps the status we just stored (the file's copy of it is stale by
+// construction). Then Sync rewrites only markers of lines whose description is
+// a stored row — the user's prose and their own items stay byte-for-byte — and
+// re-seals the body under a fresh hash.
+func (o *Orchestrator) syncPlanArtifact(sess *SessionState, projectID int64, justFlipped string) {
+	if !planfile.Enabled() || sess == nil || sess.WorkspacePath == "" || o.store == nil {
+		return
+	}
+	content, existed, err := planfile.Read(sess.WorkspacePath)
+	if err != nil || !existed {
+		return // creation belongs to seed/savePlan; unreadable → leave it alone
+	}
+	storeRows, err := o.store.LoadPlanTasks(projectID)
+	if err != nil {
+		return
+	}
+	byID := make(map[string]string, len(storeRows))
+	byDesc := make(map[string]string, len(storeRows))
+	for _, r := range storeRows {
+		byID[r.TaskID] = r.Status
+		byDesc[r.Description] = r.Status
+	}
+	if planfile.Edited(content) {
+		fileStatuses := planfile.ParseStatuses(content)
+		for _, r := range storeRows {
+			if r.TaskID == justFlipped {
+				continue // the flip that triggered this write wins its own line
+			}
+			status, ok := fileStatuses[r.Description]
+			if !ok || status == r.Status {
+				continue
+			}
+			if err := o.store.ImportPlanTaskStatus(projectID, r.TaskID, r.Description, status); err != nil {
+				log.Printf("orchestrator: could not import plan checkbox %s (project %d): %v", r.TaskID, projectID, err)
+				continue
+			}
+			byID[r.TaskID] = status
+			byDesc[r.Description] = status
+		}
+	}
+	if next := planfile.Sync(content, byDesc); next != content {
+		if _, err := planfile.Write(sess.WorkspacePath, next); err != nil {
+			log.Printf("orchestrator: could not sync the plan artifact (project %d): %v", projectID, err)
+		}
 	}
 }
 

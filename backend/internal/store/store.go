@@ -1469,6 +1469,32 @@ func (s *Store) UpsertPlanTask(projectID int64, t PlanTask) error {
 }
 
 // LoadPlanTasks returns the project's durable backlog, oldest first.
+// ImportPlanTaskStatus writes a status that came from the plan artifact
+// (.talon/plan.md) — W3.4's file→system direction. It deliberately bypasses
+// UpsertPlanTask's terminal-status protection: that clause exists to stop a
+// seeding sweep from clobbering recorded completions back to pending, while
+// this write IS the authority it protects against — a human unchecked a box,
+// and the file is editable precisely so they can reopen work. Attribution is
+// cleared: no prompt finished this; the person at the keyboard did.
+func (s *Store) ImportPlanTaskStatus(projectID int64, taskID, description, status string) error {
+	switch status {
+	case "pending", "in_progress", "completed", "failed":
+	default:
+		return fmt.Errorf("plan task %s: unknown status %q", taskID, status)
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO plan_task_status (project_id, task_id, description, status, result, completed_by_prompt)
+		 VALUES (?, ?, ?, ?, '', 0)
+		 ON CONFLICT(project_id, task_id) DO UPDATE SET
+		   description = excluded.description,
+		   status = excluded.status,
+		   completed_by_prompt = 0,
+		   updated_at = CURRENT_TIMESTAMP`,
+		projectID, taskID, description, status,
+	)
+	return err
+}
+
 func (s *Store) LoadPlanTasks(projectID int64) ([]PlanTask, error) {
 	rows, err := s.db.Query(
 		"SELECT task_id, description, status, result, completed_by_prompt FROM plan_task_status WHERE project_id = ? ORDER BY id ASC", projectID,

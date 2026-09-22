@@ -567,3 +567,29 @@ and search keep reading legacy until W2.3 flips them with the same gate.
 **Gates:** `gofmt`/`go vet` clean (api, cmd/server); 10 W3 tests + flag-off regression green fast; `make evals` EXIT=0; `go test -race ./...` EXIT=0 (41 ok).
 
 **Web/mobile connection:** none required — plan turns remain server-computed; injection enriches the system prompt only. The web/mobile plan view *may* surface richer text (map-grounded plans cite real files — already visible in the plan JSON `features`), but no client work is implied by W3.2/W3.5. Flag stays dark in production → zero behavior change.
+
+---
+
+## W3.4 — `.talon/plan.md` artifact + two-way checklist sync (committed, behind `TALONSTUDIO_PLAN_TOOLS=v1`)
+
+**Plan:** `PLAN_WORLDCLASS.md` W3.4 — the plan becomes a durable, user-editable file in the workspace; register row 13 closed, **W3 fully landed**.
+
+**New package `internal/planfile`** (imported by api + orchestrator; imports only `ai` — no cycles):
+- `RelPath = ".talon/plan.md"` beside skills/plugin pins. `Enabled()` reads the same env var with the *same* truthy set as `api.planToolsEnabled` (`1|true|on|v1` — deliberately not `"yes"`: two definitions that disagree would mean write-under-one, read-under-the-other).
+- `Render(plan, rows, statuses)` = deterministic body (`# Plan` / `## Checklist` rows / Navigation / Packages / Structure) under a line-1 marker `<!-- talon-plan:v1 sha256:<hex> -->` hashing the body. Same inputs → byte-identical bytes (the eval gate's "written and re-read stable").
+- Direction signal = the marker: hash matches → the bytes are ours (safe to overwrite); mismatch *or missing marker* (hand-written file) → the user's. `ParseStatuses` returns desc→status for the four talon markers (`[ ] [~] [x] [!]`); `Sync(content, statuses)` rewrites **only** the marker char of lines whose description names a stored row, keeps prose/own-items byte-for-byte, and re-seals (adopting their text into the canonical body).
+- **Join key = description, not ID** — IDs are internal; a reworded line imports nothing (stale-but-honest) rather than matching the wrong row.
+
+**Single derivation:** `orchestrator.PlanTaskRows(plan) []planfile.Row` now backs everything — `seedPlanTasks` (refactored off its two inline loops), `savePlan`'s artifact render, and file↔store imports — so store rows, prompt checklist, and checkbox lines cannot drift.
+
+**Write points:**
+- `savePlan(projectID, promptID, resp)` (both doors pass the prompt ID): after `UpdateProjectPlan` → full `Render` + `planfile.Write`; **changed bytes** → `h.checkpoint("plan saved", pre-image snapshot)` (`Existed` from prior `Read`), so `RestoreCheckpoint` undoes creation and re-saves like any turned file. No-op re-save → no write, no checkpoint (byte-stable, zero churn).
+- `reconcilePlanArtifact` at the top of `seedPlanTasks`: missing → backfill render; ours → re-render (repairs a restore-stale marker; byte no-op when nothing moved); **theirs** → `ParseStatuses` → `store.ImportPlanTaskStatus` per matching row *and* into the `persisted` map the restore pass reads — before seeding, so the import survives `UpsertPlanTask`'s conflict path and the session restores it. No write on this branch: their text stands until the next flip.
+- `syncPlanArtifact` through the persistence hook (`taskPersistence` extracted from `CreateSession` so tests wire the real path): every `MarkPlanTask` flip → `UpsertPlanTask` → sync. Edited file → import every row *except* `justFlipped` (a mid-turn user check survives; the flip's own stale line must not revert it) → `Sync` → write iff bytes changed. Hook skips sync if the store write failed.
+- `store.ImportPlanTaskStatus` is an unconditional upsert (clears `completed_by_prompt` — a human, not a prompt, settled this) with a status-vocabulary guard; bypasses the terminal-status protection **by design** (that clause stops *seeding* from clobbering completions; this is the person reopening work). Import iteration always walks **rows**, never the file map — the user's own `- [ ]` items parse but can never become phantom tasks.
+
+**Gates:** `gofmt`/`go vet` clean on all touched files; `planfile` pkg tests (byte-stability + marker round-trip, edit detection incl. missing marker, sync-preserves-user-text + re-seal, parse vocabulary, write no-churn, flag truthy set); `api/TestPhaseW3PlanArtifactWrittenAndStable` (plan turn → file exists, marker-valid, rows+sections present; second save byte-identical; checkpoint holds the absent pre-image; flag-off → no file); `orchestrator/TestPlanArtifact{SeedFlipRoundTrip,UserCheckImportsAtSeed,MidTurnImportOnFlip,FlagOff}`; 10 W3 tests + `TestPlanModeSendsNoToolsToModel` green; `make evals` EXIT=0; `go test -race ./...` EXIT=0 (41 ok).
+
+**Web/mobile connection:** the artifact is server-written into the workspace — no client change. The web/mobile plan view already reads plan JSON; checking a box in the app *or* in the file converges at the next boundary (seed or flip). A future nicety: a "edit `.talon/plan.md` in any editor" affordance, and the web file viewer shows the artifact for free.
+
+**Caveat (honest):** description-join means a user who *rewords* a checklist line breaks that row's import (by design — no safe mapping exists). Their edits are not checkpointed (only `savePlan`'s structural writes create checkpoints; status lives in `plan_task_status`, which checkpoint restore deliberately does not touch). Mid-turn user checks are honored at the next flip's sync or the next seed, whichever comes first.

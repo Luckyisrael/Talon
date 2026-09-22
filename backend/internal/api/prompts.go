@@ -27,6 +27,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/metrics"
 	"github.com/luckyisrael/talon/backend/internal/notify"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
+	"github.com/luckyisrael/talon/backend/internal/planfile"
 	"github.com/luckyisrael/talon/backend/internal/store"
 	"github.com/luckyisrael/talon/backend/internal/tools"
 )
@@ -285,7 +286,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, friendlyAIError(err))
 			return
 		}
-		h.savePlan(req.ProjectID, planResp)
+		h.savePlan(req.ProjectID, prompt.ID, planResp)
 
 		respBytes, _ := json.Marshal(planResp)
 		h.store.UpdatePromptResponse(prompt.ID, string(respBytes))
@@ -750,7 +751,7 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 	// structured plan alongside it.
 	var planResp ai.PlanResponse
 	if json.Unmarshal([]byte(raw), &planResp) == nil && (planResp.Message != "" || planResp.Plan != nil) {
-		h.savePlan(projectID, &planResp)
+		h.savePlan(projectID, promptID, &planResp)
 		payload, _ := json.Marshal(planResp)
 		h.store.UpdatePromptResponse(promptID, string(payload))
 		h.persistPlanExchange(projectID, promptID, userTurn, planResp.Message, planJSON(planResp.Plan))
@@ -1617,8 +1618,10 @@ func (h *PromptHandler) systemPrompt() string {
 
 // savePlan stores the plan on the project. The plan itself is the durable
 // record; writing one memory row per screen duplicated it and then went stale as
-// soon as the app changed.
-func (h *PromptHandler) savePlan(projectID int64, resp *ai.PlanResponse) {
+// soon as the app changed. W3.4: the settled plan is also a file — .talon/
+// plan.md in the workspace, checkpointed like any other structural change so a
+// restore can bring the previous version (or its absence) back.
+func (h *PromptHandler) savePlan(projectID, promptID int64, resp *ai.PlanResponse) {
 	if resp == nil || resp.Plan == nil {
 		return
 	}
@@ -1628,7 +1631,51 @@ func (h *PromptHandler) savePlan(projectID int64, resp *ai.PlanResponse) {
 	}
 	if err := h.store.UpdateProjectPlan(projectID, string(planJSON)); err != nil {
 		log.Printf("project %d: could not save the plan: %v", projectID, err)
+		return // the stored plan is the artifact's source; on failure write neither
 	}
+	// Dark flag: the store write above is all that happens, exactly as before.
+	h.writePlanArtifact(projectID, promptID, resp.Plan)
+}
+
+// writePlanArtifact renders the plan artifact with the backlog's current
+// statuses — keyed by description, the file's join key — and checkpoints the
+// pre-image: a plan re-save structurally overwrites a user-editable file, so
+// undo must reach it too. Identical re-renders report no change and create no
+// checkpoint, so a re-save with nothing moved is byte-for-byte free.
+func (h *PromptHandler) writePlanArtifact(projectID, promptID int64, plan *ai.AppPlan) {
+	if !planfile.Enabled() || plan == nil {
+		return
+	}
+	workspacePath, err := h.workspacePath(projectID)
+	if err != nil {
+		log.Printf("project %d: plan artifact skipped: %v", projectID, err)
+		return
+	}
+	statuses := map[string]string{}
+	if storeRows, err := h.store.LoadPlanTasks(projectID); err == nil {
+		for _, r := range storeRows {
+			statuses[r.Description] = r.Status
+		}
+	}
+	content := planfile.Render(plan, orchestrator.PlanTaskRows(plan), statuses)
+	prev, existed, err := planfile.Read(workspacePath)
+	if err != nil {
+		log.Printf("project %d: plan artifact unreadable: %v", projectID, err)
+		return
+	}
+	changed, err := planfile.Write(workspacePath, content)
+	if err != nil {
+		log.Printf("project %d: could not write the plan artifact: %v", projectID, err)
+		return
+	}
+	if !changed {
+		return
+	}
+	// The pre-image (including "it did not exist") becomes a checkpoint, so
+	// RestoreCheckpoint undoes the artifact exactly like a turned file.
+	h.checkpoint(projectID, promptID, "plan saved", []tools.FileSnapshot{
+		{Path: planfile.RelPath, Content: prev, Existed: existed},
+	})
 }
 
 // ── Read endpoints ────────────────────────────────────
