@@ -698,6 +698,56 @@ func (s *Store) migrate() error {
 	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS conversation_fts_au AFTER UPDATE ON conversation_messages BEGIN INSERT INTO conversation_fts(conversation_fts, rowid, blocks) VALUES('delete', old.id, old.blocks); INSERT INTO conversation_fts(rowid, blocks) VALUES (new.id, new.blocks); END`)
 	s.db.Exec(`INSERT INTO conversation_fts(conversation_fts) VALUES('rebuild')`)
 
+	// W4: codebase index (TALONSTUDIO_INDEX, shipped dark). code_files holds
+	// the per-file content hash — the Merkle-ish state that lets a reconcile
+	// touch only changed paths instead of re-reading the tree. chunks/symbols/
+	// edges are the lexical and graph layers; code_chunks_fts mirrors chunks
+	// with the same external-content + trigger pattern as project_memory_fts —
+	// bm25 ranking comes free with FTS5, which is the whole lexical layer of
+	// W4.1 (vector rides a later slice behind an interface). Rows are keyed by
+	// project_id; FTS queries join through the base table for the tenant filter
+	// because the mirror carries no project column of its own.
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS code_files (
+		project_id INTEGER NOT NULL,
+		path TEXT NOT NULL,
+		hash TEXT NOT NULL,
+		PRIMARY KEY (project_id, path)
+	)`)
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS code_chunks (
+		id INTEGER PRIMARY KEY,
+		project_id INTEGER NOT NULL,
+		path TEXT NOT NULL,
+		hash TEXT NOT NULL,
+		name TEXT NOT NULL DEFAULT '',
+		start_line INTEGER NOT NULL DEFAULT 1,
+		body TEXT NOT NULL
+	)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_code_chunks_file ON code_chunks(project_id, path)`)
+	s.db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS code_chunks_fts USING fts5(body, name, path, content='code_chunks', content_rowid='id', tokenize='porter unicode61')`)
+	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS code_chunks_fts_ai AFTER INSERT ON code_chunks BEGIN INSERT INTO code_chunks_fts(rowid, body, name, path) VALUES (new.id, new.body, new.name, new.path); END`)
+	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS code_chunks_fts_ad AFTER DELETE ON code_chunks BEGIN INSERT INTO code_chunks_fts(code_chunks_fts, rowid, body, name, path) VALUES('delete', old.id, old.body, old.name, old.path); END`)
+	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS code_chunks_fts_au AFTER UPDATE ON code_chunks BEGIN INSERT INTO code_chunks_fts(code_chunks_fts, rowid, body, name, path) VALUES('delete', old.id, old.body, old.name, old.path); INSERT INTO code_chunks_fts(rowid, body, name, path) VALUES (new.id, new.body, new.name, new.path); END`)
+	s.db.Exec(`INSERT INTO code_chunks_fts(code_chunks_fts) VALUES('rebuild')`)
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS code_symbols (
+		project_id INTEGER NOT NULL,
+		path TEXT NOT NULL,
+		name TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		line INTEGER NOT NULL
+	)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_code_symbols_name ON code_symbols(project_id, name)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_code_symbols_path ON code_symbols(project_id, path)`)
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS code_edges (
+		project_id INTEGER NOT NULL,
+		from_path TEXT NOT NULL,
+		from_name TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		to_path TEXT NOT NULL DEFAULT '',
+		to_name TEXT NOT NULL
+	)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_code_edges_to ON code_edges(project_id, kind, to_name)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_code_edges_from ON code_edges(project_id, from_path, from_name)`)
+
 	// P3a: audit log — append-only, who/when/what for every memory/history mutation.
 	// Never DELETE. Hash chain is implicit via id ordering; before/after can be
 	// added when needed for tamper audit.

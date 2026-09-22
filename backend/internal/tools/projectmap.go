@@ -223,6 +223,13 @@ func isMappableSource(name string) bool {
 	return false
 }
 
+// IsMappableSource is the exported predicate behind isMappableSource, for the
+// codebase index (W4): the index must walk exactly the file set the map
+// renders and ProjectFingerprint hashes — same-file-set law, by construction,
+// not by copy. Widening the set (say, to .go) means changing this one switch
+// and updating the map/fingerprint tests together with it.
+func IsMappableSource(name string) bool { return isMappableSource(name) }
+
 var (
 	// A named declaration export, e.g. `export function foo`, `export const bar`,
 	// `export class Baz`, `export interface Qux`. The optional `default` is
