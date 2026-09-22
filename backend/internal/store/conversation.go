@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -267,14 +268,19 @@ func (s *Store) MaxConversationSeq(projectID int64) (int64, error) {
 	return seq.Int64, nil
 }
 
-// SearchConversationBlocks finds turns whose stored blocks mention q
-// (case-insensitive substring over the raw JSON). LIKE metacharacters in q
-// are escaped so a query for "100%" does not become a wildcard. Returns
-// whole turns newest first, capped — excerpts, not a dump.
+// SearchConversationBlocks finds the newest `limit` turns whose stored blocks
+// mention q and returns them in turn order (oldest→newest within that
+// window) — whole turns, not a dump. Two legs union behind this one
+// signature: conversation_fts (porter-stemmed tokens — "connecting" finds
+// "connected") and the escaped literal substring over the raw JSON —
+// "onnected" still finds it, and LIKE metacharacters in q ("100%") stay
+// literal. Deduped by id; if the FTS leg errors (or the index is absent),
+// the LIKE leg still answers — search degrades, it does not fail.
 func (s *Store) SearchConversationBlocks(projectID int64, q string, limit int) ([]ConversationMessage, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
+	// LIKE leg: literal substring, metacharacters escaped.
 	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
 	rows, err := s.db.Query(
 		`SELECT id, project_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at
@@ -283,8 +289,53 @@ func (s *Store) SearchConversationBlocks(projectID int64, q string, limit int) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	return scanConversationRows(rows)
+	like, err := scanConversationRows(rows)
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	// FTS leg: phrase-quoted so operators in the user's text (AND/OR/*) are
+	// searched for, not parsed. Any error (index missing, q that tokenizes
+	// to nothing) falls back to the LIKE leg alone.
+	var fts []ConversationMessage
+	match := `"` + strings.ReplaceAll(q, `"`, `""`) + `"`
+	if frows, ferr := s.db.Query(
+		`SELECT id, project_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at
+		 FROM conversation_messages
+		 WHERE project_id = ? AND id IN (SELECT rowid FROM conversation_fts WHERE conversation_fts MATCH ?)
+		 ORDER BY seq DESC LIMIT ?`, projectID, match, limit); ferr == nil {
+		if got, serr := scanConversationRows(frows); serr == nil {
+			fts = got
+		}
+		frows.Close()
+	}
+
+	// Union deduped by id: keep the newest `limit` matches, returned in turn
+	// order — the same window the LIKE-only query returned before FTS.
+	seen := make(map[int64]struct{}, len(like)+len(fts))
+	union := make([]ConversationMessage, 0, len(like)+len(fts))
+	for _, m := range like {
+		seen[m.ID] = struct{}{}
+		union = append(union, m)
+	}
+	for _, m := range fts {
+		if _, ok := seen[m.ID]; !ok {
+			seen[m.ID] = struct{}{}
+			union = append(union, m)
+		}
+	}
+	if len(union) == 0 {
+		return nil, nil
+	}
+	sort.Slice(union, func(i, j int) bool { return union[i].Seq > union[j].Seq })
+	if len(union) > limit {
+		union = union[:limit]
+	}
+	for i, j := 0, len(union)-1; i < j; i, j = i+1, j-1 {
+		union[i], union[j] = union[j], union[i]
+	}
+	return union, nil
 }
 
 // TrimConversation archives then deletes all but the newest `keep` messages.

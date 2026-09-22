@@ -698,6 +698,17 @@ func (s *Store) migrate() error {
 	)`)
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_conv_archive_project ON conversation_archive(project_id, seq)")
 
+	// W1.3: conversation search → FTS5, mirroring project_memory_fts above.
+	// External content: conversation_messages.blocks is the source text (the
+	// same bytes the LIKE leg matches, so both legs stay in parity), FTS is
+	// only the index — triggers keep it in lockstep with append/trim/clear
+	// and rebuild backfills rows that predate it.
+	s.db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5(blocks, content='conversation_messages', content_rowid='id', tokenize='porter unicode61')`)
+	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS conversation_fts_ai AFTER INSERT ON conversation_messages BEGIN INSERT INTO conversation_fts(rowid, blocks) VALUES (new.id, new.blocks); END`)
+	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS conversation_fts_ad AFTER DELETE ON conversation_messages BEGIN INSERT INTO conversation_fts(conversation_fts, rowid, blocks) VALUES('delete', old.id, old.blocks); END`)
+	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS conversation_fts_au AFTER UPDATE ON conversation_messages BEGIN INSERT INTO conversation_fts(conversation_fts, rowid, blocks) VALUES('delete', old.id, old.blocks); INSERT INTO conversation_fts(rowid, blocks) VALUES (new.id, new.blocks); END`)
+	s.db.Exec(`INSERT INTO conversation_fts(conversation_fts) VALUES('rebuild')`)
+
 	// P3a: audit log — append-only, who/when/what for every memory/history mutation.
 	// Never DELETE. Hash chain is implicit via id ordering; before/after can be
 	// added when needed for tamper audit.

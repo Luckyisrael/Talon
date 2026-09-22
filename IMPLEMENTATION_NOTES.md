@@ -126,3 +126,41 @@ raw trace verb.
   (verbatim window, paging, past-end names the filed path, nil resolver
   unchanged), `evals/TestPhaseW1SpillReadBack` (full chain: Spill → locator →
   read_file → line window with true total; outside path does not leak).
+
+### W1.3 — conversation search → FTS5 ∪ LIKE (2026-09-22)
+
+- **The break:** audit row 6 — `SearchConversationBlocks` was `LIKE '%q%'`
+  over the raw `blocks` JSON: substring-only, so a search for "running"
+  never found "runs"-shaped queries the other way (no stemming), and every
+  keystroke pattern scanned full JSON per project. The memory table had had
+  FTS5 since P1b (`project_memory_fts`); conversation never got it.
+- **`store/store.go` migrate** — `conversation_fts`, an *external-content*
+  FTS5 (`content='conversation_messages'`, `content_rowid='id'`,
+  `tokenize='porter unicode61'`) mirroring the memory pattern: three triggers
+  (ai/ad/au) keep the index in lockstep with append/trim/clear, and a
+  `rebuild` backfills rows that predate it. Indexing `blocks` (the same bytes
+  the LIKE leg matches) means both legs stay in parity by construction.
+- **`store/conversation.go`** — `SearchConversationBlocks` now runs *two*
+  legs behind the one signature and unions them deduped by id:
+  - **LIKE leg (kept as fallback):** escaped literal substring — "uild" finds
+    "build", "100%" stays literal. Runs first; if it errors, the call fails.
+  - **FTS leg:** phrase-quoted MATCH (user operators `AND/OR/*` are searched
+    for, not parsed); porter stemming means "runs" finds "running". If this
+    leg errors — index missing, q tokenizes to nothing — it's simply dropped:
+    search degrades to the LIKE result, never fails.
+  - Union takes the newest `limit` matches, returns them in turn order
+    (same window/order the LIKE-only query had), `nil` on no hits.
+- **Handler (`api/history.go`):** comment updated (stem + substring recall,
+  both literal-metachar-safe); endpoint, request, and response shape
+  unchanged — web History drawer and mobile History screen need no change.
+- **Why union, not switch:** the plan (W1 work item 3) says "LIKE path
+  retained as fallback behind the same handler" — a pure FTS swap would lose
+  mid-token substring hits users already depend on (the wildcard-escape test
+  is the contract), while pure LIKE keeps the audit's "not FTS" finding open.
+  Union closes the finding and keeps the old contract as a subset.
+- **Tests:** `store/TestSearchConversationBlocksFTSUnion` (FTS-only stem hit,
+  LIKE-only substring hit, `100%` literal, dedup of a both-legs match, window
+  + turn order), `evals/TestPhaseW1SearchFTS` — the plan's eval gate
+  ("FTS query matches LIKE results on fixture"): ground truth is the old LIKE
+  path replayed in Go over the same rows; union must equal it exactly on
+  plain-word queries, plus stem/substring/wildcard class probes.

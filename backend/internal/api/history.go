@@ -55,10 +55,13 @@ func (h *PromptHandler) ListPrompts(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── GET /v1/projects/{id}/conversation/search ────────────────────────
-// Substring search over stored turns, newest first. LIKE metacharacters are
-// escaped store-side, so a query for "100%" matches literally. Returns whole
-// turns (same shape as GetConversation) with the prompt ids clients need to
-// scroll to them — excerpts would strand the reader with no way to jump.
+// Search over stored turns: FTS5 tokens unioned with the escaped literal
+// substring, so "connecting" finds "connected" (stemmed) and "onnected"
+// still finds it (substring) — neither recall class lost. LIKE
+// metacharacters are escaped store-side, so a query for "100%" matches
+// literally. Returns whole turns (same shape as GetConversation) with the
+// prompt ids clients need to scroll to them — excerpts would strand the
+// reader with no way to jump.
 func (h *PromptHandler) SearchConversation(w http.ResponseWriter, r *http.Request) {
 	projectID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {

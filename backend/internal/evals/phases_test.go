@@ -1415,3 +1415,94 @@ func TestPhaseW1SpillReadBack(t *testing.T) {
 		t.Errorf("spill resolution leaked an outside file: %.120s", outside.Content)
 	}
 }
+
+// W1.3 eval gate: FTS query matches LIKE results on fixture. Ground truth
+// is the old path — literal case-insensitive substring over stored blocks —
+// and the union must return exactly the turns that path found on plain-word
+// queries (nothing lost, nothing spuriously added), while each leg keeps
+// the recall class only it has.
+func TestPhaseW1SearchFTS(t *testing.T) {
+	st, err := store.New(filepath.Join(t.TempDir(), "w13-fts.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer st.Close()
+	// FK: the project needs a real user row.
+	u, err := st.CreateUser("w13fts@evals.test", "x")
+	if err != nil {
+		t.Fatalf("user: %v", err)
+	}
+	proj, err := st.CreateProject(u.ID, "p", "v1", "s", "a.b.c", "d.e", "f")
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	for _, text := range []string{"the build is running now", "discount 100% today", "unrelated hello"} {
+		if err := st.AppendMessage(proj.ID, 1, "user", `[{"type":"text","text":"`+text+`"}]`, 0, 0); err != nil {
+			t.Fatalf("append %q: %v", text, err)
+		}
+	}
+	all, err := st.GetConversation(proj.ID, 0)
+	if err != nil {
+		t.Fatalf("conversation: %v", err)
+	}
+
+	// The old LIKE path as ground truth, replayed in Go over the same rows.
+	likeOnly := func(q string) []int64 {
+		var seqs []int64
+		ql := strings.ToLower(q)
+		for _, m := range all {
+			if strings.Contains(strings.ToLower(m.Blocks), ql) {
+				seqs = append(seqs, m.Seq)
+			}
+		}
+		return seqs
+	}
+	gotSeqs := func(q string, limit int) []int64 {
+		t.Helper()
+		turns, err := st.SearchConversationBlocks(proj.ID, q, limit)
+		if err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+		seqs := make([]int64, 0, len(turns))
+		for _, m := range turns {
+			seqs = append(seqs, m.Seq)
+		}
+		return seqs
+	}
+
+	// The gate: on plain-word fixture queries the union returns exactly the
+	// LIKE set.
+	for _, q := range []string{"build", "discount", "hello"} {
+		want := likeOnly(q)
+		got := gotSeqs(q, 20)
+		if len(got) != len(want) {
+			t.Errorf("q=%q: union seqs %v, LIKE fixture seqs %v", q, got, want)
+			continue
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("q=%q: union seqs %v, LIKE fixture seqs %v", q, got, want)
+				break
+			}
+		}
+	}
+
+	// FTS-only recall: porter stem "runs" finds "running"; substring never
+	// does — and the fixture proves it (LIKE sees nothing for this query).
+	if like := likeOnly("runs"); len(like) != 0 {
+		t.Errorf("fixture broken: LIKE sees seqs %v for the stem query", like)
+	}
+	if seqs := gotSeqs("runs", 20); len(seqs) != 1 || seqs[0] != 1 {
+		t.Errorf("stem query: union seqs %v, want [1] (the running turn)", seqs)
+	}
+
+	// LIKE-only recall: mid-token substring "uild".
+	if seqs := gotSeqs("uild", 20); len(seqs) != 1 || seqs[0] != 1 {
+		t.Errorf("substring query: union seqs %v, want [1] (the build turn)", seqs)
+	}
+
+	// Metacharacters literal on both legs: "100%" is one turn, not all.
+	if seqs := gotSeqs("100%", 20); len(seqs) != 1 || seqs[0] != 2 {
+		t.Errorf("wildcard query: union seqs %v, want [2]", seqs)
+	}
+}

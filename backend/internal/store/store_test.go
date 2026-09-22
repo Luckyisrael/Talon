@@ -165,6 +165,61 @@ func TestGetConversationTailInOrder(t *testing.T) {
 	}
 }
 
+// W1.3: search unions FTS5 and LIKE behind one signature. Each leg covers a
+// class the other misses — porter stems for FTS, mid-token substrings and
+// literal metacharacters for LIKE — a turn both legs match comes back
+// exactly once, and the window is the newest `limit` matches in turn order.
+func TestSearchConversationBlocksFTSUnion(t *testing.T) {
+	s := newTestStore(t)
+	pid := seedProject(t, s)
+
+	for _, text := range []string{"the build is running now", "discount 100% today", "unrelated hello"} {
+		if err := s.AppendMessage(pid, 1, "user", `[{"type":"text","text":"`+text+`"}]`, 0, 0); err != nil {
+			t.Fatalf("append %q: %v", text, err)
+		}
+	}
+
+	seqsOf := func(q string, limit int) []int64 {
+		t.Helper()
+		turns, err := s.SearchConversationBlocks(pid, q, limit)
+		if err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+		seqs := make([]int64, 0, len(turns))
+		for _, m := range turns {
+			seqs = append(seqs, m.Seq)
+		}
+		return seqs
+	}
+	want := func(q string, got []int64, wantSeqs ...int64) {
+		t.Helper()
+		if len(got) != len(wantSeqs) {
+			t.Fatalf("q=%q: seqs %v, want %v", q, got, wantSeqs)
+		}
+		for i := range wantSeqs {
+			if got[i] != wantSeqs[i] {
+				t.Fatalf("q=%q: seqs %v, want %v (turn order)", q, got, wantSeqs)
+			}
+		}
+	}
+
+	// FTS-only class: "runs" stems to "run", matching "running" — the
+	// substring path never sees it.
+	want("runs", seqsOf("runs", 20), 1)
+	// LIKE-only class: "uild" is a mid-token substring of "build", which
+	// FTS never tokenizes.
+	want("uild", seqsOf("uild", 20), 1)
+	// Metacharacters stay literal across both legs: "100%" is one turn,
+	// not every turn.
+	want("100%", seqsOf("100%", 20), 2)
+	// Dedup: "today" matches both legs (token + substring) — one turn,
+	// not two copies.
+	want("today", seqsOf("today", 20), 2)
+	// "text" hits every turn on both legs (it is in the stored JSON
+	// itself): the window is the newest `limit` matches, in turn order.
+	want("text", seqsOf("text", 2), 2, 3)
+}
+
 func TestTrimConversationKeepsNewest(t *testing.T) {
 	s := newTestStore(t)
 	pid := seedProject(t, s)
