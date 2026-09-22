@@ -142,6 +142,9 @@ func TestProbeTargetExtraction(t *testing.T) {
 		{"read_file", `{"path":"node_modules/@solana-mobile/mobile-wallet-adapter-protocol/lib/types/index.d.ts"}`, "@solana-mobile/mobile-wallet-adapter-protocol"},
 		{"read_file", `{"path":"app/index.tsx"}`, ""},
 		{"grep_codebase", `{"pattern":"authorize","glob":"*.ts"}`, ""},
+		{"codebase_search", `{"query":"require('@solana/web3.js') usage"}`, "@solana/web3.js"},
+		{"codebase_search", `{"query":"how does auth work"}`, ""},
+		{"codebase_graph", `{"symbol":"node_modules/@solana-mobile/mwa/lib/index.d.ts"}`, "@solana-mobile/mwa"},
 		{"write_file", `{"path":"node_modules/x"}`, ""},
 	}
 	for _, c := range cases {

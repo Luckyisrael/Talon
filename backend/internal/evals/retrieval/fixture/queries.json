@@ -1,0 +1,10 @@
+[
+  {"query": "how does the wallet authorize a transaction", "gold": "src/wallet.ts"},
+  {"query": "JWT session token validation", "gold": "src/auth.ts"},
+  {"query": "theme colors and spacing", "gold": "src/theme.ts"},
+  {"query": "where is the home screen rendered", "gold": "src/screens/home.tsx"},
+  {"query": "API request retry with backoff", "gold": "src/net/retry.ts"},
+  {"query": "navigation routes for the stack", "gold": "src/routes.ts"},
+  {"query": "currency number formatting", "gold": "src/lib/format.ts"},
+  {"query": "fingerprint biometric unlock", "gold": "src/biometrics.ts"}
+]

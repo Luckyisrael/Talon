@@ -2082,7 +2082,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		// (write_memory) instead of re-probed.
 		if !isError {
 			switch call.Name {
-			case "run_shell", "grep_codebase", "read_file":
+			case "run_shell", "grep_codebase", "read_file", "codebase_search", "codebase_graph":
 				if target := probeTarget(call.Name, call.Input); target != "" {
 					n := sess.NoteProbe(target)
 					probeNote = probeNoteFor(n, target)
@@ -2233,6 +2233,22 @@ func probeTarget(toolName string, input json.RawMessage) string {
 			return ""
 		}
 		text = a.Pattern + " " + a.Glob
+	case "codebase_search":
+		var a struct {
+			Query string `json:"query"`
+		}
+		if json.Unmarshal(input, &a) != nil {
+			return ""
+		}
+		text = a.Query
+	case "codebase_graph":
+		var a struct {
+			Symbol string `json:"symbol"`
+		}
+		if json.Unmarshal(input, &a) != nil {
+			return ""
+		}
+		text = a.Symbol
 	case "read_file":
 		var a struct {
 			Path string `json:"path"`
@@ -3071,6 +3087,22 @@ func describeTool(name string, input json.RawMessage, workspacePath string) stri
 			return "Searching for " + truncateLine(a.Pattern, 40)
 		}
 		return "Searching the codebase"
+	case "codebase_search":
+		var a struct {
+			Query string `json:"query"`
+		}
+		if json.Unmarshal(input, &a) == nil && a.Query != "" {
+			return "Searching the index for " + truncateLine(a.Query, 40)
+		}
+		return "Searching the codebase index"
+	case "codebase_graph":
+		var a struct {
+			Symbol string `json:"symbol"`
+		}
+		if json.Unmarshal(input, &a) == nil && a.Symbol != "" {
+			return "Tracing " + truncateLine(a.Symbol, 40)
+		}
+		return "Querying the code graph"
 	case "install_package":
 		var a struct {
 			Name string `json:"name"`
@@ -3162,6 +3194,10 @@ func toolTarget(name string, input json.RawMessage) string {
 		return field("path")
 	case "grep_codebase":
 		return truncateLine(field("pattern"), 60)
+	case "codebase_search":
+		return truncateLine(field("query"), 60)
+	case "codebase_graph":
+		return truncateLine(field("symbol"), 60)
 	case "run_command":
 		return truncateLine(field("command"), 80)
 	case "install_package":

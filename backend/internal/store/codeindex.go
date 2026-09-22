@@ -304,6 +304,31 @@ func (s *Store) CodeEdgesFrom(projectID int64, fromPath, fromName string) ([]Cod
 	return out, rows.Err()
 }
 
+// CodeEdgesFromSymbol is callees-by-name: every file's out-edges whose
+// enclosing symbol carries this NAME, whatever path declared it. Call sites
+// don't care which file a function lives in, only that it is the function —
+// which is why name, not path, is the join here (from_path stays a filter
+// only for the file-scoped form above).
+func (s *Store) CodeEdgesFromSymbol(projectID int64, fromName string) ([]CodeEdge, error) {
+	rows, err := s.db.Query(
+		`SELECT from_path, from_name, kind, to_path, to_name FROM code_edges
+		 WHERE project_id = ? AND from_name = ? ORDER BY from_path, kind, to_name`,
+		projectID, fromName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CodeEdge
+	for rows.Next() {
+		var e CodeEdge
+		if err := rows.Scan(&e.FromPath, &e.FromName, &e.Kind, &e.ToPath, &e.ToName); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // CodeIndexDigest is the eval's hash-equal witness: a deterministic sha256
 // over the project's whole index state (files, chunks, symbols, edges — each
 // set in sorted order). Two index builds over identical trees must produce

@@ -261,7 +261,8 @@ func mustMarshalJSON(v any) []byte {
 var coreToolSet = map[string]bool{
 	"read_file": true, "write_file": true, "edit_file": true, "multi_edit": true,
 	"list_files": true, "grep_codebase": true, "search_files": true, "find_files": true,
-	"explore": true, "project_map": true, "inspect_package": true, "read_skill": true,
+	"explore": true, "project_map": true, "codebase_search": true, "codebase_graph": true,
+	"inspect_package": true, "read_skill": true,
 	"run_typecheck": true, "run_lint": true, "run_checks": true, "run_prettier": true,
 	"ask_user": true, "mark_task_done": true,
 }

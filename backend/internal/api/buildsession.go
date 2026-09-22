@@ -21,6 +21,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
 	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
 	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
+	"github.com/luckyisrael/talon/backend/internal/index"
 	"github.com/luckyisrael/talon/backend/internal/metro"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/store"
@@ -39,6 +40,17 @@ func (w commandOutputWriter) Write(p []byte) (int, error) {
 		w.emitter.EmitCommandOutput(string(p))
 	}
 	return len(p), nil
+}
+
+// convertIndexEdges crosses the boundary the StoreAdapter law draws: store
+// types become the tools package's boundary types here, so tools never
+// import the store.
+func convertIndexEdges(edges []store.CodeEdge) []tools.IndexEdge {
+	out := make([]tools.IndexEdge, 0, len(edges))
+	for _, e := range edges {
+		out = append(out, tools.IndexEdge{FromPath: e.FromPath, FromName: e.FromName, Kind: e.Kind, ToPath: e.ToPath, ToName: e.ToName})
+	}
+	return out
 }
 
 // buildSession is everything one build turn needs: the tools it can call, the
@@ -138,6 +150,63 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// on a stack newer than its training data. Both are read-only (run concurrently).
 	reg.Register(&tools.ProjectMap{FS: fs})
 	reg.Register(&tools.InspectPackage{WorkspacePath: workspacePath})
+
+	// W4.4: hybrid search + call graph over the codebase index. Registered
+	// only with TALONSTUDIO_INDEX on — flag off, this block is skipped and
+	// the registry is byte-identical to today's (grep-only fallback, no hard
+	// dependency). Each call reconciles first, so results reflect files
+	// written this turn: reconcile-on-touch, no filesystem watcher. The fn
+	// fields keep the tools package store-free (the StoreAdapter law).
+	if index.Enabled() {
+		reconcile := func() error {
+			_, err := index.Reconcile(fs.Root(), projectID, h.store)
+			return err
+		}
+		reg.Register(&tools.CodebaseSearch{
+			FS:        fs,
+			Reconcile: reconcile,
+			Search: func(query string, limit int) ([]tools.IndexHit, error) {
+				hits, err := h.store.SearchCodeChunks(projectID, query, limit)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]tools.IndexHit, 0, len(hits))
+				for _, hit := range hits {
+					out = append(out, tools.IndexHit{Path: hit.Path, Name: hit.Name, StartLine: hit.StartLine, Body: hit.Body})
+				}
+				return out, nil
+			},
+		})
+		reg.Register(&tools.CodebaseGraph{
+			FS:        fs,
+			Reconcile: reconcile,
+			Definitions: func(symbol string) ([]tools.IndexSymbol, error) {
+				syms, err := h.store.CodeDefinitions(projectID, symbol)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]tools.IndexSymbol, 0, len(syms))
+				for _, s := range syms {
+					out = append(out, tools.IndexSymbol{Path: s.Path, Name: s.Name, Kind: s.Kind, Line: s.Line})
+				}
+				return out, nil
+			},
+			Callers: func(symbol string) ([]tools.IndexEdge, error) {
+				edges, err := h.store.CodeEdgesTo(projectID, "call", symbol)
+				if err != nil {
+					return nil, err
+				}
+				return convertIndexEdges(edges), nil
+			},
+			Callees: func(symbol string) ([]tools.IndexEdge, error) {
+				edges, err := h.store.CodeEdgesFromSymbol(projectID, symbol)
+				if err != nil {
+					return nil, err
+				}
+				return convertIndexEdges(edges), nil
+			},
+		})
+	}
 
 	// Writing. edit_file and multi_edit are what make incremental work possible;
 	// without them the only way to change one line was to rewrite the file.

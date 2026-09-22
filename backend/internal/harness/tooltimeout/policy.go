@@ -94,6 +94,7 @@ func DefaultPolicy() *Policy {
 	p := New()
 	for _, name := range []string{
 		"read_file", "list_files", "project_map", "inspect_package",
+		"codebase_search", "codebase_graph",
 	} {
 		p.Register(name, readBudget)
 	}

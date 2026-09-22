@@ -615,4 +615,28 @@ and search keep reading legacy until W2.3 flips them with the same gate.
 
 **Web/mobile connection:** none yet — no tool reads the index in this slice; W4.4 lands `codebase_search`/`codebase_graph` in the build registry, after which the web timeline renders their labels/targets like any other search tool. Tables are inert until the flag is set.
 
-**Remaining in W4:** W4.3 embedding provider (interface + API default + populate `project_memory.embedding`), W4.4 the two tools + `evals/retrieval/` benchmark (hybrid ≥ grep-only hit@5), W4.5 `read_memory` FTS ∪ vector fusion, W4.6 project map as a view over the index.
+**Remaining in W4:** W4.3 embedding provider (interface + API default + populate `project_memory.embedding`), W4.5 `read_memory` FTS ∪ vector fusion, W4.6 project map as a view over the index.
+
+## W4.4 — `codebase_search` + `codebase_graph` tools + retrieval benchmark (committed, behind `TALONSTUDIO_INDEX`)
+
+**Plan:** `PLAN_WORLDCLASS.md` W4 items 4–5 — the two index-backed tools in the build registry plus `evals/retrieval/` (gate: indexed ≥ grep-only hit@5). Register row 14 partially closed (embedding, memory fusion, map-as-view remain).
+
+**Tools (`internal/tools/codebase.go`, fn-field pattern):**
+- Both follow the `StoreAdapter` law: **the tools package never imports the store.** `Reconcile`/`Search`/`Definitions`/`Callers`/`Callees` are function fields wired in `api/buildsession.go`; `IndexHit`/`IndexSymbol`/`IndexEdge` are boundary types converted at that seam (`convertIndexEdges`). The `FS` field is kept for sibling symmetry — the index walk is root-closure-based, so `Execute` never touches it directly.
+- **`codebase_search`** — bm25 over chunks (today's whole retrieval layer; the vector half joins at the same `Search` seam when W4.3 lands, fused before formatting). Reconciles before every query: a `Reconcile` failure yields a stale-but-honest answer with an inline note, never a failed call. Output shares grep's prefix — `path:line (name): excerpt` vs grep's `path:line: content` — so one parser reads both tools, which is the benchmark's formatting contract. Limit 1–25 (default 10); empty results steer back to `grep_codebase`.
+- **`codebase_graph`** — `direction` ∈ {definitions, callers, callees}; `distance` 1–2 (callers/callees only, definitions always direct). Callers dedupe on `(FromPath, FromName)` across hops, callees on `ToName`; hop-2 walks the opposite direction from each level-1 edge's far endpoint, skipping self-references and file-level edges. New store method **`CodeEdgesFromSymbol`** (callees-by-name: call sites join on name, not path — `CodeEdgesFrom` stays file-scoped).
+
+**Wiring + classification (flag-gated everywhere):**
+- `buildsession.go`: one `if index.Enabled()` block registers both with a shared `reconcile` closure (`fs.Root()`). Flag off → registry byte-identical to today's; grep-only fallback, no hard dependency.
+- Name-based lists updated or the tools silently vanish/misbehave: `ai/agentic.go coreToolSet` (the ≥8-core truncation path would filter them out), `harness/tooltimeout/policy.go` readBudget (fast).
+- Orchestrator: probe list + `probeTarget` cases — both tools' `query`/`symbol` text joins the same `require()`/`node_modules` package-unit extraction as `grep_codebase`/`read_file` (pinned by new `enforce_test` rows in both directions); `toolLabel` → "Searching the index for …" / "Tracing …"; `toolTarget` → `query`/`symbol` fields truncated at 60. Plan registry untouched (byte-pinned).
+
+**`evals/retrieval/` (new benchmark package):** checked-in fixture (`fixture/src/` — 8 small ts/tsx files) + `fixture/queries.json` (8 natural-language queries → known gold paths). **`TestHitAt5IndexedAtLeastGrep`** runs both systems end to end through the real tools over one shared `path:line` parser: `codebase_search` (limit 5) vs a *generous* grep-only baseline (stopwords stripped, remaining tokens as a `(?i)` alternation — the indexed layer must beat a competent agent's grep, not a strawman). Gate = indexed hit@5 ≥ grep-only hit@5 **and** ≥ 6/8, so `0 ≥ 0` can never pass. **`TestGraphEndToEnd`** pins definitions/callers/callees through real edge rows and asserts no spurious hop-2 in a fixture where nothing calls `authorizeTransaction`.
+
+**Gates:** `gofmt`/`go vet` clean; targeted: tools + index + store + **evals/retrieval** + orchestrator (probe rows + 4 switches) + tooltimeout + ai all pass; `make evals` EXIT=0 (first run hit the known `TestRefreshRotates` TempDir-cleanup flake — same class as `TestClaimAttachmentsSpendsOnce`, test body green, clean re-run); `go test -race ./...` EXIT=0 (44 packages).
+
+**Honest deviations:** (a) "hybrid" is lexical-only today — bm25 stands in for the fusion; the fixture and gate are deliberately built so W4.3's vector half strengthens (never weakens) the same measurement. (b) The index reconciles **at query time**, not via turn-end `FS.Touched()` feeding — freshness without a watcher (W4.1's note; the feeding hook stays an optimization). (c) Distance capped at 2 hops: the scope says "direction+distance" without a bound, and beyond 2 the result set outgrows a tool result.
+
+**Web/mobile connection:** the web timeline already renders generic tool labels/targets — `toolLabel`/`toolTarget` give it "Searching the index for …"/`query` rows exactly like `grep_codebase`, over the same SSE events the mobile app consumes. Both tools are `ReadOnly()` → run concurrently within a turn, no approval, sandbox-op classification unchanged. Every shipped environment keeps `TALONSTUDIO_INDEX` unset until W4.3 flips the deployment default.
+
+**Remaining in W4:** W4.3 embedding provider (interface + API default + populate `project_memory.embedding`), W4.5 `read_memory` FTS ∪ vector fusion, W4.6 project map as a view over the index.
