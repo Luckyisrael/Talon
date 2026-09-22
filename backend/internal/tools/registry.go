@@ -188,11 +188,16 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 // chooses which to populate per tool. That keeps the surface small for
 // tools that only need one direction.
 type StoreAdapter struct {
-	CreateADRFn      func(projectID int64, decision, context, options, outcome string) error
-	AddMemoryFn      func(projectID int64, entryType, content, metadata string) error
-	GetAllMemoryFn   func(projectID int64) ([]MemoryEntry, error)
+	CreateADRFn       func(projectID int64, decision, context, options, outcome string) error
+	AddMemoryFn       func(projectID int64, entryType, content, metadata string) error
+	GetAllMemoryFn    func(projectID int64) ([]MemoryEntry, error)
 	GetMemoryByTypeFn func(projectID int64, entryType string) ([]MemoryEntry, error)
-	SearchMemoryFn   func(projectID int64, query, entryType string, limit int) ([]MemoryEntry, error)
+	SearchMemoryFn    func(projectID int64, query, entryType string, limit int) ([]MemoryEntry, error)
+	// VectorSearchMemoryFn is read_memory's vector leg (W4.5): same
+	// signature as SearchMemoryFn, cosine-ordered. nil — or (nil, nil) —
+	// means the vector layer is off, which is configuration, not failure;
+	// the tool fuses only what it gets and falls back exactly as before.
+	VectorSearchMemoryFn func(projectID int64, query, entryType string, limit int) ([]MemoryEntry, error)
 }
 
 // MemoryEntry is the read-side view of a project memory row. It mirrors the
@@ -200,11 +205,11 @@ type StoreAdapter struct {
 // store.ProjectMemory type stays in the store package and is converted at the
 // adapter boundary so tools never need to import the store.
 type MemoryEntry struct {
-	ID         int64
-	EntryType  string
-	Content    string
-	Metadata   string
-	CreatedAt  string
+	ID        int64
+	EntryType string
+	Content   string
+	Metadata  string
+	CreatedAt string
 }
 
 func (a *StoreAdapter) CreateADR(projectID int64, decision, context, options, outcome string) error {

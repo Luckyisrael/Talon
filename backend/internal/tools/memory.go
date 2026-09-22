@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/luckyisrael/talon/backend/internal/recall"
 )
 
 // WriteMemory records a durable fact about the project. The ProjectID is bound
@@ -130,11 +133,56 @@ func (t *ReadMemory) Execute(ctx context.Context, args json.RawMessage) (ToolRes
 
 	var entries []MemoryEntry
 	var err error
+	// fuse merges both recall legs by memory-row ID through recall.Fuse —
+	// FTS first, so exact-score ties resolve toward lexical evidence. Only
+	// called when the vector leg produced something: with no provider (or
+	// one that failed) the FTS path below is byte-identical to today's.
+	fuse := func(fts, vec []MemoryEntry) []MemoryEntry {
+		byID := map[string]MemoryEntry{}
+		lexIDs := make([]string, 0, len(fts))
+		vecIDs := make([]string, 0, len(vec))
+		for _, e := range fts {
+			id := strconv.FormatInt(e.ID, 10)
+			lexIDs = append(lexIDs, id)
+			byID[id] = e
+		}
+		for _, e := range vec {
+			id := strconv.FormatInt(e.ID, 10)
+			if _, dup := byID[id]; !dup {
+				byID[id] = e
+			}
+			vecIDs = append(vecIDs, id)
+		}
+		fused := recall.Fuse(lexIDs, vecIDs)
+		out := make([]MemoryEntry, 0, len(fused))
+		for _, id := range fused {
+			out = append(out, byID[id])
+		}
+		if len(out) > readMemoryCap {
+			out = out[:readMemoryCap]
+		}
+		return out
+	}
 	// Hybrid: when contains is set, try FTS5 tokenised search first — it
 	// handles stemming and prefix, so "wallet" hits "wallets" and "MWA".
-	// Falls back to substring when FTS is not wired (tests) or yields nothing.
+	// W4.5 adds the vector leg when it exists (nil = provider off, by
+	// configuration); both legs fuse when both answered. Falls back to
+	// substring when neither did (tests without a store, or a phrase no
+	// leg could match).
 	if a.Contains != "" {
-		if fts, ferr := t.Store.SearchMemory(t.ProjectID, a.Contains, a.Type, readMemoryCap); ferr == nil && len(fts) > 0 {
+		fts, ferr := t.Store.SearchMemory(t.ProjectID, a.Contains, a.Type, readMemoryCap)
+		var vec []MemoryEntry
+		if t.Store != nil && t.Store.VectorSearchMemoryFn != nil {
+			// The wiring returns (nil, nil) when no provider is configured;
+			// an error means configured-but-unavailable — degrade to FTS,
+			// never fail a recall the lexical leg can still answer.
+			if v, verr := t.Store.VectorSearchMemoryFn(t.ProjectID, a.Contains, a.Type, readMemoryCap); verr == nil {
+				vec = v
+			}
+		}
+		if len(vec) > 0 {
+			entries = fuse(fts, vec)
+		} else if ferr == nil && len(fts) > 0 {
 			entries = fts
 		} else {
 			if a.Type != "" {

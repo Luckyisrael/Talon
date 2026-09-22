@@ -666,3 +666,30 @@ and search keep reading legacy until W2.3 flips them with the same gate.
 **Web/mobile connection:** none visible — no UI surface for vectors; sweeps are silent background work (logging only when vectors land). The gain arrives with W4.5's fused `read_memory`, which both clients consume through the existing events. Config ships as empty env keys only.
 
 **Remaining in W4:** W4.5 `read_memory` FTS ∪ vector fusion (reads `VecFromBytes`), W4.6 project map as a view over the index.
+
+## W4.5 — `read_memory` FTS ∪ vector + hybrid `codebase_search`: one shared fusion (committed, dormant without env)
+
+**Plan:** W4 items 4–5 — memory recall upgrade (FTS ∪ vector, "same fusion") plus the deferred vector half of item 4's hybrid search. Register row 14 partially closed (map-as-view remains); register **row 16** (memory FTS-only recall) closed.
+
+**`internal/recall` (new package — the scope's "same fusion"):**
+- `Fuse(ranked ...[]string) []string` — reciprocal rank fusion (score = Σ 1/(K+rank), K=60) over ranked ID lists. It never normalizes scores: bm25, cosine, and recency numbers mean nothing to each other, and RRF deliberately never looks at them. Ties keep first-seen order, so callers pass lexical before vector — a tie resolves toward bm25 evidence. A duplicate ID within one list counts once (first rank); empty/nil legs degenerate to a stable copy of the other, so single-leg calls return today's order untouched.
+
+**Store legs (`store/vectorsearch.go`):**
+- `cosine(a, b) (score, ok)` — `ok=false` on dimension mismatch (a model change mid-cache: the read-path validation W4.3's notes reserved) and zero norms (no direction, no meaning). Never an error.
+- `SearchMemoryVector(pid, query, entryType, limit)` — brute-force cosine over `project_memory.embedding` (in-process, the documented sqlite-vec rejection at workspace scale), `decryptContent` exactly like the FTS leg, type filter mirroring FTS, scan order `created_at DESC, id DESC` so ties resolve by recency (matching FTS intuition), stable-sorted by score, capped at 50. Empty query → (nil, nil), no scan.
+- `SearchCodeChunksVector(pid, query, limit)` — same shape over `code_chunks.embedding`; `Score` carries cosine (fusion reads ranks only); deterministic path/line/name scan order.
+
+**Tool fusion (both tools, literally one component):**
+- `read_memory` (`tools/memory.go`): a `fuse` closure over row IDs calls `recall.Fuse(ftsIDs, vecIDs)` — FTS list first. New optional `StoreAdapter.VectorSearchMemoryFn` (nil = vector layer off, by configuration); an error degrades to FTS silently — configured-but-unavailable never fails a recall the lexical leg can still answer. **Fuse runs only when the vector leg produced rows**: FTS-only output is byte-identical to today's (existing tests untouched; the deployment law).
+- `codebase_search` (`tools/codebase.go`): new optional `VectorSearch` field; `hitID` = `path:line:name` — both legs read the same reconciled rows, so chunk identities pair exactly; `fuseIndexHits` runs `recall.Fuse` and truncates to limit. FTS-empty + vector-nonempty uses the vector list directly; a failing leg appends an honest `[vector leg unavailable: …]` note while lexical results keep flowing (same degrade contract as the reconcile note). **Item 4's hybrid is now complete** — the fixture benchmark stays green because tests configure no provider (lexical-only path).
+
+**Provider seam (`api/buildsession.go`):**
+- `embedQuery(query)` — shared by both legs: `embed.FromEnv()` per call (nil → `(nil, nil)`: an absent vector layer is configuration), 8s timeout bounding the tool's latency budget. Wired as `VectorSearchMemoryFn` in `storeAdapter()` and `VectorSearch` in the `CodebaseSearch` registration. Zero signature churn anywhere — a missing provider reaches every tool as a nil field or empty leg.
+
+**Gates:** `gofmt`/`go vet` clean; `recall/TestFuse{SingleListIsStable,OverlapBoosts,TieKeepsFirstList,DeduplicatesWithinList,EmptyLegs,SkipsEmptyIDs}`; `store/TestSearchMemoryVector{RanksByCosine,BadRows}` (type filter, limit, dim-mismatch/zero-norm/garbage-blob skips, empty query) + `TestSearchCodeChunksVector` + `TestCosineUnit`; `tools/TestReadMemory{FusesVectorLeg,VectorOnlyAnswers,VectorOffIsUnchanged,VectorErrorDegrades}` + `TestCodebaseSearch{FusesVectorLeg,VectorOffIsUnchanged,VectorErrorNotes}` — both tools pinned end-to-end through real `Execute` output; retrieval benchmark + index/embed untouched and green; `make evals` EXIT=0 (first run, no flake); `go test -race ./...` EXIT=0 (46 pkgs).
+
+**Honest deviations:** (a) The fusion *call sites* live in each tool (a closure in `ReadMemory`, helpers in `CodebaseSearch`) because the two adapters' shapes differ — but the *ranking* is literally one function (`recall.Fuse`) used by both, which is what scope's "same fusion" means. (b) The vector leg re-reads `embed.FromEnv()` per query instead of capturing at build time: deliberate — zero signature churn, env reads are cheap, and the 8s context bounds the cost. (c) When the vector leg answers and FTS found nothing, the substring fallback is skipped (the fused result wins); substring stays the last resort only when both legs miss. (d) Raw scores never reach the model — rank order only, consistent with `IndexHit`'s deliberate Score-absence.
+
+**Web/mobile connection:** no UI change — both are model-facing tools; the web timeline renders their labels/results over the same SSE events the mobile app consumes. The behavior difference is visible only with `TALONSTUDIO_EMBED_URL` set (results fuse); unset in every shipped environment.
+
+**Remaining in W4:** W4.6 project map as a view over the index.

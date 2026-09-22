@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+
+	"github.com/luckyisrael/talon/backend/internal/recall"
 )
 
 // ── codebase_search / codebase_graph (W4.4) ─────────────────────────
@@ -45,14 +48,17 @@ type IndexEdge struct {
 	ToName   string
 }
 
-// CodebaseSearch is hybrid retrieval's lexical half today (bm25 over chunks,
-// names, and paths); the vector half joins at the same Search seam when the
-// embedding provider lands (W4.3), fused before formatting. Reconcile runs
-// first so results reflect files just written this turn.
+// CodebaseSearch is hybrid retrieval: bm25 over chunks, names, and paths
+// fused (W4.5, recall.Fuse) with a cosine vector leg when one is wired —
+// Reconcile runs first so results reflect files just written this turn.
 type CodebaseSearch struct {
 	FS        *FS
 	Reconcile func() error // freshness hook; nil = index not wired
 	Search    func(query string, limit int) ([]IndexHit, error)
+	// VectorSearch is the cosine leg (W4.5). nil means the vector layer is
+	// off (no provider configured) — lexical behavior is byte-identical;
+	// an error surfaces as an inline note, never a failed call.
+	VectorSearch func(query string, limit int) ([]IndexHit, error)
 }
 
 func (t *CodebaseSearch) Name() string { return "codebase_search" }
@@ -112,6 +118,25 @@ func (t *CodebaseSearch) Execute(_ context.Context, args json.RawMessage) (ToolR
 	if err != nil {
 		return errResult("index search failed: %v — fall back to grep_codebase", err), nil
 	}
+	// W4.5 vector leg: nil field (or nil provider inside the wiring) means
+	// off — lexical behavior is byte-identical; a failing leg degrades to
+	// lexical with an honest note — the index accelerates, it never gates.
+	// Both legs read the same reconciled rows, so chunk IDs align for fusion.
+	var vecHits []IndexHit
+	if t.VectorSearch != nil {
+		v, verr := t.VectorSearch(a.Query, limit)
+		if verr != nil {
+			stale += fmt.Sprintf("\n\n[vector leg unavailable: %v]", verr)
+		}
+		vecHits = v
+	}
+	if len(vecHits) > 0 {
+		if len(hits) == 0 {
+			hits = vecHits
+		} else {
+			hits = fuseIndexHits(hits, vecHits, limit)
+		}
+	}
 	if len(hits) == 0 {
 		return ToolResult{
 			Content: fmt.Sprintf("No index hits for %q. Try grep_codebase for exact patterns, or reword with different terms.", a.Query) + stale,
@@ -122,6 +147,42 @@ func (t *CodebaseSearch) Execute(_ context.Context, args json.RawMessage) (ToolR
 		out = append(out, fmt.Sprintf("%s:%d (%s): %s", h.Path, h.StartLine, h.Name, excerpt(h.Body, 160)))
 	}
 	return ToolResult{Content: strings.Join(out, "\n") + stale}, nil
+}
+
+// hitID is a chunk's fusion identity: path + line + name — both legs read
+// the same reconciled rows, so an FTS hit and a vector hit for one chunk
+// pair up exactly.
+func hitID(h IndexHit) string {
+	return h.Path + ":" + strconv.Itoa(h.StartLine) + ":" + h.Name
+}
+
+// fuseIndexHits merges both legs through recall.Fuse (lexical passed first,
+// so exact-score ties resolve toward bm25 evidence) and truncates to limit.
+func fuseIndexHits(fts, vec []IndexHit, limit int) []IndexHit {
+	byID := map[string]IndexHit{}
+	lexIDs := make([]string, 0, len(fts))
+	vecIDs := make([]string, 0, len(vec))
+	for _, h := range fts {
+		id := hitID(h)
+		lexIDs = append(lexIDs, id)
+		byID[id] = h
+	}
+	for _, h := range vec {
+		id := hitID(h)
+		if _, dup := byID[id]; !dup {
+			byID[id] = h
+		}
+		vecIDs = append(vecIDs, id)
+	}
+	fused := recall.Fuse(lexIDs, vecIDs)
+	out := make([]IndexHit, 0, len(fused))
+	for _, id := range fused {
+		out = append(out, byID[id])
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 // excerpt is the first non-empty line of a body, trimmed — the same

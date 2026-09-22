@@ -177,6 +177,28 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 				}
 				return out, nil
 			},
+			// W4.5: the cosine leg — same provider seam as read_memory's
+			// (embedQuery: no provider configured → nil, nil → the tool
+			// keeps lexical behavior exactly). Fusion happens in the tool
+			// over both legs' order.
+			VectorSearch: func(query string, limit int) ([]tools.IndexHit, error) {
+				vec, err := embedQuery(query)
+				if err != nil {
+					return nil, err
+				}
+				if len(vec) == 0 {
+					return nil, nil
+				}
+				hits, err := h.store.SearchCodeChunksVector(projectID, vec, limit)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]tools.IndexHit, 0, len(hits))
+				for _, hit := range hits {
+					out = append(out, tools.IndexHit{Path: hit.Path, Name: hit.Name, StartLine: hit.StartLine, Body: hit.Body})
+				}
+				return out, nil
+			},
 		})
 		reg.Register(&tools.CodebaseGraph{
 			FS:        fs,
@@ -488,7 +510,48 @@ func (h *PromptHandler) storeAdapter() *tools.StoreAdapter {
 			}
 			return projectMemoryToEntries(rows), nil
 		},
+		// W4.5: read_memory's vector leg. Self-contained — reads the
+		// provider from env per call (nil → nil, nil: an absent vector
+		// layer is configuration, not failure), embeds the query, and
+		// cosine-scans project_memory.embedding. The fusion happens in
+		// the tool, so a nil here leaves read_memory byte-identical.
+		VectorSearchMemoryFn: func(projectID int64, query, entryType string, limit int) ([]tools.MemoryEntry, error) {
+			vec, err := embedQuery(query)
+			if err != nil {
+				return nil, err
+			}
+			if len(vec) == 0 {
+				return nil, nil
+			}
+			rows, err := h.store.SearchMemoryVector(projectID, vec, entryType, limit)
+			if err != nil {
+				return nil, err
+			}
+			return projectMemoryToEntries(rows), nil
+		},
 	}
+}
+
+// embedQuery is the shared query-side embed both vector legs (read_memory,
+// codebase_search) use: the provider comes from env — nil yields (nil, nil),
+// because an absent vector layer is configuration, not failure — and an 8s
+// bound keeps a slow endpoint out of the tool's latency budget. Callers
+// treat a nil vector as "leg off" and answer from the lexical leg alone.
+func embedQuery(query string) ([]float32, error) {
+	emb := embed.FromEnv()
+	if emb == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	vecs, err := emb.Embed(ctx, []string{query})
+	if err != nil {
+		return nil, err
+	}
+	if len(vecs) == 0 {
+		return nil, nil
+	}
+	return vecs[0], nil
 }
 
 func projectMemoryToEntries(rows []store.ProjectMemory) []tools.MemoryEntry {
