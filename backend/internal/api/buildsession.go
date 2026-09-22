@@ -23,6 +23,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
 	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
 	"github.com/luckyisrael/talon/backend/internal/index"
+	"github.com/luckyisrael/talon/backend/internal/lsp"
 	"github.com/luckyisrael/talon/backend/internal/metro"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/store"
@@ -155,6 +156,25 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// nil and Execute is the old walk, byte-identical.
 	reg.Register(h.projectMapTool(fs, projectID))
 	reg.Register(&tools.InspectPackage{WorkspacePath: workspacePath})
+
+	// W5: the language-server senses. Registered only with TALONSTUDIO_LSP
+	// on — flag off, this block is skipped and the registry is
+	// byte-identical (no server process can ever spawn). One resolver
+	// closure feeds all four: *lsp.Client satisfies tools.LSPConn
+	// structurally, so no adapter is needed. The fleet itself lives in
+	// lsp.Shared — LRU cap + idle reaper own the processes.
+	if lsp.Enabled() {
+		lspResolve := func(ctx context.Context, path string) (tools.LSPConn, error) {
+			return lsp.Shared().Client(ctx, workspacePath, path)
+		}
+		reg.Register(&tools.LSPDiagnostics{WorkspacePath: workspacePath, Resolve: lspResolve})
+		reg.Register(&tools.LSPReferences{Resolve: lspResolve})
+		reg.Register(&tools.LSPDefinition{Resolve: lspResolve})
+		reg.Register(&tools.LSPSymbol{Resolve: lspResolve})
+		// W5.4: the one write — the server proposes, FS applies (journaled,
+		// workspace-scoped, write budget).
+		reg.Register(&tools.LSPOrganizeImports{FS: fs, WorkspacePath: workspacePath, Resolve: lspResolve})
+	}
 
 	// W4.4: hybrid search + call graph over the codebase index. Registered
 	// only with TALONSTUDIO_INDEX on — flag off, this block is skipped and

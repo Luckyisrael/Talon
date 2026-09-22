@@ -265,6 +265,12 @@ var coreToolSet = map[string]bool{
 	"inspect_package": true, "read_skill": true,
 	"run_typecheck": true, "run_lint": true, "run_checks": true, "run_prettier": true,
 	"ask_user": true, "mark_task_done": true,
+	// W5: the language-server senses — read-only and instant, the same
+	// contract as read_file/grep. Registered only under TALONSTUDIO_LSP;
+	// listed here so agents that have them are allowed to call them.
+	// organize_imports writes like edit_file, which is listed above.
+	"lsp_diagnostics": true, "lsp_references": true, "lsp_definition": true, "lsp_symbol": true,
+	"lsp_organize_imports": true,
 }
 
 func filterToCoreTools(tools []map[string]any) []map[string]any {

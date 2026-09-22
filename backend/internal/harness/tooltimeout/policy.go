@@ -95,11 +95,16 @@ func DefaultPolicy() *Policy {
 	for _, name := range []string{
 		"read_file", "list_files", "project_map", "inspect_package",
 		"codebase_search", "codebase_graph",
+		// W5: the lsp_* tools ask a local server over stdin/stdout — as
+		// fast as grep; the fleet is cached, nothing compiles per call.
+		"lsp_diagnostics", "lsp_references", "lsp_definition", "lsp_symbol",
 	} {
 		p.Register(name, readBudget)
 	}
 	for _, name := range []string{
 		"write_file", "try_edit", "keep_edit", "create_component",
+		// W5.4: the one lsp write — journaled through FS like every write.
+		"lsp_organize_imports",
 	} {
 		p.Register(name, writeBudget)
 	}

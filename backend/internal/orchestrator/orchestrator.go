@@ -29,6 +29,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	"github.com/luckyisrael/talon/backend/internal/harness/tooltimeout"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
+	"github.com/luckyisrael/talon/backend/internal/lsp"
 	"github.com/luckyisrael/talon/backend/internal/metrics"
 	"github.com/luckyisrael/talon/backend/internal/planfile"
 	"github.com/luckyisrael/talon/backend/internal/runtime"
@@ -183,20 +184,14 @@ func (o *Orchestrator) loadProjectContext(sess *SessionState, projectID int64) {
 		for _, m := range mem {
 			if m.EntryType == "failure_pattern" {
 				parts := parseFailurePattern(m.Content)
-				if parts.match != "" {
-					re, err := regexp.Compile(parts.match)
-					if err != nil {
-						continue
-					}
-					sess.RuntimePatterns = append(sess.RuntimePatterns, knowledge.FailurePattern{
-						Tool:           parts.tool,
-						Match:          re,
-						Cause:          parts.cause,
-						Fix:            parts.fix,
-						Skill:          m.Metadata,
-						CooldownRounds: 3,
-					})
+				if parts.match == "" {
+					continue
 				}
+				rp, ok := runtimePattern(parts.tool, parts.match, parts.cause, parts.fix, m.Metadata)
+				if !ok {
+					continue
+				}
+				sess.RuntimePatterns = append(sess.RuntimePatterns, rp)
 			}
 		}
 	}
@@ -2005,33 +2000,23 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			}
 		}
 
-		// Failure-pattern lookup: if the error matches a known pattern and
+		// Failure-pattern lookup: if the result matches a known pattern and
 		// its cooldown has expired, inject a one-line reminder so the model
-		// fixes the known issue instead of reasoning it from scratch.
-		// Failed device steps additionally file in the run-scoped crash
-		// index, so the crash triage sees every failed step in one place.
-		if isError {
-			patterns := knowledge.DefaultFailureIndex()
-			// Compile and append runtime patterns from project memory.
-			for _, rp := range sess.RuntimePatterns {
-				if rp.Match != nil {
-					patterns = append(patterns, rp)
-				}
-			}
-			if pat, ok := knowledge.Lookup(patterns, call.Name, output); ok {
-				norm := knowledge.NormalizeError(output)
-				if sess.CooldownLeft(call.Name, norm) == 0 {
-					failReminder = "\n\n" + pat.Reminder()
-					sess.NoteCooldown(call.Name, norm, pat.CooldownRounds)
-				}
-			}
-			if isDeviceStep(call.Name) {
-				sess.NoteCrash(runtime.CrashEntry{
-					Tx:      crashTx(call.Input),
-					Tool:    call.Name,
-					Excerpt: runtime.CrashExcerpt(output, 20),
-				})
-			}
+		// fixes the known issue instead of reasoning it from scratch. Tool
+		// errors and failing verification verdicts both feed the index (W5:
+		// gate zero's tsc-shaped diagnostics are failure text like any
+		// other — see failurefeed.go). Failed device steps additionally file
+		// in the run-scoped crash index, so the crash triage sees every
+		// failed step in one place.
+		if rem := failureReminder(sess, call.Name, output, isError); rem != "" {
+			failReminder = rem
+		}
+		if isError && isDeviceStep(call.Name) {
+			sess.NoteCrash(runtime.CrashEntry{
+				Tx:      crashTx(call.Input),
+				Tool:    call.Name,
+				Excerpt: runtime.CrashExcerpt(output, 20),
+			})
 		}
 
 		// A recorded decision — an architecture decision (write_adr) or a durable
@@ -2082,7 +2067,8 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		// (write_memory) instead of re-probed.
 		if !isError {
 			switch call.Name {
-			case "run_shell", "grep_codebase", "read_file", "codebase_search", "codebase_graph":
+			case "run_shell", "grep_codebase", "read_file", "codebase_search", "codebase_graph",
+				"lsp_diagnostics", "lsp_references", "lsp_definition", "lsp_symbol":
 				if target := probeTarget(call.Name, call.Input); target != "" {
 					n := sess.NoteProbe(target)
 					probeNote = probeNoteFor(n, target)
@@ -2249,7 +2235,7 @@ func probeTarget(toolName string, input json.RawMessage) string {
 			return ""
 		}
 		text = a.Symbol
-	case "read_file":
+	case "read_file", "lsp_diagnostics", "lsp_references", "lsp_definition", "lsp_symbol":
 		var a struct {
 			Path string `json:"path"`
 		}
@@ -2516,23 +2502,57 @@ type verifyGate struct {
 	feedback func(verifyResult) string
 }
 
-// verifyGates is the ladder, ordered most-fundamental first: compilation before
-// lint. It deliberately stops short of the APK build — that needs a device and
-// minutes, and runs as its own explicit step, not on every repair iteration.
+// verifyGates is the ladder, ordered most-fundamental first: the language
+// server's read of the code, then compilation, then lint. It deliberately
+// stops short of the APK build — that needs a device and minutes, and runs
+// as its own explicit step, not on every repair iteration.
+//
+// The lsp gate rides only under TALONSTUDIO_LSP: flag-off ladders are
+// byte-identical to the shipped ones — a permanently-skipped "lsp" entry in
+// every deployment's SkippedGates would be a behavior change, not a note.
+// When no server can run, the tool's LSP_UNAVAILABLE error result makes
+// runGate classify it "unavailable": the skip is recorded, and the ladder
+// continues to tsc as before.
 func (o *Orchestrator) verifyGates() []verifyGate {
-	return []verifyGate{
-		{stage: "typecheck", tool: "run_typecheck", feedback: typecheckFeedback},
-		{stage: "lint", tool: "run_lint", feedback: lintFeedback},
+	gates := []verifyGate{}
+	if lsp.Enabled() {
+		gates = append(gates, verifyGate{stage: "lsp", tool: "lsp_diagnostics", feedback: lspFeedback})
+	}
+	return append(gates,
+		verifyGate{stage: "typecheck", tool: "run_typecheck", feedback: typecheckFeedback},
+		verifyGate{stage: "lint", tool: "run_lint", feedback: lintFeedback},
 		// The gates below are G4. Each one returns passed=true with an
 		// "unavailable" summary when its infra is missing (no android/ dir,
 		// no JDK, no device) so the ladder is safe to run on every repair
 		// without blowing up on hosts that lack the full toolchain.
-		{stage: "bundle", tool: "run_bundle", feedback: bundleFeedback},
-		{stage: "gradle", tool: "run_gradle", feedback: gradleFeedback},
-		{stage: "boot", tool: "run_boot", feedback: bootFeedback},
-		{stage: "vision", tool: "run_vision", feedback: visionFeedback},
-		{stage: "interact", tool: "run_interact", feedback: interactFeedback},
+		verifyGate{stage: "bundle", tool: "run_bundle", feedback: bundleFeedback},
+		verifyGate{stage: "gradle", tool: "run_gradle", feedback: gradleFeedback},
+		verifyGate{stage: "boot", tool: "run_boot", feedback: bootFeedback},
+		verifyGate{stage: "vision", tool: "run_vision", feedback: visionFeedback},
+		verifyGate{stage: "interact", tool: "run_interact", feedback: interactFeedback},
+	)
+}
+
+// lspFeedback turns failed LSP diagnostics into repair guidance. The lines
+// are already tsc-shaped (the tool renders Diagnostic.FormatTsc), so the
+// failure index's run_typecheck patterns match this gate's output with no
+// second rule set — same tsNNNN codes, same path(line,col) shape — and the
+// guidance mirrors typecheckFeedback because the job is the same.
+func lspFeedback(vr verifyResult) string {
+	var b strings.Builder
+	b.WriteString("The language server reports type errors:\n\n")
+	b.WriteString(vr.Errors)
+	b.WriteString("\n\nFix these — the server read your code directly, no typecheck ran, so this is " +
+		"the cheapest signal you will get. Read each file it names before changing it, and use " +
+		"edit_file for targeted changes. When you believe it is fixed, call lsp_diagnostics to " +
+		"confirm (instant), then run_typecheck once for the authoritative pass.")
+
+	if files := errorFiles(vr.Errors); len(files) > 0 {
+		b.WriteString("\n\nFiles with errors: " + strings.Join(files, ", "))
 	}
+	b.WriteString("\n\nFix everything in as few edits as you can, then verify once — " +
+		"do not alternate one edit with one check.")
+	return b.String()
 }
 
 // verify walks the gates in order and returns the first failure as feedback the
@@ -3161,6 +3181,31 @@ func describeTool(name string, input json.RawMessage, workspacePath string) stri
 			return "Searching the web for " + truncateLine(a.Query, 40)
 		}
 		return "Searching the web"
+	case "lsp_diagnostics":
+		if p := pathOf(); p != "" {
+			return "Checking diagnostics in " + p
+		}
+		return "Checking diagnostics"
+	case "lsp_references":
+		if p := pathOf(); p != "" {
+			return "Finding references in " + p
+		}
+		return "Finding references"
+	case "lsp_definition":
+		if p := pathOf(); p != "" {
+			return "Jumping to definition in " + p
+		}
+		return "Jumping to definition"
+	case "lsp_symbol":
+		if p := pathOf(); p != "" {
+			return "Outlining " + p
+		}
+		return "Outlining a file"
+	case "lsp_organize_imports":
+		if p := pathOf(); p != "" {
+			return "Organizing imports in " + p
+		}
+		return "Organizing imports"
 	default:
 		return name
 	}
@@ -3190,7 +3235,9 @@ func toolTarget(name string, input json.RawMessage) string {
 		return s
 	}
 	switch name {
-	case "read_file", "write_file", "edit_file", "multi_edit", "delete_file", "list_files":
+	case "read_file", "write_file", "edit_file", "multi_edit", "delete_file", "list_files",
+		"lsp_diagnostics", "lsp_references", "lsp_definition", "lsp_symbol",
+		"lsp_organize_imports":
 		return field("path")
 	case "grep_codebase":
 		return truncateLine(field("pattern"), 60)

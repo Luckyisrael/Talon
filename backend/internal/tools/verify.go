@@ -288,8 +288,11 @@ func (t *RunPrettier) Execute(ctx context.Context, args json.RawMessage) (ToolRe
 		}
 	}
 
-	cmdArgs := append([]string{"--no-install", "prettier", "--write"}, targets...)
-	out, failed, err := runVerifyCmd(ctx, t.WorkspacePath, t.Output, "npx", cmdArgs...)
+	// W5.4: the workspace's formatter key (behind TALONSTUDIO_LSP) swaps
+	// the command; run_prettier remains the formatter of record — same
+	// tool, swappable binary. Flag off: byte-identical npx prettier.
+	prog, cmdArgs := formatterRunner(t.WorkspacePath, targets)
+	out, failed, err := runVerifyCmd(ctx, t.WorkspacePath, t.Output, prog, cmdArgs...)
 	if err != nil {
 		return marshalVerify(VerifyResult{Passed: true, Summary: "prettier unavailable: " + err.Error()}), nil
 	}
