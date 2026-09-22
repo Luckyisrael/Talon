@@ -405,3 +405,49 @@ carries every `ApprovalDecided` event it needs). Also noted for W9: the
 device answer-flow's negation guard is now in place, and scopes are the
 seam's matching axis (`device_build` | `tier2_shell` | `sandbox-escalation:*`
 | `git-push` | `release-export`).
+
+---
+
+## W1.8 — Spill retention audit (document-only, no finding)
+
+**What was audited.** `PLAN_WORLDCLASS:251-252` / H8 risk: workspace
+cleanup + export paths must exclude `backend/spill` (oversized tool
+outputs can be hundreds of KB and outlive the content that produced them).
+Read the four relevant trees in code; **no code change — audit passes.**
+
+**Findings (all verified, cited):**
+- *Spill placement:* `cmd/server/main.go:163` roots the store at
+  `filepath.Join(filepath.Dir(dbPath), "spill")` — a **sibling of the
+  database**, outside `workspacesDir`. (H8's prose says "under the
+  project"; the implementation's datadir-sibling placement is the safer
+  choice for this audit — see below.)
+- *Cleanup paths* never touch it: `workspace.Manager.Create`/`Destroy`
+  (`workspace.go:95,213`) `RemoveAll` only `<workspacesDir>/<projectID>`;
+  the project file-delete endpoint (`projects.go:343`) resolves through
+  `resolveInside` (`projects.go:407+`), which rejects absolute paths, NUL,
+  and any escape from the project dir; project delete
+  (`projects.go:389-395`) calls `store.DeleteProject` + `workspace.Destroy`
+  only. Release-build scratch (`release/build.go`) and the devclient build
+  dir have their own roots.
+- *Export paths* never walk into it: `writeBundle` (`export.go:166`)
+  assembles an explicit `SubmissionBundle{APK, shots/icon/banner,
+  whats-new}` — no directory walk; `GetFiles` (`projects.go:185`) walks
+  only `projectDir`; `release/build.go:448` walks only the release
+  scratch source.
+- *Structural guarantee:* zero `spill` references in `workspace/`,
+  `release/`, or `export.go` — cleanup/export do not know spill exists;
+  the trees are disjoint by construction (`<workspacesDir>/<id>` and
+  `<datadir>/<db>` vs `<datadir>/spill`).
+
+**Retention note (not a finding, for a future sweep):** `SpillStore` is a
+global content-hash dedupe (`compaction.go:64` — no per-project key), so
+project deletion *cannot* selectively purge spill files and today does not
+attempt to; there is no size/age GC either. Orphaned spill files therefore
+accumulate for the life of the datadir. Harmless for correctness (the
+audit's requirement is exclusion, verified above) but a size-capped or
+age-based GC over `<datadir>/spill` would complete the retention story —
+candidate for a later H8/W14 follow-through, not scheduled work.
+
+**Status:** register row 39 ✅. No tests/gates — nothing changed; the W1.6
+gates (package tests, `make evals`, `-race`) remain the last green run on
+this tree.

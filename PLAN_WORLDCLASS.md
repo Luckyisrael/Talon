@@ -657,6 +657,7 @@ W14 loop extraction + composition (last; consumes everything)
 | 36 | Headless real-boot profile (H11) partial | **W14.3** |
 | 37 | `--dump-config` golden diff never run | **W14.4** |
 | 38 | Model Experience docs guard (H13.1) unenforced | **W14.5** |
+| 39 | Spill retention (H8 risk `:467-469`): cleanup/export vs `backend/spill` | **W1.8** ✅ audited — no finding: spill lives at `<datadir>/spill` (sibling of the DB, outside every workspace), cleanup targets `workspacesDir/<id>` + `resolveInside`-contained paths, export bundles an explicit asset list — disjoint by construction; one retention note (global hash store, no GC) in the notes |
 
 ## 6. Explicit non-goals (kept from PLAN_HARNESS §4, re-confirmed)
 
