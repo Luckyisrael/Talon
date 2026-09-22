@@ -681,27 +681,16 @@ func (s *Store) migrate() error {
 	// until key is configured.
 	s.db.Exec("ALTER TABLE project_memory ADD COLUMN content_encrypted TEXT DEFAULT ''")
 
-	// P2a: durable history archive — TrimConversation no longer hard-deletes beyond 400;
-	// rows are copied to archive first so replay can be audited. Archive is append-only.
-	s.db.Exec(`CREATE TABLE IF NOT EXISTS conversation_archive (
-		id INTEGER PRIMARY KEY,
-		project_id INTEGER NOT NULL,
-		user_id INTEGER,
-		prompt_id INTEGER,
-		seq INTEGER NOT NULL,
-		role TEXT NOT NULL,
-		blocks TEXT NOT NULL,
-		input_tokens INTEGER,
-		output_tokens INTEGER,
-		created_at DATETIME,
-		archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`)
-	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_conv_archive_project ON conversation_archive(project_id, seq)")
+	// P2a retired (W1.1): conversation_archive was write-only — TrimConversation
+	// archived then deleted, and nothing ever read it back. The delete path is
+	// gone; legacy rows are recovered into conversation_messages after the
+	// audit block below (the stale-clear purge reads audit_log, so recovery
+	// must follow its CREATE), and the table is dropped there.
 
 	// W1.3: conversation search → FTS5, mirroring project_memory_fts above.
 	// External content: conversation_messages.blocks is the source text (the
 	// same bytes the LIKE leg matches, so both legs stay in parity), FTS is
-	// only the index — triggers keep it in lockstep with append/trim/clear
+	// only the index — triggers keep it in lockstep with append/clear
 	// and rebuild backfills rows that predate it.
 	s.db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5(blocks, content='conversation_messages', content_rowid='id', tokenize='porter unicode61')`)
 	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS conversation_fts_ai AFTER INSERT ON conversation_messages BEGIN INSERT INTO conversation_fts(rowid, blocks) VALUES (new.id, new.blocks); END`)
@@ -723,6 +712,42 @@ func (s *Store) migrate() error {
 	)`)
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id)")
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_audit_project ON audit_log(project_id)")
+
+	// W1.1: recover rows a legacy build archived (the write-only table P2a
+	// created; its writer is gone). Runs after audit_log because the purge
+	// below reads clear_conversation, and after the FTS block because the
+	// conversation_fts_ai trigger indexes each recovered row as it lands.
+	// Order inside: purge stale rows first — archived before a later
+	// clear_conversation must not resurrect a wipe the user asked for — then
+	// copy survivors back. Guards make it idempotent under crash-retry: ids
+	// never collide (AUTOINCREMENT ids are never reused, OR IGNORE anyway) and
+	// (project_id, seq) skips anything already live (post-clear generations
+	// restart seq at 1, so overlap is real). Drop only after a clean copy;
+	// any failure keeps the table so the next boot tries again.
+	var archiveTable int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='conversation_archive'`,
+	).Scan(&archiveTable); err == nil && archiveTable > 0 {
+		if _, err := s.db.Exec(`DELETE FROM conversation_archive WHERE EXISTS (
+			SELECT 1 FROM audit_log
+			WHERE audit_log.project_id = conversation_archive.project_id
+				AND audit_log.action = 'clear_conversation'
+				AND audit_log.created_at >= conversation_archive.archived_at
+		)`); err != nil {
+			log.Printf("store: archive purge failed (will retry next boot): %v", err)
+		} else if _, err := s.db.Exec(`INSERT OR IGNORE INTO conversation_messages
+			(id, project_id, user_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at)
+			SELECT id, project_id, user_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at
+			FROM conversation_archive a
+			WHERE NOT EXISTS (
+				SELECT 1 FROM conversation_messages m
+				WHERE m.project_id = a.project_id AND m.seq = a.seq
+			)`); err != nil {
+			log.Printf("store: archive recovery failed (will retry next boot): %v", err)
+		} else if _, err := s.db.Exec(`DROP TABLE conversation_archive`); err != nil {
+			log.Printf("store: archive drop failed (will retry next boot): %v", err)
+		}
+	}
 
 	return nil
 }

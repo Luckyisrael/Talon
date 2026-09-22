@@ -3,10 +3,14 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
 )
 
 // ConversationMessage is one persisted turn. Blocks holds the raw JSON array of
@@ -338,22 +342,39 @@ func (s *Store) SearchConversationBlocks(projectID int64, q string, limit int) (
 	return union, nil
 }
 
-// TrimConversation archives then deletes all but the newest `keep` messages.
-// Archive is append-only so a long build never loses its early turns.
-func (s *Store) TrimConversation(projectID int64, keep int) error {
-	_, _ = s.db.Exec(
-		`INSERT INTO conversation_archive (id, project_id, user_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at)
-		 SELECT id, project_id, user_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at FROM conversation_messages
-		 WHERE project_id = ? AND seq <= (SELECT COALESCE(MAX(seq), 0) - ? FROM conversation_messages WHERE project_id = ?)`,
-		projectID, keep, projectID)
-	_, err := s.db.Exec(
-		`DELETE FROM conversation_messages WHERE project_id = ? AND seq <= (
-			SELECT COALESCE(MAX(seq), 0) - ? FROM conversation_messages WHERE project_id = ?
-		)`, projectID, keep, projectID)
-	if err == nil {
-		_, _ = s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES ((SELECT user_id FROM projects WHERE id = ?), ?, 'trim_conversation', ?, ?)", projectID, projectID, strconv.Itoa(keep), "")
+// TrimConversation keeps the newest `keep` messages derivation-visible by
+// writing a shadow marker into the harness log (W1.1, H1): it deletes
+// nothing. The stored conversation is the full truth — re-derivation must
+// reproduce it — so retention windows apply to rendering, never storage. The
+// marker write ships behind TALONSTUDIO_TRIM_SHADOW; with the flag dark (or
+// no log available) this is a no-op and rows still survive. An audit row
+// lands only when a shadow actually did (the old code audited every call).
+// ClearConversation below remains the user-intended wipe.
+func (s *Store) TrimConversation(lg *sessionlog.Log, projectID int64, keep int) error {
+	if lg == nil || !trimShadowEnabled() {
+		return nil
 	}
-	return err
+	boundary, err := lg.Retain(keep,
+		fmt.Sprintf("Older turns retained: the newest %d messages are shown.", keep),
+		"retention")
+	if err != nil {
+		return err
+	}
+	if boundary > 0 {
+		_, _ = s.db.Exec("INSERT INTO audit_log (user_id, project_id, action, target_id, detail) VALUES ((SELECT user_id FROM projects WHERE id = ?), ?, 'trim_conversation', ?, ?)", projectID, projectID, strconv.Itoa(keep), fmt.Sprintf("keep=%d boundary=%d", keep, boundary))
+	}
+	return nil
+}
+
+// trimShadowEnabled reads TALONSTUDIO_TRIM_SHADOW: shadow-marker retention
+// ships dark (off by default) — it changes what the model sees mid-thread, so
+// a deployment opts in. The destructive delete it replaces is gone either way.
+func trimShadowEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TALONSTUDIO_TRIM_SHADOW"))) {
+	case "1", "true", "on", "v1":
+		return true
+	}
+	return false
 }
 
 // ClearConversation removes the entire conversation for a project.

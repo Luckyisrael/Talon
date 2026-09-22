@@ -213,8 +213,58 @@ func (l *Log) Shadow(fromSeq int64, summary, reason string) error {
 	if _, err := l.Append(events.CompactionShadow, events.CompactionPayload{ShadowFromSeq: fromSeq, Reason: reason}); err != nil {
 		return err
 	}
-	_, err := l.Append(events.SessionCompacted, events.CompactionSummaryPayload{Summary: summary})
-	return err
+	if _, err := l.Append(events.SessionCompacted, events.CompactionSummaryPayload{Summary: summary}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Retain is the W1.1 replacement for destructive storage trimming: it keeps the
+// newest keep surface messages derivation-visible by shadowing everything
+// before them, without deleting anything. It scans Replay backward counting
+// UserMessage/AssistantMessage rows; the boundary is the seq of the row just
+// before the oldest kept message, so shadowing at or before it leaves that
+// message and every newer one visible to DeriveMessages while Replay still
+// holds the full history.
+//
+// It writes no marker — returning 0, nil — when there is nothing to shadow
+// (fewer than keep messages, or the oldest kept message is the first row) or
+// when the existing shadow already covers the boundary, which makes a repeated
+// Retain with the same keep idempotent: no duplicate markers pile up. The
+// returned boundary is non-zero exactly when a marker landed, so the caller
+// can audit only real shadows.
+func (l *Log) Retain(keep int, summary, reason string) (int64, error) {
+	if keep <= 0 {
+		return 0, nil
+	}
+	rows := l.Replay()
+	oldestKept := -1
+	for i, counted := len(rows)-1, 0; i >= 0; i-- {
+		if rows[i].Kind == events.UserMessage || rows[i].Kind == events.AssistantMessage {
+			counted++
+			if counted == keep {
+				oldestKept = i
+				break
+			}
+		}
+	}
+	if oldestKept <= 0 {
+		// -1: fewer than keep surface messages — all of them stay visible.
+		// 0: the kept window starts at the first row, nothing precedes it.
+		return 0, nil
+	}
+	boundary := rows[oldestKept-1].Seq
+
+	l.mu.Lock()
+	covered := boundary <= l.shadowSeq
+	l.mu.Unlock()
+	if covered {
+		return 0, nil
+	}
+	if err := l.Shadow(boundary, summary, reason); err != nil {
+		return 0, err
+	}
+	return boundary, nil
 }
 
 // ── Derivation ────────────────────────────────────────

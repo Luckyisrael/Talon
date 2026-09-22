@@ -1,9 +1,12 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/luckyisrael/talon/backend/internal/harness/events"
 
 	// The sqlite driver registers itself on import; the store package relies on
 	// the main binary for this, so the test binary must pull it in directly.
@@ -220,29 +223,236 @@ func TestSearchConversationBlocksFTSUnion(t *testing.T) {
 	want("text", seqsOf("text", 2), 2, 3)
 }
 
-func TestTrimConversationKeepsNewest(t *testing.T) {
+// W1.1: trim shadows derivation, never storage. With the flag on, a keep=2
+// trim bounds what the model sees (summary + newest two) while every row and
+// every log event survives byte-identical — and a repeat trim is idempotent:
+// no duplicate markers, no second audit row (only real shadows audit).
+func TestTrimConversationShadowsInsteadOfDeleting(t *testing.T) {
+	t.Setenv("TALONSTUDIO_TRIM_SHADOW", "1")
 	s := newTestStore(t)
 	pid := seedProject(t, s)
+	lg, err := s.SessionLog(fmt.Sprintf("project-%d", pid))
+	if err != nil {
+		t.Fatalf("session log: %v", err)
+	}
 
 	for i := 0; i < 5; i++ {
 		if err := s.AppendMessage(pid, 1, "user", `[{"type":"text","text":"x"}]`, 0, 0); err != nil {
 			t.Fatalf("append: %v", err)
 		}
+		if _, err := lg.Append(events.UserMessage, events.MessagePayload{
+			Role: "user", Blocks: []events.BlockPayload{{Type: "text", Text: "x"}},
+		}); err != nil {
+			t.Fatalf("log append: %v", err)
+		}
 	}
 
-	if err := s.TrimConversation(pid, 2); err != nil {
+	if err := s.TrimConversation(lg, pid, 2); err != nil {
 		t.Fatalf("trim: %v", err)
 	}
+
+	// Storage is untouched: all five rows survive, in order.
 	msgs, err := s.GetConversation(pid, 0)
 	if err != nil {
 		t.Fatalf("get conversation: %v", err)
 	}
-	if len(msgs) != 2 {
-		t.Fatalf("after trim to 2, have %d messages", len(msgs))
+	if len(msgs) != 5 {
+		t.Fatalf("trim deleted rows: have %d messages, want 5", len(msgs))
 	}
-	if msgs[0].Seq != 4 || msgs[1].Seq != 5 {
-		t.Errorf("trim kept the wrong messages: seqs %d,%d want 4,5", msgs[0].Seq, msgs[1].Seq)
+	for i, m := range msgs {
+		if m.Seq != int64(i+1) {
+			t.Errorf("row %d has seq %d, want %d", i, m.Seq, i+1)
+		}
 	}
+
+	// The log keeps the full history (replay reproduces it) plus the two
+	// additive markers; derivation alone is bounded: summary + 2 kept.
+	if got := len(lg.Replay()); got != 7 {
+		t.Errorf("replay after trim: %d events, want 7 (5 messages + shadow + summary)", got)
+	}
+	if got := len(lg.DeriveMessages()); got != 3 {
+		t.Errorf("derived %d messages after trim, want 3 (summary + 2 kept)", got)
+	}
+
+	// Idempotent re-trim: boundary already covered → no marker, no audit.
+	if err := s.TrimConversation(lg, pid, 2); err != nil {
+		t.Fatalf("re-trim: %v", err)
+	}
+	if got := len(lg.Replay()); got != 7 {
+		t.Errorf("re-trim appended markers: replay %d, want 7", got)
+	}
+	var audits int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'trim_conversation'`).Scan(&audits); err != nil {
+		t.Fatalf("audit count: %v", err)
+	}
+	if audits != 1 {
+		t.Errorf("trim_conversation audit rows = %d, want 1 (only the landed shadow audits)", audits)
+	}
+}
+
+// Flag dark (the shipped default): trim is a complete no-op — no markers, no
+// audit, nothing bounded. This is what keeps the behavior rollback-free.
+func TestTrimConversationFlagDarkNoop(t *testing.T) {
+	t.Setenv("TALONSTUDIO_TRIM_SHADOW", "")
+	s := newTestStore(t)
+	pid := seedProject(t, s)
+	lg, err := s.SessionLog(fmt.Sprintf("project-%d", pid))
+	if err != nil {
+		t.Fatalf("session log: %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		if err := s.AppendMessage(pid, 1, "user", `[{"type":"text","text":"x"}]`, 0, 0); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+		if _, err := lg.Append(events.UserMessage, events.MessagePayload{
+			Role: "user", Blocks: []events.BlockPayload{{Type: "text", Text: "x"}},
+		}); err != nil {
+			t.Fatalf("log append: %v", err)
+		}
+	}
+
+	if err := s.TrimConversation(lg, pid, 2); err != nil {
+		t.Fatalf("trim: %v", err)
+	}
+	if got := len(lg.Replay()); got != 5 {
+		t.Errorf("flag-dark trim wrote events: replay %d, want 5", got)
+	}
+	if got := len(lg.DeriveMessages()); got != 5 {
+		t.Errorf("flag-dark trim bounded derivation: %d, want 5", got)
+	}
+	var audits int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'trim_conversation'`).Scan(&audits); err != nil {
+		t.Fatalf("audit count: %v", err)
+	}
+	if audits != 0 {
+		t.Errorf("flag-dark trim audited %d rows, want 0", audits)
+	}
+}
+
+// W1.1: rows a legacy build archived (the write-only table its destructive
+// trim filled) come home on the next boot, and the table retires — the archive
+// finally gains a reader. Recovery restores order: seqs 1..5 continuous.
+func TestMigrateRecoversArchive(t *testing.T) {
+	s := newTestStore(t)
+	pid := seedProject(t, s)
+	for i := 0; i < 5; i++ {
+		if err := s.AppendMessage(pid, 1, "user", `[{"type":"text","text":"x"}]`, 0, 0); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	simulateLegacyTrim(t, s, pid, 3)
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	msgs, err := s.GetConversation(pid, 0)
+	if err != nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	if len(msgs) != 5 {
+		t.Fatalf("recovered %d rows, want 5", len(msgs))
+	}
+	for i, m := range msgs {
+		if m.Seq != int64(i+1) {
+			t.Errorf("row %d has seq %d, want %d (recovery must restore order)", i, m.Seq, i+1)
+		}
+	}
+	if archiveExists(t, s) {
+		t.Error("conversation_archive survived recovery; it should be dropped")
+	}
+
+	// A second boot is a clean no-op, not a duplicate insert.
+	if err := s.migrate(); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+	if got := countMessages(t, s, pid); got != 5 {
+		t.Errorf("second recovery pass: %d rows, want 5", got)
+	}
+}
+
+// A wipe outranks recovery: archived rows from before a clear_conversation
+// must not resurrect history the user explicitly destroyed — but the table
+// still retires (an empty copy is a successful copy).
+func TestMigratePurgesClearedArchive(t *testing.T) {
+	s := newTestStore(t)
+	pid := seedProject(t, s)
+	for i := 0; i < 4; i++ {
+		if err := s.AppendMessage(pid, 1, "user", `[{"type":"text","text":"x"}]`, 0, 0); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	simulateLegacyTrim(t, s, pid, 2)
+	// Backdate the archive write so the clear below is unambiguously later —
+	// CURRENT_TIMESTAMP only has second granularity.
+	if _, err := s.db.Exec(`UPDATE conversation_archive SET archived_at = '2020-01-01 00:00:00' WHERE project_id = ?`, pid); err != nil {
+		t.Fatalf("backdate archive: %v", err)
+	}
+	if err := s.ClearConversation(pid); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if got := countMessages(t, s, pid); got != 0 {
+		t.Errorf("recovery resurrected %d cleared rows, want 0", got)
+	}
+	if archiveExists(t, s) {
+		t.Error("conversation_archive survived a purge-only recovery")
+	}
+}
+
+// simulateLegacyTrim rebuilds the on-disk state the pre-W1.1 TrimConversation
+// produced: rows at or below boundarySeq copied into conversation_archive,
+// then deleted from conversation_messages.
+func simulateLegacyTrim(t *testing.T, s *Store, pid int64, boundarySeq int64) {
+	t.Helper()
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS conversation_archive (
+		id INTEGER PRIMARY KEY,
+		project_id INTEGER NOT NULL,
+		user_id INTEGER,
+		prompt_id INTEGER,
+		seq INTEGER NOT NULL,
+		role TEXT NOT NULL,
+		blocks TEXT NOT NULL,
+		input_tokens INTEGER,
+		output_tokens INTEGER,
+		created_at DATETIME,
+		archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		t.Fatalf("create legacy archive: %v", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO conversation_archive
+		(id, project_id, user_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at)
+		SELECT id, project_id, user_id, prompt_id, seq, role, blocks, input_tokens, output_tokens, created_at
+		FROM conversation_messages WHERE project_id = ? AND seq <= ?`, pid, boundarySeq); err != nil {
+		t.Fatalf("archive copy: %v", err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM conversation_messages WHERE project_id = ? AND seq <= ?`, pid, boundarySeq); err != nil {
+		t.Fatalf("archive delete: %v", err)
+	}
+}
+
+func archiveExists(t *testing.T, s *Store) bool {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='conversation_archive'`,
+	).Scan(&n); err != nil {
+		t.Fatalf("archive lookup: %v", err)
+	}
+	return n > 0
+}
+
+func countMessages(t *testing.T, s *Store, pid int64) int {
+	t.Helper()
+	msgs, err := s.GetConversation(pid, 0)
+	if err != nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	return len(msgs)
 }
 
 // Token spend is attributed to the prompt and rolled up onto the user's usage

@@ -622,7 +622,7 @@ W14 loop extraction + composition (last; consumes everything)
 | 1 | `make evals` red — copylock `client.go:222,233`; lying comment | **W0** ✅ landed (`cb80d59`) |
 | 2 | Uncommitted AI-core WIP (+323/−27) | **W0** ✅ landed (`f517661`) |
 | 3 | `PLAN_HARNESS.md` status overstated | **W0** ✅ landed (`cb80d59`) |
-| 4 | Trim deletes history; archive write-only | **W1.1** |
+| 4 | Trim deletes history; archive write-only | **W1.1** ✅ landed — trim shadows instead of deleting (flag `TALONSTUDIO_TRIM_SHADOW`); archive recovered at boot then dropped (gate: `TestPhaseW1TrimShadow`) |
 | 5 | Spill one-way (no `read_spill`) | **W1.2** ✅ landed — via `read_file` locator resolution (repo-native; see notes) |
 | 6 | Conversation search = LIKE not FTS | **W1.3** ✅ landed — FTS5 ∪ LIKE union behind the same handler (gate: `TestPhaseW1SearchFTS`) |
 | 7 | `run_gate` defined, unregistered | **W1.4** ✅ landed (`ef736f3`) |

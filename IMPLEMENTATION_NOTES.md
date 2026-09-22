@@ -164,3 +164,66 @@ raw trace verb.
   ("FTS query matches LIKE results on fixture"): ground truth is the old LIKE
   path replayed in Go over the same rows; union must equal it exactly on
   plain-word queries, plus stem/substring/wildcard class probes.
+
+### W1.1 — trim → shadow (2026-09-22)
+
+- **The break:** audit row 4, both halves. Every turn finalize ran
+  `TrimConversation(400)`: INSERT the overflow into `conversation_archive`,
+  then **DELETE** it from `conversation_messages` — the oldest turns past the
+  newest-400 window were hard-deleted from the only table any reader touches,
+  and the archive had *no* reader (search/API/derive never opened it). The web
+  History drawer and mobile History screen therefore silently stopped at the
+  trim point: truth destroyed, replay hazard on every reload (H1 law,
+  `PLAN_HARNESS.md:256-258`).
+- **`store/conversation.go`** — `TrimConversation` keeps the name, changes the
+  semantics (per H1: "keep the name, change the semantics to shadowing"). New
+  signature `(lg *sessionlog.Log, projectID, keep)`, nil-safe, **deletes
+  nothing**: it calls `Log.Retain` and, only if a marker actually landed,
+  writes a `trim_conversation` audit row (`target_id`=keep,
+  `detail`=`keep=%d boundary=%d`).
+- **`sessionlog/log.go`** — new `Retain(keep, summary, reason) (boundary,
+  err)`, the retention counterpart to `Shadow` (compaction already wrote
+  shadows): scans `Replay()` backward counting User/AssistantMessage rows,
+  boundary = seq of the row just before the oldest kept message, then
+  `Shadow(boundary, …)`. Returns `0, nil` — no marker — when nothing falls out
+  of the window or the existing shadow already covers the boundary, so a
+  repeated trim is idempotent (no duplicate markers, no second audit row).
+  `Replay()` is untouched by shadowing; only `DeriveMessages` skips shadowed
+  rows.
+- **Flag:** `TALONSTUDIO_TRIM_SHADOW` (documented in `.env.example` under
+  "Harness flags — all ship dark") gates **only the shadow-marker write**.
+  Delete-removal and archive recovery ship live, so row 4 closes even with the
+  flag dark. Flag dark → trim is a complete no-op: no marker, no audit, full
+  transcript stays model-visible (the pre-W1.1 visibility, minus the deletes).
+- **`store/store.go` migrate** — P2a retirement: the `conversation_archive`
+  CREATE/index block is replaced by a boot-time recovery, run after the audit
+  indexes (the purge needs `audit_log`): rows whose project has a newer
+  `clear_conversation` audit are **purged** (a user wipe wins — recovery never
+  resurrects destroyed history), the rest are `INSERT OR IGNORE … WHERE NOT
+  EXISTS (project_id, seq)` back into `conversation_messages` — the write-only
+  archive finally gains a reader — and the table is `DROP`ped only if both
+  steps succeeded. Any error logs "will retry next boot" and boot continues:
+  crash-idempotent (`OR IGNORE` + `NOT EXISTS`), and the next boot re-runs it.
+- **Call sites (`api/prompts.go`):** `finalizeTurn` (`:1257`) and
+  `persistPlanExchange` (`:1366`) pass the project's log from the existing
+  `h.slog` cache; stale "trim deletes" comments replaced with the truth.
+  `historyTurns = 60` untouched — rendering window only (plan: *"`historyTurns`
+  window applies to rendering, not to truth"*).
+- **Client impact:** the **History endpoints for web and mobile now always
+  return the complete transcript** — turns older than the newest 400, deleted
+  from storage before this change, are back (recovered from legacy archives,
+  never deleted again). No endpoint, request, or response shape changed → no
+  `lib/api.ts` / mobile wrapper work. When the flag flips on, the only
+  client-visible difference is model-side: derivation mid-thread starts from a
+  retention summary ("Older turns retained…") instead of full history — an
+  ordinary message in the web trace; mobile headline status unchanged.
+- **Tests:** `store/TestTrimConversationShadowsInsteadOfDeleting` (5 rows
+  survive a keep=2 trim, Replay=7 = 5+shadow+summary, Derive=3 = summary+2,
+  re-trim idempotent, exactly one audit row), `TestTrimConversationFlagDarkNoop`
+  (no marker / no audit / derivation unbounded), `TestMigrateRecoversArchive`
+  (seq order restored, table dropped, second boot a no-op),
+  `TestMigratePurgesClearedArchive` (wipe outranks recovery; table still
+  retires), `evals/TestPhaseW1TrimShadow` — the plan's eval gate
+  (*"re-derive after trim reproduces full history"*): every original log event
+  survives byte-identical (+ exactly 2 additive markers), storage keeps every
+  row, derivation = summary + keep.

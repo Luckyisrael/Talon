@@ -1506,3 +1506,83 @@ func TestPhaseW1SearchFTS(t *testing.T) {
 		t.Errorf("wildcard query: union seqs %v, want [2]", seqs)
 	}
 }
+
+// W1.1 gate: "re-derive after trim reproduces full history." The destructive
+// delete is gone — retention is a shadow marker (flag-gated) — so the gate
+// proves three things at once: Replay still holds every original payload
+// byte-for-byte (re-derivation reproduces the full history), the legacy table
+// keeps every row (storage is truth, trim never touches it), and only the
+// model-visible derivation is bounded by the shadow.
+func TestPhaseW1TrimShadow(t *testing.T) {
+	t.Setenv("TALONSTUDIO_TRIM_SHADOW", "1")
+	st, err := store.New(filepath.Join(t.TempDir(), "w11-trim.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer st.Close()
+	// FK: the project needs a real user row.
+	u, err := st.CreateUser("w11trim@evals.test", "x")
+	if err != nil {
+		t.Fatalf("user: %v", err)
+	}
+	proj, err := st.CreateProject(u.ID, "p", "v1", "s", "a.b.c", "d.e", "f")
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	lg, err := st.SessionLog(fmt.Sprintf("project-%d", proj.ID))
+	if err != nil {
+		t.Fatalf("session log: %v", err)
+	}
+
+	// Dual-write turns exactly as the handlers do: table row + log event.
+	const turns = 6
+	for i := 0; i < turns; i++ {
+		role, kind := "user", events.UserMessage
+		if i%2 == 1 {
+			role, kind = "assistant", events.AssistantMessage
+		}
+		text := "turn " + strconv.Itoa(i)
+		if err := st.AppendMessage(proj.ID, 1, role,
+			`[{"type":"text","text":"`+text+`"}]`, 0, 0); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+		if _, err := lg.Append(kind, events.MessagePayload{
+			Role: role, Blocks: []events.BlockPayload{{Type: "text", Text: text}},
+		}); err != nil {
+			t.Fatalf("log append: %v", err)
+		}
+	}
+	before := lg.Replay()
+
+	if err := st.TrimConversation(lg, proj.ID, 2); err != nil {
+		t.Fatalf("trim: %v", err)
+	}
+
+	// Gate 1: full history reproduces — every original event is still there,
+	// in order, byte-identical; the shadow adds two markers and removes none.
+	after := lg.Replay()
+	if len(after) != len(before)+2 {
+		t.Fatalf("replay after trim: %d events, want %d (originals + shadow + summary)",
+			len(after), len(before)+2)
+	}
+	for i, e := range before {
+		if after[i].Kind != e.Kind || !bytes.Equal(after[i].Payload, e.Payload) {
+			t.Fatalf("event %d mutated under trim: got %s %s, want %s %s",
+				i, after[i].Kind, after[i].Payload, e.Kind, e.Payload)
+		}
+	}
+
+	// Gate 2: the legacy read path is untouched — storage keeps every row.
+	msgs, err := st.GetConversation(proj.ID, 0)
+	if err != nil {
+		t.Fatalf("conversation: %v", err)
+	}
+	if len(msgs) != turns {
+		t.Errorf("storage after trim: %d rows, want %d (trim must not delete)", len(msgs), turns)
+	}
+
+	// Gate 3: only rendering is bounded — summary + the newest keep.
+	if got := len(lg.DeriveMessages()); got != 3 {
+		t.Errorf("derived %d messages after trim, want 3 (summary + 2 kept)", got)
+	}
+}

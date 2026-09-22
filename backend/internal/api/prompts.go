@@ -1251,9 +1251,10 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 		h.store.IncrementPrompts(userID)
 	}
 
-	// Keep the stored conversation bounded. The tail is what matters for
-	// continuity; the whole history would eventually dominate the database.
-	h.store.TrimConversation(projectID, 400)
+	// Retention now shadows old turns out of derivation instead of deleting
+	// them (W1.1): the stored conversation is the full truth; historyTurns
+	// windows rendering, not storage. Flag-gated inside — dark = no-op.
+	h.store.TrimConversation(h.slog.get(h.store, projectID), projectID, 400)
 
 	// H13: upgrade the session title with the LLM path once the turn is
 	// fully terminal (completed or failed — never waiting/paused, whose
@@ -1361,7 +1362,8 @@ func (h *PromptHandler) persistPlanExchange(projectID, promptID int64, userTurn 
 	}
 	appendLoggedAssistant(lg, assistant, promptID)
 
-	h.store.TrimConversation(projectID, 400)
+	// Plan turns shadow-trim like any other (flag-gated, non-destructive).
+	h.store.TrimConversation(lg, projectID, 400)
 }
 
 // planJSON marshals a plan for storage, returning nil when there is nothing to

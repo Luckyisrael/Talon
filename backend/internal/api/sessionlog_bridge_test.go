@@ -82,10 +82,9 @@ func TestBridgeRoundTrip(t *testing.T) {
 	}
 }
 
-// The log must survive what the shadowing path does today to the legacy
-// table: after Shadow, derivation is bounded but Replay keeps everything —
-// the guarantee TrimConversation cannot make.
-func TestBridgeShadowVsLegacyTrim(t *testing.T) {
+// The log must survive shadowing: derivation is bounded but Replay keeps
+// everything — the guarantee the W1.1 trim now leans on instead of deleting.
+func TestBridgeShadowKeepsFullReplay(t *testing.T) {
 	cache := newSessionLogCache()
 	lg := cache.get(testStore(t), 2)
 	if lg == nil {
