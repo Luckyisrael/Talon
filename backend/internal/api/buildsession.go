@@ -17,10 +17,10 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/ai"
 	"github.com/luckyisrael/talon/backend/internal/devclient"
 	"github.com/luckyisrael/talon/backend/internal/events"
-	"github.com/luckyisrael/talon/backend/internal/metro"
 	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
 	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
 	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
+	"github.com/luckyisrael/talon/backend/internal/metro"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/store"
 	"github.com/luckyisrael/talon/backend/internal/tools"
@@ -167,6 +167,20 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// path); registered so the model sees their schemas.
 	reg.Register(&tools.TryEdit{})
 	reg.Register(&tools.KeepEdit{})
+
+	// run_gate reports the session's latest verify-chain state.
+	// Orchestrator-owned like ask_user/try_edit: the provider reads the
+	// loop's accumulator directly, so the model can ask "what's green,
+	// what's red" without waiting for the ladder's next cadence. Defined
+	// and unit-tested since G4 but never registered — the model's request
+	// always resolved to "No tool named run_gate" (W1.4). Nil-safe for
+	// handlers constructed without an orchestrator (the testinfo shape).
+	reg.Register(&tools.RunGate{ReportProvider: func() *tools.VerifyReport {
+		if h.orch == nil {
+			return nil
+		}
+		return h.orch.LastVerifyReport()
+	}})
 
 	// Git-native workflow (G1-G2): the workspace is a real repo from provision.
 	// These tools let the agent work standard — status/diff/log/commit/branch

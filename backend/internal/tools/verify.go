@@ -790,7 +790,12 @@ func (t *RunGate) Execute(ctx context.Context, args json.RawMessage) (ToolResult
 	if t.ReportProvider != nil {
 		report = t.ReportProvider()
 	}
-	if report == nil {
+	// nil (no orchestrator wired) and an empty accumulator (constructed but
+	// no chain has swept yet) are the same state to the model: nothing has
+	// run. The accumulator is initialized non-nil at construction, so
+	// without the empty check a fresh session would render "chain pass:
+	// empty" — a pass claim for gates that never ran (W1.4).
+	if report == nil || len(report.Gates) == 0 {
 		return marshalVerify(VerifyResult{Passed: true, Summary: "no chain run yet"}), nil
 	}
 	if report.OverallPassed {

@@ -2514,8 +2514,21 @@ func (o *Orchestrator) lastVerifyReport() *tools.VerifyReport {
 	return o.verifyReport.Load()
 }
 
+// resetVerifyReport clears the accumulator for a new sweep. The baseline must
+// match New's: OverallPassed=true means "no failure recorded yet".
+// appendVerifyGate multiplies the carried verdict (cur.OverallPassed &&
+// status != "fail"), so a zeroed reset made every post-chain report read
+// fail even when every gate passed — invisible while nothing read it,
+// actively wrong once run_gate did (W1.4).
 func (o *Orchestrator) resetVerifyReport() {
-	o.verifyReport.Store(&tools.VerifyReport{})
+	o.verifyReport.Store(&tools.VerifyReport{OverallPassed: true})
+}
+
+// LastVerifyReport exposes the accumulator to the harness wiring — the
+// run_gate tool's report provider. It returns the atomic snapshot pointer,
+// safe to read without holding the loop's mutex.
+func (o *Orchestrator) LastVerifyReport() *tools.VerifyReport {
+	return o.lastVerifyReport()
 }
 
 func (o *Orchestrator) appendVerifyGate(stage, status, note string) {
