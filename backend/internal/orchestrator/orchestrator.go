@@ -755,11 +755,36 @@ func (o *Orchestrator) Agent(id int64) *harnessagent.Agent {
 // requestErrorListener is the default request-error policy (H2 seam): one
 // retry on the routing policy's fallback model when one is configured and the
 // turn has not used its fallback yet, latching on success; terminal otherwise.
-// This is exactly the inline policy it replaced — extracted so a composition
-// can swap it without editing the loop.
-func (o *Orchestrator) requestErrorListener(round int, model string, err error, fellBack bool) loop.RequestErrorDecision {
+// With the router on (W7) the failing provider's circuit is recorded first
+// and a configured fallback_provider is tried before the same-endpoint model
+// fallback — cross-provider failover gated by the target's breaker. Flag off,
+// the policy below is byte-identical to what this listener replaced.
+func (o *Orchestrator) requestErrorListener(round int, provider, model string, err error, fellBack bool) loop.RequestErrorDecision {
 	policy := ai.LoadRoutingPolicy()
-	if fellBack || policy.FallbackModel == "" || policy.FallbackModel == model {
+	if fellBack {
+		return loop.Terminal("model request failed")
+	}
+	if ai.RouterEnabled() {
+		// Whatever the decision below, this failure is evidence about the
+		// provider that produced it.
+		ai.NoteProviderFailure(provider)
+		if target := strings.TrimSpace(policy.FallbackProvider); target != "" && target != provider {
+			spec, found := ai.LookupProvider(target)
+			if !found {
+				return loop.Terminal(fmt.Sprintf("model request failed on %s: fallback_provider %q has no providers-block entry in the settings document", provider, target))
+			}
+			if !ai.AllowProvider(target) {
+				return loop.Terminal(fmt.Sprintf("model request failed on %s: fallback provider %q is circuit-open", provider, target))
+			}
+			retryModel := model
+			if m := strings.TrimSpace(spec.Model); m != "" {
+				retryModel = m
+			}
+			return loop.RetryOnProvider(target, retryModel, true,
+				fmt.Sprintf("provider %s failed (%v); failing over to %s", provider, err, target))
+		}
+	}
+	if policy.FallbackModel == "" || policy.FallbackModel == model {
 		return loop.Terminal("model request failed")
 	}
 	return loop.RetryOnModel(policy.FallbackModel, true,
@@ -818,6 +843,18 @@ type BuildOutcome struct {
 	// the tokens actually spent, not the configured default.
 	RoutedModel string
 	RouteReason string
+	// W7: RoutedProvider names the endpoint that served the most recent
+	// round ("primary" unless a cross-provider failover moved the turn),
+	// CostUSD is the turn's cumulative spend when a per-turn cap prices it,
+	// and BudgetStop marks a turn halted because spend reached
+	// max_turn_cost_usd. All three stay zero/empty with the router off —
+	// flag-off outcomes and wire are byte-identical.
+	RoutedProvider string
+	CostUSD        float64
+	// BudgetStop returns a nil error like Exhausted: a cap reached is a
+	// deliberate, honest stop with every finished round persisted, not a
+	// failure. FinalText names the spend and the cap.
+	BudgetStop bool
 	// Paused is set when the turn stopped to ask the user a question through
 	// ask_user rather than finishing. A paused turn returns a nil error — it is a
 	// deliberate stop, not a failure — so a caller must check Paused before
@@ -1058,6 +1095,23 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	// primary and die again — one retry that hands the turn back to a dead
 	// model is theater, not reliability.
 	latchedModel := ""
+	// latchedProvider (W7) pins the turn to a failover provider on the same
+	// success that latches the model — the model and the endpoint that
+	// actually served it move together, or not at all.
+	latchedProvider := ""
+	// servedModel/servedProvider are who answered the most recent request:
+	// usage/record and cost pricing read these, never the round's starting
+	// client, so a mid-round failover is attributed to the endpoint that
+	// served it (W7 honest cost attribution).
+	servedModel := ""
+	servedProvider := ""
+	// W7.3: a per-turn cost cap rides the same policy load. Flag off the
+	// budget stays 0 — no accumulation, no stop, today's behavior.
+	turnBudgetUSD := 0.0
+	if ai.RouterEnabled() {
+		turnBudgetUSD = routingPolicy.MaxTurnCostUSD
+	}
+	turnSpendUSD := 0.0
 	// rambleCount tracks consecutive tool-less max_tokens rounds. Any tool
 	// call resets it — only a model emitting full outputs with zero calls,
 	// repeatedly, trips the breaker.
@@ -1072,6 +1126,25 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		flush() // persist what the previous round produced before starting this one
 		sess.SetRound(round)
 		sess.TickCooldowns()
+
+		// W7.3 — stop before dispatching a round the cap cannot pay for.
+		// Placed after flush: every finished round is already durable, so
+		// the stop is as graceful as Exhausted — nil error, honest text
+		// naming spend, cap, and rounds, work preserved.
+		if turnBudgetUSD > 0 && turnSpendUSD >= turnBudgetUSD {
+			stopText := fmt.Sprintf(
+				"Stopped this turn at its cost budget: spent $%.4f of the $%.4f cap across %d round(s). The work already done is saved; raise routing.max_turn_cost_usd (settings document or ROUTING_POLICY_JSON) to let turns run longer.",
+				turnSpendUSD, turnBudgetUSD, round-1)
+			stopMsg := ai.Message{Role: "assistant", Blocks: []ai.Block{{Type: "text", Text: stopText}}}
+			conversation = append(conversation, stopMsg)
+			outcome.Messages = append(outcome.Messages, stopMsg)
+			outcome.FinalText = stopText
+			outcome.CostUSD = turnSpendUSD
+			outcome.BudgetStop = true
+			sess.Emitter.EmitText(stopText)
+			logTurn("budget-stop")
+			return outcome, nil
+		}
 
 		// H2 steer lane: drain mid-turn messages that arrived since the last
 		// round. A steer is the user redirecting the running build — it lands
@@ -1147,13 +1220,45 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		// is logged with its reason — that log is the tuning data.
 		_, tier, reason := ai.ClassifyTurn(opts.Mode, promptLen, sess.GetVerifyAttempts(), routingPolicy)
 		model := routingPolicy.ModelFor(tier)
-		client := o.ai
+		// base is who this round talks to (W7): latched to the provider that
+		// saved the turn, else the orchestrator's client — with an open
+		// primary circuit sending the round straight to the fallback provider
+		// instead of rediscovering the outage one request at a time. Flag off,
+		// base stays o.ai: exactly today's path.
+		base := o.ai
+		if ai.RouterEnabled() {
+			if latchedProvider != "" {
+				if spec, ok := ai.LookupProvider(latchedProvider); ok {
+					if pc := ai.ClientForProvider(spec, o.ai); pc != nil {
+						base = pc
+					}
+				}
+			} else {
+				cur := base.ProviderName()
+				if start := ai.SelectStartProvider(cur, routingPolicy.FallbackProvider); start != cur {
+					if spec, ok := ai.LookupProvider(start); ok {
+						if pc := ai.ClientForProvider(spec, base); pc != nil {
+							base = pc
+							if m := strings.TrimSpace(spec.Model); m != "" {
+								model = m
+							}
+							reason = fmt.Sprintf("provider %s circuit-open; round starts on %s", cur, start)
+						}
+					}
+				}
+			}
+		}
+		client := base
 		if latchedModel != "" {
 			model = latchedModel
 			reason = "latched to fallback after primary failed"
 		}
-		if model != "" && model != o.ai.Model() {
-			client = o.ai.WithModel(model)
+		if model != "" && model != base.Model() {
+			client = base.WithModel(model)
+		}
+		servedModel, servedProvider = client.Model(), client.ProviderName()
+		if ai.RouterEnabled() {
+			outcome.RoutedProvider = servedProvider
 		}
 		// A rate limit or a transient server error backoffs for seconds with no
 		// output — without this the request looks hung and gets killed. The hook
@@ -1218,19 +1323,53 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			// inline policy. The default listener reproduces today's behavior
 			// exactly — one retry on the fallback model, latch on success — so
 			// this is a pure seam extraction; a composition can swap the policy
-			// without touching the loop body.
-			dec := o.requestErrorListener(round, client.Model(), err, fellBack)
+			// without touching the loop body. The listener also names the
+			// provider that was tried (W7): failover needs the endpoint, not
+			// only the model.
+			dec := o.requestErrorListener(round, client.ProviderName(), client.Model(), err, fellBack)
 			switch dec.Action {
 			case loop.ErrorRetryOnModel:
 				log.Printf("orchestrator: round %d model %s failed (%v); %s",
 					round, client.Model(), err, dec.Reason)
 				fellBack = true
 				retryClient := client
-				if dec.RetryModel != "" && dec.RetryModel != client.Model() {
-					retryClient = o.ai.WithModel(dec.RetryModel).WithRetryHook(retryHook)
+				if dec.RetryProvider != "" && dec.RetryProvider != client.ProviderName() {
+					if spec, ok := ai.LookupProvider(dec.RetryProvider); ok {
+						if pc := ai.ClientForProvider(spec, o.ai); pc != nil {
+							retryClient = pc
+						}
+					}
+				}
+				if dec.RetryModel != "" && dec.RetryModel != retryClient.Model() {
+					retryClient = retryClient.WithModel(dec.RetryModel)
+				}
+				retryClient = retryClient.WithRetryHook(retryHook)
+				if dec.RetryProvider != "" && opts.EventLog != nil {
+					// The cross-provider failover's own audit trail: which
+					// endpoint the turn moved to and why. Attempt 1, no
+					// backoff — the switch itself was instant; the wait a
+					// client-side retry took is not this event's story.
+					if _, aerr := opts.EventLog.Append(harnessevents.RetryLogged, harnessevents.RetryPayload{
+						Attempt:    1,
+						MaxRetries: 1,
+						Reason:     retryClass(err.Error()),
+						Detail:     err.Error(),
+						BackoffMs:  0,
+						Model:      retryClient.Model(),
+						Provider:   dec.RetryProvider,
+						PromptID:   sess.ID,
+					}); aerr != nil {
+						log.Printf("prompt %d: could not record the cross-provider retry event: %v", sess.ID, aerr)
+					}
 				}
 				result, err = retryClient.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools, sink)
 				if err == nil {
+					if ai.RouterEnabled() {
+						// The endpoint that actually answered is now this one:
+						// usage/record, pricing, and the outcome pin it.
+						servedModel, servedProvider = retryClient.Model(), retryClient.ProviderName()
+						outcome.RoutedProvider = servedProvider
+					}
 					if retryClient.Model() != routedModel {
 						routedModel = retryClient.Model()
 						outcome.RoutedModel = routedModel
@@ -1238,9 +1377,17 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 					}
 					if dec.Latch {
 						latchedModel = retryClient.Model()
+						if dec.RetryProvider != "" {
+							latchedProvider = dec.RetryProvider
+						}
 						log.Printf("orchestrator: round %d latched to fallback model %s for the rest of the turn",
 							round, latchedModel)
 					}
+				} else if ai.RouterEnabled() && dec.RetryProvider != "" {
+					// The failover target failed too — record it so the next
+					// decision sees both endpoints down instead of retrying
+					// into the same hole.
+					ai.NoteProviderFailure(dec.RetryProvider)
 				}
 			case loop.ErrorRetryWithBackoff:
 				log.Printf("orchestrator: round %d model %s failed (%v); %s",
@@ -1260,6 +1407,11 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			logTurn("model-request-failed")
 			return outcome, fmt.Errorf("model request failed: %w", err)
 		}
+		if ai.RouterEnabled() {
+			// A round that answered is proof — it closes whatever circuit this
+			// provider was under, half-open probe included.
+			ai.NoteProviderSuccess(servedProvider)
+		}
 
 		outcome.Usage.InputTokens += result.Usage.InputTokens
 		outcome.Usage.OutputTokens += result.Usage.OutputTokens
@@ -1267,17 +1419,31 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		outcome.Usage.CacheWriteTokens += result.Usage.CacheWriteTokens
 		sess.Emitter.EmitUsage(outcome.Usage.InputTokens, outcome.Usage.OutputTokens, outcome.Usage.CacheReadTokens)
 
+		// W7.3: price the round that just spent — served model, document-over-
+		// env pricing — against the turn's cap. No cap (flag off leaves it 0):
+		// no accumulation, CostUSD stays 0, today's accounting untouched.
+		if turnBudgetUSD > 0 {
+			turnSpendUSD += ai.CostUSD(servedModel,
+				result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.CacheReadTokens,
+				ai.LoadPricing())
+			outcome.CostUSD = turnSpendUSD
+		}
+
 		// The meter's source: one usage/record event per model call, so the
 		// cumulative accounting survives a reload instead of living only in the
 		// SSE stream. Cost attribution prices the model that actually served
-		// the round.
+		// the round; with the router on it also pins the provider (W7).
 		if opts.EventLog != nil {
-			if _, err := opts.EventLog.Append(harnessevents.UsageRecord, harnessevents.UsagePayload{
+			usage := harnessevents.UsagePayload{
 				InputTokens:  result.Usage.InputTokens,
 				OutputTokens: result.Usage.OutputTokens,
 				CacheRead:    result.Usage.CacheReadTokens,
-				Model:        client.Model(),
-			}); err != nil {
+				Model:        servedModel,
+			}
+			if ai.RouterEnabled() && servedProvider != "" {
+				usage.Provider = servedProvider
+			}
+			if _, err := opts.EventLog.Append(harnessevents.UsageRecord, usage); err != nil {
 				log.Printf("prompt %d: could not record the usage event: %v", sess.ID, err)
 			}
 		}

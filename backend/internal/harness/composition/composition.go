@@ -1,6 +1,7 @@
 // Package composition is the H12 declarative composition: talon.composition.yaml
 // becomes the wiring source, main.go becomes a composer, and model routing
-// becomes runtime data (harness/settings) instead of boot-time env.
+// becomes runtime data (the one watched settings document behind
+// ai.AttachSettingsFile) instead of boot-time env.
 //
 // This file holds the preset layer — per-project composition shaping — and
 // the overlay rule. The full YAML composer is staged after the settings
@@ -52,11 +53,11 @@ var Catalog = []Preset{
 		StartGuide:     false,
 	},
 	{
-		Name:               "fast",
-		Discipline:         "compressed",
-		SkillsSections:      "core",
-		StartGuide:         false,
-		RoutingTightPrune:   true,
+		Name:              "fast",
+		Discipline:        "compressed",
+		SkillsSections:    "core",
+		StartGuide:        false,
+		RoutingTightPrune: true,
 	},
 }
 

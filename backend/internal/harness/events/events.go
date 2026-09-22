@@ -201,6 +201,10 @@ type UsagePayload struct {
 	CacheRead    int     `json:"cache_read_tokens,omitempty"`
 	CostUSD      float64 `json:"cost_usd,omitempty"`
 	Model        string  `json:"model,omitempty"`
+	// Provider pins which endpoint served these tokens (W7) — honest cost
+	// attribution across providers. Empty when the router is off, so
+	// flag-off events stay byte-identical.
+	Provider string `json:"provider,omitempty"`
 }
 
 // InterruptedPayload is the body of stream/interrupted.
@@ -249,7 +253,10 @@ type RetryPayload struct {
 	// BackoffMs is the wait before this retry runs.
 	BackoffMs int64  `json:"backoff_ms"`
 	Model     string `json:"model,omitempty"`
-	PromptID  int64  `json:"prompt_id,omitempty"`
+	// Provider names the endpoint this retry is landing on (W7
+	// cross-provider failover). Empty for same-provider retries.
+	Provider string `json:"provider,omitempty"`
+	PromptID int64  `json:"prompt_id,omitempty"`
 }
 
 // SkillsPayload is the body of skills/suggested.

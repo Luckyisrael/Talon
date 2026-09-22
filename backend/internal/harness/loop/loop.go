@@ -24,6 +24,9 @@ type RequestErrorDecision struct {
 	// RetryModel names the model to retry on (Action RetryOnModel). Empty
 	// means the same model.
 	RetryModel string
+	// RetryProvider names the provider to retry on (W7 cross-provider
+	// failover). Empty means the provider the request was already sent to.
+	RetryProvider string
 	// Latch pins the turn to RetryModel for the rest of the turn after a
 	// successful retry — one retry that hands the turn back to a dead model
 	// is theater, not reliability.
@@ -43,6 +46,7 @@ const (
 	ErrorTerminal ErrorAction = iota
 	// ErrorRetryOnModel retries the request, on RetryModel when set,
 	// otherwise the same model. Latch pins the turn to it on success.
+	// RetryProvider (W7) additionally moves the request to that provider.
 	ErrorRetryOnModel
 	// ErrorRetryWithBackoff waits Backoff, then retries on the same model —
 	// for transient throttles a cheaper model cannot fix.
@@ -50,10 +54,10 @@ const (
 )
 
 // RequestErrorListener answers a failed model request. round is the loop
-// round the failure happened on; model is what was tried; fellBack reports
-// whether a fallback retry already happened this turn (the listener decides
-// whether a second is allowed).
-type RequestErrorListener func(round int, model string, err error, fellBack bool) RequestErrorDecision
+// round the failure happened on; provider/model name what was tried;
+// fellBack reports whether a fallback retry already happened this turn
+// (the listener decides whether a second is allowed).
+type RequestErrorListener func(round int, provider, model string, err error, fellBack bool) RequestErrorDecision
 
 // Terminal is the no-retry answer: fail the turn.
 func Terminal(reason string) RequestErrorDecision {
@@ -64,6 +68,13 @@ func Terminal(reason string) RequestErrorDecision {
 // optionally latching the turn to it.
 func RetryOnModel(model string, latch bool, reason string) RequestErrorDecision {
 	return RequestErrorDecision{Action: ErrorRetryOnModel, RetryModel: model, Latch: latch, Reason: reason}
+}
+
+// RetryOnProvider is the cross-provider answer (W7): retry once on the
+// named provider — on RetryModel when set, otherwise the same model — and
+// latch the turn to it on success.
+func RetryOnProvider(provider, model string, latch bool, reason string) RequestErrorDecision {
+	return RequestErrorDecision{Action: ErrorRetryOnModel, RetryProvider: provider, RetryModel: model, Latch: latch, Reason: reason}
 }
 
 // RetryAfter is the backoff answer: same model, wait first.

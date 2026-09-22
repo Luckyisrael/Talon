@@ -424,10 +424,12 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 			h.store.TouchSession(live.ID)
 		}
 		// capture_screenshot verifies through the model; give it one only when we
-		// have a client, otherwise it degrades to a plain capture.
+		// have a client, otherwise it degrades to a plain capture. W7: when the
+		// router is on and vision_model is set, vision rides its own model —
+		// flag off, ForVision hands back the chat client untouched.
 		var vision tools.VisionChecker
 		if h.ai != nil {
-			vision = visionAdapter{c: h.ai}
+			vision = visionAdapter{c: ai.ForVision(h.ai)}
 		}
 		reg.Register(&tools.CaptureScreenshot{ADBTarget: adbTarget, Vision: vision})
 		reg.Register(&tools.TailLogcat{ADBTarget: adbTarget})
@@ -473,7 +475,10 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 		// vision verdict, and the gates would claim verification they
 		// never performed).
 		if h.ai != nil {
-			gate := &gateVision{c: h.ai, target: adbTarget}
+			// Same W7 vision routing as capture_screenshot: gate verdicts go
+			// through vision_model when the router is on, the chat model when
+			// not.
+			gate := &gateVision{c: ai.ForVision(h.ai), target: adbTarget}
 			reg.Register(&tools.RunVision{WorkspacePath: workspacePath, Capture: gate, Vision: gate, ADBClient: adbClient})
 			reg.Register(&tools.RunInteract{WorkspacePath: workspacePath, Capture: gate, Vision: gate, ADBClient: adbClient})
 		}

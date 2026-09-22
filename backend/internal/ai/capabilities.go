@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"os"
 	"strings"
 )
 
@@ -48,7 +47,9 @@ func (c *Client) Capabilities() Capabilities {
 	}
 	return Capabilities{
 		Model: c.model,
-		Tier:  classifyTier(c.model, os.Getenv("AI_MODEL_TIER")),
+		// TierOverride: the settings document's model_tier wins when the
+		// router is on (W7.4); flag off, AI_MODEL_TIER exactly as before.
+		Tier: classifyTier(c.model, TierOverride()),
 	}
 }
 

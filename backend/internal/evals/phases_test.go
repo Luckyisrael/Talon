@@ -33,7 +33,6 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/ralph"
 	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
 	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
-	"github.com/luckyisrael/talon/backend/internal/harness/settings"
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
 	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
@@ -945,20 +944,11 @@ func TestPhaseH12CompositionData(t *testing.T) {
 		t.Errorf("fault: mid-output switch allowed: %v", err)
 	}
 
-	// Settings: a write then a read serves the written routing (the
-	// harness-level document; the ai-level integration is tested in the ai
-	// package's own suite).
-	doc := settings.NewDoc(settings.Document{Routing: settings.Routing{FallbackModel: "seed"}},
-		filepath.Join(t.TempDir(), "settings.json"))
-	if s := doc.Snapshot(); s.Routing.FallbackModel != "seed" {
-		t.Errorf("healthy: seed not serving: %+v", s.Routing)
-	}
-	if err := doc.Write(settings.Document{Routing: settings.Routing{FallbackModel: "live"}}); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if s := doc.Snapshot(); s.Routing.FallbackModel != "live" {
-		t.Errorf("fault: live document not serving: %+v", s.Routing)
-	}
+	// W7.4: harness/settings was retired — the one watched settings document
+	// now lives in ai.AttachSettingsFile (routing + pricing + providers +
+	// tier display), and its "edit flips routing next turn without restart"
+	// gate runs at turn level in the orchestrator suite, where a whole turn
+	// is what must observe the edit.
 }
 
 // H13: the Model Experience doc contract. Every harness package's README

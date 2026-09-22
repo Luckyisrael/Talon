@@ -24,10 +24,15 @@ const (
 )
 
 type Client struct {
-	protocol     Provider
-	baseURL      string
-	apiKey       string
-	model        string
+	protocol Provider
+	baseURL  string
+	apiKey   string
+	model    string
+	// providerName pins which provider this client serves (W7): "primary"
+	// for the env-built client, a providers-block name after AtProvider.
+	// Surfaced so usage/record and the breaker log the endpoint that
+	// actually answered, not the one that was asked first.
+	providerName string
 	httpClient   *http.Client
 	workspaceDir string
 
@@ -193,6 +198,8 @@ func New() (*Client, error) {
 		baseURL:  strings.TrimSuffix(cfg.BaseURL, "/"),
 		apiKey:   cfg.APIKey,
 		model:    cfg.Model,
+		// The env-built client is the primary provider (W7 naming).
+		providerName: DefaultProviderName,
 		// Generous: an agentic turn asks for up to 16k output tokens and a
 		// reasoning model can spend minutes on one before the first byte.
 		httpClient:   &http.Client{Timeout: 10 * time.Minute},
@@ -203,6 +210,16 @@ func New() (*Client, error) {
 
 // Model reports the configured model id, for logging and usage accounting.
 func (c *Client) Model() string { return c.model }
+
+// ProviderName reports which provider this client serves — "primary" for
+// the env-built client, a providers-block name after ClientForProvider.
+// Usage/record and the breaker pin this value per round (W7).
+func (c *Client) ProviderName() string {
+	if c == nil || c.providerName == "" {
+		return DefaultProviderName
+	}
+	return c.providerName
+}
 
 // PacingInterval reports the enforced minimum interval between gateway calls
 // (0 when unset). The usage endpoint surfaces it so a long turn reads as
@@ -229,6 +246,7 @@ func (c *Client) clone() Client {
 		baseURL:      c.baseURL,
 		apiKey:       c.apiKey,
 		model:        c.model,
+		providerName: c.providerName,
 		httpClient:   c.httpClient,
 		workspaceDir: c.workspaceDir,
 		lastErr:      c.lastErr,

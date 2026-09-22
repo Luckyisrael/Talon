@@ -1,12 +1,12 @@
 package ai
 
 import (
-	"sync"
-	"time"
 	"encoding/json"
 	"log"
 	"os"
 	"strings"
+	"sync"
+	"time"
 )
 
 // TurnKind is what a turn is trying to do. Routing happens per turn — never
@@ -36,9 +36,21 @@ type Policy struct {
 	// is not a heal retry. Longer prompts need full context and get it.
 	SmallEditMaxChars int `json:"small_edit_max_chars"`
 	// FallbackModel is tried once when the routed model errors. Same endpoint,
-	// different model — cross-provider failover without a second provider is
-	// untestable dead code, so the fallback stays on the configured endpoint.
+	// different model — the cross-provider case is FallbackProvider below
+	// (W7, flag-gated on TALONSTUDIO_ROUTER).
 	FallbackModel string `json:"fallback_model"`
+	// VisionModel (W7.2) serves vision calls when the router is on: the build
+	// model and the vision model are different jobs. Empty means "vision
+	// rides the chat model" — today's behavior, flag or no flag.
+	VisionModel string `json:"vision_model"`
+	// FallbackProvider (W7.1) names an entry of the settings document's
+	// providers block to pin to when the current provider errors —
+	// cross-provider failover behind TALONSTUDIO_ROUTER.
+	FallbackProvider string `json:"fallback_provider"`
+	// MaxTurnCostUSD (W7.3) caps what one turn may spend: when cumulative
+	// spend reaches it, the turn stops honestly and names the spend.
+	// 0 (the default) means no cap.
+	MaxTurnCostUSD float64 `json:"max_turn_cost_usd"`
 }
 
 func DefaultPolicy() Policy {
@@ -129,6 +141,15 @@ func LoadRoutingPolicy() Policy {
 	if err := json.Unmarshal(raw, &doc); err == nil && policyNonEmpty(doc.Routing) {
 		over = doc.Routing
 	} else if err := json.Unmarshal(raw, &over); err != nil || !policyNonEmpty(over) {
+		// A W7.4 four-section document whose only sections are
+		// providers/pricing/model_tier is valid: routing rides env/defaults
+		// until a routing section appears. Only a true parse failure (or a
+		// policy-shaped document that carries nothing) is an error.
+		var extra settingsExtra
+		if err == nil && json.Unmarshal(raw, &extra) == nil &&
+			(len(extra.Providers) > 0 || len(extra.Pricing) > 0 || extra.ModelTier != "") {
+			return loadEnvPolicy()
+		}
 		log.Printf("ai: settings file invalid; holding the last good routing policy: %v", err)
 		if good {
 			return cached
@@ -184,6 +205,15 @@ func applyOverride(pol Policy, over Policy) Policy {
 	}
 	if strings.TrimSpace(over.FallbackModel) != "" {
 		pol.FallbackModel = over.FallbackModel
+	}
+	if strings.TrimSpace(over.VisionModel) != "" {
+		pol.VisionModel = over.VisionModel
+	}
+	if strings.TrimSpace(over.FallbackProvider) != "" {
+		pol.FallbackProvider = over.FallbackProvider
+	}
+	if over.MaxTurnCostUSD > 0 {
+		pol.MaxTurnCostUSD = over.MaxTurnCostUSD
 	}
 	return pol
 }
@@ -265,5 +295,6 @@ func logUnknownPrice(model string) {
 func policyNonEmpty(p Policy) bool {
 	return p.PlanTier != "" || p.BuildTier != "" || p.SmallEditTier != "" ||
 		p.HealTier != "" || len(p.Models) > 0 || p.SmallEditMaxChars > 0 ||
-		p.FallbackModel != ""
+		p.FallbackModel != "" || p.VisionModel != "" ||
+		p.FallbackProvider != "" || p.MaxTurnCostUSD > 0
 }

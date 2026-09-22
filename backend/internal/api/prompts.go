@@ -333,6 +333,13 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response["rounds"] = outcome.Rounds
 		response["usage"] = outcome.Usage
 		response["remaining_tasks"] = outcome.RemainingTasks
+		// W7: turn spend and the provider that served it ride the wire only
+		// when the router is on — flag-off responses stay byte-identical.
+		if ai.RouterEnabled() {
+			response["cost_usd"] = outcome.CostUSD
+			response["routed_provider"] = outcome.RoutedProvider
+			response["budget_stop"] = outcome.BudgetStop
+		}
 	}
 
 	if buildErr != nil {
@@ -930,6 +937,13 @@ func (h *PromptHandler) finishBuildStream(w http.ResponseWriter, flusher http.Fl
 		payload["skipped_gates"] = outcome.SkippedGates
 		payload["rounds"] = outcome.Rounds
 		payload["remaining_tasks"] = outcome.RemainingTasks
+		// W7: turn spend and the serving provider ride the wire only when the
+		// router is on — flag-off finish payloads stay byte-identical.
+		if ai.RouterEnabled() {
+			payload["cost_usd"] = outcome.CostUSD
+			payload["routed_provider"] = outcome.RoutedProvider
+			payload["budget_stop"] = outcome.BudgetStop
+		}
 		// A turn paused on ask_user ended cleanly but is not done: it is waiting for
 		// the user's answer to resume. Say so rather than "success", so the client
 		// keeps the turn open and shows the question instead of a finished turn.
