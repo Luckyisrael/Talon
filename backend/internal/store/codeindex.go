@@ -1,9 +1,11 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"unicode"
@@ -64,12 +66,40 @@ type CodeChunkHit struct {
 // chunks (and through the trigger, their FTS rows), symbols, and out-edges go
 // away and the new ones land in one transaction. The content hash is
 // upserted — that row is what lets a later Reconcile skip this file entirely.
+// W4.3: embeddings whose content hash survives the swap ride along (the
+// embed cache is keyed by chunk hash, so an unchanged chunk never re-embeds).
 func (s *Store) ReplaceFileIndex(projectID int64, path, hash string, chunks []CodeChunk, symbols []CodeSymbol, edges []CodeEdge) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	// Read this file's hash→vector pairs BEFORE the deletes below remove
+	// them; re-insert applies them to surviving hashes, and everything else
+	// lands NULL for the sweep to fill.
+	carry := map[string][]byte{}
+	rows, err := tx.Query(
+		`SELECT hash, embedding FROM code_chunks WHERE project_id = ? AND path = ? AND embedding IS NOT NULL`,
+		projectID, path)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var h string
+		var vec []byte
+		if err := rows.Scan(&h, &vec); err != nil {
+			rows.Close()
+			return err
+		}
+		carry[h] = vec
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
 	for _, q := range []struct {
 		sql string
 	}{
@@ -83,8 +113,8 @@ func (s *Store) ReplaceFileIndex(projectID int64, path, hash string, chunks []Co
 	}
 	for _, c := range chunks {
 		if _, err := tx.Exec(
-			`INSERT INTO code_chunks (project_id, path, hash, name, start_line, body) VALUES (?, ?, ?, ?, ?, ?)`,
-			projectID, path, c.Hash, c.Name, c.StartLine, c.Body,
+			`INSERT INTO code_chunks (project_id, path, hash, name, start_line, body, embedding) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			projectID, path, c.Hash, c.Name, c.StartLine, c.Body, carry[c.Hash],
 		); err != nil {
 			return err
 		}
@@ -327,6 +357,133 @@ func (s *Store) CodeEdgesFromSymbol(projectID int64, fromName string) ([]CodeEdg
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ── W4.3: embed sweeps ────────────────────────────────────────────────
+//
+// The store declares its own slice of the provider interface (structural
+// typing: any embed.Provider satisfies it) so store never imports embed —
+// the StoreAdapter law, applied one layer deeper.
+
+// Embedder is all a sweep needs from a provider: texts in, vectors out,
+// positionally aligned.
+type Embedder interface {
+	Embed(ctx context.Context, texts []string) ([][]float32, error)
+}
+
+// defaultEmbedBatch mirrors the provider's conservative input cap.
+const defaultEmbedBatch = 64
+
+// EmbedCodeChunks fills NULL vectors for a project's chunks — the sweep half
+// of the embed cache (ReplaceFileIndex's carry handles the rest inside its
+// own transaction). Idempotent: embedded rows are never selected, so a
+// provider outage just retries next time. batch <= 0 means defaultEmbedBatch.
+func (s *Store) EmbedCodeChunks(ctx context.Context, projectID int64, emb Embedder, batch int) (int, error) {
+	return s.embedRows(ctx, emb, batch,
+		`SELECT id, body FROM code_chunks WHERE project_id = ? AND embedding IS NULL ORDER BY id`,
+		[]any{projectID},
+		`UPDATE code_chunks SET embedding = ? WHERE id = ?`)
+}
+
+// EmbedMemories activates the existing project_memory.embedding column (in
+// the schema since P1c): rows without a vector fill, vectored rows are never
+// touched. Same idempotence law as the chunk sweep.
+func (s *Store) EmbedMemories(ctx context.Context, projectID int64, emb Embedder, batch int) (int, error) {
+	return s.embedRows(ctx, emb, batch,
+		`SELECT id, content FROM project_memory WHERE project_id = ? AND embedding IS NULL ORDER BY id`,
+		[]any{projectID},
+		`UPDATE project_memory SET embedding = ? WHERE id = ?`)
+}
+
+// embedRows is the shared sweep shape: collect (id, text) pairs lacking a
+// vector, embed in batches, update by primary key. Failures surface after
+// whatever earlier batches landed — safe, because each row's vector depends
+// only on that row's own text; the rest stay NULL and the next sweep resumes
+// exactly where this one stopped.
+func (s *Store) embedRows(ctx context.Context, emb Embedder, batch int, query string, args []any, update string) (int, error) {
+	if batch <= 0 {
+		batch = defaultEmbedBatch
+	}
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	var ids []int64
+	var texts []string
+	for rows.Next() {
+		var id int64
+		var text string
+		if err := rows.Scan(&id, &text); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+		texts = append(texts, text)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if len(texts) == 0 {
+		return 0, nil
+	}
+	total := 0
+	for start := 0; start < len(texts); start += batch {
+		end := start + batch
+		if end > len(texts) {
+			end = len(texts)
+		}
+		vecs, err := emb.Embed(ctx, texts[start:end])
+		if err != nil {
+			return total, fmt.Errorf("embed batch at %d: %w", start, err)
+		}
+		if len(vecs) != end-start {
+			return total, fmt.Errorf("embed returned %d vectors for %d texts", len(vecs), end-start)
+		}
+		for i, vec := range vecs {
+			if _, err := s.db.Exec(update, vecBytes(vec), ids[start+i]); err != nil {
+				return total, err
+			}
+			total++
+		}
+	}
+	return total, nil
+}
+
+// vecBytes is THE on-disk vector format: little-endian IEEE-754 float32s,
+// 4 bytes each (math.Float32bits, then low byte first). The sqlite driver
+// refuses []float32 outright, which is how this encoding earned its name —
+// W4.5's cosine scan reads exactly this back through VecFromBytes: change
+// one, change both.
+func vecBytes(v []float32) []byte {
+	b := make([]byte, 4*len(v))
+	for i, f := range v {
+		bits := math.Float32bits(f)
+		b[4*i] = byte(bits)
+		b[4*i+1] = byte(bits >> 8)
+		b[4*i+2] = byte(bits >> 16)
+		b[4*i+3] = byte(bits >> 24)
+	}
+	return b
+}
+
+// VecFromBytes decodes the format vecBytes writes. A length that isn't a
+// whole number of float32s returns nil — a truncated blob is corruption, and
+// a garbage vector is worse than none.
+func VecFromBytes(b []byte) []float32 {
+	if len(b) == 0 || len(b)%4 != 0 {
+		return nil
+	}
+	out := make([]float32, len(b)/4)
+	for i := range out {
+		j := 4 * i
+		out[i] = math.Float32frombits(
+			uint32(b[j]) | uint32(b[j+1])<<8 | uint32(b[j+2])<<16 | uint32(b[j+3])<<24)
+	}
+	return out
 }
 
 // CodeIndexDigest is the eval's hash-equal witness: a deterministic sha256

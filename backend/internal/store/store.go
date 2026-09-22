@@ -704,9 +704,10 @@ func (s *Store) migrate() error {
 	// edges are the lexical and graph layers; code_chunks_fts mirrors chunks
 	// with the same external-content + trigger pattern as project_memory_fts —
 	// bm25 ranking comes free with FTS5, which is the whole lexical layer of
-	// W4.1 (vector rides a later slice behind an interface). Rows are keyed by
-	// project_id; FTS queries join through the base table for the tenant filter
-	// because the mirror carries no project column of its own.
+	// W4.1; W4.3 vectors ride the same rows behind the provider interface,
+	// keyed by chunk hash so an unchanged chunk never re-embeds. Rows are
+	// keyed by project_id; FTS queries join through the base table for the
+	// tenant filter because the mirror carries no project column of its own.
 	s.db.Exec(`CREATE TABLE IF NOT EXISTS code_files (
 		project_id INTEGER NOT NULL,
 		path TEXT NOT NULL,
@@ -720,8 +721,13 @@ func (s *Store) migrate() error {
 		hash TEXT NOT NULL,
 		name TEXT NOT NULL DEFAULT '',
 		start_line INTEGER NOT NULL DEFAULT 1,
-		body TEXT NOT NULL
+		body TEXT NOT NULL,
+		embedding BLOB
 	)`)
+	// W4.3: databases built before the vector layer lack the column; the
+	// duplicate-column error on fresh databases is the same benign no-op
+	// every guarded ALTER above relies on.
+	s.db.Exec("ALTER TABLE code_chunks ADD COLUMN embedding BLOB")
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_code_chunks_file ON code_chunks(project_id, path)`)
 	s.db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS code_chunks_fts USING fts5(body, name, path, content='code_chunks', content_rowid='id', tokenize='porter unicode61')`)
 	s.db.Exec(`CREATE TRIGGER IF NOT EXISTS code_chunks_fts_ai AFTER INSERT ON code_chunks BEGIN INSERT INTO code_chunks_fts(rowid, body, name, path) VALUES (new.id, new.body, new.name, new.path); END`)

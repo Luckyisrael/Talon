@@ -16,6 +16,7 @@ import (
 
 	"github.com/luckyisrael/talon/backend/internal/ai"
 	"github.com/luckyisrael/talon/backend/internal/devclient"
+	"github.com/luckyisrael/talon/backend/internal/embed"
 	"github.com/luckyisrael/talon/backend/internal/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/approval"
 	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
@@ -206,6 +207,34 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 				return convertIndexEdges(edges), nil
 			},
 		})
+	}
+
+	// W4.3: embedding provider (interface + API default; ONNX = the local
+	// slot, unimplemented by design — see internal/embed). Unconfigured →
+	// nil → nothing below runs: no vector layer, no goroutine, byte-identical
+	// to today. Configured → one background sweep fills both embed caches —
+	// chunks (carried by content hash inside ReplaceFileIndex, so only new
+	// hashes ever reach the provider) and the dormant project_memory.embedding
+	// column (W4.5's fusion reads it). Fire-and-forget: a build must never
+	// block on the network, and a failure just leaves rows NULL for the next
+	// sweep — idempotent by construction.
+	if emb := embed.FromEnv(); emb != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if index.Enabled() {
+				if n, err := h.store.EmbedCodeChunks(ctx, projectID, emb, 0); err != nil {
+					log.Printf("embed: code chunks: %v", err)
+				} else if n > 0 {
+					log.Printf("embed: %d new chunk vectors", n)
+				}
+			}
+			if n, err := h.store.EmbedMemories(ctx, projectID, emb, 0); err != nil {
+				log.Printf("embed: memories: %v", err)
+			} else if n > 0 {
+				log.Printf("embed: %d new memory vectors", n)
+			}
+		}()
 	}
 
 	// Writing. edit_file and multi_edit are what make incremental work possible;
