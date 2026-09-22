@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -70,12 +71,20 @@ type AgenticChatResult struct {
 // component files in one turn.
 const maxOutputTokens = 16384
 
+// StreamSink receives the model's words as they are produced, mid-call. When
+// an orchestrator passes one, the round's text and reasoning reach the client
+// as they arrive instead of all at once when the call returns — without it a
+// long model call shows the user nothing but a spinner, because the provider
+// has the answer and the wire is silent.
+type StreamSink func(text string, thinking bool)
+
 // ChatWithTools performs one agentic round: send the conversation plus tool
 // definitions, get back text and/or tool calls. It does not execute tools —
-// the caller owns the loop.
-func (c *Client) ChatWithTools(ctx context.Context, system string, history []Message, tools []ToolDefinition) (*AgenticChatResult, error) {
+// the caller owns the loop. A non-nil sink receives text and reasoning deltas
+// as the provider emits them; a nil sink keeps the buffered behaviour.
+func (c *Client) ChatWithTools(ctx context.Context, system string, history []Message, tools []ToolDefinition, sink StreamSink) (*AgenticChatResult, error) {
 	if c.protocol == ProtocolOpenAI {
-		return c.chatWithToolsOpenAI(ctx, system, history, tools)
+		return c.chatWithToolsOpenAI(ctx, system, history, tools, sink)
 	}
 	return c.chatWithToolsAnthropic(ctx, system, history, tools)
 }
@@ -274,7 +283,7 @@ func filterToCoreTools(tools []map[string]any) []map[string]any {
 
 // ── OpenAI-compatible path ────────────────────────────
 
-func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history []Message, tools []ToolDefinition) (*AgenticChatResult, error) {
+func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history []Message, tools []ToolDefinition, sink StreamSink) (*AgenticChatResult, error) {
 	messages := toOpenAI(system, history)
 
 	oaiTools := make([]map[string]any, 0, len(tools))
@@ -311,6 +320,12 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 		"messages":   messages,
 		"max_tokens": maxOutputTokens,
 	}
+	// A sink means someone is watching: ask the provider to stream so the
+	// model's words can be forwarded as they are written instead of all at
+	// once when the whole response lands.
+	if sink != nil {
+		reqBody["stream"] = true
+	}
 	if len(oaiTools) > 0 {
 		reqBody["tools"] = oaiTools
 		reqBody["tool_choice"] = "auto"
@@ -327,15 +342,211 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 	log.Printf("ChatWithTools(OpenAI): model=%s est_input_tok=%d (system=%d hist_msgs=%d tools=%d body_bytes=%d)",
 		c.model, len(body)/4, len(system)/4, len(history), len(oaiTools), len(body))
 
+	// The streaming branch takes its own request path: openStream hands back a
+	// live body to read chunk by chunk, whereas doWithEnvelopeRetry buffers the
+	// whole response before returning. When a sink is watching, read the SSE
+	// chunks as they arrive, forwarding text and reasoning to the sink and
+	// accumulating the same fields the buffered path returns — the caller's
+	// result contract is unchanged, only its latency is.
+	var sinkText, sinkReasoning strings.Builder
+	if sink != nil {
+		stream, err := c.openStream(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
+			req.Header.Set("HTTP-Referer", "https://talon.app")
+			req.Header.Set("X-Title", "Talon")
+		})
+		if err != nil {
+			return nil, err
+		}
+		defer stream.Close()
+
+		// Not every provider honours the stream flag — some return one buffered
+		// JSON object no matter what was asked. Peek the head of the body: an
+		// SSE stream begins with "data:", and anything else means the response
+		// is a single object that must be parsed whole. Serving both shapes is
+		// what keeps this branch safe against a provider that ignores the flag.
+		buf := bufio.NewReaderSize(stream, 256*1024)
+		head, _ := buf.Peek(64)
+		if !bytes.HasPrefix(bytes.TrimLeft(head, " \t\r\n"), []byte("data:")) {
+			bodyBytes, err := io.ReadAll(buf)
+			if err != nil {
+				return nil, fmt.Errorf("could not read the response: %w", err)
+			}
+			return c.parseBufferedOpenAITools(ctx, bodyBytes)
+		}
+		scanner := newSSEScanner(buf)
+		var toolCalls []struct {
+			ID       string `json:"id"`
+			Function struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"function"`
+			ExtraContent struct {
+				Google struct {
+					ThoughtSignature string `json:"thought_signature"`
+				} `json:"google"`
+			} `json:"extra_content"`
+		}
+		var finishReason string
+		var usage struct {
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
+			PromptTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
+		}
+		for scanner.Next() {
+			event := scanner.Event()
+			if len(event.Data) == 0 {
+				continue
+			}
+			if bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) {
+				break
+			}
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Content          string `json:"content"`
+						Reasoning        string `json:"reasoning"`
+						ReasoningContent string `json:"reasoning_content"`
+						ToolCalls        []struct {
+							Index    int    `json:"index"`
+							ID       string `json:"id"`
+							Function struct {
+								Name      string `json:"name"`
+								Arguments string `json:"arguments"`
+							} `json:"function"`
+						} `json:"tool_calls"`
+					} `json:"delta"`
+					FinishReason string `json:"finish_reason"`
+				} `json:"choices"`
+				Usage *struct {
+					PromptTokens        int `json:"prompt_tokens"`
+					CompletionTokens    int `json:"completion_tokens"`
+					PromptTokensDetails struct {
+						CachedTokens int `json:"cached_tokens"`
+					} `json:"prompt_tokens_details"`
+				} `json:"usage"`
+				Error *struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(event.Data, &chunk); err != nil {
+				continue // keep-alives and provider-specific frames are not fatal
+			}
+			if chunk.Error != nil {
+				return nil, fmt.Errorf("provider error: %s", chunk.Error.Message)
+			}
+			if chunk.Usage != nil {
+				usage = *chunk.Usage
+			}
+			if len(chunk.Choices) == 0 {
+				continue
+			}
+			choice := chunk.Choices[0]
+
+			reasoning := choice.Delta.Reasoning
+			if reasoning == "" {
+				reasoning = choice.Delta.ReasoningContent
+			}
+			if reasoning != "" {
+				sinkReasoning.WriteString(reasoning)
+				sink(reasoning, true)
+			}
+			if choice.Delta.Content != "" {
+				sinkText.WriteString(choice.Delta.Content)
+				sink(choice.Delta.Content, false)
+			}
+			// Tool calls arrive incrementally: the name and id land on the first
+			// fragment for an index, arguments arrive as successive fragments
+			// that must be concatenated in order.
+			for _, tc := range choice.Delta.ToolCalls {
+				for tc.Index >= len(toolCalls) {
+					toolCalls = append(toolCalls, struct {
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+						ExtraContent struct {
+							Google struct {
+								ThoughtSignature string `json:"thought_signature"`
+							} `json:"google"`
+						} `json:"extra_content"`
+					}{})
+				}
+				if tc.ID != "" {
+					toolCalls[tc.Index].ID = tc.ID
+				}
+				if tc.Function.Name != "" {
+					toolCalls[tc.Index].Function.Name = tc.Function.Name
+				}
+				toolCalls[tc.Index].Function.Arguments += tc.Function.Arguments
+			}
+			if choice.FinishReason != "" {
+				finishReason = choice.FinishReason
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return nil, fmt.Errorf("the AI stream ended early: %w", err)
+		}
+
+		result := &AgenticChatResult{
+			Text: sinkText.String(),
+			Usage: Usage{
+				InputTokens:     usage.PromptTokens,
+				OutputTokens:    usage.CompletionTokens,
+				CacheReadTokens: usage.PromptTokensDetails.CachedTokens,
+			},
+		}
+		if sinkReasoning.Len() > 0 {
+			result.Blocks = append(result.Blocks, Block{Type: "thinking", Text: sinkReasoning.String()})
+		}
+		if result.Text != "" {
+			result.Blocks = append(result.Blocks, Block{Type: "text", Text: result.Text})
+		}
+		for _, tc := range toolCalls {
+			args := tc.Function.Arguments
+			if args == "" {
+				args = "{}"
+			}
+			id := tc.ID
+			if id == "" {
+				id = fmt.Sprintf("call_%s_%d", tc.Function.Name, len(result.ToolUses))
+			}
+			result.ToolUses = append(result.ToolUses, ToolUseBlock{
+				Type: "tool_use", ID: id, Name: tc.Function.Name, Input: json.RawMessage(args),
+			})
+			result.Blocks = append(result.Blocks, Block{
+				Type: "tool_use", ID: id, Name: tc.Function.Name, Input: json.RawMessage(args),
+			})
+		}
+		switch {
+		case len(result.ToolUses) > 0:
+			result.StopReason = "tool_use"
+		case finishReason == "length":
+			result.StopReason = "max_tokens"
+		default:
+			result.StopReason = "end_turn"
+		}
+		log.Printf("ChatWithTools(OpenAI stream): stop=%s text=%d tools=%d in=%d out=%d",
+			result.StopReason, len(result.Text), len(result.ToolUses),
+			result.Usage.InputTokens, result.Usage.OutputTokens)
+		return result, nil
+	}
+
 	respBody, err := c.doWithEnvelopeRetry(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		req.Header.Set("HTTP-Referer", "https://talon.app")
 		req.Header.Set("X-Title", "Talon")
 	}, "ChatWithTools(OpenAI)")
-	if err != nil {
-		return nil, err
-	}
+	return c.parseBufferedOpenAITools(ctx, respBody)
+}
 
+// parseBufferedOpenAITools turns one whole Chat Completions object into an
+// AgenticChatResult. Shared by the buffered path and by the streaming path when
+// a provider ignores the stream flag and answers with a single object anyway.
+func (c *Client) parseBufferedOpenAITools(_ context.Context, respBody []byte) (*AgenticChatResult, error) {
 	var oaiResp struct {
 		Choices []struct {
 			FinishReason string `json:"finish_reason"`
@@ -350,13 +561,13 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 					} `json:"function"`
 					// Gemini echoes a thought_signature under extra_content.google
 					// on EACH tool call it returns. Per Google's docs the signature
-					// travels positionally with the part that issued it — parallel
-					// calls only carry one on the first part — and must be echoed
+					// travels positionally with the part that issued it - parallel
+					// calls only carry one on the first part - and must be echoed
 					// back exactly as received on the same part.
 					ExtraContent struct {
 						Google struct {
 							ThoughtSignature string `json:"thought_signature"`
-						} `json:"google"`
+						} `json:"extra_content"`
 					} `json:"extra_content"`
 				} `json:"tool_calls"`
 				// Gemini echoes a thought_signature under extra_content.google that
@@ -364,7 +575,7 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 				ExtraContent struct {
 					Google struct {
 						ThoughtSignature string `json:"thought_signature"`
-					} `json:"google"`
+					} `json:"extra_content"`
 				} `json:"extra_content"`
 			} `json:"message"`
 		} `json:"choices"`
@@ -400,7 +611,7 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 		},
 	}
 
-	// The model's private reasoning comes first — it is what drove the text and
+	// The model's private reasoning comes first - it is what drove the text and
 	// the tool calls that follow, so the user reads the decision before the act.
 	// Plan mode streams this live; build mode used to vanish it entirely, so a
 	// user watching a build saw tool rows stacking up with no idea what the model
@@ -423,7 +634,7 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 			id = fmt.Sprintf("call_%s_%d", tc.Function.Name, len(result.ToolUses))
 		}
 		// Gemini returns the signature on each tool call part; some responses
-		// put it once on the whole message instead. Prefer the per-call value —
+		// put it once on the whole message instead. Prefer the per-call value -
 		// parallel calls only sign the first part, and that positional match is
 		// what the API validates on the next request.
 		sig := tc.ExtraContent.Google.ThoughtSignature

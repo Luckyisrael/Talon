@@ -488,9 +488,17 @@ func Compact(msgs []Message, maxTokens int) []Message {
 	dropped := keepFrom
 	out := make([]Message, 0, len(rest)-keepFrom+2)
 	out = append(out, first)
+	// The wording matters: the old notice told the model to read_file whenever
+	// it needed a file, which a compliant model took as a standing instruction
+	// and re-read files it already had the contents of — twenty reads of a
+	// fifty-line file, each costing a round. What is actually true after a
+	// compaction is narrower: the transcript no longer shows the old turns, but
+	// any file the model can still see in the surviving window it already has.
 	out = append(out, UserText(fmt.Sprintf(
 		"[Earlier context compacted: %d turns removed to stay within the context window. "+
-			"The files already written are on disk — use read_file if you need to see them.]", dropped)))
+			"Files written before this point are on disk. Only read a file when its contents are "+
+			"not already visible in the surviving conversation below — re-reading what you can "+
+			"already see wastes a round.]", dropped)))
 	out = append(out, AssistantText("Understood. Continuing from the current state of the files."))
 	out = append(out, rest[keepFrom:]...)
 	return out
@@ -582,10 +590,14 @@ var supersedableTools = map[string]bool{
 
 // minTrimmableResult is the result size, in bytes, below which a superseded
 // result is left alone. Trimming a small result saves almost nothing, and on a
+// minTrimmableResult is the result size, in bytes, below which a superseded
+// result is left alone. Trimming a tiny result saves almost nothing, and on a
 // caching provider a change deep in the replayed prefix can cost a re-cache of
-// everything after it — so a result has to be genuinely large to be worth
-// collapsing.
-const minTrimmableResult = 800
+// everything after it. The floor is low on purpose: a source file re-read two,
+// three, ten times in a turn is dead weight at any size — every stale copy is
+// replayed verbatim on every later round — and the re-cache cost is bounded
+// because the newest fetch of that target still keeps its full body.
+const minTrimmableResult = 200
 
 // TrimSupersededToolOutput returns a view of msgs in which a large read_file or
 // list_files result is collapsed to a one-line pointer when the SAME target is

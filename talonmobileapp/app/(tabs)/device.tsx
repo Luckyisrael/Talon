@@ -4,7 +4,7 @@ import Clipboard from '@react-native-clipboard/clipboard'
 import QRCodeStyled from 'react-native-qrcode-styled'
 import { Badge, LimeButton, Screen, UIText } from '@/components/ui'
 import { Colors, Spacing } from '@/constants/theme'
-import { useActiveProject, useCreateSession, useDestroySession, useDeviceSession, useTestInfo } from '@/hooks'
+import { useActiveProject, useCreateSession, useDestroySession, useDeviceSession, useLiveSession, useTestInfo } from '@/hooks'
 import { getSessionId, setSessionId } from '@/lib/session'
 import { openMetroStream, type MetroEvent } from '@/lib/api'
 
@@ -40,7 +40,11 @@ export default function DeviceScreen() {
   const createSession = useCreateSession()
   const destroySession = useDestroySession()
 
-  // The session id persists across tab switches; the row is the truth.
+  // The session the device tab shows. The server is the source of truth, not
+  // this device's SecureStore: a session started from the web IDE holds an id
+  // that never reached this phone, and without asking the backend the tab
+  // would report "no session" while a device is running. Local storage only
+  // short-circuits the first paint; the live query then corrects it.
   const [sessionId, setLocalSessionId] = React.useState<number | null>(null)
   React.useEffect(() => {
     let alive = true
@@ -53,6 +57,18 @@ export default function DeviceScreen() {
       alive = false
     }
   }, [projectId])
+
+  // Ask the server what is actually running. The id discovered here replaces
+  // the local one, and is persisted so the next cold start opens on it.
+  useLiveSession(projectId, (live) => {
+    if (live == null) {
+      setLocalSessionId(null)
+      if (projectId != null) void setSessionId(projectId, null)
+    } else if (live.id !== sessionId) {
+      setLocalSessionId(live.id)
+      if (projectId != null) void setSessionId(projectId, live.id)
+    }
+  })
 
   const { data: session } = useDeviceSession(sessionId)
   const { data: testInfo } = useTestInfo(projectId)

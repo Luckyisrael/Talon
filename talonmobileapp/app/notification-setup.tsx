@@ -154,7 +154,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   copy: { gap: Spacing.s8, alignItems: 'center' },
-  headline: { textAlign: 'center' },
+  headline: { textAlign: 'center', marginTop: Spacing.s20},
   sub: { textAlign: 'center', paddingHorizontal: Spacing.s16 },
   cards: { gap: Spacing.s8 },
   card: {

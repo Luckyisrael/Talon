@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -339,6 +340,24 @@ func (s *SessionState) KnownFileMtime(path string) int64 {
 		return 0
 	}
 	return s.KnownFiles[path]
+}
+
+// KnownFileList returns a snapshot of the files the model has already read or
+// written this session. The prompt renderer walks this to tell the model what
+// it already holds before it decides to fetch anything, so the copy is taken
+// under the lock — the loop can touch the map while the prompt is assembled.
+func (s *SessionState) KnownFileList() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.KnownFiles) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(s.KnownFiles))
+	for path := range s.KnownFiles {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // NoteFileKnown records that path was read or written with the given mtime.

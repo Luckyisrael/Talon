@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1920, height=1080">
+    <title>Talon — Coming Soon Teaser</title>
+    <script src="assets/vendor/gsap.min.js"></script>
+    <script src="assets/music/audio-bands.js"></script>
+    <style>
+      @font-face {
+        font-family: "Inter";
+        src: url("assets/fonts/inter-latin.woff2") format("woff2");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: block;
+      }
+      @font-face {
+        font-family: "JetBrains Mono";
+        src: url("assets/fonts/jetbrains-mono-latin.woff2") format("woff2");
+        font-weight: 100 800;
+        font-style: normal;
+        font-display: block;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #08090a;
+        color: #d0d6e0;
+        font-family: "Inter", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #08090a;
+      }
+      .clip { position: absolute; inset: 0; }
+      .scene {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        background: #08090a;
+        opacity: 0;
+      }
+
+      /* ── shared decor ─────────────────────────────────────── */
+      .glow {
+        position: absolute;
+        width: 1500px;
+        height: 1000px;
+        background: radial-gradient(closest-side, rgba(228, 242, 34, 0.13), rgba(228, 242, 34, 0.04) 55%, transparent 75%);
+        pointer-events: none;
+      }
+      .glow-warm {
+        background: radial-gradient(closest-side, rgba(228, 242, 34, 0.10), rgba(120, 110, 60, 0.05) 55%, transparent 78%);
+      }
+      .grid {
+        position: absolute;
+        inset: -80px 0 0 0;
+        background-image:
+          repeating-linear-gradient(to right, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 160px),
+          repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 160px);
+        pointer-events: none;
+      }
+      .ghost {
+        position: absolute;
+        font-size: 320px;
+        font-weight: 600;
+        letter-spacing: -0.03em;
+        color: rgba(255, 255, 255, 0.045);
+        white-space: nowrap;
+        pointer-events: none;
+        transform-origin: center;
+      }
+      .ghost-c { left: 0; width: 100%; text-align: center; }
+
+      /* ── corner metadata ──────────────────────────────────── */
+      .meta {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 20px;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: #8a8f98;
+      }
+      .corner { position: absolute; opacity: 0; }
+      .c-tl { left: 64px; top: 52px; }
+      .c-tr { right: 64px; top: 52px; text-align: right; }
+      .c-bl { left: 64px; bottom: 48px; }
+      .c-br { right: 64px; bottom: 48px; }
+
+      .fx { opacity: 0; }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 22px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        font-size: 22px;
+        color: #d0d6e0;
+        white-space: nowrap;
+      }
+
+      .mark { display: block; }
+
+      /* ── Scene 1 ──────────────────────────────────────────── */
+      .stack {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+      .display {
+        margin: 0;
+        font-size: 118px;
+        font-weight: 510;
+        line-height: 1.02;
+        letter-spacing: -0.022em;
+        color: #ffffff;
+        transform-origin: center center;
+      }
+
+      /* ── Scene 2 : the IDE ────────────────────────────────── */
+      .s2-head {
+        position: absolute;
+        left: 64px;
+        top: 118px;
+        max-width: 1180px;
+      }
+      .s2-title {
+        margin: 26px 0 0;
+        font-size: 80px;
+        font-weight: 510;
+        line-height: 1.05;
+        letter-spacing: -0.022em;
+        color: #ffffff;
+      }
+      .ide {
+        position: absolute;
+        left: 420px;
+        top: 300px;
+        width: 1440px;
+        height: 700px;
+        background: #0f1011;
+        border: 1px solid #23252a;
+        border-radius: 16px;
+        box-shadow: 0 40px 120px rgba(0, 0, 0, 0.55);
+        overflow: hidden;
+        opacity: 0;
+      }
+      .ide-top {
+        height: 58px;
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        padding: 0 26px;
+        border-bottom: 1px solid #23252a;
+      }
+      .dots { display: flex; gap: 10px; }
+      .dots i {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #23252a;
+        display: block;
+      }
+      .gauge {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 19px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #8a8f98;
+      }
+      .ide-body { display: flex; height: calc(100% - 58px); }
+      .stream { position: relative; flex: 1; padding: 34px 36px; }
+      .turn-label {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 19px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #787c82;
+      }
+      .empty-state {
+        position: absolute;
+        left: 36px;
+        right: 36px;
+        top: 210px;
+        font-size: 34px;
+        font-weight: 400;
+        letter-spacing: -0.012em;
+        color: #d0d6e0;
+        opacity: 0;
+      }
+      .composer {
+        position: absolute;
+        left: 36px;
+        right: 36px;
+        bottom: 26px;
+        height: 104px;
+        background: #08090a;
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 24px;
+        display: flex;
+        align-items: center;
+        padding: 0 22px 0 28px;
+        box-shadow: 0 8px 40px rgba(0, 0, 0, 0.36);
+      }
+      .composer-text {
+        position: relative;
+        flex: 1;
+        font-size: 28px;
+        line-height: 1.3;
+        color: #d0d6e0;
+        white-space: pre;
+      }
+      .ch { opacity: 0; }
+      .underline {
+        position: absolute;
+        left: 0;
+        bottom: -14px;
+        width: 560px;
+        height: 3px;
+        background: #e4f222;
+        border-radius: 2px;
+        transform-origin: left center;
+      }
+      .send {
+        width: 58px;
+        height: 58px;
+        border-radius: 50%;
+        background: #e4f222;
+        display: grid;
+        place-items: center;
+        flex: none;
+        transform-origin: center center;
+      }
+      .device {
+        width: 400px;
+        border-left: 1px solid #23252a;
+        padding: 24px 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+      }
+      .phone-s {
+        width: 258px;
+        height: 552px;
+        background: #08090a;
+        border: 2px solid #23252a;
+        border-radius: 30px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        position: relative;
+        overflow: hidden;
+      }
+      .phone-s::before {
+        content: "";
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        width: 90px;
+        height: 8px;
+        border-radius: 999px;
+        background: #161718;
+        margin-left: -45px;
+      }
+      .wait-dot {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #e4f222;
+        box-shadow: 0 0 18px rgba(228, 242, 34, 0.65);
+      }
+      .wait-text {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 20px;
+        color: #8a8f98;
+        opacity: 0;
+      }
+
+      /* ── Scene 3 : plan card ──────────────────────────────── */
+      .plan-card {
+        position: absolute;
+        left: 120px;
+        top: 150px;
+        width: 920px;
+        background: #161718;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 18px;
+        padding: 30px 34px;
+        opacity: 0;
+      }
+      .plan-head {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 22px;
+      }
+      .plan-ico {
+        width: 46px;
+        height: 46px;
+        border-radius: 13px;
+        background: rgba(228, 242, 34, 0.16);
+        color: #e4f222;
+        display: grid;
+        place-items: center;
+        flex: none;
+      }
+      .plan-head h3 {
+        margin: 0;
+        font-size: 30px;
+        font-weight: 560;
+        letter-spacing: -0.012em;
+        color: #ffffff;
+      }
+      .plan-sub {
+        margin-left: auto;
+        font-size: 22px;
+        color: #8a8f98;
+      }
+      .plan-rows { list-style: none; margin: 0; padding: 0; }
+      .plan-rows li {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        height: 84px;
+        padding: 0 14px;
+        border-radius: 12px;
+      }
+      .p-n {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: #0f1011;
+        color: #8a8f98;
+        display: grid;
+        place-items: center;
+        font-size: 20px;
+        font-weight: 600;
+        flex: none;
+      }
+      .p-txt {
+        font-size: 30px;
+        letter-spacing: -0.011em;
+        color: #8a8f98;
+      }
+      .p-ck { margin-left: auto; opacity: 0; }
+      .p-meta {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 21px;
+        color: #7c8086;
+        min-width: 92px;
+        text-align: right;
+      }
+      .plan-foot {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin-top: 20px;
+        padding-top: 22px;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      .plan-note { font-size: 21px; color: #8a8f98; }
+      .approved {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 18px;
+        border-radius: 999px;
+        background: #e4f222;
+        color: #08090a;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 19px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        transform-origin: center center;
+      }
+      .tools-panel {
+        position: absolute;
+        left: 120px;
+        top: 706px;
+        width: 920px;
+        background: #0f1011;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 16px;
+        padding: 14px 18px;
+        opacity: 0;
+      }
+      .tool {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 15px 12px;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 22px;
+        color: #d0d6e0;
+        opacity: 0;
+      }
+      .tool .verb { color: #8a8f98; }
+      .tool .ico { width: 22px; height: 22px; flex: none; display: grid; place-items: center; }
+      .tool-run {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 2.5px solid #23252a;
+        border-top-color: #e4f222;
+        transform-origin: center;
+      }
+      .hairline-v {
+        position: absolute;
+        left: 1130px;
+        top: 210px;
+        width: 1px;
+        height: 560px;
+        background: rgba(255, 255, 255, 0.07);
+      }
+      .s3-gauges { display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+      .s3-gauges .row { display: flex; align-items: center; gap: 12px; }
+      .lamp-lime {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #e4f222;
+        box-shadow: 0 0 12px rgba(228, 242, 34, 0.6);
+      }
+
+      /* ── Scene 4 : verify + phone ─────────────────────────── */
+      .s4-title {
+        position: absolute;
+        left: 64px;
+        top: 150px;
+        width: 900px;
+        font-size: 84px;
+        font-weight: 510;
+        line-height: 1.06;
+        letter-spacing: -0.022em;
+        color: #ffffff;
+        margin: 0;
+      }
+      .ladder {
+        position: absolute;
+        left: 64px;
+        top: 470px;
+        display: flex;
+        gap: 18px;
+        opacity: 0;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        height: 62px;
+        padding: 0 26px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 22px;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: #8a8f98;
+        transform-origin: center center;
+      }
+      .c-dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: #62666d;
+        flex: none;
+      }
+      .c-ck { opacity: 0; flex: none; }
+      .lamp-live {
+        position: absolute;
+        right: 560px;
+        top: 40px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        opacity: 0;
+      }
+      .lamp-live .dot {
+        width: 13px;
+        height: 13px;
+        border-radius: 50%;
+        background: #27a644;
+        box-shadow: 0 0 14px rgba(39, 166, 68, 0.75);
+      }
+      .lamp-live .txt {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 21px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #4cc069;
+      }
+      .phone-b {
+        position: absolute;
+        right: 96px;
+        top: 76px;
+        width: 430px;
+        height: 930px;
+        background: #0f1011;
+        border: 3px solid #23252a;
+        border-radius: 52px;
+        box-shadow: 0 50px 130px rgba(0, 0, 0, 0.6);
+        overflow: hidden;
+      }
+      .phone-b::before {
+        content: "";
+        position: absolute;
+        top: 18px;
+        left: 50%;
+        width: 130px;
+        height: 10px;
+        border-radius: 999px;
+        background: #161718;
+        margin-left: -65px;
+        z-index: 2;
+      }
+      .app-screen {
+        position: absolute;
+        inset: 0;
+        padding: 74px 34px 40px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        opacity: 0;
+      }
+      .app-title {
+        font-size: 44px;
+        font-weight: 560;
+        letter-spacing: -0.018em;
+        color: #ffffff;
+        margin-top: 26px;
+      }
+      .app-card {
+        margin-top: 44px;
+        width: 100%;
+        background: #161718;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 24px;
+        padding: 40px 30px;
+        text-align: center;
+      }
+      .app-amount {
+        font-size: 86px;
+        font-weight: 560;
+        letter-spacing: -0.02em;
+        color: #ffffff;
+        line-height: 1;
+      }
+      .app-cap {
+        margin-top: 14px;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 21px;
+        color: #8a8f98;
+      }
+      .app-btn {
+        margin-top: 40px;
+        width: 100%;
+        height: 78px;
+        border-radius: 16px;
+        background: #e4f222;
+        color: #08090a;
+        font-size: 27px;
+        font-weight: 560;
+        letter-spacing: -0.01em;
+        display: grid;
+        place-items: center;
+      }
+      .app-foot {
+        margin-top: auto;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 20px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #62666d;
+      }
+
+      /* ── Scene 5 : outro ──────────────────────────────────── */
+      .s5-name {
+        margin: 34px 0 0;
+        font-size: 92px;
+        font-weight: 530;
+        letter-spacing: -0.022em;
+        color: #ffffff;
+        transform-origin: center center;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 30px;
+        padding: 10px 24px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 21px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: #d0d6e0;
+      }
+      .soon {
+        margin: 44px 0 0;
+        font-size: 104px;
+        font-weight: 510;
+        letter-spacing: -0.016em;
+        color: #ffffff;
+        transform-origin: center center;
+      }
+      .open-line {
+        margin: 26px 0 0;
+        font-size: 46px;
+        font-weight: 430;
+        letter-spacing: -0.012em;
+        color: #d0d6e0;
+      }
+      .micro {
+        margin: 34px 0 0;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 23px;
+        letter-spacing: 0.06em;
+        color: #8a8f98;
+      }
+      .slam { transform-origin: center center; }
+    </style>
+  </head>
+  <body>
+    <div data-hf-id="hf-enpg" id="root" data-composition-id="main" data-start="0" data-width="1920" data-height="1080" data-duration="20" data-fps="30">
+      <!-- ══ Scene 1 — Hook: One sentence (0 – 4.5) ══ -->
+      <section data-hf-id="hf-em2f" class="clip" id="scene-1-hook" data-start="0" data-duration="4.5">
+        <div data-hf-id="hf-rb5y" class="scene" id="s1-in">
+          <div data-hf-id="hf-506g" class="grid" id="s1-grid" data-layout-ignore=""></div>
+          <div data-hf-id="hf-6oxz" class="glow" id="s1-glow" data-layout-ignore="" style="left: 210px; top: 40px;"></div>
+          <div data-hf-id="hf-lkhn" class="ghost ghost-c" id="s1-ghost" data-layout-ignore="" style="top: 300px;">SOON</div>
+
+          <div data-hf-id="hf-uqit" class="corner c-tl meta" id="s1-tl">Talon</div>
+          <div data-hf-id="hf-cxis" class="corner c-tr meta" id="s1-tr">Early access</div>
+          <div data-hf-id="hf-e2uc" class="corner c-br meta" id="s1-br">01 / 05</div>
+
+          <div data-hf-id="hf-d1zs" class="stack">
+            <svg data-hf-id="hf-8gc3" class="mark fx" id="s1-mark" width="104" height="104" viewBox="0 0 18 18" fill="none" aria-hidden="">
+              <rect data-hf-id="hf-y1yp" x="1" y="1" width="16" height="16" rx="4" stroke="#ffffff" stroke-width="1.5" />
+              <circle data-hf-id="hf-8ycn" cx="9" cy="9" r="2.5" fill="#e4f222" />
+            </svg>
+            <h1 data-hf-id="hf-db9n" class="display fx" id="s1-l1" style="margin-top: 56px;">ONE SENTENCE.</h1>
+            <h1 data-hf-id="hf-j9jg" class="display fx" id="s1-l2" style="margin-top: 18px;">A SHIPPED APP.</h1>
+            <div data-hf-id="hf-wvqt" class="meta fx" id="s1-cap" style="margin-top: 54px;">Browser IDE · Solana Mobile</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Scene 2 — Reveal: the browser IDE (4.0 – 8.8) ══ -->
+      <section data-hf-id="hf-k0wg" class="clip" id="scene-2-ide" data-start="4" data-duration="4.8">
+        <div data-hf-id="hf-0nmf" class="scene" id="s2-in">
+          <div data-hf-id="hf-q9bx" class="grid" id="s2-grid" data-layout-ignore=""></div>
+          <div data-hf-id="hf-goh3" class="glow glow-warm" id="s2-glow" data-layout-ignore="" style="left: 640px; top: 380px;"></div>
+          <div data-hf-id="hf-3mrs" class="ghost" id="s2-ghost" data-layout-ignore="" style="left: 40px; top: 640px; font-size: 250px;">TALON</div>
+
+          <div data-hf-id="hf-5m36" class="corner c-tr meta" id="s2-tr">Browser IDE</div>
+          <div data-hf-id="hf-3tm8" class="corner c-br meta" id="s2-br">02 / 05</div>
+
+          <div data-hf-id="hf-3rfe" class="s2-head">
+            <span data-hf-id="hf-9au0" class="pill fx" id="s2-pill">
+              <svg data-hf-id="hf-9wdb" width="20" height="20" viewBox="0 0 18 18" fill="none" aria-hidden="">
+                <rect data-hf-id="hf-3aed" x="1" y="1" width="16" height="16" rx="4" stroke="#ffffff" stroke-width="1.5" />
+                <circle data-hf-id="hf-axs7" cx="9" cy="9" r="2.5" fill="#e4f222" />
+              </svg>
+              Talon-native AI coding platform
+            </span>
+            <h2 data-hf-id="hf-1524" class="s2-title fx" id="s2-title">Watch it get written.</h2>
+          </div>
+
+          <div data-hf-id="hf-o49e" class="ide" id="s2-ide">
+            <div data-hf-id="hf-d6wy" class="ide-top">
+              <div data-hf-id="hf-zx1w" class="dots"><i data-hf-id="hf-wt6k"></i><i data-hf-id="hf-zeb8"></i><i data-hf-id="hf-y7e5"></i></div>
+              <span data-hf-id="hf-mri2" class="gauge">talon — project · agent workspace</span>
+              <span data-hf-id="hf-q9gr" class="gauge" style="margin-left: auto;">seeker · redroid · adb</span>
+            </div>
+            <div data-hf-id="hf-9ojp" class="ide-body">
+              <div data-hf-id="hf-rbx4" class="stream">
+                <div data-hf-id="hf-0m0c" class="turn-label fx" id="s2-turn">Build · turn 01</div>
+                <div data-hf-id="hf-f87q" class="empty-state" id="s2-empty">The agent is your editor.</div>
+                <div data-hf-id="hf-cydq" class="composer">
+                  <div data-hf-id="hf-4yqi" class="composer-text">
+                    <span data-hf-id="hf-56dq" id="s2-typed"></span>
+                    <span data-hf-id="hf-hen1" class="underline" id="s2-underline"></span>
+                  </div>
+                  <div data-hf-id="hf-mtj2" class="send" id="s2-send">
+                    <svg data-hf-id="hf-hs5d" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                      <path data-hf-id="hf-hxjg" d="M12 19V5M12 5l-6 6M12 5l6 6" stroke="#08090a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+              <div data-hf-id="hf-l1ou" class="device">
+                <span data-hf-id="hf-moph" class="gauge">device · pixel_8_api_34</span>
+                <div data-hf-id="hf-rfzc" class="phone-s">
+                  <span data-hf-id="hf-rmvm" class="wait-dot" id="s2-waitdot"></span>
+                  <span data-hf-id="hf-2yv2" class="wait-text" id="s2-waittext">waiting for build</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Scene 3 — The plan executes (8.3 – 12.5) ══ -->
+      <section data-hf-id="hf-mi89" class="clip" id="scene-3-plan" data-start="8.3" data-duration="4.2">
+        <div data-hf-id="hf-6wek" class="scene" id="s3-in">
+          <div data-hf-id="hf-m1pu" class="grid" id="s3-grid" data-layout-ignore=""></div>
+          <div data-hf-id="hf-xnqf" class="glow" id="s3-glow" data-layout-ignore="" style="left: 10px; top: 20px;"></div>
+          <div data-hf-id="hf-tehz" class="ghost" id="s3-ghost" data-layout-ignore="" style="left: 1140px; top: 360px; font-size: 340px;">PLAN</div>
+          <div data-hf-id="hf-6lom" class="hairline-v" data-layout-ignore=""></div>
+
+          <div data-hf-id="hf-vdjx" class="corner c-tr s3-gauges fx" id="s3-tr">
+            <div data-hf-id="hf-thy4" class="row"><span data-hf-id="hf-s40h">Plan mode</span><span data-hf-id="hf-2ovv" class="lamp-lime"></span></div>
+            <div data-hf-id="hf-lt04" class="row"><span data-hf-id="hf-k3dj">Approval required</span></div>
+          </div>
+          <div data-hf-id="hf-sfds" class="corner c-br meta" id="s3-br">03 / 05</div>
+
+          <div data-hf-id="hf-f24z" class="plan-card" id="s3-card">
+            <div data-hf-id="hf-oak4" class="plan-head">
+              <div data-hf-id="hf-oss9" class="plan-ico">
+                <svg data-hf-id="hf-09g5" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-xtub" d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                </svg>
+              </div>
+              <h3 data-hf-id="hf-ch1r">Build plan</h3>
+              <span data-hf-id="hf-pmy3" class="plan-sub">4 steps · agent proposes, you approve</span>
+            </div>
+            <ul data-hf-id="hf-mwu1" class="plan-rows">
+              <li data-hf-id="hf-mim8" id="s3-r0">
+                <span data-hf-id="hf-kq1h" class="p-n">1</span>
+                <span data-hf-id="hf-4u2f" class="p-txt">Scaffold Expo screens</span>
+                <svg data-hf-id="hf-dwhv" class="p-ck" id="s3-c0" width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-rwt0" d="M5 13l4 4L19 7" stroke="#4cc069" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span data-hf-id="hf-syie" class="p-meta">+3 files</span>
+              </li>
+              <li data-hf-id="hf-naa1" id="s3-r1">
+                <span data-hf-id="hf-lwyk" class="p-n">2</span>
+                <span data-hf-id="hf-o5yb" class="p-txt">Wire MWA wallet</span>
+                <svg data-hf-id="hf-blyo" class="p-ck" id="s3-c1" width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-kbu4" d="M5 13l4 4L19 7" stroke="#4cc069" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span data-hf-id="hf-c46h" class="p-meta">+2 files</span>
+              </li>
+              <li data-hf-id="hf-r8e2" id="s3-r2">
+                <span data-hf-id="hf-linj" class="p-n">3</span>
+                <span data-hf-id="hf-rw0e" class="p-txt">Typecheck + lint</span>
+                <svg data-hf-id="hf-0wsh" class="p-ck" id="s3-c2" width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-j4x1" d="M5 13l4 4L19 7" stroke="#4cc069" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span data-hf-id="hf-8riv" class="p-meta">tsc</span>
+              </li>
+              <li data-hf-id="hf-v6i3" id="s3-r3">
+                <span data-hf-id="hf-mpkm" class="p-n">4</span>
+                <span data-hf-id="hf-rnq2" class="p-txt">Boot device</span>
+                <svg data-hf-id="hf-5l06" class="p-ck" id="s3-c3" width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-jj82" d="M5 13l4 4L19 7" stroke="#4cc069" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span data-hf-id="hf-r3d0" class="p-meta">6.2s</span>
+              </li>
+            </ul>
+            <div data-hf-id="hf-fnvi" class="plan-foot">
+              <span data-hf-id="hf-c9yp" class="plan-note">Checkpoints + undo on every step</span>
+              <span data-hf-id="hf-j2hp" class="approved fx" id="s3-approved">
+                <svg data-hf-id="hf-zvbv" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-gyag" d="M5 13l4 4L19 7" stroke="#08090a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                APPROVED
+              </span>
+            </div>
+          </div>
+
+          <div data-hf-id="hf-m2ze" class="tools-panel" id="s3-tools">
+            <div data-hf-id="hf-79u3" class="tool" id="s3-t0">
+              <span data-hf-id="hf-gm9w" class="ico">
+                <svg data-hf-id="hf-o30h" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-lir7" d="M5 13l4 4L19 7" stroke="#4cc069" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+              <span data-hf-id="hf-ukg0" class="verb">write_file</span>
+              <span data-hf-id="hf-llrw">· app/App.tsx</span>
+            </div>
+            <div data-hf-id="hf-3bq2" class="tool" id="s3-t1">
+              <span data-hf-id="hf-qj98" class="ico">
+                <svg data-hf-id="hf-fbdh" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-lx28" d="M5 13l4 4L19 7" stroke="#4cc069" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+              <span data-hf-id="hf-xch0" class="verb">shell</span>
+              <span data-hf-id="hf-xr95">· pnpm tsc --noEmit</span>
+            </div>
+            <div data-hf-id="hf-zdm1" class="tool" id="s3-t2">
+              <span data-hf-id="hf-pcc5" class="ico"><span data-hf-id="hf-0frc" class="tool-run" id="s3-spin"></span></span>
+              <span data-hf-id="hf-9x5o" class="verb">shell</span>
+              <span data-hf-id="hf-tb8y">· gradle assembleDebug</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Scene 4 — Verify, then live on device (12.0 – 16.5) ══ -->
+      <section data-hf-id="hf-ygul" class="clip" id="scene-4-verify" data-start="12" data-duration="4.5">
+        <div data-hf-id="hf-bot1" class="scene" id="s4-in">
+          <div data-hf-id="hf-7uzr" class="grid" id="s4-grid" data-layout-ignore=""></div>
+          <div data-hf-id="hf-ol1q" class="glow" id="s4-glow" data-layout-ignore="" style="left: 700px; top: 150px;"></div>
+          <div data-hf-id="hf-1m64" class="ghost" id="s4-ghost" data-layout-ignore="" style="left: 56px; top: 620px; font-size: 330px;">LIVE</div>
+
+          <div data-hf-id="hf-sa33" class="corner c-tr meta" id="s4-tr">Verify ladder</div>
+          <div data-hf-id="hf-3yrg" class="corner c-br meta" id="s4-br">04 / 05</div>
+
+          <h2 data-hf-id="hf-sinv" class="s4-title">
+            <span data-hf-id="hf-kko4" class="fx" id="s4-l1" style="display: block;">It won’t ship</span>
+            <span data-hf-id="hf-2fed" class="fx" id="s4-l2" style="display: block;">broken code.</span>
+          </h2>
+
+          <div data-hf-id="hf-qe54" class="ladder" id="s4-ladder">
+            <span data-hf-id="hf-5rz2" class="chip" id="s4-k0">
+              <span data-hf-id="hf-vjvm" class="c-dot"></span>
+              <span data-hf-id="hf-b56t" class="c-ck" id="s4-ck0">
+                <svg data-hf-id="hf-3oaj" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-o9mx" d="M5 13l4 4L19 7" stroke="#4cc069" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+              Static
+            </span>
+            <span data-hf-id="hf-tu53" class="chip" id="s4-k1">
+              <span data-hf-id="hf-0dvq" class="c-dot"></span>
+              <span data-hf-id="hf-efi4" class="c-ck" id="s4-ck1">
+                <svg data-hf-id="hf-d0u3" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-vtml" d="M5 13l4 4L19 7" stroke="#4cc069" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+              Runtime
+            </span>
+            <span data-hf-id="hf-g20y" class="chip" id="s4-k2">
+              <span data-hf-id="hf-0s6r" class="c-dot"></span>
+              <span data-hf-id="hf-pazr" class="c-ck" id="s4-ck2">
+                <svg data-hf-id="hf-cmj2" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-x0jo" d="M5 13l4 4L19 7" stroke="#4cc069" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+              Vision
+            </span>
+            <span data-hf-id="hf-sf9l" class="chip" id="s4-k3">
+              <span data-hf-id="hf-16hs" class="c-dot"></span>
+              <span data-hf-id="hf-hawm" class="c-ck" id="s4-ck3">
+                <svg data-hf-id="hf-c881" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="">
+                  <path data-hf-id="hf-wm8n" d="M5 13l4 4L19 7" stroke="#4cc069" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+              Interact
+            </span>
+          </div>
+
+          <div data-hf-id="hf-glp1" class="lamp-live" id="s4-live">
+            <span data-hf-id="hf-5pj1" class="dot" id="s4-livedot"></span>
+            <span data-hf-id="hf-ij0f" class="txt">Live · seeker</span>
+          </div>
+
+          <div data-hf-id="hf-xbk9" class="phone-b" id="s4-phone">
+            <div data-hf-id="hf-2bie" class="app-screen" id="s4-screen">
+              <div data-hf-id="hf-9ypw" class="app-title">Tip Jar</div>
+              <div data-hf-id="hf-1qxk" class="app-card">
+                <div data-hf-id="hf-6j9x" class="app-amount">$5</div>
+                <div data-hf-id="hf-8np9" class="app-cap">12 tips today · devnet</div>
+                <div data-hf-id="hf-10tm" class="app-btn">Sign in with Solana</div>
+              </div>
+              <div data-hf-id="hf-06tx" class="app-foot">MWA · seed vault</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Scene 5 — Outro: coming soon (16.0 – 20.0) ══ -->
+      <section data-hf-id="hf-vyjz" class="clip" id="scene-5-outro" data-start="16" data-duration="4">
+        <div data-hf-id="hf-tf0i" class="scene" id="s5-in">
+          <div data-hf-id="hf-n5d0" class="grid" id="s5-grid" data-layout-ignore=""></div>
+          <div data-hf-id="hf-mvkp" class="glow" id="s5-glow" data-layout-ignore="" style="left: 210px; top: 60px;"></div>
+          <div data-hf-id="hf-5sof" class="ghost ghost-c" id="s5-ghost" data-layout-ignore="" style="top: 300px;">SOON</div>
+
+          <div data-hf-id="hf-wqt3" class="corner c-tl meta fx" id="s5-tl">Talon</div>
+          <div data-hf-id="hf-0pbq" class="corner c-br meta fx" id="s5-br">05 / 05</div>
+          <div data-hf-id="hf-ozd3" class="corner c-bl meta fx" id="s5-bl">Solana Mobile · Expo SDK 55 · React Native</div>
+
+          <div data-hf-id="hf-g2wg" class="stack">
+            <div data-hf-id="hf-4z2h" class="slam fx" id="s5-slam">
+              <svg data-hf-id="hf-6yrp" class="mark" width="96" height="96" viewBox="0 0 18 18" fill="none" aria-hidden="" style="margin: 0 auto;">
+                <rect data-hf-id="hf-4hbg" x="1" y="1" width="16" height="16" rx="4" stroke="#ffffff" stroke-width="1.5" />
+                <circle data-hf-id="hf-ajh6" cx="9" cy="9" r="2.5" fill="#e4f222" />
+              </svg>
+              <h2 data-hf-id="hf-itfr" class="s5-name" id="s5-name">Talon</h2>
+            </div>
+            <div data-hf-id="hf-2tvm" class="badge fx" id="s5-badge">Early access</div>
+            <h1 data-hf-id="hf-2t03" class="soon fx" id="s5-soon">COMING SOON.</h1>
+            <p data-hf-id="hf-vzaj" class="open-line fx" id="s5-open">Building is open now.</p>
+            <p data-hf-id="hf-v9tt" class="micro fx" id="s5-micro">20 prompts · 60 minutes device time · free</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Audio ══ -->
+      <audio data-hf-id="hf-8t1h" id="bg-music" data-start="0" data-duration="20" data-track-index="10" data-volume="1" src="assets/music/happy-beats-business-moves-vol-12-by-ende-dot-app.mp3"></audio>
+
+      <!-- ══ Narration (Kokoro · bm_george) ══ -->
+      <audio data-hf-id="hf-s76j" id="vo-l1" data-start="0.40" data-track-index="40" data-volume="1.15" src="assets/voice/line1-george.wav"></audio>
+      <audio data-hf-id="hf-597w" id="vo-l2" data-start="4.80" data-track-index="41" data-volume="1.15" src="assets/voice/line2-george.wav"></audio>
+      <audio data-hf-id="hf-lymv" id="vo-l3" data-start="9.45" data-track-index="42" data-volume="1.15" src="assets/voice/line3-george.wav"></audio>
+      <audio data-hf-id="hf-wocb" id="vo-l4" data-start="13.45" data-track-index="43" data-volume="1.15" src="assets/voice/line4-george.wav"></audio>
+
+      <!-- Scene 1 -->
+      <audio data-hf-id="hf-njlu" id="sfx-hook" data-start="1.06" data-track-index="11" data-volume="0.65" src="assets/sfx/impact/impactSoft_medium_001.ogg"></audio>
+      <audio data-hf-id="hf-hr5j" id="sfx-line2" data-start="2.16" data-track-index="12" data-volume="0.40" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <!-- Scene 2 -->
+      <audio data-hf-id="hf-gknu" id="sfx-reveal" data-start="4.12" data-track-index="13" data-volume="0.70" src="assets/sfx/impact/impactBell_heavy_000.ogg"></audio>
+      <audio data-hf-id="hf-4hs7" id="sfx-key0" data-start="5.00" data-track-index="14" data-volume="0.30" src="assets/sfx/keyboard/keypress-001.wav"></audio>
+      <audio data-hf-id="hf-6702" id="sfx-key1" data-start="5.27" data-track-index="15" data-volume="0.30" src="assets/sfx/keyboard/keypress-003.wav"></audio>
+      <audio data-hf-id="hf-owvc" id="sfx-key2" data-start="5.54" data-track-index="16" data-volume="0.30" src="assets/sfx/keyboard/keypress-005.wav"></audio>
+      <audio data-hf-id="hf-5n5j" id="sfx-key3" data-start="5.81" data-track-index="17" data-volume="0.30" src="assets/sfx/keyboard/keypress-002.wav"></audio>
+      <audio data-hf-id="hf-p3is" id="sfx-key4" data-start="6.08" data-track-index="18" data-volume="0.30" src="assets/sfx/keyboard/keypress-007.wav"></audio>
+      <audio data-hf-id="hf-8ilh" id="sfx-key5" data-start="6.35" data-track-index="19" data-volume="0.30" src="assets/sfx/keyboard/keypress-004.wav"></audio>
+      <audio data-hf-id="hf-sc2s" id="sfx-send" data-start="7.06" data-track-index="20" data-volume="0.50" src="assets/sfx/interface/click_003.ogg"></audio>
+      <!-- Scene 3 -->
+      <audio data-hf-id="hf-8nhb" id="sfx-card" data-start="8.71" data-track-index="21" data-volume="0.55" src="assets/sfx/interface/drop_002.ogg"></audio>
+      <audio data-hf-id="hf-u5ee" id="sfx-row0" data-start="9.26" data-track-index="22" data-volume="0.42" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio data-hf-id="hf-1nxt" id="sfx-row1" data-start="9.80" data-track-index="23" data-volume="0.36" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio data-hf-id="hf-nvqe" id="sfx-row2" data-start="10.34" data-track-index="24" data-volume="0.36" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio data-hf-id="hf-j3ff" id="sfx-row3" data-start="10.90" data-track-index="25" data-volume="0.46" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio data-hf-id="hf-n3pb" id="sfx-approved" data-start="11.12" data-track-index="26" data-volume="0.45" src="assets/sfx/interface/drop_002.ogg"></audio>
+      <!-- Scene 4 -->
+      <audio data-hf-id="hf-h2en" id="sfx-chip0" data-start="13.08" data-track-index="27" data-volume="0.50" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio data-hf-id="hf-7bjs" id="sfx-chip3" data-start="14.70" data-track-index="28" data-volume="0.55" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio data-hf-id="hf-0j6b" id="sfx-live" data-start="15.12" data-track-index="29" data-volume="0.65" src="assets/sfx/interface/bong_001.ogg"></audio>
+      <!-- Scene 4 → 5 cut, outro -->
+      <audio data-hf-id="hf-ru7p" id="sfx-cut" data-start="16.00" data-track-index="30" data-volume="0.55" src="assets/sfx/impact/impactSoft_medium_001.ogg"></audio>
+      <audio data-hf-id="hf-l3t3" id="sfx-slam" data-start="17.44" data-track-index="31" data-volume="0.75" src="assets/sfx/impact/impactBell_heavy_003.ogg"></audio>
+      <audio data-hf-id="hf-n46u" id="sfx-badge" data-start="17.92" data-track-index="32" data-volume="0.40" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio data-hf-id="hf-s31h" id="sfx-soon" data-start="18.47" data-track-index="33" data-volume="0.45" src="assets/sfx/interface/drop_001.ogg"></audio>
+    </div>
+
+    <script>
+      (function () {
+        /* ── typed prompt: per-character spans (seek-safe, no callbacks) ── */
+        var PROMPT = "Build a tip jar with Solana sign-in";
+        var TYPE_START = 5.0;
+        var TYPE_STEP = 0.045;
+        var typedHost = document.getElementById("s2-typed");
+        var chars = [];
+        for (var i = 0; i < PROMPT.length; i++) {
+          var s = document.createElement("span");
+          s.className = "ch";
+          s.textContent = PROMPT.charAt(i) === " " ? " " : PROMPT.charAt(i);
+          typedHost.appendChild(s);
+          chars.push(s);
+        }
+
+        var tl = gsap.timeline({ paused: true });
+
+        /* ══ Scene 1 — Hook (0 – 4.5) ══ */
+        tl.fromTo("#s1-in", { opacity: 0, scale: 0.975 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power2.out" }, 0);
+        tl.to("#s1-grid", { y: -30, duration: 4.4, ease: "none" }, 0);
+        tl.fromTo("#s1-glow", { opacity: 0 }, { opacity: 1, duration: 0.9, ease: "power1.out" }, 0.1);
+        tl.fromTo("#s1-ghost", { x: -24 }, { x: 24, duration: 2.1, ease: "sine.inOut", yoyo: true, repeat: 1 }, 0.3);
+        tl.fromTo(["#s1-tl", "#s1-tr", "#s1-br"], { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0.35);
+        tl.fromTo("#s1-mark", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.55, ease: "power3.out" }, 0.35);
+        // beat-locked: 1.09s (strong beat)
+        tl.fromTo("#s1-l1", { opacity: 0, scale: 1.12 }, { opacity: 1, scale: 1, duration: 0.4, ease: "power4.out" }, 1.09);
+        // beat-grid: 2.19s
+        tl.fromTo("#s1-l2", { opacity: 0, scale: 1.12 }, { opacity: 1, scale: 1, duration: 0.4, ease: "power4.out" }, 2.19);
+        tl.fromTo("#s1-cap", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 2.95);
+
+        /* ══ Scene 2 — Reveal: browser IDE (4.0 – 8.8) ══ */
+        tl.fromTo("#s2-in", { opacity: 0, scale: 0.975 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power2.out" }, 4.0);
+        tl.to("#s2-grid", { y: -30, duration: 4.75, ease: "none" }, 4.0);
+        tl.fromTo("#s2-glow", { opacity: 0 }, { opacity: 1, duration: 0.8, ease: "power1.out" }, 4.1);
+        tl.to("#s2-glow", { scale: 1.05, duration: 2.3, ease: "sine.inOut", yoyo: true, repeat: 1 }, 4.1);
+        tl.fromTo("#s2-ghost", { x: -20 }, { x: 20, duration: 2.1, ease: "sine.inOut", yoyo: true, repeat: 1 }, 4.4);
+        tl.fromTo(["#s2-tr", "#s2-br"], { opacity: 0 }, { opacity: 1, duration: 0.5 }, 4.4);
+        // The reveal — deep bell lands with the window
+        tl.fromTo("#s2-ide", { opacity: 0, scale: 0.95, y: 56 }, { opacity: 1, scale: 1, y: 0, duration: 0.7, ease: "power3.out" }, 4.15);
+        tl.fromTo("#s2-pill", { opacity: 0, y: -16 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 4.5);
+        tl.fromTo("#s2-turn", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 4.7);
+        tl.fromTo("#s2-waitdot", { opacity: 0 }, { opacity: 1, duration: 0.35 }, 4.9);
+        tl.to("#s2-waitdot", { opacity: 0.35, duration: 0.6, ease: "sine.inOut", yoyo: true, repeat: 2 }, 5.25);
+        tl.fromTo("#s2-waittext", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 5.2);
+        tl.fromTo("#s2-empty", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 5.5);
+        // Prompt types character-by-character (zero-duration sets — seek-safe)
+        for (var c = 0; c < chars.length; c++) {
+          tl.set(chars[c], { opacity: 1 }, TYPE_START + c * TYPE_STEP);
+        }
+        tl.fromTo("#s2-underline", { scaleX: 0 }, { scaleX: 1, duration: chars.length * TYPE_STEP, ease: "none" }, TYPE_START);
+        // beat-grid: 7.09s send pulse
+        tl.to("#s2-send", { scale: 1.15, duration: 0.12, ease: "power2.out" }, 7.09);
+        tl.to("#s2-send", { scale: 1, duration: 0.18, ease: "power2.in" }, 7.21);
+        tl.fromTo("#s2-title", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.55, ease: "power3.out" }, 6.95);
+
+        /* ══ Scene 3 — The plan executes (8.3 – 12.5) ══ */
+        tl.fromTo("#s3-in", { opacity: 0, scale: 0.975 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power2.out" }, 8.3);
+        tl.to("#s3-grid", { y: -30, duration: 4.15, ease: "none" }, 8.3);
+        tl.fromTo("#s3-glow", { opacity: 0 }, { opacity: 1, duration: 0.7, ease: "power1.out" }, 8.35);
+        tl.to("#s3-glow", { scale: 1.05, duration: 1.95, ease: "sine.inOut", yoyo: true, repeat: 1 }, 8.4);
+        tl.fromTo("#s3-ghost", { x: 22 }, { x: -22, duration: 1.8, ease: "sine.inOut", yoyo: true, repeat: 1 }, 8.6);
+        tl.fromTo(["#s3-tr", "#s3-br"], { opacity: 0 }, { opacity: 1, duration: 0.5 }, 8.55);
+        // beat-locked: 8.74s (strong cue) — plan card lands
+        tl.fromTo("#s3-card", { opacity: 0, scale: 0.96, y: 24 }, { opacity: 1, scale: 1, y: 0, duration: 0.42, ease: "power3.out" }, 8.74);
+        // beat-grid: checklist ticks on 9.29 / 9.83 / 10.37 / 10.93
+        var rows = ["#s3-r0", "#s3-r1", "#s3-r2", "#s3-r3"];
+        var cks = ["#s3-c0", "#s3-c1", "#s3-c2", "#s3-c3"];
+        var ticks = [9.29, 9.83, 10.37, 10.93];
+        for (var r = 0; r < rows.length; r++) {
+          var t = ticks[r];
+          tl.to(rows[r] + " .p-n", { backgroundColor: "#e4f222", color: "#08090a", duration: 0.1, ease: "power1.out" }, t);
+          tl.to(rows[r] + " .p-txt", { color: "#ffffff", duration: 0.3, ease: "power1.out" }, t);
+          tl.fromTo(cks[r], { opacity: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 0.25, ease: "back.out(2)" }, t + 0.12);
+          tl.to(rows[r] + " .p-n", { backgroundColor: "rgba(39,166,68,0.16)", color: "#4cc069", duration: 0.35, ease: "power1.out" }, t + 0.45);
+        }
+        tl.fromTo("#s3-approved", { opacity: 0, scale: 0.8 }, { opacity: 1, scale: 1, duration: 0.35, ease: "back.out(2)" }, 11.15);
+        tl.fromTo("#s3-tools", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 11.1);
+        tl.fromTo("#s3-t0", { opacity: 0, x: -14 }, { opacity: 1, x: 0, duration: 0.35, ease: "power2.out" }, 11.2);
+        tl.fromTo("#s3-t1", { opacity: 0, x: -14 }, { opacity: 1, x: 0, duration: 0.35, ease: "power2.out" }, 11.45);
+        tl.fromTo("#s3-t2", { opacity: 0, x: -14 }, { opacity: 1, x: 0, duration: 0.35, ease: "power2.out" }, 11.7);
+        tl.to("#s3-spin", { rotation: 360, duration: 0.75, ease: "none" }, 11.7);
+
+        /* ══ Scene 4 — Verify, then live on device (12.0 – 16.5) ══ */
+        tl.fromTo("#s4-in", { opacity: 0, scale: 0.975 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power2.out" }, 12.0);
+        tl.to("#s4-grid", { y: -30, duration: 4.45, ease: "none" }, 12.0);
+        tl.fromTo("#s4-glow", { opacity: 0 }, { opacity: 1, duration: 0.7, ease: "power1.out" }, 12.1);
+        tl.to("#s4-glow", { scale: 1.06, duration: 2.15, ease: "sine.inOut", yoyo: true, repeat: 1 }, 12.1);
+        tl.fromTo("#s4-ghost", { x: -22 }, { x: 22, duration: 2.1, ease: "sine.inOut", yoyo: true, repeat: 1 }, 12.4);
+        tl.fromTo(["#s4-tr", "#s4-br"], { opacity: 0 }, { opacity: 1, duration: 0.5 }, 12.4);
+        tl.fromTo("#s4-l1", { opacity: 0, y: 44 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 12.35);
+        tl.fromTo("#s4-l2", { opacity: 0, y: 44 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 12.5);
+        tl.fromTo("#s4-ladder", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 12.85);
+        // beat-locked: 13.11s (strong cue) — first chip flips; then consecutive beats
+        var chips = ["#s4-k0", "#s4-k1", "#s4-k2", "#s4-k3"];
+        var chipCks = ["#s4-ck0", "#s4-ck1", "#s4-ck2", "#s4-ck3"];
+        var flips = [13.11, 13.64, 14.2, 14.73];
+        for (var k = 0; k < chips.length; k++) {
+          var ft = flips[k];
+          tl.to(chips[k], { backgroundColor: "rgba(39,166,68,0.13)", borderColor: "rgba(39,166,68,0.55)", color: "#4cc069", duration: 0.25, ease: "power1.out" }, ft);
+          tl.to(chips[k] + " .c-dot", { opacity: 0, duration: 0.15 }, ft + 0.05);
+          tl.fromTo(chipCks[k], { opacity: 0, scale: 0.5 }, { opacity: 1, scale: 1, duration: 0.25, ease: "back.out(2)" }, ft + 0.08);
+          tl.to(chips[k], { scale: 1.08, duration: 0.12, ease: "power2.out" }, ft);
+          tl.to(chips[k], { scale: 1, duration: 0.2, ease: "power2.in" }, ft + 0.12);
+        }
+        // The payoff — phone goes live
+        tl.fromTo("#s4-live", { opacity: 0, x: -14 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, 15.15);
+        tl.fromTo("#s4-screen", { opacity: 0, scale: 0.98 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power3.out" }, 15.15);
+        tl.to("#s4-livedot", { opacity: 0.4, duration: 0.42, ease: "sine.inOut", yoyo: true, repeat: 1 }, 15.6);
+
+        /* ══ Scene 5 — Outro: coming soon (16.0 – 20.0) ══ */
+        tl.fromTo("#s5-in", { opacity: 0, scale: 0.975 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power2.out" }, 16.0);
+        tl.to("#s5-grid", { y: -30, duration: 3.95, ease: "none" }, 16.0);
+        tl.fromTo("#s5-glow", { opacity: 0 }, { opacity: 1, duration: 0.7, ease: "power1.out" }, 16.1);
+        tl.fromTo("#s5-ghost", { x: -30, opacity: 0.4 }, { x: 16, opacity: 1, duration: 3.3, ease: "sine.out" }, 16.5);
+        tl.fromTo(["#s5-tl", "#s5-br", "#s5-bl"], { opacity: 0 }, { opacity: 1, duration: 0.5 }, 16.7);
+        // beat-locked: 17.47s (strong cue) — the mark + name slam
+        tl.fromTo("#s5-slam", { opacity: 0, scale: 1.14 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power4.out" }, 17.47);
+        tl.fromTo("#s5-badge", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 17.95);
+        tl.fromTo("#s5-micro", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 18.02);
+        // beat-grid: 18.50 (near strong cue 18.56)
+        tl.fromTo("#s5-soon", { opacity: 0, scale: 1.08 }, { opacity: 1, scale: 1, duration: 0.45, ease: "power4.out" }, 18.5);
+        tl.fromTo("#s5-open", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 18.72);
+
+        /* ══ Music: fade in → duck under narration → swell at the slam → fade out.
+              Absolute gains, sequential non-overlapping tweens. ══ */
+        tl.fromTo("#bg-music", { volume: 0 }, { volume: 0.32, duration: 0.35, ease: "power1.out" }, 0);
+        tl.to("#bg-music", { volume: 0.19, duration: 0.25, ease: "power1.inOut" }, 0.40);   // carve A: L1+L2
+        tl.to("#bg-music", { volume: 0.32, duration: 0.30, ease: "power1.inOut" }, 7.47);   // restore A
+        tl.to("#bg-music", { volume: 0.18, duration: 0.25, ease: "power1.inOut" }, 9.40);   // carve B: L3+L4
+        tl.to("#bg-music", { volume: 0.32, duration: 0.24, ease: "power1.inOut" }, 16.91);  // restore B
+        tl.to("#bg-music", { volume: 0.42, duration: 0.30, ease: "power1.in" }, 17.15);     // swell peaks on the slam
+        tl.to("#bg-music", { volume: 0, duration: 1.0, ease: "power1.out" }, 19.0);         // fade out
+
+        /* ══ Audio-reactive: pre-extracted bands → subtle presence ══
+           bass (band 0) breathes the hero glows; treble (band 14) gives the
+           wordmark a soft lift after it lands. No waveform visuals. */
+        var AD = window.__AUDIO_DATA;
+        if (AD && AD.frames && AD.frames.length) {
+          var CAP = Math.min(AD.totalFrames, 600); // composition is 20s @30fps
+          for (var f = 0; f < CAP; f++) {
+            tl.call(
+              (function (fr) {
+                return function () {
+                  var t = fr / AD.fps;
+                  var bands = AD.frames[fr].bands;
+                  var bass = bands[0];
+                  var treble = bands[14];
+                  if (t <= 4.45) {
+                    gsap.set("#s1-glow", { scale: 1 + bass * 0.1 });
+                  }
+                  if (t >= 16.55) {
+                    gsap.set("#s5-glow", { scale: 1 + bass * 0.09 });
+                    if (t >= 17.95) {
+                      gsap.set("#s5-name", { scale: 1 + treble * 0.022 });
+                    }
+                  }
+                };
+              })(f),
+              [],
+              f / AD.fps
+            );
+          }
+        }
+
+        window.__timelines["main"] = tl;
+      })();
+    </script>
+  </body>
+</html>

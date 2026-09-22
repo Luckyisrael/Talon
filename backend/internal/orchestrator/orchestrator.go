@@ -1015,7 +1015,23 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			return outcome, fmt.Errorf("durability barrier failed before model dispatch")
 		}
 
-		result, err := client.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
+		// The sink forwards each delta the provider emits to the client as it
+		// lands, so a model call is watched instead of waited on. Without it
+		// ChatWithTools buffers the whole response and the UI shows nothing but
+		// a spinner for the full duration of the call.
+		streamed := false
+		sink := func(text string, thinking bool) {
+			if !streamed {
+				streamed = true
+			}
+			if thinking {
+				sess.Emitter.EmitThinking(text)
+			} else {
+				sess.Emitter.EmitText(text)
+			}
+		}
+
+		result, err := client.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools, sink)
 		if err != nil {
 			// H2: the request-error decision is a listener (harness/loop), not
 			// inline policy. The default listener reproduces today's behavior
@@ -1032,7 +1048,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 				if dec.RetryModel != "" && dec.RetryModel != client.Model() {
 					retryClient = o.ai.WithModel(dec.RetryModel).WithRetryHook(retryHook)
 				}
-				result, err = retryClient.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
+				result, err = retryClient.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools, sink)
 				if err == nil {
 					if retryClient.Model() != routedModel {
 						routedModel = retryClient.Model()
@@ -1052,7 +1068,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 				case <-time.After(dec.Backoff):
 				case <-ctx.Done():
 				}
-				result, err = client.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools)
+				result, err = client.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools, sink)
 			case loop.ErrorTerminal:
 				// Fall through to the error exit below.
 			}
@@ -1086,13 +1102,17 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		}
 
 		// Forward the model's own words. Without this the user watches a build
-		// happen with no idea what the agent thinks it is doing.
-		for _, b := range result.Blocks {
-			switch b.Type {
-			case "text":
-				sess.Emitter.EmitText(b.Text)
-			case "thinking":
-				sess.Emitter.EmitThinking(b.Text)
+		// happen with no idea what the agent thinks it is doing. When the sink
+		// already streamed them delta by delta, skip: re-emitting the assembled
+		// text would say everything twice, once complete and once in pieces.
+		if !streamed {
+			for _, b := range result.Blocks {
+				switch b.Type {
+				case "text":
+					sess.Emitter.EmitText(b.Text)
+				case "thinking":
+					sess.Emitter.EmitThinking(b.Text)
+				}
 			}
 		}
 
@@ -2624,6 +2644,19 @@ func (o *Orchestrator) enrichPromptWithContext(sess *SessionState, systemPrompt 
 		})
 	}
 
+	// known files — the files already read or written this session. This is the
+	// pre-read half of the anti-reread discipline: a notice on the tool result
+	// arrives after the wasted round, but a list in the prompt arrives before
+	// the model decides to read. Without it the model re-fetches files it can
+	// already see, and a fifty-line file gets read twenty times.
+	if known := renderKnownFiles(sess); known != "" {
+		reg.Register(promptsec.Section{
+			Name:   "project/known-files",
+			Weight: promptsec.WeightProjectMap + 10,
+			Render: func() string { return renderKnownFiles(sess) },
+		})
+	}
+
 	// plan checklist — the settled screens/features; varies only when a
 	// task's status flips.
 	if tasks := sess.GetTasks(); len(tasks) > 0 {
@@ -2740,6 +2773,27 @@ func sanitizeMemory(s string) string {
 	// Break any remaining "##" header attempts inside.
 	s = strings.ReplaceAll(s, "##", "# #")
 	return s
+}
+
+// renderKnownFiles lists the files the model has already read or written this
+// session, so it can tell a file it holds from one it has never seen. This is
+// the front half of the anti-reread discipline: the tool-result note arrives
+// after a wasted round, this list arrives before the read is decided. Bounded —
+// the session caps KnownFiles at 150, and the list is paths only, no bodies.
+func renderKnownFiles(sess *SessionState) string {
+	paths := sess.KnownFileList()
+	if len(paths) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Files you have already read or written\n\n")
+	b.WriteString("These files are in your context already — their current contents were fetched or\n")
+	b.WriteString("written this session. Do not read_file one of them again unless it has changed on\n")
+	b.WriteString("disk since; re-reading what you already hold only spends a round.\n\n")
+	for _, p := range paths {
+		fmt.Fprintf(&b, "- %s\n", p)
+	}
+	return b.String()
 }
 
 // renderPlanChecklist formats the seeded plan tasks as a done/remaining checklist

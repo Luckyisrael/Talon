@@ -360,6 +360,13 @@ export const sessionsApi = {
   get(id: number) {
     return request<Session>(`/v1/sessions/${id}`)
   },
+  // The discovery path. A session started from the web IDE — or by any other
+  // client — is invisible to this app otherwise, because the id was never in
+  // this device's SecureStore. The server is the source of truth; asking it
+  // is what keeps every client showing the same device. 204 means idle.
+  live(projectId: number) {
+    return request<Session | null>(`/v1/projects/${projectId}/live-session`)
+  },
   destroy(id: number) {
     return request<void>(`/v1/sessions/${id}`, { method: 'DELETE' })
   },
@@ -397,13 +404,23 @@ export async function openStream(
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(init?.headers as Record<string, string>),
   }
+  // TEMP DIAGNOSTIC — stage markers so the build screen can show exactly where
+  // the SSE stream stalls. The symptom is events=0: nothing reaches the app,
+  // so the failure is in the transport, not the reducer. These marks pin it.
+  const marks: string[] = []
+  const mark = (stage: string) => {
+    marks.push(stage)
+    onEvent({ kind: 'diag', data: stage })
+  }
   ;(async () => {
     try {
+      mark('fetch-start')
       let res = await fetch(`${BASE}${path}`, {
         ...init,
         signal: controller.signal,
         headers,
       })
+      mark(`status-${res.status}`)
       // Streams open rarely but live long: a 401 here gets the same silent
       // rotation as request(), once, before the session is treated as dead.
       if (res.status === 401 && token) {
@@ -414,20 +431,30 @@ export async function openStream(
             signal: controller.signal,
             headers: { ...headers, Authorization: `Bearer ${fresh}` },
           })
+          mark(`retry-status-${res.status}`)
         } catch {
           // Refresh failed: the handling below reports it.
         }
       }
       if (!res.ok || !res.body) {
+        mark(`no-body-or-not-ok-ok=${res.ok}-body=${res.body != null}`)
         throw new Error(`stream failed (${res.status})`)
       }
+      mark('has-body')
       const reader = res.body.getReader()
+      mark('has-reader')
       const decoder = new TextDecoder()
       let buf = ''
       let kind = ''
+      let chunks = 0
       for (;;) {
         const { done, value } = await reader.read()
-        if (done) break
+        if (done) {
+          mark('read-done')
+          break
+        }
+        chunks += 1
+        if (chunks <= 3) mark(`chunk-${chunks}-bytes=${value?.length ?? 0}`)
         buf += decoder.decode(value, { stream: true })
         let nl: number
         while ((nl = buf.indexOf('\n')) >= 0) {
@@ -441,9 +468,13 @@ export async function openStream(
           }
         }
       }
+      mark('loop-exit')
     } catch (err) {
       if (!controller.signal.aborted) {
+        mark(`error:${err instanceof Error ? err.message : String(err)}`)
         onError?.(err instanceof Error ? err : new Error(String(err)))
+      } else {
+        mark('aborted')
       }
     }
   })()

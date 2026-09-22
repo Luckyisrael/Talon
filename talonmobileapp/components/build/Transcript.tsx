@@ -17,6 +17,10 @@ const MAX_LINES = 6
 export interface RestoredTurn {
   role: string
   blocks: ConversationBlock[]
+  /** The prompt this turn belongs to. The live tail keys its retirement on
+   *  this: once history contains the prompt id in flight, the optimistic rows
+   *  hand off to the durable ones and nothing is shown twice. */
+  prompt_id?: number
 }
 
 // RestoredTranscript renders stored turns with the same vocabulary as the

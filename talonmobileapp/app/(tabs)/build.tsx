@@ -61,7 +61,7 @@ export default function BuildScreen() {
   // the bottom of this screen in every sub-view.
   const project = useActiveProject();
   const projectId = project?.id ?? null;
-  const { turn, send, answer, answerPrompt, stop } = usePromptStream(projectId);
+  const { turn, send, answer, answerPrompt, stop, diag } = usePromptStream(projectId);
   const [draft, setDraft] = React.useState('');
   const [mode, setMode] = React.useState<'plan' | 'build'>('build');
   const [answers, setAnswers] = React.useState<string[]>([]);
@@ -125,6 +125,20 @@ export default function BuildScreen() {
   );
 
   const busy = turn.phase === 'streaming';
+
+  // The optimistic tail is visible while the turn is in flight AND for the
+  // brief settled window after done/error, until loadHistory returns the
+  // turns for this prompt id — then the transcript carries them and the tail
+  // retires so nothing is shown twice. Without the retirement check a finished
+  // turn's streamed text and tool rows would duplicate the rows history just
+  // loaded.
+  const historyHasTurn = React.useMemo(
+    () => (turn.promptId != null && history.some((t) => t.prompt_id === turn.promptId)),
+    [history, turn.promptId],
+  );
+  const liveVisible =
+    (turn.phase === 'streaming' || turn.phase === 'waiting' || turn.phase === 'done' || turn.phase === 'error') &&
+    !historyHasTurn;
 
   function addPicked(assets: { uri: string; name?: string | null; mimeType?: string | null; fileSize?: number | null }[]) {
     if (pendingBlock()) return;
@@ -297,100 +311,158 @@ export default function BuildScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadHistory()} tintColor={Colors.fog} />}
       >
         <View style={styles.stack}>
-          {/* The transcript renders whenever the turn is not streaming. The
-              phase used to gate on 'idle' alone, and since nothing ever moved
-              a finished or failed turn back to idle, the history fetched on
-              done/error stayed invisible behind a closed gate — the transcript
-              read as empty and every previous prompt "disappeared". DSH's rule:
-              the UI is a projection of the durable log, and the log is what
-              shows; in-memory phase only ever hides it while work is live. */}
-          {turn.phase !== 'streaming' && history.length > 0 && (
+          {/* The transcript is always rendered. It is the durable log, and the
+              visible list is a projection of it — sending a prompt must append
+              below, not replace what is above. It used to gate on a phase that
+              flipped to 'streaming' on send, which unmounted the whole history
+              the moment you tapped send and made the conversation "disappear".
+              The empty state only shows when there is genuinely nothing. */}
+          {history.length > 0 && projectId != null && (
             <View style={styles.recent}>
-              <View style={styles.recentHead}>
-                <UIText variant="label" tone="faint">Transcript</UIText>
-                {historyStale && (
-                  <UIText variant="monoSm" tone="faint">
-                    offline snapshot
-                  </UIText>
-                )}
-              </View>
-              {projectId != null && (
-                <RestoredTranscript
-                  turns={history}
-                  projectId={projectId}
-                  waitingPromptId={waitingId}
-                  onAnswer={(pid, text) => void answerPrompt(pid, text)}
-                />
+              {historyStale && (
+                <UIText variant="monoSm" tone="faint">
+                  offline snapshot
+                </UIText>
               )}
+              <RestoredTranscript
+                turns={history}
+                projectId={projectId}
+                waitingPromptId={waitingId}
+                onAnswer={(pid, text) => void answerPrompt(pid, text)}
+              />
             </View>
           )}
-          {turn.phase !== 'streaming' && history.length === 0 && (
+          {history.length === 0 && turn.phase === 'idle' && (
             <UIText variant="body" tone="muted" style={styles.empty}>
               Describe what you want. The agent plans, writes files, and verifies on the device.
             </UIText>
           )}
 
-          {/* Live task updates, the plan shape the agent is working to. */}
-          {turn.tasks.map((t: PlanTask) => (
-            <View key={t.id} style={styles.taskRow}>
-              <View style={[styles.taskBox, t.status === 'completed' && styles.taskBoxDone]}>
-                {t.status === 'completed' && <UIText style={styles.tick}>✓</UIText>}
-              </View>
-              <View style={styles.taskText}>
-                <UIText variant="bodySm" tone={t.status === 'completed' ? 'faint' : 'hero'}>
-                  {t.description}
+          {/* The live turn — the optimistic tail. It renders below the
+              transcript while work is in flight and retires the moment the
+              history absorbs this prompt (loadHistory runs on done/error), so
+              rows never duplicate. This is DSH's one-list model: the stream
+              appends to the same array the history fills, instead of swapping
+              places with it. */}
+          {liveVisible && (
+            <View style={styles.liveTurn}>
+              {turn.userEcho ? (
+                <UIText variant="body" tone="hero">
+                  {turn.userEcho}
                 </UIText>
-                {!!t.result && (
-                  <UIText variant="caption" tone="muted" numberOfLines={3}>
-                    {t.result}
+              ) : null}
+
+              {/* Live task updates, the plan shape the agent is working to. */}
+              {turn.tasks.map((t: PlanTask) => (
+                <View key={t.id} style={styles.taskRow}>
+                  <View style={[styles.taskBox, t.status === 'completed' && styles.taskBoxDone]}>
+                    {t.status === 'completed' && <UIText style={styles.tick}>✓</UIText>}
+                  </View>
+                  <View style={styles.taskText}>
+                    <UIText variant="bodySm" tone={t.status === 'completed' ? 'faint' : 'hero'}>
+                      {t.description}
+                    </UIText>
+                    {!!t.result && (
+                      <UIText variant="caption" tone="muted" numberOfLines={3}>
+                        {t.result}
+                      </UIText>
+                    )}
+                  </View>
+                </View>
+              ))}
+
+              {/* The live tool trace. */}
+              {turn.toolCalls.map((c, i) => {
+                const meta = toolRow(c.name);
+                return (
+                  <TraceRow
+                    key={i}
+                    tool={c.name.split(' ')[0]}
+                    label={meta.label}
+                    target={meta.target ?? c.name}
+                    status={c.status === 'completed' ? 'done' : c.status === 'error' ? 'fail' : 'running'}
+                  />
+                );
+              })}
+
+              {/* The ask_user pause, the negotiation-first law, mobile side. */}
+              {turn.phase === 'waiting' && turn.question && (
+                <QuestionCard
+                  question={turn.question}
+                  choices={['Yes, proceed', 'No, stop']}
+                  onAnswer={(a) => {
+                    setAnswers((prev) => [...prev, a]);
+                    answer(a);
+                  }}
+                />
+              )}
+              {answers.map((a, i) => (
+                <UIText key={i} variant="caption" tone="faint">
+                  → answered: {a}
+                </UIText>
+              ))}
+
+              {/* Live command output — typecheck, lint and build stdout as it
+                  prints. The web streams this to a terminal pane and into the
+                  trace; the mobile shows the bounded tail, which is what tells
+                  you what the tools are doing right now. */}
+              {turn.output !== '' && (
+                <View style={styles.outputBox}>
+                  <UIText variant="monoSm" tone="faint" numberOfLines={8}>
+                    {turn.output}
                   </UIText>
-                )}
-              </View>
+                </View>
+              )}
+
+              {/* The model's reasoning, streamed live. This is the bulk of
+                  what a turn produces while the user watches — a build emits
+                  hundreds of thinking deltas — and it is what fills the dead
+                  window between sending the prompt and the first tool call.
+                  Rendered before the text, as the web orders it: the decision
+                  before the act. */}
+              {turn.thinking !== '' && (
+                <View style={styles.thinkingBox}>
+                  <UIText variant="caption" tone="faint">Thinking</UIText>
+                  <UIText variant="bodySm" tone="muted" style={styles.thinkingText}>
+                    {turn.thinking}
+                  </UIText>
+                </View>
+              )}
+
+              {/* The assistant's streamed text. */}
+              {turn.text !== '' && (
+                <UIText variant="body" tone="hero" style={styles.echo}>
+                  {turn.text}
+                </UIText>
+              )}
+
+              {busy && <PixelGrid label={turn.activity ?? 'Working'} variant="Drive" />}
             </View>
-          ))}
-
-          {/* The live tool trace, shown only while streaming. Once the turn
-              settles the transcript carries the same rows durably (the
-              turn_end marker says how they ended), so the in-memory trace hands
-              off rather than duplicating rows. */}
-          {turn.phase === 'streaming' && turn.toolCalls.map((c, i) => {
-            const meta = toolRow(c.name);
-            return (
-              <TraceRow
-                key={i}
-                tool={c.name.split(' ')[0]}
-                label={meta.label}
-                target={meta.target ?? c.name}
-                status={c.status === 'completed' ? 'done' : c.status === 'error' ? 'fail' : 'running'}
-              />
-            );
-          })}
-
-          {/* The ask_user pause, the negotiation-first law, mobile side. */}
-          {turn.phase === 'waiting' && turn.question && (
-            <QuestionCard
-              question={turn.question}
-              choices={['Yes, proceed', 'No, stop']}
-              onAnswer={(a) => {
-                setAnswers((prev) => [...prev, a]);
-                answer(a);
-              }}
-            />
           )}
-          {answers.map((a, i) => (
-            <UIText key={i} variant="caption" tone="faint">
-              → answered: {a}
-            </UIText>
-          ))}
 
-          {/* The assistant's streamed text. */}
-          {turn.text !== '' && (
-            <UIText variant="body" tone="hero" style={styles.echo}>
-              {turn.text}
+          {/* A settled turn's failure, shown only briefly before loadHistory
+              absorbs it into the transcript above. */}
+          {!liveVisible && turn.phase === 'error' && (
+            <UIText variant="bodySm" tone="faint" style={{ color: Colors.coralRed }}>
+              {turn.error}
             </UIText>
           )}
 
-          {busy && <PixelGrid label="Working" variant="Drive" />}
+          {/* TEMP DIAGNOSTIC — shows exactly what the SSE stream delivered to
+              this app, so we can see whether events arrive live or only at the
+              end. Remove once streaming works. */}
+          {turn.phase !== 'idle' && (
+            <View style={styles.diagBox}>
+              <UIText variant="monoSm" tone="faint">
+                DIAG events={diag.count} kinds={diag.kinds.join(',') || 'none'}
+              </UIText>
+              {diag.lastData ? (
+                <UIText variant="monoSm" tone="faint" numberOfLines={3}>
+                  last: {diag.lastData}
+                </UIText>
+              ) : null}
+            </View>
+          )}
         </View>
       </ScrollView>
       )}
@@ -523,4 +595,14 @@ const styles = StyleSheet.create({
   btnOff: { opacity: 0.35 },
   recent: { gap: 8, padding: 10, backgroundColor: Colors.obsidian, borderRadius: 8 },
   recentHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  // The optimistic tail. It sits below the transcript, so the only separation
+  // it needs from the settled rows above is a top rule — the conversation is
+  // one continuous scroll, not a panel swap.
+  liveTurn: { gap: 12, paddingVertical: 8, borderTopWidth: 1, borderTopColor: Colors.graphite, marginTop: 8 },
+  // Reasoning is set apart from the model's prose by surface, not colour: it
+  // reads as the machine's working, subordinate to what it eventually says.
+  thinkingBox: { gap: 4, padding: 10, backgroundColor: Colors.carbon, borderRadius: 8 },
+  thinkingText: { lineHeight: 18 },
+  outputBox: { padding: 10, backgroundColor: Colors.void, borderRadius: 8 },
+  diagBox: { padding: 8, backgroundColor: Colors.carbon, borderRadius: 8, gap: 4 },
 });
