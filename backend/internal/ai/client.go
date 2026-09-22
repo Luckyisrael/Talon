@@ -393,6 +393,15 @@ func (c *Client) Plan(ctx context.Context, systemPrompt string, history []Prompt
 	return &PlanResponse{Message: StripCodeBlocks(resp2)}, nil
 }
 
+// ParsePlan parses a final plan-mode reply's envelope — the same contract
+// ai.Plan applies internally, exported for callers that finalise a reply
+// themselves (the W3.1 plan tool loop decides its own corrective round, then
+// hands the raw text to the doors exactly as the stream door has always
+// received it). Anything that isn't the envelope reports false.
+func ParsePlan(resp string) (*PlanResponse, bool) {
+	return parsePlan(resp)
+}
+
 // parsePlan reports whether a reply is a usable PlanResponse.
 func parsePlan(resp string) (*PlanResponse, bool) {
 	var p PlanResponse

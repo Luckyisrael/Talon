@@ -222,7 +222,25 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if req.Mode == "plan" {
-		planResp, err := h.ai.Plan(ctx, h.planPrompt, h.planHistory(req.ProjectID, h.buildUserTurn(attachments, req.Prompt)))
+		hist := h.planHistory(req.ProjectID, h.buildUserTurn(attachments, req.Prompt))
+		var planResp *ai.PlanResponse
+		if planToolsEnabled() {
+			// W3.1: eyes on — the bounded read-only loop answers in the same
+			// raw envelope the tool-less path produced, finalised under
+			// ai.Plan's contract (parse, else message-only), so everything
+			// below is shape-identical with the flag on or off.
+			raw, perr := h.planWithTools(ctx, req.ProjectID, h.planPrompt, hist)
+			err = perr
+			if perr == nil {
+				if p, ok := ai.ParsePlan(raw); ok {
+					planResp = p
+				} else {
+					planResp = &ai.PlanResponse{Message: ai.StripCodeBlocks(raw)}
+				}
+			}
+		} else {
+			planResp, err = h.ai.Plan(ctx, h.planPrompt, hist)
+		}
 		if err != nil {
 			log.Printf("plan failed (user %d, project %d): %v", userID, req.ProjectID, err)
 			h.store.UpdatePromptStatus(prompt.ID, "failed", 0)
@@ -614,54 +632,80 @@ func (h *PromptHandler) Discard(w http.ResponseWriter, r *http.Request) {
 // streamPlan proxies the model's stream to the client, then parses the finished
 // text into a plan.
 func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID, userID int64, userTurn ai.Message) {
-	// The system prompt was previously omitted here while the output was still
-	// parsed as a plan, so plan mode had no instructions at all.
-	stream := h.ai.ChatStream(ctx, h.planPrompt, h.planHistory(projectID, userTurn))
-
-	var full strings.Builder
-	sawError := false
-
-	for event := range stream {
-		switch event.Type {
-		case "thinking.start", "thinking.delta", "thinking.end":
-			// Plan replies are JSON; the model's private reasoning is not the
-			// reply. Streaming it verbatim dumped raw chain-of-thought into the
-			// chat. Nothing is forwarded here — the parsed plan carries the
-			// message the user actually reads.
-		case "text.start", "text.end":
-			// The streamed text is the raw JSON envelope, not something the user
-			// should watch form. It is buffered below and reaches the client only
-			// as the parsed plan/message.
-		case "text.delta":
-			if td, ok := event.Data.(ai.StreamTextDelta); ok {
-				full.WriteString(td.Text)
+	var raw string
+	if planToolsEnabled() {
+		// W3.1: eyes on — the bounded read-only loop produces the final text
+		// directly. Its failures land in the same terminal handling the
+		// stream error path applies, and the tail below parses raw exactly
+		// as it always has (the Answer door inherits this path unchanged).
+		loopRaw, err := h.planWithTools(ctx, projectID, h.planPrompt, h.planHistory(projectID, userTurn))
+		if err != nil {
+			writeSSE(w, "error", map[string]string{"message": friendlyAIError(err)})
+			h.store.UpdatePromptResponse(promptID, "Error: "+friendlyAIError(err))
+			// Give a plan turn that errored or was cut off a terminal status
+			// too, so a later reload does not offer to resume it. Plan turns
+			// are not resumable; the marker just keeps the row from looking
+			// interrupted forever.
+			if ctx.Err() != nil {
+				h.store.UpdatePromptStatus(promptID, "cancelled", 0)
+			} else {
+				h.store.UpdatePromptStatus(promptID, "failed", 0)
 			}
-		case "error":
-			sawError = true
-			writeSSE(w, "error", map[string]string{"message": event.Error})
-			h.store.UpdatePromptResponse(promptID, "Error: "+event.Error)
+			writeSSE(w, "done", map[string]string{"status": "error"})
+			flusher.Flush()
+			return
 		}
-		flusher.Flush()
-	}
+		raw = ai.StripCodeBlocks(loopRaw)
+	} else {
+		// The system prompt was previously omitted here while the output was
+		// still parsed as a plan, so plan mode had no instructions at all.
+		stream := h.ai.ChatStream(ctx, h.planPrompt, h.planHistory(projectID, userTurn))
 
-	if sawError || ctx.Err() != nil {
-		// Give a plan turn that errored or was cut off a terminal status too, so a
-		// later reload does not offer to resume it. Plan turns are not resumable;
-		// the marker just keeps the row from looking interrupted forever.
-		if ctx.Err() != nil {
-			h.store.UpdatePromptStatus(promptID, "cancelled", 0)
-		} else {
-			h.store.UpdatePromptStatus(promptID, "failed", 0)
+		var full strings.Builder
+		sawError := false
+
+		for event := range stream {
+			switch event.Type {
+			case "thinking.start", "thinking.delta", "thinking.end":
+				// Plan replies are JSON; the model's private reasoning is not the
+				// reply. Streaming it verbatim dumped raw chain-of-thought into the
+				// chat. Nothing is forwarded here — the parsed plan carries the
+				// message the user actually reads.
+			case "text.start", "text.end":
+				// The streamed text is the raw JSON envelope, not something the user
+				// should watch form. It is buffered below and reaches the client only
+				// as the parsed plan/message.
+			case "text.delta":
+				if td, ok := event.Data.(ai.StreamTextDelta); ok {
+					full.WriteString(td.Text)
+				}
+			case "error":
+				sawError = true
+				writeSSE(w, "error", map[string]string{"message": event.Error})
+				h.store.UpdatePromptResponse(promptID, "Error: "+event.Error)
+			}
+			flusher.Flush()
 		}
-		writeSSE(w, "done", map[string]string{"status": "error"})
-		flusher.Flush()
-		return
+
+		if sawError || ctx.Err() != nil {
+			// Give a plan turn that errored or was cut off a terminal status too, so a
+			// later reload does not offer to resume it. Plan turns are not resumable;
+			// the marker just keeps the row from looking interrupted forever.
+			if ctx.Err() != nil {
+				h.store.UpdatePromptStatus(promptID, "cancelled", 0)
+			} else {
+				h.store.UpdatePromptStatus(promptID, "failed", 0)
+			}
+			writeSSE(w, "done", map[string]string{"status": "error"})
+			flusher.Flush()
+			return
+		}
+		raw = ai.StripCodeBlocks(full.String())
 	}
 
 	// The model is asked for JSON. Send the human-readable message to the client
 	// as its own event so the UI never has to display raw JSON, and hand over the
 	// structured plan alongside it.
-	raw := ai.StripCodeBlocks(full.String())
 	var planResp ai.PlanResponse
 	if json.Unmarshal([]byte(raw), &planResp) == nil && (planResp.Message != "" || planResp.Plan != nil) {
 		h.savePlan(projectID, &planResp)

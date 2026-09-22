@@ -519,3 +519,25 @@ and search keep reading legacy until W2.3 flips them with the same gate.
 
 **Gates (all green, local = CI):** package tests (21 pkts) → `make evals`
 → `go test -race ./...` (41 pkts).
+
+---
+
+## W3.A — plan-with-eyes: bounded read-only tool loop (committed `TALONSTUDIO_PLAN_TOOLS=v1`)
+
+**Plan:** `PLAN_WORLDCLASS.md` W3.1 (project map + `Plan` reads code) + W3.3 (round cap); register row 12 (partially).
+
+**Design (new file `backend/internal/api/planloop.go`):**
+- **Flag:** `planToolsEnabled()` — same truthy-switch as `subagentsEnabled`; `.env.example` documents `TALONSTUDIO_PLAN_TOOLS=v1`. Dark in production → both plan doors byte-identical (existing `TestPlanModeSendsNoToolsToModel` keeps the wire assertion).
+- **Registry:** `buildPlanToolRegistry()` — a *filtered copy* of `tools.All()` (never mutates the shared registry) keeping exactly `explore, find_files, grep_codebase, list_files, project_map, read_file`, asserted read-only via `tools.IsReadOnly` (gate: `TestPhaseW3PlanRegistryReadOnly`). This is the "Plan is not allowed to edit code" boundary.
+- **Loop (`runPlanToolLoop`):** messages start from `planMessages`; each round = one `client.Send` with `client.Tools(registry)`. `stop_reason == tool_use` → execute each tool block through `registry.Execute` (failures become `is_error` tool results, the conversation stays valid) → append assistant + tool-result blocks → next round. Rounds capped at `maxPlanRounds = 8`; after the cap the next Send is forced tool-less, so the model must return `text` (gate: `TestPhaseW3PlanRoundCap` — 9 calls total, finalize has `tools == nil`).
+- **Answer/doors:** first tool-less `text` becomes the answer. The streaming door passes it through the *new* `ai.ParsePlan` (thin exported wrapper over the private `parsePlan`), so plan JSON extraction/normalization stays single-sourced; the non-stream door calls it for its envelope check. Loop returns `(raw, env, err)`; callers branch on `err == nil && env != nil`.
+- **Fallback (`planFallback`):** any non-cancellation failure (e.g. provider 400s tools) or a missing workspace path reverts to the *original single-shot `ai.Plan`* (gate: `TestPhaseW3PlanToollessFallback` — provider-rejects-tools → 2 calls; no-workspace → 1 tool-less call). The tool-less path is byte-equivalent to the old wire (`TestPlanModeSendsNoToolsToModel`).
+- **Both doors:** flag-on `sawError`-style terminals mirror the existing streamPlan error handling (error SSE + `UpdatePromptResponse` + `cancelled/failed` + done error); `persistPlanExchange`/`savePlan`/`dispatchNotification` tail unchanged.
+
+**Gates (all green, uncommitted at time of writing → commit `W3.1/W3.3: …`):** `gofmt`/`go vet` clean; package tests (api, ai); `TestPhaseW3PlanTurnSeesFixtureRepo` (real loop over a fixture workspace, marker `W3_FIXTURE_MARKER` only reachable via `read_file` content); registry/cap/fallback/stream-doors gates; `make evals`; `go test -race ./...` (41 ok).
+
+**Caveat:** same class as W2 historical rows — this only affects *new* plan turns behind the flag; old plan rows are untouched (no projection change).
+
+**Web/mobile connection:** none required — plan turns are server-computed; the flag is a harness/env concern. When W3.2 (map/AGENTS injection) lands, the web/mobile plan view may surface richer `readiness` text, but no client change is required for W3.A itself.
+
+**Remaining in W3:** W3.2 (inject project map + fingerprint + AGENTS.md chain into `planPrompt`), W3.4 (plan artifact `.talon/plan.md` + checklist sync, register row 13), W3.5 (stale-fingerprint Explore survey via `ClassifyTurn`).
