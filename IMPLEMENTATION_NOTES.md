@@ -288,3 +288,120 @@ raw trace verb.
   — tool contract: `Fork` set, `DefaultForkTask` on omitted task, lineage
   `ParentID`, report framed as data, nil-service structured refusal,
   `SurfaceKind(SessionForked)==false`.
+
+---
+
+## W1.6 — Approval Seam wired live (H4 tier-2 Escalate + sensitive HTTP)
+
+**What shipped.** The H4 approval seam and `sandbox.Capability.Escalate` were
+complete but dead (register row 9): zero production callers, and `run_shell`
+tier-2 was ask-only — the refusal told the model to "ask the user and run it
+only after they approve", but no approval could ever unlock the tool (the
+approval spin's cousin: an ask that led nowhere). W1.6 wires it:
+
+- **Tier-2 shell → Escalate.** `RunShell` gained `Sandbox`/`Approval`/
+  `PromptID`; the `tierApproval` case now calls `escalateTier2`, which asks
+  `Capability.Escalate(workspace → danger, Operation{shell, command},
+  justification)` against the turn's seam. Outcomes: `AllowedOnce` → the
+  command runs (exactly this command, once); `Rejected` → a final `REFUSED`
+  (denial is final per the escalation contract — no retry-with-new-reason
+  ladders); `Unavailable` (nil seam, nobody asked, nobody answered yet) →
+  the pre-existing `APPROVAL REQUIRED … ask_user` fallback, verbatim — the
+  model-visible question stays the delivery mechanism. `Escalate` refuses
+  unjustified requests, so an empty classifier reason falls back to
+  "outside the always-allowed shell set".
+- **Consent flow closes the loop.** `WantsDeviceBuild` only matches build
+  words, so a user answering *"yes, run git push"* recorded no
+  `turn_approvals` row and the seam could only ever answer "not yet". Two
+  scanners now sit in `orchestrator`: `WantsApproval` (affirmative consent,
+  negation-outranks) and `AnswerNegated`; the answer flow grants the new
+  `store.ScopeTier2Shell` on an affirmative answer, and the seam's answerer
+  (`turnAnswerer`, renamed from `deviceBuildAnswerer`) reads **scope by
+  request family**: `sandbox-escalation:*` → `tier2_shell`, everything else
+  → `device_build`. A build yes stays a build unlock; a command yes unlocks
+  exactly the surfaced command's escalation for this turn. The device-build
+  grant also gained `&& !AnswerNegated(...)` — *"don't install it"* contains
+  the word install and previously recorded a grant (adjacent hole, same
+  binding-record contract, fixed while in the file).
+- **Sensitive HTTP actions audit through the same seam.** `GitHandler.Push`
+  (between repo-name resolution and `EnsureRepo`, so a refusal never creates
+  a repo) and `ExportHandler.Create` (which mints/bundles signing
+  keystores) each make one `approveUserAction` request — scopes
+  `git-push`/`release-export`, one `ApprovalDecided` event to the project's
+  session log, `403` if the seam cannot answer (fail closed, never
+  unseamed). The authenticated POST is the consent (`userInitiatedAnswerer`),
+  matching the plan's framing: these were "sensitive by convention only" —
+  now they are sensitive by seam + audit. Keystores have no separate
+  endpoint; the release export path *is* the keystore-touching action.
+- **Audit text names the command.** `escalation.go`'s action formatter used
+  `Operation.Path` (empty for shell) → records read *"shell  — reason"*; it
+  now renders the command: *"shell git push origin main — outside the
+  always-allowed set"* — what an operator needs to judge a grant.
+- **Root cause of "seam dead" found and fixed.** `newBuildSession`
+  accumulated `sandbox`, `promptID`, `seam`, `children` on a local
+  `buildSession` but returned a **fresh struct literal** with only
+  `{reg, fs, defs, projectID, store}` — so the executor's H4 outer ring
+  (`b.sandbox != nil` at `buildsession.go:477`) never ran, build receipts
+  were attributed to prompt 0 (guard `b.promptID != 0` always false — the
+  "every build_apk completion is filed durably" feature was dark), and the
+  session carried no seam. Tool registrations copied their own field values
+  before the return, which is why delegation and (now) tier-2 worked while
+  the *session* stayed nil. Fixed by returning `bs` with `defs` set; the
+  diff comment records the find.
+
+**How it connects.**
+- *Web app:* no endpoint or SSE-shape changes. The user-visible flow is the
+  ask_user card they already answer (the answer endpoint they already call
+  now also records `tier2_shell` consent — same POST, one more
+  `GrantApproval`); `run_shell` results stream through the existing tool
+  result events. Git push / release export requests keep their contract —
+  403 only when the seam is unavailable (never under `PolicyAsk`, the
+  hardcoded default). Audit trail = `ApprovalDecided` events already in the
+  project session log (the same stream `GET …/sessions` replays).
+- *Companion mobile app:* no wrapper work (`lib/api.ts` untouched). Mobile
+  answers the approval prompt through the same answer endpoint; headline
+  statuses unchanged (PHASE_17 §2.3 — no new raw trace verbs; the refusal/
+  grant text rides ordinary tool-result content).
+- *Harness:* `tools → harness/{approval,sandbox}` imports follow the
+  existing `tools → harness/subagent` precedent; the seam is per-turn
+  (built in `newBuildSession`), audited via `approvalAudit` → session log.
+
+**Decisions recorded.** (1) **Ships live, no new flag** — consistent with
+W1.2–W1.5 (behavior fixes, not opt-in surfaces); the plan names no flag for
+W1.6 and `PolicyAsk` is the established default (W9 owns modes/policy
+composition). (2) Turn-wide consent is by plan design ("`turn_approvals`
+stays the binding record"): a yes is not consumed per action — each
+sensitive act still *asks* and audits individually; the grant scopes which
+*class* of act it can answer. (3) `PolicyNever` → deterministic refusal
+without prompting is already seam-native (eval-gated below); no policy env
+yet — W9. (4) No success-path handler test for `Create`/`Push`: one would
+spawn the async export goroutine; the shared helper is gate-tested
+(`TestApproveUserActionAuditsOnce`) and the handlers are 4-line
+pass-throughs — noted residual. (5) Observed pre-existing flake, unrelated
+to this diff: `TestClaimAttachmentsSpendsOnce` TempDir cleanup race under
+full-package parallel load (6/6 isolated, full package green).
+
+**Tests / gates (all green, local = CI-equivalent):** package tests →
+`make evals` → `go test -race ./...` (41 pkts). New:
+`evals/TestPhaseW1SeamWiring` — the plan gate: granted escalation →
+exactly **one** audit record/event + `AskedCount==1` + action names the
+command; unanswered → one `Unavailable` event; `PolicyNever` → refuses
+without prompting (asked=false), one event. `api/TestNewBuildSessionWiresTier2Seam`
+(registration wiring + nil-slog bare-handler regression),
+`api/TestTier2ShellGrantFlowAuditsOnce` (unanswered → ask_user fallback +
+1 event; grant → retry runs + exactly 1 new event, escalation-scoped,
+prompt-attributed),
+`api/TestApproveUserActionAuditsOnce` (push + export → 1 event each),
+`tools/TestRunShellTier2SeamOutcomes` (granted executes / denied final /
+unavailable falls back — one audit record each, command named),
+`orchestrator/TestWantsApproval` + `TestAnswerNegated`, existing
+`TestRunShellRequiresApproval` (bare tool = fallback) still green.
+
+**For W9 (audit-register follow-through):** W9:434 claims
+`GET /v1/projects/{projectID}/audit` "already serves it" — **no such route
+exists** in `internal/api` today (grep `/audit` finds only `approvalAudit`
+callers). W9's UI-trail work must build that endpoint (session log already
+carries every `ApprovalDecided` event it needs). Also noted for W9: the
+device answer-flow's negation guard is now in place, and scopes are the
+seam's matching axis (`device_build` | `tier2_shell` | `sandbox-escalation:*`
+| `git-push` | `release-export`).

@@ -17,6 +17,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/ai"
 	"github.com/luckyisrael/talon/backend/internal/devclient"
 	"github.com/luckyisrael/talon/backend/internal/events"
+	"github.com/luckyisrael/talon/backend/internal/harness/approval"
 	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
 	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
 	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
@@ -55,6 +56,13 @@ type buildSession struct {
 	// the extra pass, exactly today's behavior (the per-tool checks inside
 	// the registry still apply; the capability is the uniform outer ring).
 	sandbox *sandbox.Capability
+	// seam is the H4 approval seam for this turn: ask policy, the
+	// turn-approvals answerer, the session-log audit. Tier-2 shell
+	// escalations ask through it (RunShell's Sandbox + Approval + PromptID);
+	// the device-build gate reads the same table. A nil log still yields a
+	// working seam — record() degrades to a no-op, so audit loss never fails
+	// a build.
+	seam *approval.Seam
 	// children is the H9 delegation service bound to this session: delegate
 	// spawns scoped child loops, delegate_fork seeds one from this session's
 	// history, list_children reports them. Nil (default) keeps the tools
@@ -98,6 +106,13 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	bs.sandbox = sandbox.New(sandboxModeFromEnv(), workspacePath,
 		[]string{os.TempDir()}, func(op sandbox.Operation) error { return nil })
 
+	// H4: the approval seam for this turn — ask policy, the turn-approvals
+	// answerer (escalation requests read tier2_shell, device build reads
+	// device_build), every decision audited to the project's session log.
+	// The log resolves through the handler cache when present and opens
+	// directly when not (bare handlers); a nil log still builds a seam.
+	bs.seam = h.buildApprovalSeam(h.projectLog(projectID), projectID, promptID)
+
 	// H9: opt-in delegation. The child runner is a second orchestrator loop
 	// over this same workspace with a read-scoped registry: children inspect
 	// and report; they never mutate (a review child must not be able to
@@ -134,7 +149,13 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// Running and verifying. The output sink makes each one's subprocess output
 	// visible in the terminal pane instead of arriving only at tool result time.
 	reg.Register(&tools.RunCommand{WorkspacePath: workspacePath, Output: output})
-	reg.Register(&tools.RunShell{WorkspacePath: workspacePath, Output: output})
+	// run_shell: tier-2 commands escalate through this turn's approval seam
+	// (H4) — one strictly-wider ask, audited, the turn's grant the binding
+	// record. Nil seam fields fall back to the ask_user refusal.
+	reg.Register(&tools.RunShell{
+		WorkspacePath: workspacePath, Output: output,
+		Sandbox: bs.sandbox, Approval: bs.seam, PromptID: promptID,
+	})
 	reg.Register(&tools.RunTypecheck{WorkspacePath: workspacePath, Output: output})
 	reg.Register(&tools.RunLint{WorkspacePath: workspacePath, Output: output})
 	reg.Register(&tools.RunPrettier{WorkspacePath: workspacePath, Output: output})
@@ -328,7 +349,14 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 		})
 	}
 
-	return &buildSession{reg: reg, fs: fs, defs: defs, projectID: projectID, store: h.store}
+	// Return the session the fields were accumulated on, not a fresh
+	// literal: rebuilding here silently dropped sandbox, promptID, seam,
+	// and children — the H4 outer ring never ran, receipts attributed to
+	// prompt 0, and the approval seam never reached the session (W1.6 found
+	// this; the tool registrations carried their own copies, which is why
+	// tier-2 worked while the session stayed nil).
+	bs.defs = defs
+	return bs
 }
 
 func (h *PromptHandler) storeAdapter() *tools.StoreAdapter {

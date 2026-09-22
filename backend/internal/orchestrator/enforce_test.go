@@ -101,7 +101,8 @@ func TestScreenBaseNameStripsQualifier(t *testing.T) {
 	}
 }
 
-func TestMarkScreenMatchesQualifiedNames(t *testing.T) {	o := &Orchestrator{}
+func TestMarkScreenMatchesQualifiedNames(t *testing.T) {
+	o := &Orchestrator{}
 	sess := newTestSession(t)
 	// Seeded the way seedPlanTasks seeds them: qualifier stripped for the ID.
 	sess.AddTask("plan:screen:"+planSlug(screenBaseName("Portfolio (tab)")), "Screen: Portfolio (tab)")
@@ -220,6 +221,66 @@ func TestWantsDeviceBuild(t *testing.T) {
 	for _, prompt := range no {
 		if WantsDeviceBuild(prompt) {
 			t.Errorf("expected no device build for %q", prompt)
+		}
+	}
+}
+
+func TestWantsApproval(t *testing.T) {
+	yes := []string{
+		"yes",
+		"OK",
+		"yep, run it",
+		"go ahead",
+		"approved",
+		"looks good",
+		"sure — push it",
+		"lgtm",
+	}
+	for _, prompt := range yes {
+		if !WantsApproval(prompt) {
+			t.Errorf("expected approval consent for %q", prompt)
+		}
+	}
+	no := []string{
+		"",
+		"maybe later",
+		"pick the other one",
+		"red, not blue", // negation-outranks: "not" kills the "ok" inside... (contains no yes-word anyway)
+		"yes, but not now",
+		"no",
+		"don't",
+		"wait",
+	}
+	for _, prompt := range no {
+		if WantsApproval(prompt) {
+			t.Errorf("expected no approval consent for %q", prompt)
+		}
+	}
+}
+
+func TestAnswerNegated(t *testing.T) {
+	neg := []string{
+		"no",
+		"don't install it",
+		"I said no",
+		"never do that again",
+		"wait for me",
+		"cancelled",
+	}
+	for _, prompt := range neg {
+		if !AnswerNegated(prompt) {
+			t.Errorf("expected negated for %q", prompt)
+		}
+	}
+	pos := []string{
+		"yes",
+		"build the apk and install it",
+		"run it on the device for me",
+		"go ahead and push",
+	}
+	for _, prompt := range pos {
+		if AnswerNegated(prompt) {
+			t.Errorf("expected not negated for %q", prompt)
 		}
 	}
 }

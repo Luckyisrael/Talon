@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/luckyisrael/talon/backend/internal/harness/approval"
+	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
 )
 
 func TestClassifyCommandTiers(t *testing.T) {
@@ -49,9 +52,9 @@ func TestClassifyCommandTiers(t *testing.T) {
 		{`kubectl get pods`, tierApproval},
 		{`cat /tmp/other-project/.env`, tierBlocked}, // .env pattern fires first
 		{`grep -r token /tmp/ | head`, tierApproval}, // absolute operand needs approval
-		{`cat /tmp/notes.txt`, tierApproval},       // reads stay in-workspace
-		{`ls /opt/data`, tierApproval},             // reads stay in-workspace
-		{`ls /home/other`, tierBlocked},            // /home is off-limits entirely
+		{`cat /tmp/notes.txt`, tierApproval},         // reads stay in-workspace
+		{`ls /opt/data`, tierApproval},               // reads stay in-workspace
+		{`ls /home/other`, tierBlocked},              // /home is off-limits entirely
 		{`adb reboot`, tierApproval},
 		{`adb uninstall com.x`, tierApproval},
 		{`ls app/; rm -rf /tmp/cache`, tierApproval},
@@ -142,4 +145,80 @@ func TestRunShellScrubsSecrets(t *testing.T) {
 	if strings.Contains(res.Content, "super-secret-value") {
 		t.Error("server secret leaked into shell environment")
 	}
+}
+
+// TestRunShellTier2SeamOutcomes covers W1.6: a tier-2 command routes
+// through the H4 approval seam (Escalate) — granted runs it once, denial is
+// a final REFUSED, and a seam nobody can answer keeps the ask_user fallback.
+// Every outcome lands exactly one audit record, named with the command.
+func TestRunShellTier2SeamOutcomes(t *testing.T) {
+	dir := t.TempDir()
+	sbx := sandbox.New(sandbox.ModeWorkspace, dir, []string{os.TempDir()},
+		func(sandbox.Operation) error { return nil })
+
+	var grantedRecs, deniedRecs, unansweredRecs []approval.AuditRecord
+	capture := func(dst *[]approval.AuditRecord) func(approval.AuditRecord) {
+		return func(r approval.AuditRecord) { *dst = append(*dst, r) }
+	}
+
+	granted := approval.New(approval.PolicyAsk, capture(&grantedRecs))
+	granted.Register(func(approval.Request) (bool, error) { return true, nil })
+	denied := approval.New(approval.PolicyAsk, capture(&deniedRecs))
+	denied.Register(func(approval.Request) (bool, error) { return false, nil })
+	unanswered := approval.New(approval.PolicyAsk, capture(&unansweredRecs)) // no answerer
+
+	run := func(seam *approval.Seam) ToolResult {
+		t.Helper()
+		tool := &RunShell{WorkspacePath: dir, Sandbox: sbx, Approval: seam, PromptID: 7}
+		args, _ := json.Marshal(map[string]string{"command": "git push origin main"})
+		res, err := tool.Execute(context.Background(), args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	// Granted: the command executes — "command failed" (non-repo temp dir)
+	// is subprocess output, not an approval refusal.
+	res := run(granted)
+	if strings.Contains(res.Content, "APPROVAL REQUIRED") || strings.Contains(res.Content, "REFUSED") {
+		t.Errorf("granted tier-2 command was refused: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "command failed") && !strings.Contains(res.Content, "succeeded") {
+		t.Errorf("granted tier-2 command did not execute, got: %s", res.Content)
+	}
+
+	// Denied: final, no execution, no ask loop.
+	res = run(denied)
+	if !res.IsError || !strings.Contains(res.Content, "REFUSED") {
+		t.Errorf("denied tier-2 command should be REFUSED, got %+v", res)
+	}
+	if strings.Contains(res.Content, "command failed") {
+		t.Errorf("denied tier-2 command executed anyway: %s", res.Content)
+	}
+
+	// Unavailable: the ask_user fallback survives — the model-visible
+	// question nobody at the seam could answer.
+	res = run(unanswered)
+	if !res.IsError || !strings.Contains(res.Content, "APPROVAL REQUIRED") || !strings.Contains(res.Content, "ask_user") {
+		t.Errorf("unanswered tier-2 command should fall back to ask_user, got %+v", res)
+	}
+
+	// Exactly one audit record per ask, each naming the exact command
+	// (the audit text is what an operator reads to decide next time).
+	check := func(name string, recs []approval.AuditRecord, want approval.Outcome) {
+		t.Helper()
+		if len(recs) != 1 {
+			t.Fatalf("%s: %d audit records, want exactly 1", name, len(recs))
+		}
+		if recs[0].Outcome != want {
+			t.Errorf("%s: outcome = %s, want %s", name, recs[0].Outcome, want)
+		}
+		if !strings.Contains(recs[0].Action, "git push origin main") {
+			t.Errorf("%s: audit action must name the command, got %q", name, recs[0].Action)
+		}
+	}
+	check("granted", grantedRecs, approval.AllowedOnce)
+	check("denied", deniedRecs, approval.Rejected)
+	check("unanswered", unansweredRecs, approval.Unavailable)
 }

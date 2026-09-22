@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/luckyisrael/talon/backend/internal/gitremote"
+	"github.com/luckyisrael/talon/backend/internal/harness/approval"
 	"github.com/luckyisrael/talon/backend/internal/store"
 	"github.com/luckyisrael/talon/backend/internal/workspace"
 )
@@ -293,6 +294,17 @@ func (h *GitHandler) Push(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Private != nil {
 		private = *req.Private
+	}
+
+	// H4/W1.6: a push publishes the workspace — one Request through the same
+	// seam tier-2 shell uses, one audit event to the session log, named with
+	// the exact repo it will hit. The seam sits before EnsureRepo so a
+	// refusal never creates a repository. The authenticated POST is the
+	// consent; a seam that cannot answer refuses (fail closed, unseamed).
+	if out := approveUserAction(h.store, project.ID, scopeGitPush,
+		"push project "+project.Name+" to GitHub repo "+name+" (branch main)"); out != approval.AllowedOnce {
+		writeError(w, http.StatusForbidden, "push approval is "+out.String())
+		return
 	}
 
 	repo, err := h.cfg.EnsureRepo(r.Context(), token, name, private)

@@ -1356,7 +1356,14 @@ func contextKind(prefix string) string {
 // ScopeDeviceBuild is the turn_approvals scope unlocking build_apk.
 const ScopeDeviceBuild = "device_build"
 
-// GrantApproval records a mid-turn user approval (scope "device_build").
+// ScopeTier2Shell is the turn_approvals scope recording consent for a
+// surfaced tier-2 shell command (W1.6): the answer flow writes it on an
+// affirmative answer, and the approval seam's escalation answerer reads it,
+// so a granted turn runs exactly the command the user said yes to.
+const ScopeTier2Shell = "tier2_shell"
+
+// GrantApproval records a mid-turn user approval for one scope
+// ("device_build", "tier2_shell").
 // INSERT OR IGNORE: re-granting is a no-op, and approval never spans prompts.
 func (s *Store) GrantApproval(projectID, promptID int64, scope string) error {
 	_, err := s.db.Exec("INSERT OR IGNORE INTO turn_approvals (project_id, prompt_id, scope) VALUES (?, ?, ?)", projectID, promptID, scope)

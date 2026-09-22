@@ -102,13 +102,24 @@ func (c *Capability) Escalate(e Escalation, seam *approval.Seam) (Decision, appr
 
 	outcome := seam.Ask(approval.Request{
 		Scope:    "sandbox-escalation:" + e.To.String(),
-		Action:   fmt.Sprintf("%s %s — %s", e.Operation.Verb, e.Operation.Path, e.Justification),
+		Action:   escalationAction(e.Operation, e.Justification),
 		PromptID: e.PromptID,
 	})
 	if outcome != approval.AllowedOnce {
 		return Decision{false, "the escalation was " + outcome.String()}, outcome
 	}
 	return precheck, outcome
+}
+
+// escalationAction names what is being asked for. A shell operation carries
+// no path — the command itself is what the audit must show, so an operator
+// reading the record sees "shell git push — …" rather than "shell  — …".
+func escalationAction(op Operation, justification string) string {
+	what := op.Path
+	if op.Verb == "shell" && op.Command != "" {
+		what = op.Command
+	}
+	return fmt.Sprintf("%s %s — %s", op.Verb, what, justification)
 }
 
 // verbOf maps an operation to the AllowsPath verb. A shell operation under

@@ -1663,3 +1663,138 @@ func TestPhaseW1DelegateFork(t *testing.T) {
 		t.Error("session/forked must be audit-only — lineage is not model-visible surface")
 	}
 }
+
+// TestPhaseW1SeamWiring is the W1.6 eval gate (PLAN_HARNESS H4): an
+// escalation request produces exactly one audit event and one grant; the
+// never policy rejects deterministically without prompting; and the audit
+// record names the exact command so an operator can tell what was allowed.
+func TestPhaseW1SeamWiring(t *testing.T) {
+	st, err := store.New(filepath.Join(t.TempDir(), "w16-seam.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer st.Close()
+	u, err := st.CreateUser("w16@evals.test", "x")
+	if err != nil {
+		t.Fatalf("user: %v", err)
+	}
+	proj, err := st.CreateProject(u.ID, "p", "v1", "s", "a.b.c", "d.e", "f")
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	lg, err := st.SessionLog(fmt.Sprintf("project-%d", proj.ID))
+	if err != nil {
+		t.Fatalf("session log: %v", err)
+	}
+
+	// auditTo appends every decision to the session log — the same sink the
+	// handlers' approvalAudit uses — while collecting them for counting.
+	var sinkMu sync.Mutex
+	auditTo := func(dst *[]approval.AuditRecord) func(approval.AuditRecord) {
+		return func(r approval.AuditRecord) {
+			sinkMu.Lock()
+			*dst = append(*dst, r)
+			sinkMu.Unlock()
+			reason := r.Reason
+			if r.Outcome == approval.AllowedOnce {
+				reason = r.Action
+			}
+			if _, err := lg.Append(events.ApprovalDecided, events.ApprovalPayload{
+				Scope:    r.Scope,
+				Allowed:  r.Outcome == approval.AllowedOnce,
+				Reason:   reason,
+				PromptID: r.PromptID,
+			}); err != nil {
+				t.Errorf("audit append: %v", err)
+			}
+		}
+	}
+	approvalEvents := func() int {
+		n := 0
+		for _, e := range lg.Replay() {
+			if e.Kind == events.ApprovalDecided {
+				n++
+			}
+		}
+		return n
+	}
+
+	sbx := sandbox.New(sandbox.ModeWorkspace, t.TempDir(), []string{os.TempDir()},
+		func(sandbox.Operation) error { return nil })
+	esc := sandbox.Escalation{
+		From:          sandbox.ModeWorkspace,
+		To:            sandbox.ModeDangerFull,
+		Operation:     sandbox.Operation{Verb: "shell", Command: "git push origin main"},
+		Justification: "outside the always-allowed shell set",
+		PromptID:      9,
+	}
+	scope := "sandbox-escalation:" + sandbox.ModeDangerFull.String()
+
+	// Granted: exactly one audit record, one event, one ask — and the record
+	// names the command, not an empty path.
+	var granted []approval.AuditRecord
+	seamGrant := approval.New(approval.PolicyAsk, auditTo(&granted))
+	seamGrant.Register(func(approval.Request) (bool, error) { return true, nil })
+	d, out := sbx.Escalate(esc, seamGrant)
+	if out != approval.AllowedOnce || !d.Allowed {
+		t.Fatalf("granted escalation: outcome=%s decision=%+v", out, d)
+	}
+	if len(granted) != 1 {
+		t.Fatalf("grant produced %d audit records, want exactly 1", len(granted))
+	}
+	if granted[0].Outcome != approval.AllowedOnce {
+		t.Errorf("grant record outcome = %s, want allowed-once", granted[0].Outcome)
+	}
+	if !strings.Contains(granted[0].Action, "git push origin main") {
+		t.Errorf("audit action must name the command, got %q", granted[0].Action)
+	}
+	if seamGrant.AskedCount(scope) != 1 {
+		t.Errorf("AskedCount(%q) = %d, want 1", scope, seamGrant.AskedCount(scope))
+	}
+	if n := approvalEvents(); n != 1 {
+		t.Fatalf("after the grant: %d ApprovalDecided events, want exactly 1", n)
+	}
+
+	// Unavailable: a seam nobody can answer still audits exactly one event —
+	// the question not reaching anyone is a decision, not silence.
+	var unav []approval.AuditRecord
+	seamUnav := approval.New(approval.PolicyAsk, auditTo(&unav))
+	d, out = sbx.Escalate(esc, seamUnav)
+	if out != approval.Unavailable || d.Allowed {
+		t.Fatalf("unanswered escalation: outcome=%s decision=%+v", out, d)
+	}
+	if len(unav) != 1 || unav[0].Outcome != approval.Unavailable {
+		t.Fatalf("unavailable escalation: %d records outcomes=%v, want exactly 1 unavailable", len(unav), outcomesOf(unav))
+	}
+	if n := approvalEvents(); n != 2 {
+		t.Fatalf("after the unavailable ask: %d ApprovalDecided events, want exactly 2", n)
+	}
+
+	// Never policy: deterministic refusal, no prompting, one audit event.
+	asked := false
+	var never []approval.AuditRecord
+	seamNever := approval.New(approval.PolicyNever, auditTo(&never))
+	seamNever.Register(func(approval.Request) (bool, error) { asked = true; return true, nil })
+	d, out = sbx.Escalate(esc, seamNever)
+	if out != approval.Unavailable || d.Allowed {
+		t.Fatalf("policy-never escalation: outcome=%s decision=%+v", out, d)
+	}
+	if asked {
+		t.Error("policy never must reject deterministically without prompting")
+	}
+	if len(never) != 1 || never[0].Outcome != approval.Unavailable {
+		t.Fatalf("policy-never escalation: %d records outcomes=%v, want exactly 1 unavailable", len(never), outcomesOf(never))
+	}
+	if n := approvalEvents(); n != 3 {
+		t.Fatalf("after policy-never: %d ApprovalDecided events, want exactly 3", n)
+	}
+}
+
+// outcomesOf renders record outcomes for failure messages.
+func outcomesOf(recs []approval.AuditRecord) []string {
+	out := make([]string, len(recs))
+	for i, r := range recs {
+		out[i] = r.Outcome.String()
+	}
+	return out
+}

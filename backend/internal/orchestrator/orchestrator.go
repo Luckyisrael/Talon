@@ -352,6 +352,32 @@ func WantsDeviceBuild(prompt string) bool {
 	return deviceBuildRe.MatchString(prompt)
 }
 
+// affirmativeRe matches answers that consent to the action the model just
+// surfaced via ask_user. Matched anywhere in the answer (answers are prose:
+// "looks good, yes"), so consent need not open the sentence.
+var affirmativeRe = regexp.MustCompile(`(?i)\b(yes|yep|yeah|ok(ay)?|sure|go ahead|approved?|do it|run it|lgtm|ship it|fine|absolutely|definitely|looks good)\b`)
+
+// negatedRe matches answers that withdraw consent, wherever they appear:
+// "I said no" and "don't install" are refusals however they open.
+var negatedRe = regexp.MustCompile(`(?i)\b(no|nah|nope|not|don'?t|do not|never|cancel(led)?|stop|deny|denied|refus\w*|wait)\b`)
+
+// AnswerNegated reports whether an answer refuses. A negated answer must
+// never record an approval — "don't install it" contains the word install
+// and would otherwise unlock the build it declines (W1.6: the binding
+// record is only a real user yes).
+func AnswerNegated(prompt string) bool {
+	return negatedRe.MatchString(prompt)
+}
+
+// WantsApproval reports whether an answer is affirmative consent for a
+// surfaced action. Negation outranks affirmation ("yes, but not now" is not
+// a yes). The answer flow records this as the tier2_shell grant that the
+// approval seam's escalation answerer reads when a tier-2 shell command
+// asks to run (H4/W1.6).
+func WantsApproval(prompt string) bool {
+	return affirmativeRe.MatchString(prompt) && !negatedRe.MatchString(prompt)
+}
+
 // lastUserText returns the most recent user turn's text, or "" when the
 // history opens otherwise (defensive; callers pass real conversations).
 func lastUserText(conversation []ai.Message) string {

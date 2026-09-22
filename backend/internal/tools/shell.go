@@ -10,6 +10,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/luckyisrael/talon/backend/internal/harness/approval"
+	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
 )
 
 // RunShell gives the agent the same kind of shell access a developer has when
@@ -23,8 +26,11 @@ import (
 //	Tier 1 — workspace-scoped mutation, allowed and logged (mkdir, cp, npm,
 //	  adb install, node -e probes).
 //	Tier 2 — anything destructive, exfiltrating, or outside the workspace.
-//	  Refused with an explanation; the agent should surface the exact command
-//	  to the user via ask_user and run it only after they approve.
+//	  Routed through the H4 approval seam: one strictly-wider ask, audited to
+//	  the session log, the turn's approval the binding record. When the seam
+//	  cannot answer (no seam, nobody asked, nobody answered yet), the command
+//	  is refused with an explanation — the agent surfaces it via ask_user and
+//	  runs it only after they approve.
 //
 // Regardless of tier the command runs with the workspace as its working
 // directory, a scrubbed environment (see sanitizedEnv), a bounded timeout,
@@ -33,6 +39,14 @@ type RunShell struct {
 	WorkspacePath string
 	// Output, when set, receives the command's stdout/stderr as it runs.
 	Output io.Writer
+
+	// Sandbox + Approval + PromptID wire tier-2 commands to the H4 approval
+	// seam: Escalate asks for exactly this command, once, audited. Nil
+	// Sandbox or Approval means no seam can be asked — tier 2 then falls
+	// back to the ask_user refusal, exactly the pre-seam behavior.
+	Sandbox  *sandbox.Capability
+	Approval *approval.Seam
+	PromptID int64
 }
 
 func (t *RunShell) Name() string { return "run_shell" }
@@ -41,8 +55,9 @@ func (t *RunShell) Description() string {
 	return "Run a shell command in the workspace for inspection and debugging: " +
 		"grep logs, probe localhost services with curl, drive adb, run node one-liners. " +
 		"Read-only commands run freely; workspace-scoped changes (mkdir, cp, npm, adb install) run logged; " +
-		"destructive commands, network egress beyond localhost, and anything outside the workspace are refused — " +
-		"surface those to the user with ask_user and run them only after approval. " +
+		"destructive commands, network egress beyond localhost, and anything outside the workspace need approval — " +
+		"the tool asks the turn's approval itself; when it comes back APPROVAL REQUIRED, " +
+		"surface the exact command to the user with ask_user and run it only after they approve. " +
 		"Never try to read secrets: .env files, tokens, keys, and the server database are blocked."
 }
 
@@ -95,15 +110,15 @@ var blockedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(^|[;&|])\s*su\b`),
 	regexp.MustCompile(`\|\s*(sh|bash|zsh)\b`),
 	regexp.MustCompile(`(^|[;&|\s])(sh|bash)\s+-c\b.*\b(sh|bash)\s+-c\b`),
-	regexp.MustCompile(`:\(\)\s*\{`),                        // fork bomb
-	regexp.MustCompile(`\bmkfs\b|\bdd\b.*\bof=/dev`),         // disk destruction
-	regexp.MustCompile(`\bchmod\s+-R\s+777\b`),               // permission stripping
-	regexp.MustCompile(`>\s*/dev/(sda|nvme|mmcblk)`),         // block devices
+	regexp.MustCompile(`:\(\)\s*\{`),                               // fork bomb
+	regexp.MustCompile(`\bmkfs\b|\bdd\b.*\bof=/dev`),               // disk destruction
+	regexp.MustCompile(`\bchmod\s+-R\s+777\b`),                     // permission stripping
+	regexp.MustCompile(`>\s*/dev/(sda|nvme|mmcblk)`),               // block devices
 	regexp.MustCompile(`(?i)\b(rm\s+-rf?\s+/( |$)|rm\s+-rf?\s+~)`), // root/home wipe
-	regexp.MustCompile(`(?i)\.env(\.|$|["'\s])`),             // server secrets
+	regexp.MustCompile(`(?i)\.env(\.|$|["'\s])`),                   // server secrets
 	regexp.MustCompile(`(?i)(id_rsa|id_ed25519|\.pem\b|\.key\b|credentials\.json|talon\.db\b)`),
 	regexp.MustCompile(`~\/\.ssh|/etc/(passwd|shadow|ssh)|/root/`),
-	regexp.MustCompile(`(^|[\s'"])\.\.(/|$|["'\s])`),         // workspace escape
+	regexp.MustCompile(`(^|[\s'"])\.\.(/|$|["'\s])`), // workspace escape
 	regexp.MustCompile(`(^|[\s'"])/(etc|root|proc|sys|dev|var|usr|bin|sbin|home)(/|$|["'\s])`),
 	regexp.MustCompile(`169\.254\.169\.254|100\.100\.100\.200`), // cloud metadata endpoints
 }
@@ -322,14 +337,13 @@ func (t *RunShell) Execute(ctx context.Context, args json.RawMessage) (ToolResul
 			"BLOCKED: this command is never allowed (%s). It risks secrets, the host, or the network. "+
 				"Describe what you need and use ask_user to request it instead.", reason), nil
 	case tierApproval:
-		extra := ""
-		if reason != "" {
-			extra = " (" + reason + ")"
+		// H4: the tier-2 path is the approval seam — one strictly-wider ask,
+		// one audit event, turn_approvals the binding record. Only a granted
+		// escalation falls through to execution (exactly this command, once);
+		// every other outcome is a terminal tool result.
+		if res, done := t.escalateTier2(command, reason); done {
+			return res, nil
 		}
-		return errResult(
-			"APPROVAL REQUIRED: this command is outside the always-allowed set%s. "+
-				"Do not run it. Use ask_user to show the user the exact command and why you need it, "+
-				"and run it only after they approve.", extra), nil
 	}
 
 	timeout := defaultShellTimeout
@@ -374,4 +388,52 @@ func (t *RunShell) Execute(ctx context.Context, args json.RawMessage) (ToolResul
 		level = "workspace change"
 	}
 	return ToolResult{Content: fmt.Sprintf("%s succeeded [%s].\nOutput:\n%s", command, level, output)}, nil
+}
+
+// escalateTier2 routes a tier-2 command through the H4 approval seam: one
+// strictly-wider ask (Escalate), one audit event, the turn's approval the
+// binding record. The result is terminal unless the escalation granted the
+// run — AllowedOnce falls through to execution for exactly this command,
+// once. Unavailable (no seam, no answerer, nobody answered yet) keeps the
+// ask_user refusal as the model-visible fallback; Rejected is final for the
+// operation.
+func (t *RunShell) escalateTier2(command, reason string) (ToolResult, bool) {
+	if strings.TrimSpace(reason) == "" {
+		// Escalate refuses unjustified requests, and the classifier often
+		// returns no reason for a tier-2 verdict — the tier itself is the
+		// justification, stated in the shape the seam requires.
+		reason = "outside the always-allowed shell set"
+	}
+	var (
+		d   sandbox.Decision
+		out approval.Outcome
+	)
+	if t.Sandbox == nil || t.Approval == nil {
+		// No seam to ask: unavailable, never unseamed. This is the pre-W1.6
+		// behavior — the ask_user refusal below — preserved for bare tools.
+		d, out = sandbox.Decision{Allowed: false, Reason: "no approval seam is registered"}, approval.Unavailable
+	} else {
+		d, out = t.Sandbox.Escalate(sandbox.Escalation{
+			From:          t.Sandbox.Mode(),
+			To:            sandbox.ModeDangerFull,
+			Operation:     sandbox.Operation{Verb: "shell", Command: command},
+			Justification: reason,
+			PromptID:      t.PromptID,
+		}, t.Approval)
+	}
+	switch out {
+	case approval.AllowedOnce:
+		return ToolResult{}, false // granted: run exactly this command once.
+	case approval.Rejected:
+		return errResult(
+			"REFUSED: approval to run this command was denied (%s). "+
+				"Do not retry it — the refusal is final for this command; "+
+				"explain the alternative to the user instead.", d.Reason), true
+	default: // unavailable / cancelled — nobody could answer right now.
+		return errResult(
+			"APPROVAL REQUIRED: this command is outside the always-allowed set (%s). "+
+				"Escalation through the approval seam is %s. "+
+				"Do not run it. Use ask_user to show the user the exact command and why you need it, "+
+				"and run it only after they approve.", reason, out.String()), true
+	}
 }

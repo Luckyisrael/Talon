@@ -514,8 +514,10 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 	// install it") binds to this prompt's lifecycle: text-scanning guardrails
 	// never see tool_result turns, so the approval is recorded explicitly and
 	// the build_apk gate reads it. Without this, every approval looped back
-	// to another ask_user — the approval spin.
-	if orchestrator.WantsDeviceBuild(body.Answer) {
+	// to another ask_user — the approval spin. A negated answer ("don't
+	// install it") contains the word install but grants nothing — the
+	// binding record is only ever a real yes (W1.6).
+	if orchestrator.WantsDeviceBuild(body.Answer) && !orchestrator.AnswerNegated(body.Answer) {
 		// H4: the grant routes through the approval seam so the decision is
 		// audited to the session log (one ApprovalDecided event per yes) —
 		// the same seam every sensitive path will use. The table write stays
@@ -533,6 +535,28 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 						PromptID: id,
 					})
 				}
+			}
+		}
+	}
+
+	// W1.6: an affirmative answer also records the tier-2 shell consent —
+	// the same turn_approvals table, its own scope — so the approval seam's
+	// escalation answerer can grant the retry of exactly the command the
+	// model surfaced via ask_user. Without this row the seam could only ever
+	// answer "not yet" and the ask_user fallback looped forever. One
+	// ApprovalDecided event per grant: the two scopes are two decisions.
+	if orchestrator.WantsApproval(body.Answer) {
+		if err := h.store.GrantApproval(prompt.ProjectID, id, store.ScopeTier2Shell); err != nil {
+			log.Printf("WARN: could not record tier-2 approval for prompt %d: %v", id, err)
+		} else if lg := h.slog.get(h.store, prompt.ProjectID); lg != nil {
+			audit := approvalAudit(lg, id)
+			if audit != nil {
+				audit(approval.AuditRecord{
+					Scope:    store.ScopeTier2Shell,
+					Action:   "user answered a tier-2 shell approval: " + firstLine(body.Answer),
+					Outcome:  approval.AllowedOnce,
+					PromptID: id,
+				})
 			}
 		}
 	}

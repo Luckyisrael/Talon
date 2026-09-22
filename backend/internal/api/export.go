@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/luckyisrael/talon/backend/internal/harness/approval"
 	"github.com/luckyisrael/talon/backend/internal/metrics"
 	"github.com/luckyisrael/talon/backend/internal/release"
 	"github.com/luckyisrael/talon/backend/internal/secrets"
@@ -102,6 +103,16 @@ func (h *ExportHandler) Create(w http.ResponseWriter, r *http.Request) {
 	req.WhatsNew = strings.TrimSpace(req.WhatsNew)
 	if req.WhatsNew == "" {
 		writeError(w, http.StatusBadRequest, "whats_new is required — it goes into the submission bundle as the release notes")
+		return
+	}
+
+	// H4/W1.6: the export mints and bundles the project's signing keystores —
+	// one Request through the same seam tier-2 shell uses, one audit event to
+	// the session log. The authenticated POST is the consent; a seam that
+	// cannot answer refuses (fail closed, never unseamed).
+	if out := approveUserAction(h.store, project.ID, scopeReleaseExport,
+		"export release bundle for project "+project.Name); out != approval.AllowedOnce {
+		writeError(w, http.StatusForbidden, "export approval is "+out.String())
 		return
 	}
 
