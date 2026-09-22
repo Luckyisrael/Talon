@@ -259,6 +259,12 @@ func main() {
 	if spillStore != nil {
 		promptHandler.AttachSpill(spillStore)
 	}
+	// W3.2: plan-mode prompt assembly reads the same AGENTS.md chain the
+	// orchestrator does — one factory, two consumers, plan and build cannot
+	// drift on the project's conventions.
+	promptHandler.AttachInstructionsChain(func(workspacePath string) string {
+		return instructions.Loader{WorkspaceRoot: workspacePath, GlobalPath: globalAGENTS}.Load().Text()
+	})
 	var warmPool *redroid.Pool
 	if warmPoolSize > 0 && containerMgr != nil {
 		warmPool = redroid.NewPool(containerMgr, warmPoolSize)

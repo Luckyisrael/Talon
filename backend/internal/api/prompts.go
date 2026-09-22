@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,6 +20,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/approval"
 	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
+	"github.com/luckyisrael/talon/backend/internal/harness/promptsec"
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	"github.com/luckyisrael/talon/backend/internal/harness/tooltimeout"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
@@ -64,6 +66,26 @@ type PromptHandler struct {
 	// come back verbatim (W1.2). Nil disables resolution: reads behave as
 	// before. See AttachSpill.
 	spill *compaction.SpillStore
+	// planSurveyMu guards the two W3 plan caches below. It is never held
+	// across a model call: two concurrent plan turns for one project may
+	// both survey (benign duplicate) rather than serialize on it.
+	planSurveyMu sync.Mutex
+	// planSurveyCache is projectID → the fingerprint the last SUCCESSFUL
+	// W3.5 cheap-model survey was taken at, plus its digest. A matching
+	// fingerprint reuses the digest with no model call; a failure is never
+	// cached, so the next plan turn retries.
+	planSurveyCache map[int64]planSurvey
+	// planSectionFP is projectID → the promptsec fingerprint set of the
+	// previous plan turn: Diff against the next set is logged so a moved
+	// section is observable — the cache discipline generalised from
+	// projectMapFP (gated by TestPhaseW3PlanPromptSectionLocality).
+	planSectionFP map[int64][]promptsec.Fingerprint
+	// instructionsChain is the H6 AGENTS.md factory the composition attached
+	// for plan assembly — main wires the same closure the orchestrator gets,
+	// so plan and build read byte-identical conventions. Nil falls back to
+	// the workspace-only chain (no global file): tests and embedded
+	// compositions. See AttachInstructionsChain.
+	instructionsChain func(workspacePath string) string
 }
 
 func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *knowledge.Registry, n notify.Notifier) *PromptHandler {
@@ -82,6 +104,9 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir st
 		notifier:     n,
 		planPrompt:   ai.PlanSystemPrompt(preinstalled),
 		slog:         newSessionLogCache(),
+
+		planSurveyCache: map[int64]planSurvey{},
+		planSectionFP:   map[int64][]promptsec.Fingerprint{},
 	}
 }
 
@@ -92,6 +117,15 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir st
 // unchanged.
 func (h *PromptHandler) AttachSpill(s *compaction.SpillStore) {
 	h.spill = s
+}
+
+// AttachInstructionsChain provides plan mode with the H6 AGENTS.md chain
+// factory (W3.2). main wires the same closure the orchestrator gets, so a
+// plan turn and a build turn read byte-identical conventions; leaving it
+// unattached keeps plan assembly on the workspace-only chain (no global
+// file) — what tests and embedded compositions want.
+func (h *PromptHandler) AttachInstructionsChain(f func(workspacePath string) string) {
+	h.instructionsChain = f
 }
 
 type promptRequest struct {
@@ -223,13 +257,17 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	if req.Mode == "plan" {
 		hist := h.planHistory(req.ProjectID, h.buildUserTurn(attachments, req.Prompt))
+		// W3.2: per-project prompt (map + survey + AGENTS chain) with the
+		// flag on; byte-identical h.planPrompt with it off — the assembly
+		// checks the flag before touching workspace, cache, or model.
+		sys := h.planSystemPrompt(ctx, req.ProjectID)
 		var planResp *ai.PlanResponse
 		if planToolsEnabled() {
 			// W3.1: eyes on — the bounded read-only loop answers in the same
 			// raw envelope the tool-less path produced, finalised under
 			// ai.Plan's contract (parse, else message-only), so everything
 			// below is shape-identical with the flag on or off.
-			raw, perr := h.planWithTools(ctx, req.ProjectID, h.planPrompt, hist)
+			raw, perr := h.planWithTools(ctx, req.ProjectID, sys, hist)
 			err = perr
 			if perr == nil {
 				if p, ok := ai.ParsePlan(raw); ok {
@@ -239,7 +277,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		} else {
-			planResp, err = h.ai.Plan(ctx, h.planPrompt, hist)
+			planResp, err = h.ai.Plan(ctx, sys, hist)
 		}
 		if err != nil {
 			log.Printf("plan failed (user %d, project %d): %v", userID, req.ProjectID, err)
@@ -632,13 +670,17 @@ func (h *PromptHandler) Discard(w http.ResponseWriter, r *http.Request) {
 // streamPlan proxies the model's stream to the client, then parses the finished
 // text into a plan.
 func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID, userID int64, userTurn ai.Message) {
+	// W3.2: per-project prompt (map + survey + AGENTS chain) with the flag
+	// on; byte-identical h.planPrompt with it off — the assembly checks the
+	// flag before touching workspace, cache, or model.
+	sys := h.planSystemPrompt(ctx, projectID)
 	var raw string
 	if planToolsEnabled() {
 		// W3.1: eyes on — the bounded read-only loop produces the final text
 		// directly. Its failures land in the same terminal handling the
 		// stream error path applies, and the tail below parses raw exactly
 		// as it always has (the Answer door inherits this path unchanged).
-		loopRaw, err := h.planWithTools(ctx, projectID, h.planPrompt, h.planHistory(projectID, userTurn))
+		loopRaw, err := h.planWithTools(ctx, projectID, sys, h.planHistory(projectID, userTurn))
 		if err != nil {
 			writeSSE(w, "error", map[string]string{"message": friendlyAIError(err)})
 			h.store.UpdatePromptResponse(promptID, "Error: "+friendlyAIError(err))
@@ -659,7 +701,7 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 	} else {
 		// The system prompt was previously omitted here while the output was
 		// still parsed as a plan, so plan mode had no instructions at all.
-		stream := h.ai.ChatStream(ctx, h.planPrompt, h.planHistory(projectID, userTurn))
+		stream := h.ai.ChatStream(ctx, sys, h.planHistory(projectID, userTurn))
 
 		var full strings.Builder
 		sawError := false

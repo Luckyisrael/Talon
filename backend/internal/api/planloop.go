@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/harness/instructions"
+	"github.com/luckyisrael/talon/backend/internal/harness/promptsec"
 	"github.com/luckyisrael/talon/backend/internal/tools"
 )
 
@@ -180,4 +182,188 @@ func (h *PromptHandler) planFallback(ctx context.Context, system string, history
 		return resp.Message, nil
 	}
 	return string(raw), nil
+}
+
+// ── W3.2 — per-project plan prompt (map + survey + AGENTS chain) ────────
+
+// planSurvey is one project's last successful W3.5 explore survey: the
+// workspace fingerprint it was taken at and the digest it produced.
+type planSurvey struct {
+	fp     string
+	digest string
+}
+
+// weightPlanSurvey places the survey digest between the project map (500)
+// and memory (600): raw structure first, the cheap model's read of it next,
+// conventions last. promptsec keeps the standard weights total; this one is
+// local to the plan composition and still orders deterministically.
+const weightPlanSurvey = 550
+
+// maxSurveyRounds bounds one W3.5 survey: explore rounds over the
+// single-tool registry, then one tool-less finalize — the plan loop's shape
+// at a third of its budget (the survey is orientation, not planning).
+const maxSurveyRounds = 3
+
+// planSurveySystem/User prompt the cheap-model survey (W3.5). The digest
+// lands verbatim as the promptsec "project/survey" section, so it is plain
+// text by instruction — JSON here would leak into the system prompt.
+const planSurveySystem = `You are surveying a workspace before a plan is drafted for it. You have one tool, explore — a bounded overview of a project (tree, name/pattern search, one file read). Call it: the tree first, then a targeted read only if something needs checking. Then write the digest: plain text, at most 120 words — what the project is, its shape (key directories and files), and anything a planner must know. No JSON, no preamble, no recommendations.`
+
+const planSurveyUser = `Survey this workspace and send the digest.`
+
+// planSystemPrompt assembles the plan-mode system prompt for one project
+// (W3.2). With TALONSTUDIO_PLAN_TOOLS unset it returns h.planPrompt without
+// touching the workspace, the caches, or the model — flag-off plan turns
+// stay byte-identical. With the flag on the prompt becomes an ordered
+// promptsec registry: the static plan head, the project map, the W3.5
+// survey digest when the fingerprint says the last one is stale, and the
+// AGENTS.md chain — sections rendered once, omitted when empty,
+// fingerprinted so a moved section is visible.
+func (h *PromptHandler) planSystemPrompt(ctx context.Context, projectID int64) string {
+	if !planToolsEnabled() {
+		return h.planPrompt
+	}
+	ws, err := h.workspacePath(projectID)
+	if err != nil || ws == "" {
+		// The same degrade planWithTools applies: no workspace, no eyes —
+		// and no injected sections either; the static head is a complete
+		// prompt, exactly what flag-off sends.
+		return h.planPrompt
+	}
+	survey := h.planSurveyDigest(ctx, projectID, ws, tools.ProjectFingerprint(ws))
+	reg := h.planPromptSections(ws, survey)
+	h.notePlanSections(projectID, reg)
+	return reg.Assemble()
+}
+
+// planPromptSections builds the plan composition's section registry. Each
+// dynamic section renders exactly once — the closures capture the rendered
+// text — so Assemble and Fingerprints agree byte-for-byte and neither walk
+// the workspace twice.
+func (h *PromptHandler) planPromptSections(workspacePath, survey string) *promptsec.Registry {
+	mapText := tools.ProjectMapText(workspacePath)
+	chainText := h.instructionsChainText(workspacePath)
+
+	reg := promptsec.New()
+	reg.Register(promptsec.Section{
+		Name:   "plan/head",
+		Weight: promptsec.WeightPersona,
+		Render: func() string { return h.planPrompt },
+	})
+	reg.Register(promptsec.Section{
+		Name:   "project/map",
+		Weight: promptsec.WeightProjectMap,
+		Render: func() string { return mapText },
+	})
+	reg.Register(promptsec.Section{
+		Name:   "project/survey",
+		Weight: weightPlanSurvey,
+		Render: func() string { return survey },
+	})
+	reg.Register(promptsec.Section{
+		Name:   "instructions/chain",
+		Weight: promptsec.WeightInstructions,
+		Render: func() string { return chainText },
+	})
+	return reg
+}
+
+// instructionsChainText is the H6 AGENTS.md chain for plan assembly: the
+// factory main attached (byte-identical to the orchestrator's consumer of
+// the same closure), or the workspace-only chain when nothing attached one.
+func (h *PromptHandler) instructionsChainText(workspacePath string) string {
+	if h.instructionsChain != nil {
+		return h.instructionsChain(workspacePath)
+	}
+	return instructions.Loader{WorkspaceRoot: workspacePath}.Load().Text()
+}
+
+// notePlanSections logs which sections moved since this project's last plan
+// turn — the fingerprint half of the cache discipline: a change late in the
+// order (chain, survey) leaves the head and map hashes untouched, so the
+// prefix a prompt cache still covers is provably intact.
+func (h *PromptHandler) notePlanSections(projectID int64, reg *promptsec.Registry) {
+	fps := reg.Fingerprints()
+	h.planSurveyMu.Lock()
+	prev := h.planSectionFP[projectID]
+	h.planSectionFP[projectID] = fps
+	h.planSurveyMu.Unlock()
+	if prev == nil {
+		return // first plan turn for this project: everything would be "added"
+	}
+	if changed := promptsec.Diff(prev, fps); len(changed) > 0 {
+		log.Printf("plan: prompt sections changed for project %d: %s", projectID, strings.Join(changed, ", "))
+	}
+}
+
+// planSurveyDigest is W3.5's gate: the digest is reused while the workspace
+// fingerprint matches the one the last successful survey was taken at; a
+// changed (or never-taken) fingerprint runs the cheap-model explore survey
+// before drafting. A failed survey degrades to no digest and is NOT cached
+// — the next plan turn retries — and never fails the turn itself.
+func (h *PromptHandler) planSurveyDigest(ctx context.Context, projectID int64, workspacePath, fp string) string {
+	h.planSurveyMu.Lock()
+	cached, ok := h.planSurveyCache[projectID]
+	h.planSurveyMu.Unlock()
+	if ok && cached.fp == fp {
+		return cached.digest
+	}
+	digest, err := h.exploreSurvey(ctx, workspacePath)
+	if err != nil {
+		log.Printf("plan: survey unavailable (project %d): %v", projectID, err)
+		return ""
+	}
+	h.planSurveyMu.Lock()
+	h.planSurveyCache[projectID] = planSurvey{fp: fp, digest: digest}
+	h.planSurveyMu.Unlock()
+	return digest
+}
+
+// exploreSurvey runs the W3.5 survey on the cheap tier: the routing
+// policy's TierMedium model (AI_MODEL_CHEAP in the compiled defaults — the
+// same cheap path ClassifyTurn's small-edit branch takes), one bounded loop
+// over the single {explore} registry, then a tool-less finalize. Any
+// provider failure returns an error the caller degrades on — the survey can
+// add eyes, never fail a turn.
+func (h *PromptHandler) exploreSurvey(ctx context.Context, workspacePath string) (string, error) {
+	client := h.ai
+	if model := ai.LoadRoutingPolicy().Models[ai.TierMedium]; model != "" && model != h.ai.Model() {
+		client = h.ai.WithModel(model)
+	}
+	explore := tools.NewRegistry()
+	explore.Register(&tools.Explore{FS: tools.NewFS(workspacePath)})
+	toolDefs := explore.List()
+	defs := make([]ai.ToolDefinition, 0, len(toolDefs))
+	for _, d := range toolDefs {
+		defs = append(defs, ai.ToolDefinition{Name: d.Name, Description: d.Description, InputSchema: d.InputSchema})
+	}
+
+	msgs := []ai.Message{ai.UserText(planSurveyUser)}
+	for round := 0; round < maxSurveyRounds; round++ {
+		res, err := client.ChatWithTools(ctx, planSurveySystem, msgs, defs, nil)
+		if err != nil {
+			return "", err
+		}
+		if len(res.ToolUses) == 0 {
+			return strings.TrimSpace(res.Text), nil
+		}
+		msgs = append(msgs, ai.Message{Role: "assistant", Blocks: res.Blocks})
+		results := make([]ai.Block, 0, len(res.ToolUses))
+		for _, tu := range res.ToolUses {
+			tr, err := explore.Execute(ctx, tu.Name, tu.Input)
+			if err != nil {
+				return "", err // a registry read fails only when the caller hangs up
+			}
+			results = append(results, ai.Block{
+				Type: "tool_result", ToolUseID: tu.ID, Name: tu.Name,
+				Content: tr.Content, IsError: tr.IsError,
+			})
+		}
+		msgs = append(msgs, ai.ToolResults(results))
+	}
+	res, err := client.ChatWithTools(ctx, planSurveySystem, msgs, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(res.Text), nil
 }

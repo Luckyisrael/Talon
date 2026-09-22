@@ -541,3 +541,29 @@ and search keep reading legacy until W2.3 flips them with the same gate.
 **Web/mobile connection:** none required — plan turns are server-computed; the flag is a harness/env concern. When W3.2 (map/AGENTS injection) lands, the web/mobile plan view may surface richer `readiness` text, but no client change is required for W3.A itself.
 
 **Remaining in W3:** W3.2 (inject project map + fingerprint + AGENTS.md chain into `planPrompt`), W3.4 (plan artifact `.talon/plan.md` + checklist sync, register row 13), W3.5 (stale-fingerprint Explore survey via `ClassifyTurn`).
+
+---
+
+## W3.2 + W3.5 — per-project plan prompt + stale-fingerprint Explore survey (committed, same `TALONSTUDIO_PLAN_TOOLS=v1`)
+
+**Plan:** `PLAN_WORLDCLASS.md` W3.2 (inject project map + fingerprint + AGENTS.md chain into `planPrompt`) and W3.5 (cheap-model survey when the map fingerprint is stale); register row 12 now fully closed (artifact stays row 13).
+
+**W3.2 — prompt assembly (`planSystemPrompt` in `planloop.go`):**
+- Both plan doors (Send + stream, incl. the Answer door's inherited path) now call `h.planSystemPrompt(ctx, projectID)` instead of the static `h.planPrompt`. Flag off → first branch returns `h.planPrompt` untouched: no workspace walk, no cache, no model → **byte-identical wire** (pinned by `TestPlanModeSendsNoToolsToModel`).
+- Flag on → the prompt is a `promptsec` registry (H7, same package Build mode uses) with four sections in weighted order: `plan/head` (the static `PlanSystemPrompt`, persona weight), `project/map` (`tools.ProjectMapText(workspace)`), `project/survey` (W3.5 digest, custom weight 550 — between map 500 and memory 600), `instructions/chain` (AGENTS.md). Each dynamic section renders **once** and the closure captures the text, so `Assemble()` and `Fingerprints()` agree byte-for-byte and neither walks the tree twice. Empty renders are omitted by promptsec (absence = never registered).
+- **AGENTS chain reuse:** `main` attaches `promptHandler.AttachInstructionsChain(...)` — the *same closure* it hands `orchestratorSvc.AttachInstructions` (workspace root + `$TALON_HOME/AGENTS.md` via `instructions.Loader`), so plan and build cannot drift on conventions. Unattached (tests/embedded) → workspace-only loader, no global file.
+- **Fingerprint discipline:** `notePlanSections` stores each project's `promptsec.Fingerprints()` set and logs `promptsec.Diff(prev, next)` when a section moves — the observability half of the cache law (a late change leaves the head/map hashes intact, so a cached prefix stays provably valid). Gate: `TestPhaseW3PlanPromptSectionLocality` (survey change moves only `project/survey`; an AGENTS.md edit moves only `instructions/chain`).
+
+**W3.5 — Explore survey (`planSurveyDigest` + `exploreSurvey`):**
+- Staleness unit = `tools.ProjectFingerprint(workspace)` (the cheap mtime/size hash that "walks the same file set ProjectMapText renders"). Cache per project: `{fingerprint, digest}` of the last **successful** survey. Matching fingerprint → digest reused with zero model calls; changed/never-taken → survey runs *before drafting* (it happens inside prompt assembly, so the loop's first round already carries it).
+- The survey = one bounded loop (`maxSurveyRounds = 3` + tool-less finalize) over a single-tool `{explore}` registry, on the **cheap tier**: `ai.LoadRoutingPolicy().Models[TierMedium]` (compiled default maps it to `AI_MODEL_CHEAP` — the same cheap path `ClassifyTurn`'s small-edit branch serves) via `h.ai.WithModel(model)`; equal-model deployments skip the copy. Digest is plain text by prompt instruction (it lands verbatim in the system prompt).
+- **Failure semantics:** provider error → log + return "" (no digest) → **not cached**, next plan turn retries; the turn itself never waits on survey success beyond the one attempt. Gate: `TestPhaseW3PlanSurveyFailureDegrades` (400 fast-fail → head+map only, attempt count 1 then 2 proves no negative-cache). Gate: `TestPhaseW3PlanSurveyWhenStale` (1st call surveys once, 2nd call byte-identical prompt + no re-survey, file-size change → 2nd survey).
+- `.env.example` gained the previously-undocumented `AI_MODEL_CHEAP` line (W3.5 consumes it; also partial W8.3 surface).
+
+**Fixture mechanics (for future edits):** `newPlanFixture` now sets `AI_MODEL_CHEAP=survey-model` and the stub answers `model == "survey-model"` requests *apart* from plan traffic (`surveyBodies` / `f.surveyCount()`), so every existing plan call-count assertion still counts plan rounds only. `f.surveyRespond` is overridable per test (used by the failure gate). Default survey reply marker: `W3_SURVEY_DIGEST`.
+
+**Caveat (honest):** the W3.A-era assertion `sys == planPrompt` / `strings.Contains(sys, "src/app.ts")` was *silently satisfied by the wrong section* once injection landed (the AGENTS rule and survey digest both name `src/app.ts`; the map itself renders as a `src/` header + `app.ts` line). All three assertions were re-aimed at the map's fixed header `## Current project structure`, and the wire gate now additionally pins the digest (`W3_SURVEY_DIGEST`) in a real door turn.
+
+**Gates:** `gofmt`/`go vet` clean (api, cmd/server); 10 W3 tests + flag-off regression green fast; `make evals` EXIT=0; `go test -race ./...` EXIT=0 (41 ok).
+
+**Web/mobile connection:** none required — plan turns remain server-computed; injection enriches the system prompt only. The web/mobile plan view *may* surface richer text (map-grounded plans cite real files — already visible in the plan JSON `features`), but no client work is implied by W3.2/W3.5. Flag stays dark in production → zero behavior change.

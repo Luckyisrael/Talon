@@ -51,6 +51,14 @@ type planFixture struct {
 	mu     sync.Mutex
 	bodies []map[string]any
 	raws   []string
+
+	// W3.5: the cheap-model survey rides AI_MODEL_CHEAP's wire model —
+	// recorded apart from plan-model traffic so every plan call-count in
+	// the tests below counts plan rounds only.
+	surveyBodies []map[string]any
+	// surveyRespond answers survey requests; a test overrides it to fail
+	// the survey (degrade path) without touching plan-model behavior.
+	surveyRespond func(call int, body map[string]any) (int, map[string]any)
 }
 
 // newPlanFixture builds the fixture and points a real ai.Client at the
@@ -62,10 +70,33 @@ func newPlanFixture(t *testing.T, respond func(call int, body map[string]any) (i
 	t.Helper()
 
 	f := &planFixture{}
+	// Default W3.5 survey answer: the digest lands as the prompt's
+	// "project/survey" section. Tests override f.surveyRespond to fail it.
+	f.surveyRespond = func(int, map[string]any) (int, map[string]any) {
+		return 200, textReply("W3_SURVEY_DIGEST: fixture overview of src/app.ts")
+	}
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
 		_ = json.Unmarshal(raw, &body)
+
+		// W3.5: the cheap-model survey rides AI_MODEL_CHEAP's wire model —
+		// answered here and recorded apart, so every plan call-count in the
+		// tests below still counts plan rounds only.
+		if wireModel, _ := body["model"].(string); wireModel == "survey-model" {
+			f.mu.Lock()
+			f.surveyBodies = append(f.surveyBodies, body)
+			surveyCall := len(f.surveyBodies)
+			respondSurvey := f.surveyRespond
+			f.mu.Unlock()
+			status, reply := respondSurvey(surveyCall, body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			if reply != nil {
+				_ = json.NewEncoder(w).Encode(reply)
+			}
+			return
+		}
 
 		f.mu.Lock()
 		f.bodies = append(f.bodies, body)
@@ -86,6 +117,9 @@ func newPlanFixture(t *testing.T, respond func(call int, body map[string]any) (i
 	t.Setenv("AI_BASE_URL", model.URL)
 	t.Setenv("AI_API_KEY", "test-key")
 	t.Setenv("AI_MODEL", "test-model")
+	// The survey's cheap tier: a distinct model, so the fixture separates
+	// survey traffic from plan traffic at the wire.
+	t.Setenv("AI_MODEL_CHEAP", "survey-model")
 	t.Setenv("TALONSTUDIO_PLAN_TOOLS", "v1")
 
 	client, err := ai.New()
@@ -131,6 +165,13 @@ func newPlanFixture(t *testing.T, respond func(call int, body map[string]any) (i
 	f.h, f.st, f.ai, f.orch = h, st, client, orch
 	f.ws, f.uid, f.pid = ws, user.ID, project.ID
 	return f
+}
+
+// surveyCount reports how many cheap-model survey requests reached the model.
+func (f *planFixture) surveyCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.surveyBodies)
 }
 
 // runPlan drives one plan turn through the non-streaming Send door — the
@@ -288,9 +329,17 @@ func TestPhaseW3PlanTurnSeesFixtureRepo(t *testing.T) {
 	if len(f.bodies) != 2 {
 		t.Fatalf("model called %d times, want 2 (survey round + answer)", len(f.bodies))
 	}
-	// The survey round is a plan turn: plan system prompt, read-only subset.
-	if sys := systemText(t, f.bodies[0]); sys != f.h.planPrompt {
-		t.Error("survey round did not use the plan system prompt — the turn left the plan path")
+	// The survey round runs over the per-project prompt (W3.2: the static
+	// plan head, then the injected project map) with the read-only subset.
+	sys := systemText(t, f.bodies[0])
+	if !strings.HasPrefix(strings.TrimSpace(sys), strings.TrimSpace(f.h.planPrompt)) {
+		t.Error("survey round did not start with the plan system prompt — the turn left the plan path")
+	}
+	if !strings.Contains(sys, "## Current project structure") {
+		t.Error("plan system prompt carries no project map — W3.2 injection did not run")
+	}
+	if !strings.Contains(sys, "W3_SURVEY_DIGEST") {
+		t.Error("plan system prompt carries no survey digest — W3.5 did not inject it at the wire")
 	}
 	if got := requestToolNames(t, f.bodies[0]); !reflect.DeepEqual(got, wantPlanTools) {
 		t.Errorf("survey tools = %v, want exactly %v", got, wantPlanTools)
