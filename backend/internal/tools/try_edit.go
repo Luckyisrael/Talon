@@ -15,8 +15,9 @@ import (
 // Like mark_task_done, this is orchestrator-owned: the loop intercepts the
 // call because only the loop owns both the session's patch buffer and the
 // verify path. Execute is only the honest fallback for a bypassed call.
-// Behind the TALONSTUDIO_PATCH_BUFFER flag the interception is off and a
-// try_edit call behaves as the plain underlying edit.
+// TALONSTUDIO_PATCH_BUFFER=0/false/off (opt-out since the W8.1 flip)
+// turns the interception off and a try_edit call behaves as the plain
+// underlying edit.
 type TryEdit struct{}
 
 func (t *TryEdit) Name() string { return "try_edit" }

@@ -2,6 +2,13 @@
 // project, surviving restarts, mutated only through compare-and-swap so a
 // stale view can never clobber newer state.
 //
+// Scope (declared at W8.2, PLAN_WORLDCLASS row 24): headless-only — the
+// sole non-test importer is cmd/talon-headless ("continue the goal" after
+// a crash). Server sessions do not create or mutate goals; exposing goals
+// there is an open product decision, not an accident waiting to happen.
+// A package with a declared consumer is not a dead package; one without
+// would be. TestPhaseW8NoDeadImports enforces exactly that line.
+//
 // The contract (from DSH's goal service, adapted to Talon's shape):
 //
 //   - A goal is (objective text, phase, rounds used, revision). One goal is

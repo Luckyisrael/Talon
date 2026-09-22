@@ -792,15 +792,16 @@ func (o *Orchestrator) requestErrorListener(round int, provider, model string, e
 }
 
 // pipelineEnabled reports whether the H3 bounded tool pipeline drives batch
-// dispatch. Ships dark: legacy (off) behaves identically to today, the flag
-// opts in per deployment. Flip the default only after the same-script
-// transcript-parity eval has run green on both modes.
+// dispatch. The default flipped ON at W8.1: the same-script transcript-parity
+// eval (TestPipelineTranscriptParity) runs green in both modes, so the
+// bounded scheduler ships. TALONSTUDIO_PIPELINE=0/false/off opts a
+// deployment back to legacy sequential dispatch.
 func pipelineEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TALONSTUDIO_PIPELINE"))) {
-	case "v1", "1", "true", "on":
-		return true
+	case "0", "false", "off":
+		return false
 	}
-	return false
+	return true
 }
 
 // ToolExecutor runs a single tool call and returns its output. The bool reports
@@ -1805,18 +1806,20 @@ func (o *Orchestrator) applyMarkTaskDone(sess *SessionState, uses []ai.ToolUseBl
 	}
 }
 
-// patchBufferOn resolves the G6 lane: per-session opt-in, or the
-// TALONSTUDIO_PATCH_BUFFER env var for fleet-wide experiments. Both default
-// off — off behaves identically to today.
+// patchBufferOn resolves the G6 lane: per-session opt-in via
+// RunOptions.PatchBufferEnabled force-enables it; otherwise the
+// TALONSTUDIO_PATCH_BUFFER env var decides. The default flipped ON at
+// W8.1 (G6 parity proven both ways); TALONSTUDIO_PATCH_BUFFER=0/false/off
+// opts a deployment back to the legacy benign-fallback lane.
 func patchBufferOn(opts RunOptions) bool {
 	if opts.PatchBufferEnabled {
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TALONSTUDIO_PATCH_BUFFER"))) {
-	case "1", "true", "on":
-		return true
+	case "0", "false", "off":
+		return false
 	}
-	return false
+	return true
 }
 
 // applyPatchBuffer intercepts try_edit/keep_edit calls, returning owned
@@ -2313,12 +2316,13 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		}
 	}
 
-	// H3: TALONSTUDIO_PIPELINE=v1 selects the bounded harness pipeline for
-	// batch dispatch. runCall — guardrails, emission, result notes — is the
-	// single body in both modes; the pipeline replaces only the scheduling:
-	// read-only runs overlap in a bounded rolling pool (legacy peaks at one
-	// goroutine per call), and an exclusive call drains the pool and runs
-	// alone (legacy serializes the whole batch). The flag ships dark.
+	// H3: the bounded harness pipeline drives batch dispatch by default
+	// (flipped at W8.1); TALONSTUDIO_PIPELINE=0/false/off restores legacy
+	// sequential dispatch. runCall — guardrails, emission, result notes —
+	// is the single body in both modes; the pipeline replaces only the
+	// scheduling: read-only runs overlap in a bounded rolling pool (legacy
+	// peaks at one goroutine per call), and an exclusive call drains the
+	// pool and runs alone (legacy serializes the whole batch).
 	if pipelineEnabled() && len(calls) > 0 {
 		callIndex := map[string]int{}
 		for i, c := range calls {

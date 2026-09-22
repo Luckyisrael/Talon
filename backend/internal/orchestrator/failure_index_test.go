@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/ai"
 	"github.com/luckyisrael/talon/backend/internal/events"
+	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/runtime"
 )
 
@@ -116,8 +116,11 @@ func patchTestSession(t *testing.T, content string) (*SessionState, string) {
 	return newTestSession(t), dir
 }
 
-// Flag off: interception owns nothing — the session behaves as today.
+// Explicit opt-out: interception owns nothing — the session behaves as
+// today. The lane defaults ON since the W8.1 flip, so the legacy
+// behaviour must be requested.
 func TestPatchBufferOffOwnsNothing(t *testing.T) {
+	t.Setenv("TALONSTUDIO_PATCH_BUFFER", "off")
 	sess, _ := patchTestSession(t, "v1")
 	calls := []ai.ToolUseBlock{{ID: "1", Name: "try_edit", Input: json.RawMessage(`{"path":"a.txt","mode":"edit"}`)}}
 	owned := (&Orchestrator{}).applyPatchBuffer(context.Background(), sess, calls, RunOptions{})
@@ -128,7 +131,19 @@ func TestPatchBufferOffOwnsNothing(t *testing.T) {
 		t.Fatal("flag off must not create a buffer")
 	}
 	if patchBufferOn(RunOptions{}) {
-		t.Fatal("env default must be off")
+		t.Fatal("explicit off must disable the lane")
+	}
+}
+
+// Default after the W8.1 flip: no opt-in needed, the lane is on.
+func TestPatchBufferDefaultOn(t *testing.T) {
+	t.Setenv("TALONSTUDIO_PATCH_BUFFER", "")
+	if !patchBufferOn(RunOptions{}) {
+		t.Fatal("env default must be on since W8.1")
+	}
+	t.Setenv("TALONSTUDIO_PATCH_BUFFER", "0")
+	if patchBufferOn(RunOptions{}) {
+		t.Fatal("0 must opt out")
 	}
 }
 

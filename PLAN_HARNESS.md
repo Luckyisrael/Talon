@@ -640,6 +640,14 @@ our rounds are minutes, not seconds). Trigger: exhausted repair attempts on a go
 workspace state carries; terminal conditions (done / concrete blocker) reachable.
 **Risk:** burns budget; hard-cap rounds and make the offer explicit, never automatic.
 
+> **W8.2 note (2026-09):** `internal/harness/ralph` was **deleted** — it had zero
+> non-test importers (law 8) and no phase in `PLAN_WORLDCLASS.md` planned to consume
+> it (W14 consumes `composition`/`settings` only). The package's fate was an explicit
+> either/or in PLAN_WORLDCLASS W8.2: wire the fresh-context repair offer under its own
+> spec, or delete with this note. We deleted. Last tree that had it: commit `e787549`
+> (`git show e787549:backend/internal/harness/ralph/ralph.go`).
+> If the repair offer is ever wanted, re-introduce it greenfield against this spec.
+
 ---
 
 ## 4. What we deliberately do NOT adopt

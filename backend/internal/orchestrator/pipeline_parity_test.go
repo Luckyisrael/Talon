@@ -83,8 +83,9 @@ func TestPipelineTranscriptParity(t *testing.T) {
 		return outcome.Messages
 	}
 
-	// Legacy: flag off — sequential dispatch.
-	t.Setenv("TALONSTUDIO_PIPELINE", "")
+	// Legacy: explicit opt-out — sequential dispatch (the default flipped
+	// ON at W8.1, so "" would now mean pipeline-on).
+	t.Setenv("TALONSTUDIO_PIPELINE", "off")
 	legacy := run()
 
 	// Pipeline: flag on — bounded pool dispatch.
