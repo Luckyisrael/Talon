@@ -3241,7 +3241,17 @@ func (o *Orchestrator) refreshProjectMap(sess *SessionState) bool {
 	if fp == sess.ProjectMapFP() {
 		return false
 	}
-	if m := tools.ProjectMapText(root); m != "" {
+	// W4.6: with the code index wired the rebuild reads the view (reconcile +
+	// stored rows) instead of re-walking; nil keeps the walk byte-identical.
+	// The fingerprint stays the trigger — a changed tree schedules the
+	// rebuild either way; the index only changes what the rebuild reads.
+	m := ""
+	if render := sess.ProjectMapRender(); render != nil {
+		m = render()
+	} else {
+		m = tools.ProjectMapText(root)
+	}
+	if m != "" {
 		sess.SetProjectMapFP(m, fp)
 		return true
 	}

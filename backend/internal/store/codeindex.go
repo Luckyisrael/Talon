@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -175,6 +176,63 @@ func (s *Store) ClearEdgeTargets(projectID int64, path string) error {
 		`UPDATE code_edges SET to_path = '' WHERE project_id = ? AND to_path = ?`,
 		projectID, path)
 	return err
+}
+
+// CodeFileRow is one file's map-view row (W4.6): its path plus the exports
+// and imports the renderer prints — what the walk extracts, stored at index
+// time so the map can render as a view instead of re-walking the tree.
+type CodeFileRow struct {
+	Path    string
+	Exports []string
+	Imports []string
+}
+
+// SetFileExports stores the map view's per-file exports/imports, upserting
+// alongside — never touching — the hash: reconcile writes these BEFORE
+// ReplaceFileIndex advances the hash, so a row whose hash matched can never
+// be missing its map data. No-op on marshal failure only.
+func (s *Store) SetFileExports(projectID int64, path string, exports, imports []string) error {
+	ej, err := json.Marshal(exports)
+	if err != nil {
+		return err
+	}
+	ij, err := json.Marshal(imports)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO code_files (project_id, path, hash, exports, imports) VALUES (?, ?, '', ?, ?)
+		 ON CONFLICT(project_id, path) DO UPDATE SET exports = excluded.exports, imports = excluded.imports`,
+		projectID, path, string(ej), string(ij))
+	return err
+}
+
+// CodeFilesWithExports returns every file's map row for one project in path
+// order — the view's select. Corrupt JSON surfaces as an error: callers
+// degrade to the walk rather than silently rendering a wrong map.
+func (s *Store) CodeFilesWithExports(projectID int64) ([]CodeFileRow, error) {
+	rows, err := s.db.Query(
+		`SELECT path, exports, imports FROM code_files WHERE project_id = ? ORDER BY path`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CodeFileRow
+	for rows.Next() {
+		var r CodeFileRow
+		var ej, ij string
+		if err := rows.Scan(&r.Path, &ej, &ij); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(ej), &r.Exports); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(ij), &r.Imports); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // CodeFileHashes returns path → content hash: the reconcile comparison set.

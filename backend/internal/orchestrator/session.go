@@ -74,6 +74,12 @@ type SessionState struct {
 	projectMap   string
 	projectMapFP string
 
+	// mapRender is the W4.6 view renderer the refresh path prefers when set:
+	// reconcile the code index and render its stored rows instead of walking
+	// the tree. Set by the integration layer at build start; nil (flag off,
+	// no store) keeps the walk exactly as before.
+	mapRender func() string
+
 	// KnownFiles tracks files the model has read or written this session, with
 	// the mtime at last contact. A re-read of an unchanged file gets a note
 	// pointing at the transcript instead of a second full body — the content is
@@ -665,6 +671,23 @@ func (s *SessionState) ProjectMapFP() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.projectMapFP
+}
+
+// SetProjectMapRender stores the renderer the refresh path uses when the code
+// index is wired (W4.6) — the map as a view over the index, reconcile-on-read.
+// nil keeps the walk. Setting it does not touch the stored map or fingerprint.
+func (s *SessionState) SetProjectMapRender(fn func() string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mapRender = fn
+}
+
+// ProjectMapRender returns the stored view renderer, or nil when the map is
+// walk-rendered (flag off, no store, or a caller that never set one).
+func (s *SessionState) ProjectMapRender() func() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mapRender
 }
 
 // ProjectMap returns the build-start project-structure snapshot, or "" when none

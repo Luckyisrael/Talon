@@ -109,6 +109,13 @@ func Reconcile(root string, projectID int64, st *store.Store) (Stats, error) {
 				a.Edges[i].ToPath = resolveLocal(rel, a.Edges[i].ToName, fileSet)
 			}
 		}
+		// W4.6: the map view's rows land BEFORE the hash upsert — if this
+		// fails the hash never advances, so the next reconcile retries both.
+		// The other order would leave a hash-matched row permanently missing
+		// its exports (reconcile skips hash-matches forever).
+		if err := st.SetFileExports(projectID, rel, tools.ExtractExports(f.src), tools.ExtractImports(f.src)); err != nil {
+			return stats, err
+		}
 		if err := st.ReplaceFileIndex(projectID, rel, f.hash, a.Chunks, a.Symbols, a.Edges); err != nil {
 			return stats, err
 		}

@@ -71,10 +71,10 @@ func TestPhaseW3PlanPromptSectionLocality(t *testing.T) {
 		t.Fatalf("fixture file: %v", err)
 	}
 
-	before := h.planPromptSections(ws, "digest A").Fingerprints()
+	before := h.planPromptSections(ws, 0, "digest A").Fingerprints()
 
 	// A survey change moves only project/survey.
-	mid := h.planPromptSections(ws, "digest B").Fingerprints()
+	mid := h.planPromptSections(ws, 0, "digest B").Fingerprints()
 	if changed := promptsec.Diff(before, mid); !reflect.DeepEqual(changed, []string{"project/survey"}) {
 		t.Errorf("survey change moved %v, want exactly [project/survey]", changed)
 	}
@@ -85,7 +85,7 @@ func TestPhaseW3PlanPromptSectionLocality(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, "AGENTS.md"), []byte("rule\n"), 0o644); err != nil {
 		t.Fatalf("AGENTS.md: %v", err)
 	}
-	after := h.planPromptSections(ws, "digest B").Fingerprints()
+	after := h.planPromptSections(ws, 0, "digest B").Fingerprints()
 	if changed := promptsec.Diff(mid, after); !reflect.DeepEqual(changed, []string{"instructions/chain"}) {
 		t.Errorf("chain edit moved %v, want exactly [instructions/chain]", changed)
 	}

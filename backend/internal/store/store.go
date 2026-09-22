@@ -712,8 +712,27 @@ func (s *Store) migrate() error {
 		project_id INTEGER NOT NULL,
 		path TEXT NOT NULL,
 		hash TEXT NOT NULL,
+		exports TEXT NOT NULL DEFAULT '[]',
+		imports TEXT NOT NULL DEFAULT '[]',
 		PRIMARY KEY (project_id, path)
 	)`)
+	// W4.6: the map view reads per-file exports/imports from this table.
+	// Databases built before it can't backfill parsed data in SQL, so the
+	// first boot that successfully ADD COLUMNs invalidates hashes — the next
+	// reconcile repopulates every row. The duplicate-column error on fresh
+	// and already-upgraded boots is the same benign no-op every guarded
+	// ALTER relies on, and it must NOT invalidate: that would re-parse the
+	// whole workspace on every restart.
+	mapCols := false
+	if _, err := s.db.Exec("ALTER TABLE code_files ADD COLUMN exports TEXT NOT NULL DEFAULT '[]'"); err == nil {
+		mapCols = true
+	}
+	if _, err := s.db.Exec("ALTER TABLE code_files ADD COLUMN imports TEXT NOT NULL DEFAULT '[]'"); err == nil {
+		mapCols = true
+	}
+	if mapCols {
+		s.db.Exec(`UPDATE code_files SET hash = ''`)
+	}
 	s.db.Exec(`CREATE TABLE IF NOT EXISTS code_chunks (
 		id INTEGER PRIMARY KEY,
 		project_id INTEGER NOT NULL,

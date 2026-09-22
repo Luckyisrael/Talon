@@ -149,7 +149,11 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// Grounding: survey the whole project at once, and read an installed package's
 	// real type surface — so the model orients and checks APIs instead of guessing
 	// on a stack newer than its training data. Both are read-only (run concurrently).
-	reg.Register(&tools.ProjectMap{FS: fs})
+	// W4.6: the map tool gains optional index hooks — reconcile-on-read and
+	// stored map rows — so with the flag on it renders as a view over the
+	// index instead of re-walking. Flag off (or no store) the fields stay
+	// nil and Execute is the old walk, byte-identical.
+	reg.Register(h.projectMapTool(fs, projectID))
 	reg.Register(&tools.InspectPackage{WorkspacePath: workspacePath})
 
 	// W4.4: hybrid search + call graph over the codebase index. Registered

@@ -1073,15 +1073,21 @@ func (h *PromptHandler) runBuild(
 	// tool's subprocess output appears in the terminal pane as it happens.
 	bs := h.newBuildSession(workspacePath, projectID, promptID, h.adbTargetFor(projectID), commandOutputWriter{emitter: sess.Emitter})
 
-	// Ground the model in what already exists before the first round: capture a
-	// one-time map of the project's files, their exports, and their imports, and
-	// hand it to the session so the enriched system prompt carries it in the cached
-	// prefix. On a fresh project the map is empty and nothing is injected. This is
-	// what stops an iterative build from re-discovering the layout file by file.
-	if projectMap := tools.ProjectMapText(workspacePath); projectMap != "" {
+	// Ground the model in what already exists before the first round: capture
+	// a map of the project's files, their exports, and their imports, and hand
+	// it to the session so the enriched system prompt carries it in the cached
+	// prefix. On a fresh project the map is empty and nothing is injected. This
+	// is what stops an iterative build from re-discovering the layout file by
+	// file. W4.6: with the index on this renders as a view over it (reconcile
+	// + stored rows) instead of a walk — same bytes either way for one tree.
+	if projectMap := h.projectMapView(workspacePath, projectID); projectMap != "" {
 		sess.SetProjectMapFP(projectMap, tools.ProjectFingerprint(workspacePath))
 		sess.Emitter.EmitToolCall("", "context_build", "", "Scanned the project", "completed")
 	}
+	// W4.6: hand the loop's refresh path the same renderer, so a fingerprint
+	// change re-reads the view (reconcile-on-read) rather than re-walking.
+	// Never nil: refresh falls back to the walk only if nothing was set.
+	sess.SetProjectMapRender(func() string { return h.projectMapView(workspacePath, projectID) })
 
 	// Push the settled plan to the client as a checklist before the first round,
 	// so the developer sees every screen and feature the build will work through —

@@ -23,7 +23,17 @@ import (
 // start so the model begins grounded rather than spending a round rediscovering
 // the project.
 
-type ProjectMap struct{ FS *FS }
+// ProjectMap renders the workspace map. The index hooks (W4.6) turn it into
+// a view over the code index when TALONSTUDIO_INDEX is on: reconcile on
+// read, then the stored exports/imports through the SAME renderer as the walk
+// — flag-on bytes equal flag-off bytes for the same tree. Both fields are
+// optional: nil keeps the walk path byte-identical (flag off, no store).
+type ProjectMap struct {
+	FS        *FS
+	Reconcile func() error // freshness hook; nil = index not wired
+	// IndexFiles supplies the indexed map rows; nil = walk.
+	IndexFiles func() ([]MapFile, error)
+}
 
 func (t *ProjectMap) Name() string { return "project_map" }
 
@@ -41,6 +51,25 @@ func (t *ProjectMap) InputSchema() json.RawMessage {
 }
 
 func (t *ProjectMap) Execute(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+	// Index view (W4.6): fresh by construction — reconcile runs now, so the
+	// result reflects files written this turn. A failed fetch or an empty
+	// view falls through to the walk (still fresh: it reads the tree
+	// directly); only a view rendered behind a failed refresh carries a note.
+	stale := ""
+	if t.IndexFiles != nil {
+		if t.Reconcile != nil {
+			if err := t.Reconcile(); err != nil {
+				stale = fmt.Sprintf("\n\n[index refresh failed: %v — the map may be behind]", err)
+			}
+		}
+		if files, err := t.IndexFiles(); err == nil {
+			if m := ProjectMapTextFromIndex(files); m != "" {
+				return ToolResult{Content: m + stale}, nil
+			}
+			// Empty view = fresh project: fall through, whose "" produces
+			// the same empty-project message the walk always has.
+		}
+	}
 	m := ProjectMapText(t.FS.Root())
 	if m == "" {
 		return ToolResult{Content: "No source files yet — this is a fresh project. Create files with write_file."}, nil
@@ -54,18 +83,24 @@ func (t *ProjectMap) Execute(_ context.Context, _ json.RawMessage) (ToolResult, 
 // pointing at list_files/read_file for the rest.
 const maxMapBytes = 12 * 1024
 
+// MapFile is one source file's map row: path relative to the workspace root
+// plus the exports and imports the map prints. Both render paths — the walk
+// and the index view (W4.6) — produce these rows and feed them through the
+// same renderer, so flag-on output is byte-identical to flag-off for the
+// same file set (one file-set law, one extractor, one renderer).
+type MapFile struct {
+	Path    string
+	Exports []string
+	Imports []string
+}
+
 // ProjectMapText walks root and renders each source file's exported symbols and
 // imported modules, grouped by directory. It returns "" when the project has no
 // source files yet, so a caller can skip injecting an empty map. Output is
 // deterministic (lexically ordered) so an unchanged project yields identical bytes
 // and never busts the prompt cache.
 func ProjectMapText(root string) string {
-	type entry struct {
-		rel     string
-		exports []string
-		imports []string
-	}
-	var entries []entry
+	var files []MapFile
 
 	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -92,23 +127,38 @@ func ProjectMapText(root string) string {
 			return nil
 		}
 		src := string(data)
-		entries = append(entries, entry{
-			rel:     filepath.ToSlash(rel),
-			exports: extractExports(src),
-			imports: extractImports(src),
+		files = append(files, MapFile{
+			Path:    filepath.ToSlash(rel),
+			Exports: extractExports(src),
+			Imports: extractImports(src),
 		})
 		return nil
 	})
 
-	if len(entries) == 0 {
+	return renderMap(files)
+}
+
+// ProjectMapTextFromIndex renders the same map from indexed rows instead of a
+// walk (W4.6): the map as a view over the code index — no tree re-read, no
+// second parser. The rows carry exactly what the walk extracts (reconcile
+// stores them through the same extractors), so for the same file set the
+// bytes match the walk path. "" for no rows, so an empty index reads as a
+// fresh project.
+func ProjectMapTextFromIndex(files []MapFile) string {
+	return renderMap(files)
+}
+
+// renderMap is the single renderer both paths share: group by directory so
+// the tree reads the way the file system is laid out, lexical order, size
+// capped.
+func renderMap(files []MapFile) string {
+	if len(files) == 0 {
 		return ""
 	}
-
-	// Group by directory so the tree reads the way the file system is laid out.
-	byDir := map[string][]entry{}
-	for _, e := range entries {
-		dir := filepath.ToSlash(filepath.Dir(e.rel))
-		byDir[dir] = append(byDir[dir], e)
+	byDir := map[string][]MapFile{}
+	for _, f := range files {
+		dir := filepath.ToSlash(filepath.Dir(f.Path))
+		byDir[dir] = append(byDir[dir], f)
 	}
 	dirs := make([]string, 0, len(byDir))
 	for d := range byDir {
@@ -119,7 +169,7 @@ func ProjectMapText(root string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Current project structure\n\n%d source file(s). Each line lists a file's exported "+
 		"symbols and the modules it imports. Use read_file for contents. This map refreshes itself "+
-		"as files change — do not call project_map to refresh it.\n", len(entries))
+		"as files change — do not call project_map to refresh it.\n", len(files))
 
 	truncated := false
 	for _, dir := range dirs {
@@ -128,10 +178,10 @@ func ProjectMapText(root string) string {
 			header = "(project root)"
 		}
 		fmt.Fprintf(&b, "\n%s/\n", strings.TrimSuffix(header, "/"))
-		files := byDir[dir]
-		sort.Slice(files, func(i, j int) bool { return files[i].rel < files[j].rel })
-		for _, e := range files {
-			line := "  " + filepath.Base(e.rel) + fileClause(e.exports, e.imports) + "\n"
+		dirFiles := byDir[dir]
+		sort.Slice(dirFiles, func(i, j int) bool { return dirFiles[i].Path < dirFiles[j].Path })
+		for _, f := range dirFiles {
+			line := "  " + filepath.Base(f.Path) + fileClause(f.Exports, f.Imports) + "\n"
 			if b.Len()+len(line) > maxMapBytes {
 				truncated = true
 				break
@@ -306,3 +356,11 @@ func extractImports(src string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// ExtractExports/ExtractImports expose the map's extractors to the code index
+// (W4.6): reconcile stores these per file so the map can render as a view
+// over the index. One extractor, two consumers — the view can never drift
+// from the walk because it stores the walk's own data.
+func ExtractExports(src string) []string { return extractExports(src) }
+
+func ExtractImports(src string) []string { return extractImports(src) }

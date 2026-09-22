@@ -231,7 +231,7 @@ func (h *PromptHandler) planSystemPrompt(ctx context.Context, projectID int64) s
 		return h.planPrompt
 	}
 	survey := h.planSurveyDigest(ctx, projectID, ws, tools.ProjectFingerprint(ws))
-	reg := h.planPromptSections(ws, survey)
+	reg := h.planPromptSections(ws, projectID, survey)
 	h.notePlanSections(projectID, reg)
 	return reg.Assemble()
 }
@@ -239,9 +239,10 @@ func (h *PromptHandler) planSystemPrompt(ctx context.Context, projectID int64) s
 // planPromptSections builds the plan composition's section registry. Each
 // dynamic section renders exactly once — the closures capture the rendered
 // text — so Assemble and Fingerprints agree byte-for-byte and neither walk
-// the workspace twice.
-func (h *PromptHandler) planPromptSections(workspacePath, survey string) *promptsec.Registry {
-	mapText := tools.ProjectMapText(workspacePath)
+// the workspace twice. projectID feeds the W4.6 map view: the map section is
+// a view over the code index when the flag is on, the walk otherwise.
+func (h *PromptHandler) planPromptSections(workspacePath string, projectID int64, survey string) *promptsec.Registry {
+	mapText := h.projectMapView(workspacePath, projectID)
 	chainText := h.instructionsChainText(workspacePath)
 
 	reg := promptsec.New()
