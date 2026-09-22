@@ -892,6 +892,9 @@ func childRunnerFor(h *PromptHandler, workspacePath string, projectID int64, adb
 				ReadOnlyTool: bs.reg.IsReadOnly,
 				FilesTouched: bs.fs.Touched,
 				Exists:       bs.fs.Exists,
+				// W6: a fork child inherits the parent's device wiring, so
+				// boot/vision/interact classify the same way in the child.
+				DeviceAttached: adbTarget != "",
 				// A subagent's retries belong to the same project log: the parent
 				// turn's replay should see that a delegated call recovered too.
 				EventLog: eventLog,

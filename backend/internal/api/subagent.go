@@ -157,6 +157,8 @@ func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent
 
 func outcomeLabel(o *orchestrator.BuildOutcome) string {
 	switch {
+	case o.Verified && o.VerifiedBestEffort:
+		return "verified-best-effort"
 	case o.Verified:
 		return "verified"
 	case o.Paused:

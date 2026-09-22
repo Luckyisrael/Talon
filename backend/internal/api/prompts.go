@@ -312,18 +312,24 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode, attachments: attachments})
 
 	response := map[string]interface{}{
-		"id":              prompt.ID,
-		"mode":            "build",
-		"message":         "",
-		"files_touched":   []string{},
-		"verified":        false,
-		"rounds":          0,
-		"remaining_tasks": []string{},
+		"id":                   prompt.ID,
+		"mode":                 "build",
+		"message":              "",
+		"files_touched":        []string{},
+		"verified":             false,
+		"verified_best_effort": false,
+		"verify_policy":        "",
+		"rounds":               0,
+		"remaining_tasks":      []string{},
 	}
 	if outcome != nil {
 		response["message"] = outcome.FinalText
 		response["files_touched"] = outcome.FilesTouched
 		response["verified"] = outcome.Verified
+		// W6: policy annotation — a verified:true with verified_best_effort:true
+		// means best-effort gates never ran; verify_policy says who decided.
+		response["verified_best_effort"] = outcome.VerifiedBestEffort
+		response["verify_policy"] = outcome.VerifyPolicy
 		response["rounds"] = outcome.Rounds
 		response["usage"] = outcome.Usage
 		response["remaining_tasks"] = outcome.RemainingTasks
@@ -919,6 +925,8 @@ func (h *PromptHandler) finishBuildStream(w http.ResponseWriter, flusher http.Fl
 		payload["message"] = outcome.FinalText
 		payload["files_touched"] = outcome.FilesTouched
 		payload["verified"] = outcome.Verified
+		payload["verified_best_effort"] = outcome.VerifiedBestEffort
+		payload["verify_policy"] = outcome.VerifyPolicy
 		payload["skipped_gates"] = outcome.SkippedGates
 		payload["rounds"] = outcome.Rounds
 		payload["remaining_tasks"] = outcome.RemainingTasks
@@ -1107,6 +1115,9 @@ func (h *PromptHandler) runBuild(
 		ReadOnlyTool: bs.reg.IsReadOnly,
 		FilesTouched: bs.fs.Touched,
 		Exists:       bs.fs.Exists,
+		// W6: boot/vision/interact are required gates only when a device
+		// backs this turn; device-less runs classify them best-effort.
+		DeviceAttached: h.adbTargetFor(projectID) != "",
 		// Flush each round's turns as the loop advances so an interrupted run
 		// keeps the rounds that already finished — the difference between a crash
 		// costing one round and costing the whole turn.
@@ -1336,8 +1347,10 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 	h.store.UpdatePromptResponse(promptID, response)
 	// Persist the gates that could not run, so "verified" stays honest past
 	// the live stream: a reload or a later GET reports them instead of
-	// forgetting the turn was only statically verified.
-	if outcome.Verified {
+	// forgetting the turn was only statically verified. A refused turn's
+	// skips are the reason for the refusal — they persist too (W6); the
+	// ladder-failure path carries no outcome skips, exactly as before.
+	if outcome.Verified || len(outcome.SkippedGates) > 0 {
 		h.store.UpdatePromptSkippedGates(promptID, outcome.SkippedGates)
 	}
 	// Token accounting is additive, so a resumed turn correctly adds its own

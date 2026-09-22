@@ -2,12 +2,19 @@
 # unit suite plus the phase-guard eval set (one case per PLAN.md phase,
 # healthy and fault-injected polarities). `make ci` mirrors the CI workflow.
 
-.PHONY: evals ci vet test bench
+.PHONY: evals ci vet test scorecard bench
 
-evals: vet test
+evals: vet scorecard test
 
 vet:
 	cd backend && go vet ./...
+
+# W6.3: the grader's fixture cases gate merges as their own named stage.
+# Grade() is pure scoring code — nothing in the suite outside internal/evals
+# would catch a broken disqualifier, so a green build here means the
+# yardstick still measures.
+scorecard:
+	cd backend && go test -count=1 -run 'TestFixtureScorecard|TestGrade' ./internal/evals/
 
 test:
 	cd backend && go test -count=1 ./...

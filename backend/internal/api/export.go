@@ -80,6 +80,11 @@ func (h *ExportHandler) gateExport(w http.ResponseWriter, r *http.Request, proje
 
 type exportRequest struct {
 	WhatsNew string `json:"whats_new"`
+	// Override is the W6 named human key: when verification policy refuses
+	// the release (required gate skipped/failing, best-effort state, or no
+	// record at all), override:true ships anyway and the reason lands in
+	// audit_log under verify_override. Omitted = fail closed.
+	Override bool `json:"override"`
 }
 
 // Create starts an async export: POST /v1/projects/{id}/export
@@ -103,6 +108,13 @@ func (h *ExportHandler) Create(w http.ResponseWriter, r *http.Request) {
 	req.WhatsNew = strings.TrimSpace(req.WhatsNew)
 	if req.WhatsNew == "" {
 		writeError(w, http.StatusBadRequest, "whats_new is required — it goes into the submission bundle as the release notes")
+		return
+	}
+
+	// W6: policy gates the release before any approval work — a refused,
+	// best-effort, or never-verified build does not reach the seam. An
+	// omitted override fails closed (laws 6/15).
+	if !h.enforceVerifyPolicy(w, r, project, req.Override) {
 		return
 	}
 

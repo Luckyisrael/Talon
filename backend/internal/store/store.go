@@ -471,6 +471,19 @@ func (s *Store) migrate() error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
+		// project_verify_state is W6's durable shadow of the last finished
+		// verification sweep: export/release/APK-ship consult it before
+		// shipping. One row per project; the newest sweep wins.
+		`CREATE TABLE IF NOT EXISTS project_verify_state (
+			project_id INTEGER PRIMARY KEY,
+			status TEXT NOT NULL,
+			policy TEXT NOT NULL DEFAULT '',
+			skipped TEXT NOT NULL DEFAULT '[]',
+			remaining TEXT NOT NULL DEFAULT '[]',
+			reason TEXT NOT NULL DEFAULT '',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`,
 		// project_assets holds validated store assets. kind is one of
 		// screenshot, icon, banner — validated at upload time, never conflated:
 		// an emulator screenshot cannot become an icon by accident.

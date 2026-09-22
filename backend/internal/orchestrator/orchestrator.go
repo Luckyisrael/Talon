@@ -792,6 +792,14 @@ type BuildOutcome struct {
 	FinalText    string
 	FilesTouched []string
 	Verified     bool
+	// W6: the policy annotation behind Verified. Verified=true with
+	// VerifiedBestEffort=true means the ladder passed but best-effort gates
+	// never ran (no device, no language server) — honest "everything that
+	// could run, ran", never a silent release. VerifyPolicy is the policy
+	// that classified the sweep ("strict"/"besteffort"); empty when no sweep
+	// classified this turn (no code changed, or it failed before the ladder).
+	VerifiedBestEffort bool
+	VerifyPolicy       string
 	// SkippedGates names verify-ladder stages that reported "unavailable"
 	// when the turn finished verified. The ladder is deliberately fail-open
 	// (missing infra must not block a build), but "verified: true" with
@@ -858,6 +866,11 @@ type RunOptions struct {
 	// fine) from overwriting one the model has not read. Nil treats every path
 	// as new.
 	Exists func(path string) bool
+	// DeviceAttached reports whether an adb target backs this turn (W6): the
+	// gate policy matrix makes boot/vision/interact required when a device is
+	// attached and best-effort when it is not. Zero value = device-less, which
+	// is what tests and desktop runs without a phone get.
+	DeviceAttached bool
 	// Persist, if set, is handed each round's turns as the loop advances rather
 	// than only at the end, so an interrupted run keeps the rounds that already
 	// finished. It is called at every round boundary (and once more on return)
@@ -1429,6 +1442,12 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		if sess.GetVerifyAttempts() >= maxVerifyAttempts {
 			sess.TransitionTo(PhaseFailed)
 			outcome.FilesTouched = touched
+			// W6: the ladder itself refused — record it so export/release/
+			// APK-ship see this verdict rather than a previous sweep's pass.
+			failPolicy := resolveVerifyPolicy(sess.WorkspacePath)
+			outcome.VerifyPolicy = failPolicy
+			o.recordVerifyState(sess.ProjectID, failPolicy, VerifyStatusRefused,
+				verifyStateReason(maxVerifyAttempts), sess.SkippedGates(), pendingPlanTasks(sess))
 			sess.Emitter.EmitError(fmt.Sprintf("code did not pass verification after %d repair attempts", maxVerifyAttempts))
 			metrics.Default.ObserveVerifyFailure()
 			logTurn("verify-failed")
@@ -1451,10 +1470,30 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			outcome.Verified = true
 			outcome.SkippedGates = sess.SkippedGates()
 			outcome.RemainingTasks = pendingPlanTasks(sess)
+			// W6: classify the finished sweep against the policy matrix and
+			// record it — the row is what export/release/APK-ship read. A
+			// required gate that never ran is not a plain "verified": strict
+			// refuses the claim outright; besteffort downgrades it.
+			verifyPolicy := resolveVerifyPolicy(sess.WorkspacePath)
+			verifyStatus, verifyReason := classifyVerification(verifyPolicy, sess.WorkspacePath,
+				outcome.SkippedGates, opts.DeviceAttached)
+			outcome.VerifyPolicy = verifyPolicy
+			if verifyStatus == VerifyStatusRefused {
+				outcome.Verified = false
+			}
+			if verifyStatus == VerifyStatusBestEffort {
+				outcome.VerifiedBestEffort = true
+			}
+			o.recordVerifyState(sess.ProjectID, verifyPolicy, verifyStatus, verifyReason,
+				outcome.SkippedGates, outcome.RemainingTasks)
 			outcome.FinalText += remainingNote(sess, "Verified, but stopping")
 			if len(outcome.SkippedGates) > 0 {
 				outcome.FinalText += "\n\nVerification note: " + strings.Join(outcome.SkippedGates, ", ") +
 					" check(s) could not run (missing infra) — verified covers everything that ran, not these."
+			}
+			if verifyStatus == VerifyStatusRefused {
+				outcome.FinalText += "\n\nVerification policy: " + verifyReason +
+					" — this turn does not count as verified; export/release refuse without an explicit override."
 			}
 			o.recordTurnMemory(sess, touched, outcome)
 			logTurn("done-verified")
@@ -2421,6 +2460,29 @@ func (o *Orchestrator) guardrail(sess *SessionState, name string, input json.Raw
 				"If they actually want an APK on a device, ask them with ask_user first.",
 		}
 	}
+	// W6: a recorded refusal blocks APK-ship too (laws 6/15). The same
+	// device_build approval that opens the scope rule doubles as the named
+	// human key: with it the ship proceeds and each use lands one
+	// verify_override row in audit_log; without it the model is pointed at
+	// the record instead. Never-verified projects stay fenced by the scope
+	// rule above — only an explicit refusal refuses here.
+	if name == "build_apk" && o.store != nil {
+		if found, st, err := o.store.GetProjectVerifyState(sess.ProjectID); err == nil && found && st.Status == VerifyStatusRefused {
+			if !o.approved(sess.ID) {
+				return guardrails.Decision{
+					Allowed: false,
+					Rule:    "verify",
+					Message: "Verification was refused for this project (" + st.Reason + ") — an APK will not ship on a refused build. " +
+						"Fix the code until verify passes, or get explicit device_build approval to override (the override is audited).",
+				}
+			}
+			if p, err := o.store.GetProject(sess.ProjectID); err == nil {
+				if aerr := o.store.AuditLog(p.UserID, sess.ProjectID, "verify_override", "build_apk", st.Reason); aerr != nil {
+					log.Printf("project %d: verify override audit failed: %v", sess.ProjectID, aerr)
+				}
+			}
+		}
+	}
 	st := guardState{sess: sess, exists: opts.Exists, currentMtime: func(path string) (int64, bool) {
 		return fileMtime(sess.WorkspacePath, path)
 	}}
@@ -2563,6 +2625,12 @@ func (o *Orchestrator) verify(ctx context.Context, sess *SessionState, opts RunO
 	o.resetVerifyReport()
 	sess.BeginGateSweep()
 	for _, g := range o.verifyGates() {
+		// W6: an "off" gate is not part of this project's ladder at all —
+		// never run, never recorded as skipped (an explicit project choice
+		// in config, not an infra gap). Defaults never resolve to off.
+		if gatePolicyClass(sess.WorkspacePath, g.stage, opts.DeviceAttached) == GateOff {
+			continue
+		}
 		v := o.runGate(ctx, sess, opts, g)
 		if !v.ok {
 			return v
