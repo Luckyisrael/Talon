@@ -133,18 +133,30 @@ func TestWalletAuthAdversarial(t *testing.T) {
 		}
 	})
 	t.Run("base58 round trip", func(t *testing.T) {
+		roundTrip := func(b []byte) {
+			t.Helper()
+			got, err := base58Decode(base58Encode(b))
+			if err != nil || len(got) != len(b) {
+				t.Fatalf("round trip failed for %x: %v %d bytes", b, err, len(got))
+			}
+			for j := range b {
+				if got[j] != b[j] {
+					t.Fatalf("round trip mangled bytes for %x", b)
+				}
+			}
+		}
+		// Leading zero bytes only occur ~1/256 per random try — pin them
+		// deterministically (they encode as leading '1's; a NUL prefix
+		// here was the 2026-09-22 race-gate flake): the all-zero key, and
+		// a key whose leading zeros coexist with real digits.
+		roundTrip(make([]byte, 32))
+		leadZeros := make([]byte, 32)
+		leadZeros[31] = 0xFF
+		roundTrip(leadZeros)
 		for i := 0; i < 20; i++ {
 			b := make([]byte, 32)
 			rand.Read(b)
-			if got, err := base58Decode(base58Encode(b)); err != nil || len(got) != 32 {
-				t.Fatalf("round trip failed for %x: %v %d bytes", b, err, len(got))
-			} else {
-				for j := range b {
-					if got[j] != b[j] {
-						t.Fatal("round trip mangled bytes")
-					}
-				}
-			}
+			roundTrip(b)
 		}
 	})
 }
@@ -203,7 +215,14 @@ func base58Encode(b []byte) string {
 			carry /= 58
 		}
 	}
+	// Leading zero bytes encode as leading '1's (alphabet[0]) — byte 0 is
+	// not in the alphabet, so a NUL prefix fails decode. This was a real
+	// ~1/256-per-try flake (race gate, 2026-09-22): random keys starting
+	// with 0x00 round-tripped into "invalid base58 character".
 	out := make([]byte, zeros)
+	for i := range out {
+		out[i] = alphabet[0]
+	}
 	for _, d := range digits {
 		out = append(out, alphabet[d])
 	}
