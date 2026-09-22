@@ -81,6 +81,12 @@ const (
 	// is shown as a collapsed hint (names only); bodies load only via
 	// read_skill. Payload: SkillsPayload.
 	SkillsSuggested Kind = "skills/suggested"
+	// SessionForked records a delegation fork's lineage (H9/W1.5): the parent
+	// log appends it when a fork child is created and the same payload is
+	// appended to the child's own log, so either side can reconstruct who
+	// forked from whom and at which sequence. Audit-only — it never becomes a
+	// model-visible message. Payload: ForkPayload.
+	SessionForked Kind = "session/forked"
 )
 
 // SurfaceKind reports whether events of this kind join the model-visible
@@ -244,4 +250,16 @@ type RetryPayload struct {
 type SkillsPayload struct {
 	Skills   []string `json:"skills"`
 	PromptID int64    `json:"prompt_id,omitempty"`
+}
+
+// ForkPayload is the body of session/forked — the lineage record written to
+// both sides of a delegation fork: the parent log names the child it seeded,
+// the child log names the parent it came from. FromSeq is the parent's last
+// included sequence at fork time, so the child's prefix is exactly the
+// parent's events at or below it.
+type ForkPayload struct {
+	ParentKey string `json:"parent_key"`
+	ChildKey  string `json:"child_key"`
+	FromSeq   int64  `json:"from_seq"`
+	Label     string `json:"label,omitempty"`
 }

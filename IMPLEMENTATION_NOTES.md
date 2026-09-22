@@ -227,3 +227,64 @@ raw trace verb.
   (*"re-derive after trim reproduces full history"*): every original log event
   survives byte-identical (+ exactly 2 additive markers), storage keeps every
   row, derivation = summary + keep.
+
+### W1.5 — `delegate_fork` + `sessionlog.Fork` wiring (2026-09-22)
+
+- **The break (register row 8, W1.5 half):** `sessionlog.Log.Fork` and
+  `Store.SessionLogForked` were fully implemented and unit-tested but had
+  **zero production callers**; H9's second model-facing tool `delegate_fork`
+  ("child seeded with parent history prefix — continue this analysis") didn't
+  exist at all; no lineage event kind existed. The child-side plumbing
+  (`Spec.Fork`, `childRunner.forkHistory`) was dead code nothing could set.
+- **`harness/events`** — new audit-only kind `SessionForked`
+  (`session/forked`, non-surface by default: lineage never becomes a
+  model-visible message) + `ForkPayload{ParentKey, ChildKey, FromSeq, Label}`,
+  appended to **both** logs — the parent records the child it seeded, the
+  child records the parent it came from, so either side reconstructs the
+  lineage.
+- **`tools/delegate.go`** — new `DelegateFork` (`delegate_fork`): same
+  report-framed contract as `delegate`; `task` is **optional** and defaults
+  to `subagent.DefaultForkTask` (one const shared by tool + runner, so a
+  fork's prompt is never empty); spawns with `Spec.Fork=true` and
+  `ParentID=LabelPrefix` for lineage. Registered beside `delegate` in
+  `buildsession.go` → inherits the existing `TALONSTUDIO_SUBAGENTS` opt-in
+  (plan flag policy: *pure additions ship live* — no new flag; now documented
+  in `.env.example`).
+- **`api/subagent.go`** — `forkHistory` changed from a static slice to
+  `func() []ai.Message` resolved **per spawn** = `h.conversation(projectID)`:
+  exactly the history the parent's next turn replays (derive-preferring with
+  legacy fallback → child prefix == parent prefix under either flag). A fork
+  now also calls `st.SessionLogForked(parentLog, key, fromSeq)` (child key =
+  `<parentKey>-fork-<unixnano>`; `fromSeq` = parent's last event seq via
+  `EventAt(Seq()-1)`): the child log = **byte-identical parent prefix** +
+  lineage + task; the final report is appended on success → the child log is
+  a complete, replayable delegation record (prefix, lineage, task, report) —
+  not a write-only artifact. Every log failure logs and continues (never
+  fails the run — same law as `deriveFromLog`). `runLoop` became a field, so
+  its "seam tests override" comment is finally true; `Log.Key()` accessor
+  added.
+- **Decisions recorded:** (1) children keep the read-only registry
+  (`childRunnerFor`'s established design — "inspect and report; never
+  mutate"), which satisfies H9's gate *"cites no tools the parent lacks"*;
+  H9's looser "shares parent composition" phrase is noted for the W12 /
+  disjoint-write review. (2) The fork prefix comes from `h.conversation()`,
+  not child-log derive: `SESSIONLOG=derive` ships dark (row 11 / W2), so the
+  parent's own read path is the only source guaranteed identical on both
+  sides until W2's parity harness flips it. (3) `session_events.seq` is a
+  global `AUTOINCREMENT` across log keys → a forked child's new rows always
+  land **above** the inherited shadow boundary (proven: the task is
+  derivation-visible even under an inherited compaction shadow).
+- **Client impact:** none — model-facing tool only; no endpoints, no SSE
+  kinds, no `lib/api.ts` / mobile wrapper work. The child's report arrives in
+  the web trace exactly like `delegate`'s (framed block); mobile headline
+  status unchanged (PHASE_17 §2.3 — no raw trace verbs).
+- **Tests:** `api/TestDelegateForkSeedsChildFromParentPrefix` — the H9 gate:
+  first request = parent prefix (DeepEqual) + task; tool set ⊆ parent's
+  (`shell` filtered); parent log gains exactly one lineage event with the
+  right `FromSeq`; child log = byte-identical prefix + lineage + task +
+  report; task derivation-visible under inherited shadow; non-fork spawns
+  seed nothing and log nothing. `api/TestDelegateForkRegistered` — present in
+  reg/defs with `SUBAGENTS=1`, absent when dark. `evals/TestPhaseW1DelegateFork`
+  — tool contract: `Fork` set, `DefaultForkTask` on omitted task, lineage
+  `ParentID`, report framed as data, nil-service structured refusal,
+  `SurfaceKind(SessionForked)==false`.

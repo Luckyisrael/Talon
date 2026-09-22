@@ -1586,3 +1586,80 @@ func TestPhaseW1TrimShadow(t *testing.T) {
 		t.Errorf("derived %d messages after trim, want 3 (summary + 2 kept)", got)
 	}
 }
+
+// W1.5: delegate_fork is the model-facing half of the fork wiring. The tool
+// must spawn with Fork set (the runner keys prefix seeding and the session-log
+// fork off it), default an omitted task to the honest continuation instead of
+// an empty prompt, carry the parent id for lineage, frame the report as data,
+// and refuse cleanly when delegation is off. session/forked is audit-only —
+// lineage never joins the model-visible surface.
+func TestPhaseW1DelegateFork(t *testing.T) {
+	runner := &h9Runner{result: func(subagent.Spec) subagent.Result {
+		return subagent.Result{FinalText: "continued: deeper findings.", Rounds: 1}
+	}}
+	svc := subagent.NewService(runner, 2)
+	tool := &tools.DelegateFork{Service: svc, LabelPrefix: "project-7"}
+
+	if tool.Name() != "delegate_fork" {
+		t.Errorf("tool name = %q, want delegate_fork", tool.Name())
+	}
+	if !strings.Contains(tool.Description(), "history") {
+		t.Error("description must say the child is seeded from this conversation's history")
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(tool.InputSchema(), &schema); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	if props, _ := schema["properties"].(map[string]any); props == nil {
+		t.Fatal("schema exposes no properties")
+	} else if _, ok := props["task"]; !ok {
+		t.Error("schema must expose task")
+	}
+	if _, mandated := schema["required"]; mandated {
+		t.Error("task is optional — an omitted task must not fail schema validation")
+	}
+
+	// Omitted task → Fork set, DefaultForkTask used, lineage parent carried.
+	ctx := context.Background()
+	res, err := tool.Execute(ctx, json.RawMessage(`{}`))
+	if err != nil || res.IsError {
+		t.Fatalf("empty execute: err=%v isError=%v content=%q", err, res.IsError, res.Content)
+	}
+	if len(runner.ran) != 1 {
+		t.Fatalf("runner saw %d spawns, want 1", len(runner.ran))
+	}
+	spec := runner.ran[0]
+	if !spec.Fork {
+		t.Error("tool must spawn with Fork set — the runner keys seeding and the log fork off it")
+	}
+	if spec.Prompt != subagent.DefaultForkTask {
+		t.Errorf("omitted task ran %q, want DefaultForkTask", spec.Prompt)
+	}
+	if spec.ParentID != "project-7" {
+		t.Errorf("lineage parent = %q, want project-7", spec.ParentID)
+	}
+	if !strings.Contains(res.Content, "BEGIN CHILD REPORT") {
+		t.Errorf("report not framed as data: %q", res.Content)
+	}
+
+	// Explicit task + label pass through unchanged.
+	if _, err := tool.Execute(ctx, json.RawMessage(`{"task":"extend the fee table","label":"fees"}`)); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	spec2 := runner.ran[1]
+	if spec2.Prompt != "extend the fee table" || spec2.Label != "fees" || !spec2.Fork {
+		t.Errorf("explicit spawn: %+v", spec2)
+	}
+
+	// Delegation off → structured refusal, not a panic.
+	off := &tools.DelegateFork{}
+	res3, err := off.Execute(ctx, json.RawMessage(`{}`))
+	if err != nil || !res3.IsError || !strings.Contains(res3.Content, "not available") {
+		t.Errorf("nil-service refusal: err=%v isError=%v content=%q", err, res3.IsError, res3.Content)
+	}
+
+	// Audit-only: the lineage event never becomes a model-visible message.
+	if events.SurfaceKind(events.SessionForked) {
+		t.Error("session/forked must be audit-only — lineage is not model-visible surface")
+	}
+}

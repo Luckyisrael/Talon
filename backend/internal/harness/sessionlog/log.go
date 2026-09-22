@@ -169,6 +169,11 @@ func (l *Log) Seq() int64 {
 	return int64(len(l.rows))
 }
 
+// Key is the log's stable storage key — the identifier lineage events record
+// as a fork's origin or child. The key never changes after construction, so
+// it needs no lock.
+func (l *Log) Key() string { return l.key }
+
 // EventAt returns one frozen event by zero-based position.
 func (l *Log) EventAt(i int) (Event, bool) {
 	l.mu.Lock()

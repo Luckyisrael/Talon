@@ -626,7 +626,7 @@ W14 loop extraction + composition (last; consumes everything)
 | 5 | Spill one-way (no `read_spill`) | **W1.2** ✅ landed — via `read_file` locator resolution (repo-native; see notes) |
 | 6 | Conversation search = LIKE not FTS | **W1.3** ✅ landed — FTS5 ∪ LIKE union behind the same handler (gate: `TestPhaseW1SearchFTS`) |
 | 7 | `run_gate` defined, unregistered | **W1.4** ✅ landed (`ef736f3`) |
-| 8 | `Fork`/`delegate_fork` unused | **W1.5**, **W12** |
+| 8 | `Fork`/`delegate_fork` unused | **W1.5** ✅ landed — `delegate_fork` registered behind `TALONSTUDIO_SUBAGENTS`; `sessionlog.Fork` production-wired (child log = parent prefix + `session/forked` lineage in both logs; gate: `TestDelegateForkSeedsChildFromParentPrefix` + `TestPhaseW1DelegateFork`); **W12** |
 | 9 | Approval Seam/`Escalate` dead; tier-2 = ask-only | **W1.6**, **W9** |
 | 10 | `AI_MODEL_TIER` undocumented | **W1.7** ✅ no change — already documented in `.env.example:27-29` (audit error) |
 | 11 | Event log write-only (derive flag off) | **W2** |

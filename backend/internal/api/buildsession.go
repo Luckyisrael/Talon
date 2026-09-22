@@ -56,9 +56,9 @@ type buildSession struct {
 	// the registry still apply; the capability is the uniform outer ring).
 	sandbox *sandbox.Capability
 	// children is the H9 delegation service bound to this session: delegate
-	// spawns scoped child loops; list_children reports them. Nil (default)
-	// keeps the tools unregistered — the flag TALONSTUDIO_SUBAGENTS=1 opts
-	// a deployment in.
+	// spawns scoped child loops, delegate_fork seeds one from this session's
+	// history, list_children reports them. Nil (default) keeps the tools
+	// unregistered — the flag TALONSTUDIO_SUBAGENTS=1 opts a deployment in.
 	children *subagent.Service
 	// projectID + store let the executor keep the device session alive:
 	// device-scoped tool calls touch the live session clock so the reaper
@@ -231,10 +231,11 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// H9 delegation: scoped children on the same loop. Registered only
 	// when the deployment opted in — delegation multiplies context and cost,
 	// so it ships dark until a composition turns it on. Depth 1 is enforced
-	// twice: the service seam refuses grandchildren, and delegate is never
-	// registered in a child's own registry.
+	// twice: the service seam refuses grandchildren, and delegate /
+	// delegate_fork are never registered in a child's own registry.
 	if bs.children != nil {
 		reg.Register(&tools.Delegate{Service: bs.children, LabelPrefix: fmt.Sprintf("project-%d", projectID)})
+		reg.Register(&tools.DelegateFork{Service: bs.children, LabelPrefix: fmt.Sprintf("project-%d", projectID)})
 		reg.Register(&tools.ListChildren{Service: bs.children})
 		// H10: the declarative fan-out rides the same service — the engine
 		// narrates each phase into the trace so the developer sees progress
@@ -628,7 +629,10 @@ func subagentsEnabled() bool {
 // childRunnerFor assembles the H9 in-process runner: the child gets a
 // read-only build session over the same workspace (inspect and report;
 // never mutate), the orchestrator's loop, and the session handler's prompts.
+// A fork child additionally seeds from the parent's live conversation and
+// forks the project's session log (W1.5).
 func childRunnerFor(h *PromptHandler, workspacePath string, projectID int64, adbTarget string, output io.Writer) subagent.Runner {
+	eventLog := h.slog.get(h.store, projectID)
 	return &childRunner{
 		build: func() *buildSession {
 			// A child's registry: the read tools only. bs.defs is rebuilt
@@ -655,9 +659,31 @@ func childRunnerFor(h *PromptHandler, workspacePath string, projectID int64, adb
 			return sess
 		},
 		systemPrompt: h.systemPrompt(),
-		orchestrator: h.orch,
 		parentTools:  nil,
-		eventLog:     h.slog.get(h.store, projectID),
+		// W1.5: a fork child seeds from the parent's conversation — the same
+		// history the parent's next turn replays — resolved per spawn so a
+		// later fork carries the turns that happened since the last one.
+		forkHistory: func() []ai.Message { return h.conversation(projectID) },
+		// The session-log fork: child log = parent prefix + lineage + the
+		// child's own turn (nil log = no fork, never a failed run).
+		log: eventLog,
+		st:  h.store,
+		runLoop: func(ctx context.Context, sess *orchestrator.SessionState, bs *buildSession,
+			defs []ai.ToolDefinition, history []ai.Message, system string) (*orchestrator.BuildOutcome, error) {
+			return h.orch.RunAgentLoop(ctx, sess, orchestrator.RunOptions{
+				SystemPrompt: system,
+				Mode:         "build",
+				History:      history,
+				Tools:        defs,
+				Execute:      bs.executor(),
+				ReadOnlyTool: bs.reg.IsReadOnly,
+				FilesTouched: bs.fs.Touched,
+				Exists:       bs.fs.Exists,
+				// A subagent's retries belong to the same project log: the parent
+				// turn's replay should see that a delegated call recovered too.
+				EventLog: eventLog,
+			})
+		},
 	}
 }
 

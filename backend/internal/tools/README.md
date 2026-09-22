@@ -19,7 +19,7 @@ contract; this README is the author's.
   streamed live.
 - **Skills** (read_skill): loads a body on demand; the catalog manifest
   lives in the prompt (H6).
-- **Delegation** (delegate, list_children, run_workflow): H9/H10 fan-out;
+- **Delegation** (delegate, delegate_fork, list_children, run_workflow): H9/H10 fan-out;
   reports arrive between CHILD REPORT markers, framed as data.
 - **Questions** (ask_user): pauses the turn; answers bind approvals.
 - **Memory** (write_memory, read_memory, ADR tools): the project's durable

@@ -43,6 +43,12 @@ var ErrPoolFull = errors.New("DELEGATION_POOL: too many children are already run
 // fan-out is suppressed for N rounds.
 var ErrCooldown = errors.New("DELEGATION_COOLDOWN: the provider rate-limited a recent child; fan-out is paused this round")
 
+// DefaultForkTask is the instruction a fork child runs when its caller
+// supplies no task. A fork's prompt must never be empty: the child's request
+// always ends with a user turn, and this is the honest continuation when the
+// parent had nothing more specific to add.
+const DefaultForkTask = "Continue from where this analysis left off and report your findings."
+
 // Spec is one delegation request.
 type Spec struct {
 	// Prompt is the child's task — self-contained for one-shot children.
@@ -50,8 +56,10 @@ type Spec struct {
 	// SystemPrompt overrides the child's system prompt; "" inherits the
 	// parent's.
 	SystemPrompt string
-	// Fork seeds the child with the parent's completed history prefix (the
-	// "continue this analysis" case). One-shot children ignore it.
+	// Fork seeds the child with the parent's history prefix (the "continue
+	// this analysis" case) and forks the parent's session log, so the child's
+	// own log carries the prefix plus a lineage event naming where it came
+	// from. One-shot children without a fork ignore it.
 	Fork bool
 	// Continuable marks a child that idles after its turn instead of
 	// completing — the parent can steer it later.
@@ -75,11 +83,11 @@ type Result struct {
 
 // Child is one live or completed child.
 type Child struct {
-	ID        string
-	Label     string
-	ParentID  string
+	ID          string
+	Label       string
+	ParentID    string
 	Continuable bool
-	StartedAt time.Time
+	StartedAt   time.Time
 	// state transitions: running → (done | idle | failed)
 	State string
 }
@@ -101,14 +109,14 @@ type Service struct {
 	// 1 for a service handed to a child. depth 1 refuses spawns.
 	depth int
 
-	mu        sync.Mutex
-	children  map[string]*Child
-	order     []string
-	pool      int
-	running   int
+	mu       sync.Mutex
+	children map[string]*Child
+	order    []string
+	pool     int
+	running  int
 	// cooldownUntil suppresses new spawns after a provider 429.
 	cooldownUntil time.Time
-	cooldownFor    string
+	cooldownFor   string
 }
 
 // NewService builds the service. pool is the concurrent-child bound (the
