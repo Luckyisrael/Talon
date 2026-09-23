@@ -21,6 +21,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/events"
 	"github.com/luckyisrael/talon/backend/internal/guardrails"
 	harnessagent "github.com/luckyisrael/talon/backend/internal/harness/agent"
+	"github.com/luckyisrael/talon/backend/internal/harness/approval"
 	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
 	harnessevents "github.com/luckyisrael/talon/backend/internal/harness/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/loop"
@@ -916,10 +917,10 @@ type RunOptions struct {
 	// twice. A slow or failing Persist must not wedge the loop; keep it cheap and
 	// swallow its own errors.
 	Persist func(msgs []ai.Message)
-	// PatchBufferEnabled opts one session into the try_edit lane: edits are
-	// staged with pre-images and type-breaking changes auto-revert. Default
-	// off — off behaves identically to today. The TALONSTUDIO_PATCH_BUFFER
-	// env var (1/true/on) opts in without a code change.
+	// PatchBufferEnabled force-opens the try_edit lane for one session,
+	// regardless of env. The lane itself defaults ON since the W8.1 flip:
+	// TALONSTUDIO_PATCH_BUFFER=0/false/off restores the legacy fallback
+	// (see orchestrator patchBufferOn). Production never sets this field.
 	PatchBufferEnabled bool
 	// OnCompacted, when set, is called at a compaction boundary with the
 	// turn count before and after (H8): the caller (the api layer, which owns
@@ -934,6 +935,15 @@ type RunOptions struct {
 	// log claiming something that never happened. Nil keeps the loop quiet:
 	// tests that do not care about crash fidelity pass nothing.
 	EventLog AuditLog
+	// Approval is the turn's W9 approval seam. Nil = no seam composed
+	// (bare harnesses, eval harnesses) and the device-build gate keeps its
+	// pre-W9 turn_approvals table read. Non-nil: the gate asks through the
+	// seam — one Request, one audit event, turn_approvals still the
+	// binding record (the seam's answerer reads it).
+	Approval *approval.Seam
+	// PermissionMode is the session's W9 permission posture, consulted by
+	// the device-build gate alongside Approval. Zero value = ask.
+	PermissionMode approval.Mode
 }
 
 // EventAppender is the write half of the audit sink.
@@ -2622,7 +2632,11 @@ func (o *Orchestrator) guardrail(sess *SessionState, name string, input json.Raw
 	// prompt asked for a device build, or the user granted device_build approval
 	// mid-turn by answering. Answers arrive as tool_result turns, invisible to
 	// text scanning — the turn_approvals table is their binding record.
-	if name == "build_apk" && !sess.WantsBuild() && !o.approved(sess.ID) {
+	// W9.2: when the composition wired a seam, the gate IS the seam — one
+	// approval.Request, one audit event, mode composed (read-only refuses;
+	// every other mode resolves the same turn_approvals answerer as before).
+	// Nil seam keeps the bare table read, byte for byte.
+	if name == "build_apk" && !sess.WantsBuild() && !o.deviceBuildApproved(sess, opts) {
 		return guardrails.Decision{
 			Allowed: false,
 			Rule:    "scope",
@@ -2638,7 +2652,7 @@ func (o *Orchestrator) guardrail(sess *SessionState, name string, input json.Raw
 	// rule above — only an explicit refusal refuses here.
 	if name == "build_apk" && o.store != nil {
 		if found, st, err := o.store.GetProjectVerifyState(sess.ProjectID); err == nil && found && st.Status == VerifyStatusRefused {
-			if !o.approved(sess.ID) {
+			if !o.deviceBuildApproved(sess, opts) {
 				return guardrails.Decision{
 					Allowed: false,
 					Rule:    "verify",
@@ -2667,6 +2681,26 @@ func (o *Orchestrator) approved(promptID int64) bool {
 		return false
 	}
 	return o.store.HasApproval(promptID, store.ScopeDeviceBuild)
+}
+
+// deviceBuildApproved is W9.2's single decision point for the device-build
+// act. With a composed seam the gate IS one approval.Request: the W9 mode
+// composes (read-only refuses; ask/accept-edits/auto all fall through to
+// the seam's turn answerer, because device build is a per-turn consent act
+// in every mode — auto never builds an APK the user did not green-light),
+// and exactly one ApprovalDecided event lands in the session log. A nil
+// seam (bare harness, eval runs) falls back to the table read unchanged.
+func (o *Orchestrator) deviceBuildApproved(sess *SessionState, opts RunOptions) bool {
+	if opts.Approval == nil {
+		return o.approved(sess.ID)
+	}
+	return opts.Approval.Ask(approval.Request{
+		Scope:     "device-build",
+		Action:    "build_apk for session " + strconv.FormatInt(sess.ID, 10),
+		PromptID:  sess.ID,
+		Mode:      opts.PermissionMode,
+		Workspace: sess.WorkspacePath,
+	}) == approval.AllowedOnce
 }
 
 // autoAttachSkills injects the bodies of any auto-attach skills whose triggers

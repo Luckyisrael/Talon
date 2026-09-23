@@ -10,6 +10,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/tools"
 )
 
 // The H4 approval seam, wired to Talon's existing bones: the ask_user
@@ -84,8 +85,24 @@ func (errAwaitingUserAnswer) Error() string { return "the user has not answered 
 // escalations and the device-build gate both ask through this seam.
 func (h *PromptHandler) buildApprovalSeam(lg *sessionlog.Log, projectID, promptID int64) *approval.Seam {
 	seam := approval.New(approval.PolicyAsk, approvalAudit(lg, promptID))
+	// W9.4: the shell's always-blocked class is the seam's unwaivable
+	// class — evaluated before auto mode and before any standing grant,
+	// so no mode or allowlist entry can revive a secrets/host/network
+	// command. The hook reads the exact command out of the escalation's
+	// Action text; anything unparseable is simply not a hard-deny match
+	// (the shell's own tierBlocked already refused it upstream).
+	seam.HardDeny = seamHardDeny
 	seam.Register(turnAnswerer(h.store, projectID))
 	return seam
+}
+
+// seamHardDeny adapts tools.BlockedReason to the seam's hook contract.
+func seamHardDeny(req approval.Request) (string, bool) {
+	cmd, ok := tools.CommandFromAction(req.Action)
+	if !ok {
+		return "", false
+	}
+	return tools.BlockedReason(cmd)
 }
 
 // projectLog resolves the project's session log for seam construction, the
@@ -137,11 +154,15 @@ func userInitiatedAnswerer() approval.Answerer {
 // approveUserAction routes one user-initiated sensitive HTTP action through
 // the H4 seam: one Request, one audit event, AllowedOnce when the answerer
 // grants. Handlers refuse when the outcome is anything else — fail closed,
-// never unseamed.
-func approveUserAction(st *store.Store, projectID int64, scope, action string) approval.Outcome {
+// never unseamed. W9: the project's permission_mode composes in — read-only
+// refuses the act with the seam's structured reason, ask keeps today's
+// confirm; a button press is never auto-allowed by accept-edits/auto (the
+// person is already standing there).
+func approveUserAction(st *store.Store, projectID int64, workspacePath, scope, action string) approval.Outcome {
 	seam := approval.New(approval.PolicyAsk, approvalAudit(openSessionLog(st, projectID), 0))
 	seam.Register(userInitiatedAnswerer())
-	return seam.Ask(approval.Request{Scope: scope, Action: action, PromptID: 0})
+	mode := approval.ProjectMode(workspacePath) // empty path → ask
+	return seam.Ask(approval.Request{Scope: scope, Action: action, PromptID: 0, Mode: mode})
 }
 
 // WantsDeviceBuild re-exports the orchestrator's scanners for the answer

@@ -49,6 +49,13 @@ type Escalation struct {
 	Justification string
 	// PromptID locates the turn asking, for the audit record.
 	PromptID int64
+	// Permission is the session's W9 permission mode, carried into the
+	// seam's decision (read-only refuses, auto allows, accept-edits
+	// allows the workspace-write rung, ask prompts — today). Empty = ask.
+	Permission approval.Mode
+	// Workspace is the project root for standing-grant lookup/recording
+	// (W9.3). Empty disables both for this escalation.
+	Workspace string
 }
 
 // ErrNotWider names a request that does not actually escalate.
@@ -101,9 +108,11 @@ func (c *Capability) Escalate(e Escalation, seam *approval.Seam) (Decision, appr
 	}
 
 	outcome := seam.Ask(approval.Request{
-		Scope:    "sandbox-escalation:" + e.To.String(),
-		Action:   escalationAction(e.Operation, e.Justification),
-		PromptID: e.PromptID,
+		Scope:     "sandbox-escalation:" + e.To.String(),
+		Action:    escalationAction(e.Operation, e.Justification),
+		PromptID:  e.PromptID,
+		Mode:      e.Permission,
+		Workspace: e.Workspace,
 	})
 	if outcome != approval.AllowedOnce {
 		return Decision{false, "the escalation was " + outcome.String()}, outcome

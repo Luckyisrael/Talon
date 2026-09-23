@@ -137,6 +137,11 @@ type promptRequest struct {
 	ConversationID int64  `json:"conversation_id"`
 	Prompt         string `json:"prompt"`
 	Mode           string `json:"mode"`
+	// PermissionMode is the W9 session-level permission posture
+	// (read-only | ask | accept-edits | auto). Optional: absent or an
+	// invalid spelling falls back to .talon/config.json's
+	// permission_mode, then to ask.
+	PermissionMode string `json:"permission_mode"`
 	// AttachmentIDs names uploaded files the turn carries. Claimed exactly
 	// once, at send time — see claimAttachments.
 	AttachmentIDs []int64 `json:"attachment_ids"`
@@ -309,7 +314,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	outcome, buildErr := h.runBuild(ctx, req.ProjectID, prompt.ID, userID, req.Prompt, nil,
-		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode, attachments: attachments})
+		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode, permissionMode: req.PermissionMode, attachments: attachments})
 
 	response := map[string]interface{}{
 		"id":                   prompt.ID,
@@ -397,7 +402,7 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.streamBuild(ctx, w, flusher, req.ProjectID, prompt.ID, userID, req.Prompt,
-		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode, attachments: attachments})
+		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode, permissionMode: req.PermissionMode, attachments: attachments})
 }
 
 // resumePrompt is the synthetic instruction a resumed turn injects. It is not
@@ -1051,6 +1056,9 @@ type buildOptions struct {
 	attachments []store.Attachment
 	// mode is "plan" or "build": routing classifies the turn from it.
 	mode string
+	// permissionMode is the W9 session override from the request body
+	// ("" when the client sent none — the project posture decides).
+	permissionMode string
 }
 
 // runBuild executes one agentic turn: replay the stored conversation, run the
@@ -1093,7 +1101,7 @@ func (h *PromptHandler) runBuild(
 
 	// The output writer mirrors the sink for the command-running tools, so a
 	// tool's subprocess output appears in the terminal pane as it happens.
-	bs := h.newBuildSession(workspacePath, projectID, promptID, h.adbTargetFor(projectID), commandOutputWriter{emitter: sess.Emitter})
+	bs := h.newBuildSession(workspacePath, projectID, promptID, h.adbTargetFor(projectID), commandOutputWriter{emitter: sess.Emitter}, bo.permissionMode)
 
 	// Ground the model in what already exists before the first round: capture
 	// a map of the project's files, their exports, and their imports, and hand
@@ -1122,13 +1130,18 @@ func (h *PromptHandler) runBuild(
 	outcome, runErr := h.orch.RunAgentLoop(ctx, sess, orchestrator.RunOptions{
 		SystemPrompt: h.systemPrompt(),
 		Mode:         bo.mode,
-		History:      history,
-		Tools:        bs.defs,
-		Execute:      bs.executor(),
-		Timeouts:     tooltimeout.DefaultPolicy(),
-		ReadOnlyTool: bs.reg.IsReadOnly,
-		FilesTouched: bs.fs.Touched,
-		Exists:       bs.fs.Exists,
+		// W9: the turn's seam + permission posture — the device-build gate
+		// asks through the same seam tier-2 shell escalations use, with
+		// the session's mode composed (nil-safe for bare harnesses).
+		Approval:       bs.seam,
+		PermissionMode: bs.permMode,
+		History:        history,
+		Tools:          bs.defs,
+		Execute:        bs.executor(),
+		Timeouts:       tooltimeout.DefaultPolicy(),
+		ReadOnlyTool:   bs.reg.IsReadOnly,
+		FilesTouched:   bs.fs.Touched,
+		Exists:         bs.fs.Exists,
 		// W6: boot/vision/interact are required gates only when a device
 		// backs this turn; device-less runs classify them best-effort.
 		DeviceAttached: h.adbTargetFor(projectID) != "",

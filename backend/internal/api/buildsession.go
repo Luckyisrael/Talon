@@ -73,10 +73,16 @@ type buildSession struct {
 	// seam is the H4 approval seam for this turn: ask policy, the
 	// turn-approvals answerer, the session-log audit. Tier-2 shell
 	// escalations ask through it (RunShell's Sandbox + Approval + PromptID);
-	// the device-build gate reads the same table. A nil log still yields a
-	// working seam — record() degrades to a no-op, so audit loss never fails
-	// a build.
+	// the device-build gate asks through it too (W9.2). A nil log still
+	// yields a working seam — record() degrades to a no-op, so audit loss
+	// never fails a build.
 	seam *approval.Seam
+	// permMode is this session's W9 permission posture: the body's
+	// permission_mode override composed over .talon/config.json's
+	// permission_mode, defaulting to ask. It drives the sandbox (read-only
+	// downgrades the capability), RunShell's escalations, and the
+	// device-build gate via RunOptions.
+	permMode approval.Mode
 	// children is the H9 delegation service bound to this session: delegate
 	// spawns scoped child loops, delegate_fork seeds one from this session's
 	// history, list_children reports them. Nil (default) keeps the tools
@@ -104,9 +110,20 @@ var deviceTools = map[string]bool{
 // newBuildSession wires the agent's tools to one project's workspace.
 // output, when non-nil, is attached to the command-running tools so their
 // subprocess output streams back to the frontend while the agent works.
-func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptID int64, adbTarget string, output io.Writer) *buildSession {
+func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptID int64, adbTarget string, output io.Writer, permissionMode ...string) *buildSession {
 	fs := tools.NewFS(workspacePath)
 	reg := tools.NewRegistry()
+
+	// W9: this session's permission posture — the optional request-body
+	// override composed over .talon/config.json's permission_mode,
+	// defaulting to ask. Variadic so pre-W9 callers and bare test
+	// harnesses compile unchanged; an omitted override means the project
+	// posture decides (children inherit it too).
+	override := ""
+	if len(permissionMode) > 0 {
+		override = permissionMode[0]
+	}
+	permMode := approval.ResolveMode(override, approval.ProjectMode(workspacePath))
 
 	// H4: the confinement capability for this session — workspace-write by
 	// default (writes inside the project dir; the platform temp roots are
@@ -115,9 +132,15 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// (tier classification, secret patterns, timeouts) remain the inner ring.
 	// TALONSTUDIO_SANDBOX=read-only selects a read-only session (plan-style
 	// turns that must not mutate), danger-full-access is not selectable from
-	// the environment — only a composition change can grant it.
-	bs := &buildSession{fs: fs, reg: reg, projectID: projectID, promptID: promptID, store: h.store}
-	bs.sandbox = sandbox.New(sandboxModeFromEnv(), workspacePath,
+	// the environment — only a composition change can grant it. W9: a
+	// read-only permission_mode composes over the env the same way — the
+	// posture that must not mutate runs the capability in read-only too.
+	smode := sandboxModeFromEnv()
+	if permMode == approval.ModeReadOnly {
+		smode = sandbox.ModeReadOnly
+	}
+	bs := &buildSession{fs: fs, reg: reg, projectID: projectID, promptID: promptID, store: h.store, permMode: permMode}
+	bs.sandbox = sandbox.New(smode, workspacePath,
 		[]string{os.TempDir()}, func(op sandbox.Operation) error { return nil })
 
 	// H4: the approval seam for this turn — ask policy, the turn-approvals
@@ -299,6 +322,7 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	reg.Register(&tools.RunShell{
 		WorkspacePath: workspacePath, Output: output,
 		Sandbox: bs.sandbox, Approval: bs.seam, PromptID: promptID,
+		Permission: bs.permMode,
 	})
 	reg.Register(&tools.RunTypecheck{WorkspacePath: workspacePath, Output: output})
 	reg.Register(&tools.RunLint{WorkspacePath: workspacePath, Output: output})

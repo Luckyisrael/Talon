@@ -301,7 +301,11 @@ func (h *GitHandler) Push(w http.ResponseWriter, r *http.Request) {
 	// the exact repo it will hit. The seam sits before EnsureRepo so a
 	// refusal never creates a repository. The authenticated POST is the
 	// consent; a seam that cannot answer refuses (fail closed, unseamed).
-	if out := approveUserAction(h.store, project.ID, scopeGitPush,
+	var ws string
+	if h.workspace != nil {
+		ws = h.workspace.Path(project.ID)
+	}
+	if out := approveUserAction(h.store, project.ID, ws, scopeGitPush,
 		"push project "+project.Name+" to GitHub repo "+name+" (branch main)"); out != approval.AllowedOnce {
 		writeError(w, http.StatusForbidden, "push approval is "+out.String())
 		return

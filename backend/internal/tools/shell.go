@@ -47,6 +47,9 @@ type RunShell struct {
 	Sandbox  *sandbox.Capability
 	Approval *approval.Seam
 	PromptID int64
+	// Permission is the session's W9 permission mode, carried into every
+	// tier-2 escalation (empty = ask = today).
+	Permission approval.Mode
 }
 
 func (t *RunShell) Name() string { return "run_shell" }
@@ -419,6 +422,8 @@ func (t *RunShell) escalateTier2(command, reason string) (ToolResult, bool) {
 			Operation:     sandbox.Operation{Verb: "shell", Command: command},
 			Justification: reason,
 			PromptID:      t.PromptID,
+			Permission:    t.Permission,
+			Workspace:     t.WorkspacePath,
 		}, t.Approval)
 	}
 	switch out {

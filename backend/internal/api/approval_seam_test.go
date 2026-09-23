@@ -174,11 +174,11 @@ func TestTier2ShellGrantFlowAuditsOnce(t *testing.T) {
 func TestApproveUserActionAuditsOnce(t *testing.T) {
 	st, projID := seamFixture(t)
 
-	out := approveUserAction(st, projID, scopeGitPush, "push project Seam to GitHub repo seam (branch main)")
+	out := approveUserAction(st, projID, "", scopeGitPush, "push project Seam to GitHub repo seam (branch main)")
 	if out != approval.AllowedOnce {
 		t.Fatalf("git push outcome = %s, want allowed-once", out)
 	}
-	out = approveUserAction(st, projID, scopeReleaseExport, "export release bundle for project Seam")
+	out = approveUserAction(st, projID, "", scopeReleaseExport, "export release bundle for project Seam")
 	if out != approval.AllowedOnce {
 		t.Fatalf("release export outcome = %s, want allowed-once", out)
 	}

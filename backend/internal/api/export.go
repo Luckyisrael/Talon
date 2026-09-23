@@ -122,7 +122,11 @@ func (h *ExportHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// one Request through the same seam tier-2 shell uses, one audit event to
 	// the session log. The authenticated POST is the consent; a seam that
 	// cannot answer refuses (fail closed, never unseamed).
-	if out := approveUserAction(h.store, project.ID, scopeReleaseExport,
+	var ws string
+	if h.builder != nil {
+		ws = filepath.Join(h.builder.WorkspaceDir, strconv.FormatInt(project.ID, 10))
+	}
+	if out := approveUserAction(h.store, project.ID, ws, scopeReleaseExport,
 		"export release bundle for project "+project.Name); out != approval.AllowedOnce {
 		writeError(w, http.StatusForbidden, "export approval is "+out.String())
 		return

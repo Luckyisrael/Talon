@@ -73,6 +73,14 @@ type Request struct {
 	Action string
 	// PromptID / SessionID locate the turn asking.
 	PromptID int64
+	// Mode is the requester's permission posture (W9). The zero value is
+	// the empty spelling of ModeAsk — every pre-W9 caller keeps today's
+	// prompting behavior byte for byte.
+	Mode Mode
+	// Workspace is the project root, when known — the location standing
+	// grants (.talon/approvals.json) are read from and recorded into.
+	// Empty means no standing-grant lookup or recording for this request.
+	Workspace string
 }
 
 // AuditRecord is one immutable decision, as appended to the session log.
@@ -98,6 +106,15 @@ type Seam struct {
 	mu        sync.Mutex
 	answerers []Answerer
 	audit     func(AuditRecord)
+
+	// HardDeny is W9's unwaivable class (secrets, egress exfil, path
+	// escapes), injected at composition time so this package neither
+	// duplicates the shell classifier nor imports its consumers. It runs
+	// BEFORE auto mode and BEFORE any standing grant: when it names a
+	// rule, the request is rejected and no allowlist entry can revive it.
+	// Nil means the composition declared no seam-level hard-deny class —
+	// the shell's tierBlocked still holds upstream of the seam.
+	HardDeny func(Request) (rule string, denied bool)
 
 	// grants counts per-scope grants in this composition's lifetime. A grant
 	// is one-shot by contract, but the count lets the audit surface how many
@@ -142,6 +159,65 @@ func (s *Seam) Ask(req Request) Outcome {
 		return Unavailable
 	}
 
+	// W9 permission modes compose here, after the composition's never
+	// (headless fail-closed is absolute) and before any prompt. Each
+	// branch audits exactly one event; with mode empty/ask, flag off and
+	// no HardDeny hook wired, every branch is a no-op and the answerer
+	// loop below runs byte-identically to pre-W9.
+	mode := req.Mode
+	if mode == "" {
+		mode = ModeAsk
+	}
+	hdRule, hardDenied := "", false
+	if s.HardDeny != nil {
+		hdRule, hardDenied = s.HardDeny(req)
+	}
+	switch mode {
+	case ModeReadOnly:
+		// The posture that must not mutate: every seam act is a structured
+		// refusal, escalation included — asking "may I write?" from a mode
+		// that was chosen to never write is a contradiction.
+		s.record(AuditRecord{Scope: req.Scope, Action: req.Action, Outcome: Rejected,
+			Reason: "permission mode read-only refused " + req.Scope, PromptID: req.PromptID})
+		return Rejected
+	case ModeAuto:
+		if IsHumanInitiated(req.Scope) {
+			// A person's button press always confirms — auto is the
+			// posture for MODEL-initiated acts, not for replacing the
+			// confirmation dialog the person just opened. Falls through
+			// to the ask below (grant replay is human-guarded too).
+			break
+		}
+		if hardDenied {
+			s.record(AuditRecord{Scope: req.Scope, Action: req.Action, Outcome: Rejected,
+				Reason: "hard-deny:" + hdRule + " — auto mode cannot waive it", PromptID: req.PromptID})
+			return Rejected
+		}
+		s.record(AuditRecord{Scope: req.Scope, Action: req.Action, Outcome: AllowedOnce,
+			Reason: "auto mode (W9): allowed without prompting", PromptID: req.PromptID})
+		return AllowedOnce
+	case ModeAcceptEdits:
+		if IsEditClass(req) {
+			s.record(AuditRecord{Scope: req.Scope, Action: req.Action, Outcome: AllowedOnce,
+				Reason: "accept-edits (W9): edit-class act auto-allowed", PromptID: req.PromptID})
+			return AllowedOnce
+		}
+		// Non-edit acts fall through: grant replay, then the prompt.
+	}
+
+	// Standing-grant replay (W9.3): exact scope+action match with a valid
+	// hash, flag on, model-initiated scope only — a human's button press
+	// always confirms. A hard-deny match beats the grant: no allowlist
+	// entry waives the unwaivable class, so the ask still happens (or,
+	// under auto, the rejection above already landed).
+	if !IsHumanInitiated(req.Scope) {
+		if ok, hash := lookupGrant(req.Workspace, req.Scope, req.Action); ok && !hardDenied {
+			s.record(AuditRecord{Scope: req.Scope, Action: req.Action, Outcome: AllowedOnce,
+				Reason: "standing-grant replay (W9): sha256 " + hash[:12], PromptID: req.PromptID})
+			return AllowedOnce
+		}
+	}
+
 	for i := len(answerers) - 1; i >= 0; i-- {
 		approved, err := answerers[i](req)
 		if err != nil {
@@ -152,6 +228,13 @@ func (s *Seam) Ask(req Request) Outcome {
 		out := Rejected
 		if approved {
 			out = AllowedOnce
+			// W9.3: with standing grants on, a live approval of a
+			// model-initiated act becomes a recorded standing grant —
+			// the next identical ask replays instead of prompting.
+			// recordGrant is itself flag- and input-gated.
+			if !IsHumanInitiated(req.Scope) {
+				recordGrant(req.Workspace, req.Scope, req.Action)
+			}
 		}
 		s.record(AuditRecord{Scope: req.Scope, Action: req.Action, Outcome: out, PromptID: req.PromptID})
 		return out
