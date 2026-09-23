@@ -75,8 +75,271 @@ type pluginManifest struct {
 	Description string            `json:"description"`
 	Entry       string            `json:"entry"`
 	Skills      []string          `json:"skills"`
+	Tools       []manifestTool    `json:"tools,omitempty"`
 	License     string            `json:"license"`
 	Files       map[string]string `json:"files"`
+}
+
+// manifestTool is a W11 plugin-declared tool: a JSON input schema plus
+// direct-exec argv run from the plugin's hash-verified cache directory
+// (stdin gets the model's JSON arguments, stdout is the result — W10's
+// shell contract applied to tools). Mutating is parsed for loud skipping
+// only: read-only registration is the W11 contract, and a manifest claiming
+// mutation never gets an execution path.
+type manifestTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+	Command     []string        `json:"command"`
+	Mutating    bool            `json:"mutating,omitempty"`
+}
+
+// PinnedTool is one plugin-declared tool resolved for a workspace (W11):
+// the declaration as the signed manifest described it, plus the verified
+// cache directory its command runs from.
+type PinnedTool struct {
+	Plugin      string
+	Version     string
+	Name        string
+	Description string
+	InputSchema json.RawMessage
+	Command     []string
+	Dir         string
+}
+
+// PinnedTools resolves every pinned plugin's tool declarations for one
+// workspace, mirroring LoadForPins' failure posture: an unreachable index
+// degrades to cache-verified declarations, one bad plugin skips with a log
+// line, and nothing here can fail the session that asked. Every file the
+// commands may touch is materialized through the hash check first — the
+// cache write path is the supply-chain boundary the plan names (pins +
+// hashes), and a mismatch fails the plugin's tools closed, never open.
+func (p RegistryProvider) PinnedTools(pins map[string]string) ([]PinnedTool, error) {
+	if len(pins) == 0 || p.CacheDir == "" {
+		// No pins = no plugins; no cache dir = nowhere to materialize an
+		// executable directory. Both are honest absence, not failure.
+		return nil, nil
+	}
+	indexURL := p.IndexURL
+	if indexURL == "" {
+		indexURL = DefaultRegistry
+	}
+	index, err := p.fetchIndex(indexURL)
+	if err != nil {
+		log.Printf("plugins: index unreachable (%v), tool declarations served from cache only", err)
+		return p.cachedToolsForPins(pins)
+	}
+	names := make([]string, 0, len(pins))
+	for n := range pins {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var out []PinnedTool
+	for _, name := range names {
+		decls, err := p.pluginTools(index, name, pins[name])
+		if err != nil {
+			log.Printf("plugins: skipping tools for %s: %v", name, err)
+			continue
+		}
+		out = append(out, decls...)
+	}
+	return out, nil
+}
+
+// pluginTools resolves one pin: exact manifest (drift serves cache like
+// loadPlugin does), every pinned file verified into the cache, then the
+// read-only declarations extracted (mutations and malformed entries skip
+// with a log line — one bad declaration never removes the good ones).
+func (p RegistryProvider) pluginTools(index *registryIndex, name, version string) ([]PinnedTool, error) {
+	var entry *registryEntry
+	for i := range index.Plugins {
+		if index.Plugins[i].Name == name {
+			entry = &index.Plugins[i]
+			break
+		}
+	}
+	if entry == nil {
+		return nil, fmt.Errorf("not in registry index")
+	}
+	man, err := p.fetchManifestForPin(index, entry, name, version)
+	if err != nil {
+		return nil, err
+	}
+	if len(man.Tools) == 0 {
+		return nil, nil
+	}
+	rels := make([]string, 0, len(man.Files))
+	for rel := range man.Files {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels) // byte-stable order so fetch logs replay identically
+	for _, rel := range rels {
+		if _, err := p.verifyFile(index, entry, man, rel); err != nil {
+			return nil, fmt.Errorf("file %s: %w", rel, err)
+		}
+	}
+	return declsFromManifest(man, filepath.Join(p.CacheDir, name, version)), nil
+}
+
+// fetchManifestForPin fetches the pin-exact manifest, falling back to the
+// cached copy on registry drift or unreachable fetch (publishing a new
+// version must never break pinned builds — loadPlugin's posture, shared).
+func (p RegistryProvider) fetchManifestForPin(index *registryIndex, entry *registryEntry, name, version string) (pluginManifest, error) {
+	if entry.Version != version {
+		if man, ok := p.cachedManifest(name, version); ok {
+			log.Printf("plugins: %s pinned %s, registry at %s — serving cached declarations (edit .talon/plugins.json to adopt %s)",
+				name, version, entry.Version, entry.Version)
+			return man, nil
+		}
+		return pluginManifest{}, fmt.Errorf("registry has %s, pinned %s (edit .talon/plugins.json to adopt %s)",
+			entry.Version, version, entry.Version)
+	}
+	manURL := joinBase(index.Base, entry.Path, "talon-plugin.json")
+	raw, err := p.fetchGET(manURL, maxSkillBytes)
+	if err != nil {
+		if man, ok := p.cachedManifest(name, version); ok {
+			return man, nil
+		}
+		return pluginManifest{}, fmt.Errorf("manifest unreachable and not cached: %w", err)
+	}
+	var man pluginManifest
+	if err := json.Unmarshal(raw, &man); err != nil {
+		return pluginManifest{}, fmt.Errorf("bad manifest: %w", err)
+	}
+	if man.Name != name || man.Version != version {
+		return pluginManifest{}, fmt.Errorf("manifest says %s@%s, pinned %s@%s", man.Name, man.Version, name, version)
+	}
+	p.writeCache(name, version, "talon-plugin.json", raw)
+	return man, nil
+}
+
+// cachedManifest reads the previously verified manifest for a pin.
+func (p RegistryProvider) cachedManifest(name, version string) (pluginManifest, bool) {
+	raw, err := os.ReadFile(p.cachePath(name, version, "talon-plugin.json"))
+	if err != nil {
+		return pluginManifest{}, false
+	}
+	var man pluginManifest
+	if err := json.Unmarshal(raw, &man); err != nil || man.Name != name || man.Version != version {
+		return pluginManifest{}, false
+	}
+	return man, true
+}
+
+// verifyFile ends in verified bytes by either leg: a fresh fetch that
+// hash-checks (then warms the cache), or a cached copy that hash-checks
+// when the registry is unreachable. A hash failure on the leg that answers
+// fails the file — never serves it.
+func (p RegistryProvider) verifyFile(index *registryIndex, entry *registryEntry, man pluginManifest, rel string) ([]byte, error) {
+	want, ok := man.Files[rel]
+	if !ok || want == "" {
+		return nil, fmt.Errorf("not hash-pinned in the manifest")
+	}
+	data, err := p.fetchGET(joinBase(index.Base, entry.Path, rel), maxSkillBytes)
+	if err == nil {
+		if got := hashHex(data); got != strings.ToLower(want) {
+			return nil, fmt.Errorf("hash mismatch: manifest says %.12s, fetched %.12s", want, got)
+		}
+		p.writeCache(man.Name, man.Version, rel, data)
+		return data, nil
+	}
+	cached, cerr := os.ReadFile(p.cachePath(man.Name, man.Version, rel))
+	if cerr != nil {
+		return nil, fmt.Errorf("unreachable and not cached: %v", err)
+	}
+	if got := hashHex(cached); got != strings.ToLower(want) {
+		return nil, fmt.Errorf("cached hash mismatch: manifest says %.12s, have %.12s", want, got)
+	}
+	return cached, nil
+}
+
+// cachedToolsForPins serves declarations entirely from verified cache when
+// the index cannot be reached: same extraction, same filters, no network.
+func (p RegistryProvider) cachedToolsForPins(pins map[string]string) ([]PinnedTool, error) {
+	names := make([]string, 0, len(pins))
+	for n := range pins {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var out []PinnedTool
+	for _, name := range names {
+		version := pins[name]
+		man, ok := p.cachedManifest(name, version)
+		if !ok {
+			log.Printf("plugins: %s@%s has no cached manifest — its tools are absent this session", name, version)
+			continue
+		}
+		if len(man.Tools) == 0 {
+			continue
+		}
+		rels := make([]string, 0, len(man.Files))
+		for rel := range man.Files {
+			rels = append(rels, rel)
+		}
+		sort.Strings(rels)
+		okAll := true
+		for _, rel := range rels {
+			want := man.Files[rel]
+			cached, err := os.ReadFile(p.cachePath(name, version, rel))
+			if err != nil || want == "" || hashHex(cached) != strings.ToLower(want) {
+				log.Printf("plugins: %s file %s not verified in cache — its tools are absent this session", name, rel)
+				okAll = false
+				break
+			}
+		}
+		if !okAll {
+			continue
+		}
+		out = append(out, declsFromManifest(man, filepath.Join(p.CacheDir, name, version))...)
+	}
+	return out, nil
+}
+
+// declsFromManifest applies the read-only contract's filters once:
+// mutations skip (loudly), malformed names and empty commands skip, valid
+// declarations pass with schema intact (the tools layer object-guards it).
+func declsFromManifest(man pluginManifest, dir string) []PinnedTool {
+	var out []PinnedTool
+	for _, mt := range man.Tools {
+		if mt.Mutating {
+			log.Printf("plugins: %s declares mutating tool %q — skipped (plugin tools register read-only in W11)", man.Name, mt.Name)
+			continue
+		}
+		if !validToolName(mt.Name) {
+			log.Printf("plugins: %s tool name %q invalid — skipped", man.Name, mt.Name)
+			continue
+		}
+		if len(mt.Command) == 0 || strings.TrimSpace(mt.Command[0]) == "" {
+			log.Printf("plugins: %s tool %q has no command — skipped", man.Name, mt.Name)
+			continue
+		}
+		out = append(out, PinnedTool{
+			Plugin: man.Name, Version: man.Version, Name: mt.Name,
+			Description: mt.Description, InputSchema: mt.InputSchema,
+			Command: mt.Command, Dir: dir,
+		})
+	}
+	return out
+}
+
+// validToolName bounds declared tool names the same way the mcp package
+// bounds server names: ASCII alphanumerics with -_ after the first byte, so
+// a name can never smuggle structure into the plugin__ namespace.
+func validToolName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			continue
+		case (c == '_' || c == '-') && i > 0:
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // ParsePluginPins parses TALON_PLUGINS="name@version,name@version". Bad

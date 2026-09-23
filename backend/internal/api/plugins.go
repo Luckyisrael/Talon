@@ -1,6 +1,8 @@
 package api
 
 import (
+	"log"
+
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	"github.com/luckyisrael/talon/backend/internal/tools"
 )
@@ -49,5 +51,44 @@ func (h *PromptHandler) pluginFileTool(workspacePath string) *tools.ReadPluginFi
 		WorkspaceRoot: workspacePath,
 		Fetcher:       pluginFetcher{reg: reg},
 		Pins:          pluginPins{},
+	}
+}
+
+// registerPluginTools layers pinned plugins' declared tools (W11 item 2)
+// into the registry under plugin__<plugin>__<tool> — the same
+// per-workspace, pins-gated layering read_plugin_file already uses, now
+// with executable declarations. The skills provider does the heavy part
+// (pin exactness, hash verification, read-only contract, skip-logs); here
+// they just register. No pins, no plugin registry attached, or a resolve
+// failure: no tools, byte-identical to today.
+func (h *PromptHandler) registerPluginTools(reg *tools.Registry, workspacePath string) {
+	if h.orch == nil {
+		return
+	}
+	pr, ok := h.orch.PluginRegistry()
+	if !ok {
+		return
+	}
+	pins, err := skills.ReadWorkspacePins(workspacePath)
+	if err != nil {
+		// Malformed pins already fail loudly at every other reader; tools
+		// are additive, so log and register none rather than half.
+		log.Printf("plugins: %v", err)
+		return
+	}
+	decls, err := pr.PinnedTools(pins)
+	if err != nil {
+		log.Printf("plugins: tool declarations unavailable: %v", err)
+		return
+	}
+	for _, d := range decls {
+		reg.Register(&tools.PluginTool{
+			Plugin: d.Plugin,
+			Remote: d.Name,
+			Desc:   d.Description,
+			Schema: d.InputSchema,
+			Argv:   d.Command,
+			Dir:    d.Dir,
+		})
 	}
 }

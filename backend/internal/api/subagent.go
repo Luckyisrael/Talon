@@ -61,6 +61,9 @@ func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent
 	}
 
 	bs := r.build()
+	// W11: a child's dialled MCP servers reap with the child, exactly like
+	// the parent's — closeMCP is idempotent and nil-safe.
+	defer bs.closeMCP()
 	if bs == nil {
 		return subagent.Result{Errored: true, Err: "child could not be assembled in this session"}
 	}

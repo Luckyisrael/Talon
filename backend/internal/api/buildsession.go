@@ -88,6 +88,10 @@ type buildSession struct {
 	// request behind TALONSTUDIO_HOOKS; nil = hooks off (byte-identical).
 	// SessionStart fires at load; RunOptions carries it into the loop.
 	hooks *hooks.Registry
+	// mcp holds the W11 MCP servers dialled for this request — per-request
+	// servers, like the per-request registry — so closeMCP can reap them
+	// (stdio process groups die with it; http idle connections drop).
+	mcp []io.Closer
 	// children is the H9 delegation service bound to this session: delegate
 	// spawns scoped child loops, delegate_fork seeds one from this session's
 	// history, list_children reports them. Nil (default) keeps the tools
@@ -534,6 +538,12 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	reg.Register(&tools.WebSearch{HTTPClient: &http.Client{Timeout: 20 * time.Second}})
 	reg.Register(&tools.GitHubSearch{HTTPClient: &http.Client{Timeout: 20 * time.Second}})
 
+	// W11: MCP servers and pinned plugin tools join the ONE registry under
+	// their namespaces — same pipeline (policy, guards, dispatch,
+	// inspect), read-only defaults, additive failures.
+	registerMCP(reg, bs, workspacePath)
+	h.registerPluginTools(reg, workspacePath)
+
 	defs := make([]ai.ToolDefinition, 0, len(reg.List()))
 	for _, d := range reg.List() {
 		defs = append(defs, ai.ToolDefinition{
@@ -716,6 +726,13 @@ func (b *buildSession) executor() orchestrator.ToolExecutor {
 		// mode before the tool runs. The per-tool checks inside the registry
 		// stay — defense in depth, not replacement; this pass is what makes
 		// confinement uniform rather than per-tool bespoke.
+		//
+		// W11 first: a workspace-allowed mutating MCP tool carries no
+		// workspace path for the ring to resolve, so its posture check
+		// (permission_mode / read-only sandbox) runs before it.
+		if refused := b.mcpPostureRefusal(name); refused != "" {
+			return refused, true
+		}
 		if b.sandbox != nil {
 			if refused := sandboxRefusalFor(b.sandbox, name, input); refused != "" {
 				return refused, true

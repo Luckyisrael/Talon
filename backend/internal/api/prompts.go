@@ -1129,6 +1129,9 @@ func (h *PromptHandler) runBuild(
 	// The output writer mirrors the sink for the command-running tools, so a
 	// tool's subprocess output appears in the terminal pane as it happens.
 	bs := h.newBuildSession(workspacePath, projectID, promptID, h.adbTargetFor(projectID), commandOutputWriter{emitter: sess.Emitter}, bo.permissionMode)
+	// W11: per-request MCP servers die with the request (stdio process
+	// groups included) — the registry's per-request philosophy extended.
+	defer bs.closeMCP()
 
 	// Ground the model in what already exists before the first round: capture
 	// a map of the project's files, their exports, and their imports, and hand
