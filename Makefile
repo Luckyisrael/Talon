@@ -2,9 +2,9 @@
 # unit suite plus the phase-guard eval set (one case per PLAN.md phase,
 # healthy and fault-injected polarities). `make ci` mirrors the CI workflow.
 
-.PHONY: evals ci vet test scorecard golden dumpconfig bench nightly e2e-live
+.PHONY: evals ci vet test scorecard golden dumpconfig docs bench nightly e2e-live
 
-evals: vet scorecard golden dumpconfig test
+evals: vet scorecard golden dumpconfig docs test
 
 vet:
 	cd backend && go vet ./...
@@ -32,6 +32,16 @@ golden:
 # first), so this runs secret-free anywhere.
 dumpconfig:
 	cd backend && go run ./cmd/server --dump-config | diff - ../talon.composition.golden.json
+
+# H13.1/W14.5: the Model Experience docs guard — every harness/tools/stage
+# README carries a "What the model sees" section, every TALONSTUDIO_* named
+# in docs or code comments is referenced by non-test code AND documented in
+# .env.example (comment-code lies fail here by name, law 12), and
+# everything .env.example documents is referenced (W8.3, executable). The
+# WithModel comment contract is pinned to behavior in the same stage.
+docs:
+	cd backend && go test -count=1 -run 'TestModelExperienceDocs' ./internal/evals/
+	cd backend && go test -count=1 -run 'TestWithModelCommentContract' ./internal/ai/
 
 test:
 	cd backend && go test -count=1 ./...
