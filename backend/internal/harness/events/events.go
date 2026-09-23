@@ -87,6 +87,12 @@ const (
 	// forked from whom and at which sequence. Audit-only — it never becomes a
 	// model-visible message. Payload: ForkPayload.
 	SessionForked Kind = "session/forked"
+	// HookExec records one W10 hook execution: the event observed, the
+	// configured hook's name, its decision, and why — the audit trail that
+	// makes extension behavior as reviewable as approvals. Appended by
+	// whoever owned the dispatch (they hold the log handle); non-surface:
+	// an audit record, never a model message. Payload: HookPayload.
+	HookExec Kind = "hook/exec"
 )
 
 // SurfaceKind reports whether events of this kind join the model-visible
@@ -97,6 +103,18 @@ func SurfaceKind(k Kind) bool {
 		return true
 	}
 	return false
+}
+
+// HookPayload is the body of hook/exec — one hook's answer to one event.
+type HookPayload struct {
+	Event      string `json:"event"`
+	Hook       string `json:"hook"`
+	Decision   string `json:"decision"`
+	Reason     string `json:"reason,omitempty"`
+	Tool       string `json:"tool,omitempty"`
+	Async      bool   `json:"async,omitempty"`
+	Error      string `json:"error,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
 }
 
 // MessagePayload is the body of user/message and assistant/message.

@@ -11,6 +11,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
 	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
+	"github.com/luckyisrael/talon/backend/internal/hooks"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/store"
 )
@@ -68,6 +69,31 @@ func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent
 		return subagent.Result{Errored: true, Err: "child session state could not be created"}
 	}
 	defer sess.Emitter.Close()
+
+	// W10 SubagentStart: the workspace's hooks gate the spawn itself,
+	// right after the child session exists (SessionStart already fired in
+	// build()). deny — and ask, since no seam is composed here — refuses
+	// with the reason the parent model reads through the delegate tool;
+	// an extension failure refuses too, failed closed (DSH's law).
+	// Executions audit to the project log. Nil hooks (flag off / no
+	// config): no-op, byte-identical.
+	if bs.hooks != nil {
+		sp := hooks.Payload{
+			Event: hooks.SubagentStart, Prompt: prompt,
+			ProjectID: bs.projectID, PromptID: bs.promptID,
+		}
+		d, herr := bs.hooks.CheckAudited(ctx, sp, func(rec hooks.ExecRecord) {
+			appendHookExecToLog(r.log, bs.projectID, rec)
+		})
+		if herr != nil || d.Decision == hooks.Deny || d.Decision == hooks.Ask {
+			reason := d.Reason
+			if herr != nil {
+				reason = herr.Error()
+			}
+			return subagent.Result{Errored: true,
+				Err: "a project hook refused to spawn the child: " + reason}
+		}
+	}
 
 	// Validate the child's tool set against the parent's: the child may hold
 	// a subset, never a superset.
@@ -131,6 +157,28 @@ func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent
 		return subagent.Result{Errored: true, Err: "child loop runner is not configured in this session"}
 	}
 	outcome, err := r.runLoop(ctx, sess, bs, defs, history, system)
+	// W10 SubagentStop: notify-class — the child turn is over whatever
+	// happened, so this event's own failure only logs (DSH: an extension
+	// never corrupts what already finished). Async entries (slack) spawn
+	// from Check and return immediately. Executions audit to the project
+	// log; nil hooks (flag off / no config): no-op, byte-identical.
+	if bs.hooks != nil {
+		sp := hooks.Payload{
+			Event: hooks.SubagentStop, Prompt: prompt,
+			ProjectID: bs.projectID, PromptID: bs.promptID,
+		}
+		switch {
+		case err != nil:
+			sp.Outcome, sp.Reason = "failure", err.Error()
+		case outcome == nil || outcome.Stalled || outcome.HookStop:
+			sp.Outcome = "failure"
+		default:
+			sp.Outcome = "success"
+		}
+		bs.hooks.CheckAudited(ctx, sp, func(rec hooks.ExecRecord) {
+			appendHookExecToLog(r.log, bs.projectID, rec)
+		})
+	}
 	if err != nil {
 		return subagent.Result{Errored: true, Err: fmt.Sprintf("child loop failed: %v", err)}
 	}

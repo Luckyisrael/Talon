@@ -23,6 +23,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/promptsec"
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	"github.com/luckyisrael/talon/backend/internal/harness/tooltimeout"
+	"github.com/luckyisrael/talon/backend/internal/hooks"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/metrics"
 	"github.com/luckyisrael/talon/backend/internal/notify"
@@ -1078,6 +1079,32 @@ func (h *PromptHandler) runBuild(
 		return nil, err
 	}
 
+	// W10 UserPromptSubmit: the workspace's hooks see the prompt before
+	// the session exists or anything is stored. deny refuses it — the
+	// reason rides the existing friendlyAIError path, and the prompt never
+	// reaches the model; additionalContext travels with it as labeled hook
+	// context. Every execution audits (session hook/exec + server log).
+	// Flag off / no config: Load returns nil, the block is skipped, the
+	// prompt is untouched — byte-identical.
+	if hs := hooks.Load(workspacePath); hs != nil {
+		tp := hooks.Payload{
+			Event: hooks.UserPromptSubmit, Prompt: userPrompt,
+			Workspace: workspacePath, ProjectID: projectID, PromptID: promptID,
+		}
+		d, herr := hs.CheckAudited(ctx, tp, func(rec hooks.ExecRecord) {
+			appendHookRecord(h, projectID, rec)
+		})
+		if herr != nil {
+			return nil, fmt.Errorf("prompt rejected — a project hook failed: %w", herr)
+		}
+		if d.Decision == hooks.Deny {
+			return nil, fmt.Errorf("prompt rejected by a project hook: %s", d.Reason)
+		}
+		if d.AdditionalContext != "" {
+			userPrompt += "\n\n<hook-context>\n" + d.AdditionalContext + "\n</hook-context>"
+		}
+	}
+
 	sess := h.orch.CreateSession(promptID, projectID, workspacePath)
 	defer h.orch.RemoveSession(promptID)
 	defer sess.Emitter.Close()
@@ -1135,13 +1162,16 @@ func (h *PromptHandler) runBuild(
 		// the session's mode composed (nil-safe for bare harnesses).
 		Approval:       bs.seam,
 		PermissionMode: bs.permMode,
-		History:        history,
-		Tools:          bs.defs,
-		Execute:        bs.executor(),
-		Timeouts:       tooltimeout.DefaultPolicy(),
-		ReadOnlyTool:   bs.reg.IsReadOnly,
-		FilesTouched:   bs.fs.Touched,
-		Exists:         bs.fs.Exists,
+		// W10: the workspace's hook registry — nil when TALONSTUDIO_HOOKS
+		// is off or the project declares none (byte-identical loop).
+		Hooks:        bs.hooks,
+		History:      history,
+		Tools:        bs.defs,
+		Execute:      bs.executor(),
+		Timeouts:     tooltimeout.DefaultPolicy(),
+		ReadOnlyTool: bs.reg.IsReadOnly,
+		FilesTouched: bs.fs.Touched,
+		Exists:       bs.fs.Exists,
 		// W6: boot/vision/interact are required gates only when a device
 		// backs this turn; device-less runs classify them best-effort.
 		DeviceAttached: h.adbTargetFor(projectID) != "",

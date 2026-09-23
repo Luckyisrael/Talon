@@ -155,7 +155,31 @@ type SessionState struct {
 	// remains the working copy either way.
 	persistTask func(projectID int64, t Task, byPrompt int64)
 
+	// hookStop latches the reason a W10 sync hook failed (extension
+	// failure — DSH's law): set by executeTools mid-batch under mu, read by
+	// the round loop at the next boundary, which closes the turn — honest
+	// FinalText, finished rounds persisted, never a corrupted loop.
+	hookStop string
+
 	mu sync.Mutex
+}
+
+// SetHookStop latches the hook-failure reason; first writer wins so the
+// turn's closing text names the first break, not whichever goroutine
+// finished last.
+func (s *SessionState) SetHookStop(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.hookStop == "" {
+		s.hookStop = reason
+	}
+}
+
+// HookStopReason reports whether a hook failure has latched, with why.
+func (s *SessionState) HookStopReason() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hookStop, s.hookStop != ""
 }
 
 type PatchRecord struct {

@@ -29,6 +29,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/promptsec"
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	"github.com/luckyisrael/talon/backend/internal/harness/tooltimeout"
+	"github.com/luckyisrael/talon/backend/internal/hooks"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/lsp"
 	"github.com/luckyisrael/talon/backend/internal/metrics"
@@ -857,6 +858,12 @@ type BuildOutcome struct {
 	// deliberate, honest stop with every finished round persisted, not a
 	// failure. FinalText names the spend and the cap.
 	BudgetStop bool
+	// HookStop marks a turn closed by a W10 sync hook (denied TurnStart,
+	// or a hook that failed mid-turn — extension failure never corrupts the
+	// loop). Like BudgetStop it returns a nil error: the close is
+	// deliberate, with finished rounds persisted, and FinalText names the
+	// hook and why. Zero with hooks off.
+	HookStop bool
 	// Paused is set when the turn stopped to ask the user a question through
 	// ask_user rather than finishing. A paused turn returns a nil error — it is a
 	// deliberate stop, not a failure — so a caller must check Paused before
@@ -944,6 +951,12 @@ type RunOptions struct {
 	// PermissionMode is the session's W9 permission posture, consulted by
 	// the device-build gate alongside Approval. Zero value = ask.
 	PermissionMode approval.Mode
+	// Hooks is the W10 registry loaded from the workspace's project
+	// config (TALONSTUDIO_HOOKS gated). Nil — flag off, no config, bare
+	// harness — dispatches nothing: byte-identical behavior. It drives
+	// TurnStart/TurnStop around the loop and PreToolUse/PostToolUse*
+	// inside executeTools.
+	Hooks *hooks.Registry
 }
 
 // EventAppender is the write half of the audit sink.
@@ -964,13 +977,41 @@ type AuditLog interface {
 	Sync() error
 }
 
+// appendHookExec writes one W10 hook execution to the session log
+// (hook/exec, non-surface — an audit row, never a model message). A nil
+// log (bare harnesses, tests) stays quiet; the hooks package always logs
+// the same execution to the server log regardless.
+func appendHookExec(log EventAppender, p hooks.Payload, rec hooks.ExecRecord) {
+	if log == nil {
+		return
+	}
+	hp := harnessevents.HookPayload{
+		Event:      string(rec.Event),
+		Hook:       rec.Hook,
+		Decision:   rec.Decision.Decision,
+		Reason:     rec.Decision.Reason,
+		Tool:       p.Tool,
+		DurationMS: rec.Took.Milliseconds(),
+	}
+	if rec.Err != nil {
+		hp.Error = rec.Err.Error()
+	} else if hp.Reason == "" {
+		// No reason? The context it returned is the interesting part.
+		hp.Reason = rec.Decision.AdditionalContext
+	}
+	_, _ = log.Append(harnessevents.HookExec, hp)
+}
+
 // RunAgentLoop drives the agent until it stops calling tools and the code
 // verifies, or until the round budget runs out.
 //
 // The loop terminates on the model's stop_reason, never on "the model said
 // something". A turn that produces prose alongside tool calls is still working;
 // treating text as completion is what makes an agent quit halfway.
-func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opts RunOptions) (*BuildOutcome, error) {
+//
+// W10: named returns so the TurnStop defer observes the turn's real
+// outcome (success vs error) on every exit path.
+func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opts RunOptions) (outcome *BuildOutcome, runErr error) {
 	sess.TransitionTo(PhaseContextBuild)
 	systemPrompt := o.enrichPromptWithContext(sess, opts.SystemPrompt)
 	// Every other input to the enriched prompt (base prompt, rules, manifest,
@@ -1009,7 +1050,9 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	conversation := make([]ai.Message, len(opts.History))
 	copy(conversation, opts.History)
 
-	outcome := &BuildOutcome{}
+	// With named returns (W10), outcome is the return slot itself — the
+	// TurnStop defer below observes the same value every exit path returns.
+	outcome = &BuildOutcome{}
 	const maxVerifyAttempts = 6
 
 	// turnStart anchors wall-time accounting: wall time is model-latency-bound
@@ -1025,6 +1068,63 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		}
 		log.Printf("orchestrator: turn %s after %d rounds in %s (avg %s/round)",
 			ending, outcome.Rounds, elapsed.Round(time.Second), perRound.Round(time.Second))
+	}
+
+	// W10 TurnStop: fires on every exit — normal finish, budget stop,
+	// hook-closed turn, error. Notify-class and async: the turn is already
+	// ending, so this event's own failure logs rather than recursing.
+	// (slack-on-turn-fail is this event's built-in.)
+	defer func() {
+		if opts.Hooks == nil {
+			return
+		}
+		tp := hooks.Payload{
+			Event: hooks.TurnStop, Workspace: sess.WorkspacePath,
+			ProjectID: sess.ProjectID, PromptID: sess.ID,
+		}
+		switch {
+		case runErr != nil:
+			tp.Outcome, tp.Reason = "failure", runErr.Error()
+		case outcome != nil && outcome.HookStop:
+			tp.Outcome, tp.Reason = "failure", outcome.FinalText
+		default:
+			tp.Outcome = "success"
+		}
+		// Background, not ctx: the loop's ctx may already be cancelled on
+		// the exit paths, and a TurnStop hook chose its own timeout.
+		opts.Hooks.CheckAudited(context.Background(), tp, func(rec hooks.ExecRecord) {
+			appendHookExec(opts.EventLog, tp, rec)
+		})
+	}()
+
+	// W10 TurnStart: a sync hook can close the turn before round one —
+	// deny and ask both fail closed here (there is no tool and no seam
+	// action to approve against yet), and an extension failure closes it
+	// too per DSH's law: honest FinalText, nil error, finished rounds
+	// (none yet) preserved. additionalContext extends the system prompt.
+	if opts.Hooks != nil {
+		tp := hooks.Payload{
+			Event: hooks.TurnStart, Workspace: sess.WorkspacePath,
+			ProjectID: sess.ProjectID, PromptID: sess.ID,
+		}
+		d, herr := opts.Hooks.CheckAudited(ctx, tp, func(rec hooks.ExecRecord) {
+			appendHookExec(opts.EventLog, tp, rec)
+		})
+		if herr != nil || d.Decision == hooks.Deny || d.Decision == hooks.Ask {
+			stopText := "This turn did not start: " + d.Reason
+			if herr != nil {
+				stopText = "This turn did not start: " + herr.Error()
+			}
+			outcome.FinalText = stopText
+			outcome.HookStop = true
+			outcome.Messages = append(outcome.Messages, ai.Message{Role: "assistant", Blocks: []ai.Block{{Type: "text", Text: stopText}}})
+			sess.Emitter.EmitText(stopText)
+			logTurn("hook-stop")
+			return outcome, nil
+		}
+		if d.AdditionalContext != "" {
+			systemPrompt += "\n\n<hook-context>\n" + d.AdditionalContext + "\n</hook-context>"
+		}
 	}
 
 	// Wrap the executor once with the timeout policy so every Execute call
@@ -1154,6 +1254,24 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			outcome.BudgetStop = true
 			sess.Emitter.EmitText(stopText)
 			logTurn("budget-stop")
+			return outcome, nil
+		}
+
+		// W10 — a hook that failed mid-turn closes the turn the same way:
+		// flush already persisted every finished round above, the text
+		// names the hook that broke, and the error is nil — extension
+		// failure never corrupts the loop (DSH's law), it ends the turn
+		// honestly.
+		if reason, stopped := sess.HookStopReason(); stopped {
+			stopText := "Stopped this turn because a project hook failed: " + reason +
+				" — the extension broke, not the build; fix or remove the hook in .talon/config.json and rerun. The work already done is saved."
+			stopMsg := ai.Message{Role: "assistant", Blocks: []ai.Block{{Type: "text", Text: stopText}}}
+			conversation = append(conversation, stopMsg)
+			outcome.Messages = append(outcome.Messages, stopMsg)
+			outcome.FinalText = stopText
+			outcome.HookStop = true
+			sess.Emitter.EmitText(stopText)
+			logTurn("hook-stop")
 			return outcome, nil
 		}
 
@@ -2110,6 +2228,56 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			}
 		}
 
+		// W10 PreToolUse: the workspace's hooks gate dispatch right after
+		// the deterministic guardrails. deny blocks with the hook's reason
+		// on a failed tool_result (exactly how guardrail refusals read);
+		// ask falls to the turn's approval seam — AllowedOnce proceeds,
+		// anything else refuses with that outcome named — and with no seam
+		// composed it refuses, fail closed. An extension failure blocks
+		// this call AND latches the hook-stop that closes the turn at the
+		// next boundary (DSH's law). Nil registry: Check no-ops and every
+		// branch is skipped — byte-identical.
+		if opts.Hooks != nil {
+			tp := hooks.Payload{
+				Event: hooks.PreToolUse, Tool: call.Name, Input: call.Input,
+				Workspace: sess.WorkspacePath, ProjectID: sess.ProjectID, PromptID: sess.ID,
+			}
+			d, herr := opts.Hooks.CheckAudited(ctx, tp, func(rec hooks.ExecRecord) {
+				appendHookExec(opts.EventLog, tp, rec)
+			})
+			switch {
+			case herr != nil:
+				sess.SetHookStop(herr.Error())
+				return ai.Block{
+					Type: "tool_result", ToolUseID: call.ID, IsError: true,
+					Content: "A project hook failed before this call could run (" + herr.Error() + "). The turn will stop at the next boundary — fix or remove the hook in .talon/config.json.",
+				}
+			case d.Decision == hooks.Deny:
+				sess.Emitter.EmitGuardrail("project hook", d.Reason)
+				return ai.Block{
+					Type: "tool_result", ToolUseID: call.ID, IsError: true,
+					Content: "Blocked by a project hook: " + d.Reason,
+				}
+			case d.Decision == hooks.Ask:
+				if opts.Approval == nil {
+					return ai.Block{
+						Type: "tool_result", ToolUseID: call.ID, IsError: true,
+						Content: "A project hook requires approval for this call (" + d.Reason + "), but no approval seam is composed — failing closed.",
+					}
+				}
+				out := opts.Approval.Ask(approval.Request{
+					Scope: "hook", Action: "tool " + call.Name + " — " + d.Reason,
+					PromptID: sess.ID, Mode: opts.PermissionMode, Workspace: sess.WorkspacePath,
+				})
+				if out != approval.AllowedOnce {
+					return ai.Block{
+						Type: "tool_result", ToolUseID: call.ID, IsError: true,
+						Content: "A project hook asked for approval to run " + call.Name + ": the approval was " + out.String() + ".",
+					}
+				}
+			}
+		}
+
 		verb := describeTool(call.Name, call.Input, sess.WorkspacePath)
 		target := toolTarget(call.Name, call.Input)
 		sess.Emitter.EmitToolCall(call.ID, call.Name, target, verb, "running")
@@ -2157,6 +2325,48 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 				detail = firstLine(output)
 			}
 			sess.EmitTaskUpdate(taskID, verb, "completed", detail)
+		}
+
+		// W10 PostToolUse / PostToolUseFailure: the call already happened,
+		// so a sync handler's feedback lands as context on the result the
+		// model reads next — deny's reason and additionalContext appended,
+		// labeled. Post-hoc is context, never a gate. A sync handler error
+		// latches the hook-stop that closes the turn at the next boundary
+		// (DSH's law) and says so on the result. Async handlers
+		// (run-tests-after-write) spawn here and run after Write without
+		// delaying the round.
+		if opts.Hooks != nil {
+			ev := hooks.PostToolUse
+			if isError {
+				ev = hooks.PostToolUseFailure
+			}
+			tp := hooks.Payload{
+				Event: ev, Tool: call.Name, Input: call.Input,
+				IsError: isError, Result: output,
+				Workspace: sess.WorkspacePath, ProjectID: sess.ProjectID, PromptID: sess.ID,
+			}
+			d, herr := opts.Hooks.CheckAudited(ctx, tp, func(rec hooks.ExecRecord) {
+				appendHookExec(opts.EventLog, tp, rec)
+			})
+			if herr != nil {
+				sess.SetHookStop(herr.Error())
+				output += "\n\n[hook] A project hook failed after this call: " + herr.Error() +
+					" — the turn will stop at the next boundary; fix or remove the hook in .talon/config.json."
+			} else {
+				var notes []string
+				switch d.Decision {
+				case hooks.Deny:
+					notes = append(notes, "[hook] Post-tool deny: "+d.Reason)
+				case hooks.Ask:
+					notes = append(notes, "[hook] Post-tool approval requested: "+d.Reason)
+				}
+				if d.AdditionalContext != "" {
+					notes = append(notes, "[hook] "+d.AdditionalContext)
+				}
+				if len(notes) > 0 {
+					output += "\n" + strings.Join(notes, "\n")
+				}
+			}
 		}
 
 		if call.Name == "read_file" {

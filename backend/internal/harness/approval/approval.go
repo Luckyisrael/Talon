@@ -21,8 +21,12 @@
 package approval
 
 import (
+	"context"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/luckyisrael/talon/backend/internal/hooks"
 )
 
 // Outcome is the terminal result of one approval request.
@@ -171,6 +175,49 @@ func (s *Seam) Ask(req Request) Outcome {
 	hdRule, hardDenied := "", false
 	if s.HardDeny != nil {
 		hdRule, hardDenied = s.HardDeny(req)
+	}
+
+	// W10 ApprovalRequest: the workspace's hooks see every approval ask —
+	// after PolicyNever (headless fail-closed is absolute) and computed
+	// alongside the hard-deny class. deny refuses this act with the hook's
+	// reason; a *hook's* allow grants it except under read-only (the
+	// posture is absolute) or when hard-deny matched (no hook waives the
+	// unwaivable). ask — and a hook's own failure, failed closed as a
+	// rejection — continues into the mode switch and the answerer loop
+	// below. Three-layer gate so hookless flows stay byte-identical: nil
+	// registry (flag off / no config), no ApprovalRequest entries (a
+	// loaded registry's empty-event Check also answers Allow — only a
+	// sync entry that actually ran may act), and async entries never gate.
+	// (Approval-layer executions audit through this record — the reason
+	// names the hook; the loop's dispatches also get hook/exec rows.)
+	if reg := hooks.Load(req.Workspace); reg != nil {
+		var syncRan atomic.Int32
+		d, herr := reg.CheckAudited(context.Background(), hooks.Payload{
+			Event: hooks.ApprovalRequest, Prompt: req.Action,
+			Workspace: req.Workspace, PromptID: req.PromptID,
+		}, func(rec hooks.ExecRecord) {
+			if !rec.Async {
+				syncRan.Add(1)
+			}
+		})
+		switch {
+		case herr != nil:
+			s.record(AuditRecord{Scope: req.Scope, Action: req.Action, Outcome: Rejected,
+				Reason: "approval hook failed (W10, failed closed): " + herr.Error(), PromptID: req.PromptID})
+			return Rejected
+		case d.Decision == hooks.Deny:
+			s.record(AuditRecord{Scope: req.Scope, Action: req.Action, Outcome: Rejected,
+				Reason: "hook deny (W10): " + d.Reason, PromptID: req.PromptID})
+			return Rejected
+		case syncRan.Load() > 0 && d.Decision == hooks.Allow && mode != ModeReadOnly && !hardDenied:
+			reason := "hook allow (W10)"
+			if d.Reason != "" {
+				reason += ": " + d.Reason
+			}
+			s.record(AuditRecord{Scope: req.Scope, Action: req.Action, Outcome: AllowedOnce,
+				Reason: reason, PromptID: req.PromptID})
+			return AllowedOnce
+		}
 	}
 	switch mode {
 	case ModeReadOnly:

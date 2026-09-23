@@ -22,6 +22,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/sandbox"
 	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
 	"github.com/luckyisrael/talon/backend/internal/harness/workflow"
+	"github.com/luckyisrael/talon/backend/internal/hooks"
 	"github.com/luckyisrael/talon/backend/internal/index"
 	"github.com/luckyisrael/talon/backend/internal/lsp"
 	"github.com/luckyisrael/talon/backend/internal/metro"
@@ -83,6 +84,10 @@ type buildSession struct {
 	// downgrades the capability), RunShell's escalations, and the
 	// device-build gate via RunOptions.
 	permMode approval.Mode
+	// hooks is the W10 registry for this workspace: loaded once per
+	// request behind TALONSTUDIO_HOOKS; nil = hooks off (byte-identical).
+	// SessionStart fires at load; RunOptions carries it into the loop.
+	hooks *hooks.Registry
 	// children is the H9 delegation service bound to this session: delegate
 	// spawns scoped child loops, delegate_fork seeds one from this session's
 	// history, list_children reports them. Nil (default) keeps the tools
@@ -142,6 +147,22 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	bs := &buildSession{fs: fs, reg: reg, projectID: projectID, promptID: promptID, store: h.store, permMode: permMode}
 	bs.sandbox = sandbox.New(smode, workspacePath,
 		[]string{os.TempDir()}, func(op sandbox.Operation) error { return nil })
+
+	// W10: load the workspace's hooks once per request (TALONSTUDIO_HOOKS
+	// gated; nil = off, byte-identical) and fire SessionStart — notify-
+	// class (the session has not yet become a turn), so its decision is
+	// recorded but never gates, and a hook failure logs rather than fails
+	// construction. RunOptions carries bs.hooks into the loop; entries
+	// marked async (notifications) spawn and return immediately.
+	bs.hooks = hooks.Load(workspacePath)
+	if bs.hooks != nil {
+		bs.hooks.CheckAudited(context.Background(), hooks.Payload{
+			Event: hooks.SessionStart, Workspace: workspacePath,
+			ProjectID: projectID, PromptID: promptID,
+		}, func(rec hooks.ExecRecord) {
+			appendHookRecord(h, projectID, rec)
+		})
+	}
 
 	// H4: the approval seam for this turn — ask policy, the turn-approvals
 	// answerer (escalation requests read tier2_shell, device build reads
