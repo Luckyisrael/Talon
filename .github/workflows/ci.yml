@@ -43,6 +43,14 @@ jobs:
       - name: Golden transcripts (agent-behavior gate)
         run: go test -count=1 ./internal/evals/golden/
 
+      # H12/W14.4: the composition golden diff — --dump-config resolves the
+      # document (base → profile → preset, LWW) and must byte-match
+      # talon.composition.golden.json, so a wiring row never lands
+      # unaudited. The flag exits before the db/AI client open, so this
+      # step stays secret-free like everything else here.
+      - name: Composition golden diff (dump-config)
+        run: go run ./cmd/server --dump-config | diff - ../talon.composition.golden.json
+
       - name: Tests (with race detector)
         run: go test -count=1 -race ./...
 

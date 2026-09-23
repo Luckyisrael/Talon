@@ -13,10 +13,7 @@ import (
 // half-life, which is the exact failure mode the law exists to prevent.
 // Stale entries (package gained a real importer, or was deleted) fail
 // this test so the map cannot rot either.
-var deadPkgExceptions = map[string]string{
-	"composition": "staged for W14 — becomes the boot file (PLAN_WORLDCLASS W14.2); " +
-		"consumed or deleted there, register row 24",
-}
+var deadPkgExceptions = map[string]string{}
 
 // TestPhaseW8NoDeadImports: any package under internal/harness with zero
 // non-test importers fails make evals. Dead code must meet one of three

@@ -1,0 +1,14 @@
+{
+  "path": "talon.composition.yaml",
+  "profile": "server",
+  "preset": "",
+  "rows": [
+    {
+      "id": "loop",
+      "component": "harness/loop",
+      "config": {
+        "maxRounds": 60
+      }
+    }
+  ]
+}

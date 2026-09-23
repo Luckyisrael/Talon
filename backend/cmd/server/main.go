@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -21,9 +23,11 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/auth"
 	"github.com/luckyisrael/talon/backend/internal/billing"
 	"github.com/luckyisrael/talon/backend/internal/blobstore"
+	"github.com/luckyisrael/talon/backend/internal/composer"
 	"github.com/luckyisrael/talon/backend/internal/devclient"
 	"github.com/luckyisrael/talon/backend/internal/gitremote"
 	"github.com/luckyisrael/talon/backend/internal/harness/compaction"
+	"github.com/luckyisrael/talon/backend/internal/harness/composition"
 	"github.com/luckyisrael/talon/backend/internal/harness/instructions"
 	"github.com/luckyisrael/talon/backend/internal/harness/skills"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
@@ -40,6 +44,22 @@ import (
 
 func main() {
 	godotenv.Load()
+
+	// H12/W14.4: --dump-config resolves the composition (base → profile →
+	// preset, LWW) and prints it as JSON, then exits before anything is
+	// opened — no database, no AI client, no listener — so the CI golden
+	// diff runs secret-free. It doubles as the human answer to "what did
+	// this boot actually wire?".
+	dumpConfig := flag.Bool("dump-config", false,
+		"print the resolved composition (base → profile → preset, LWW) as JSON and exit")
+	flag.Parse()
+	if *dumpConfig {
+		if err := dumpComposition("server"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -111,6 +131,22 @@ func main() {
 	}
 
 	orchestratorSvc := orchestrator.New(aiClient, s, knowledge)
+
+	// H12/W14.2: main is a composer — the composition file is the wiring
+	// source, env defaults are only its seed (the settings-document
+	// precedent: data beats restart). Absent file: comp is nil and the
+	// boot is byte-identical. A malformed row or an unknown component
+	// fails the boot — wiring you cannot trust must not serve.
+	if comp, err := composer.Load("server"); err != nil {
+		log.Fatalf("composition: %v", err)
+	} else if comp != nil {
+		applied, err := composer.Apply(comp, orchestratorSvc)
+		if err != nil {
+			log.Fatalf("composition: %v", err)
+		}
+		log.Printf("composition: %s (profile %q, preset %q) applied %d row(s): %s",
+			comp.Path, comp.Profile, comp.Preset, len(applied), strings.Join(applied, ", "))
+	}
 
 	// H12: model settings become data. The settings document rides beside
 	// the database; ROUTING_POLICY_JSON remains the env seed, and edits to
@@ -717,4 +753,22 @@ func findProjectRoot() string {
 		}
 	}
 	return cwd
+}
+
+// dumpComposition prints the resolved document as JSON and returns — one
+// encoder, one trailing newline, map keys sorted by encoding/json, rows in
+// the composition's own apply order: byte-stable for the golden diff. A
+// dark boot (no file) still prints, as an empty document, so the diff has
+// bytes to compare in every state.
+func dumpComposition(profile string) error {
+	comp, err := composer.Load(profile)
+	if err != nil {
+		return err
+	}
+	if comp == nil {
+		comp = &composition.Composition{Profile: profile}
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(comp)
 }

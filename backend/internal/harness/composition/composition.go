@@ -4,9 +4,10 @@
 // ai.AttachSettingsFile) instead of boot-time env.
 //
 // This file holds the preset layer — per-project composition shaping — and
-// the overlay rule. The full YAML composer is staged after the settings
-// document proves the discipline; the overlay semantics are the contract
-// that staging must keep.
+// the overlay rule. The full YAML composer landed in yaml.go (W14.2): rows
+// resolve through base → profile → preset under exactly this overlay
+// contract, and internal/composer applies them to live wiring — this
+// package stays data-pure (no wiring imports).
 package composition
 
 import (

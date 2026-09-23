@@ -1,0 +1,52 @@
+# talon.composition.yaml — the wiring source (H12/W14.2).
+#
+# Rows are (id, component, config). Resolution: base → profiles[<profile>] →
+# presets[<preset>>, last-write-wins per id with WHOLE-config replacement
+# (a later row's config never merges into an earlier one's). A missing file
+# boots dark (byte-identical to before this file existed); a malformed row
+# or an unknown component fails the boot — wiring you cannot trust must not
+# serve.
+#
+# Profiles: TALONSTUDIO_PROFILE (default "server" for the API binary,
+# "headless" for the CI profile). Presets: TALONSTUDIO_PRESET (unset skips
+# the preset layer). TALONSTUDIO_COMPOSITION names an explicit file and
+# fails loud when it does not exist.
+#
+# Composition data beats boot env — the W7 settings-document precedent: a
+# harness/loop row wins over AI_MAX_ROUNDS, which stays the seed when no
+# row is present. `go run ./cmd/server --dump-config` prints what this
+# file actually resolves to (talon.composition.golden.json is that output,
+# diffed in CI).
+base:
+  # The agent's round budget, stated as data you can see and diff instead
+  # of an env you have to know. 60 = the shipped default (same number the
+  # env seed resolves to — boot behavior does not move by landing this).
+  - id: loop
+    component: harness/loop
+    config:
+      maxRounds: 60
+
+  # Composition-addressable guardrails are policy components. deny-tools is
+  # the shipped example — uncomment to refuse tools workspace-wide without
+  # touching code. Like every policy row it takes effect under
+  # TALONSTUDIO_LOOP=driver (the §2.4 bus), after the built-in guardrails
+  # allow: composition adds restrictions, it never weakens them.
+  # - id: no-shell
+  #   component: policy/deny-tools
+  #   config:
+  #     tools: [run_shell, run_command]
+
+# The CI profile overlays the base with its own budget: the headless build
+# is a scripted two-round demonstration, and a small ceiling keeps a
+# runaway script from burning the job.
+profiles:
+  headless:
+    - id: loop
+      component: harness/loop
+      config:
+        maxRounds: 6
+
+# Per-tier project presets (starter/expert/fast) land here when their
+# contracts flip to composition rows; an empty map keeps the layer present
+# so the overlay order is visible in the file itself.
+presets: {}

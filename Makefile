@@ -2,9 +2,9 @@
 # unit suite plus the phase-guard eval set (one case per PLAN.md phase,
 # healthy and fault-injected polarities). `make ci` mirrors the CI workflow.
 
-.PHONY: evals ci vet test scorecard golden bench nightly e2e-live
+.PHONY: evals ci vet test scorecard golden dumpconfig bench nightly e2e-live
 
-evals: vet scorecard golden test
+evals: vet scorecard golden dumpconfig test
 
 vet:
 	cd backend && go vet ./...
@@ -23,6 +23,15 @@ scorecard:
 # regression threshold that blocks the offending merge.
 golden:
 	cd backend && go test -count=1 ./internal/evals/golden/
+
+# H12/W14.4: the composition golden diff — --dump-config resolves the
+# document (base → profile → preset, LWW) and must byte-match the
+# committed golden. Any wiring edit that changes what boot would apply has
+# to re-record talon.composition.golden.json in the same commit, so a row
+# never lands unaudited. Opens no db and no AI client (the flag exits
+# first), so this runs secret-free anywhere.
+dumpconfig:
+	cd backend && go run ./cmd/server --dump-config | diff - ../talon.composition.golden.json
 
 test:
 	cd backend && go test -count=1 ./...
