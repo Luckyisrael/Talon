@@ -113,3 +113,38 @@ jobs:
 
       - name: Production build
         run: npm run build
+
+  headless:
+    name: headless (real boot + eval scorecard)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.2"
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/template/package-lock.json
+
+      # The verification ladder runs FOR REAL under this job (tsc, eslint,
+      # expo export over the shared node_modules) — without the template's
+      # dependencies those gates would fail open and "verified" would mean
+      # nothing.
+      - name: Template dependencies
+        run: npm ci
+        working-directory: backend/template
+
+      # W14.3 (H11): cmd/talon-headless boots the real composition — store,
+      # provisioned workspace, knowledge, and the same NewAgentTurn the SSE
+      # route runs — under a scripted provider (secret-free like every other
+      # job), then prints the evals.RenderScorecards scorecard. The exit
+      # code follows the critical checks: ladder not passed, or a
+      # wallet/secret marker, fails this job.
+      - name: Real boot under the scripted provider
+        working-directory: backend
+        run: go run ./cmd/talon-headless --profile headless

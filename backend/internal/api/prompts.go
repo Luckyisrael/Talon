@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -315,7 +316,7 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	outcome, buildErr := h.runBuild(ctx, req.ProjectID, prompt.ID, userID, req.Prompt, nil,
-		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode, permissionMode: req.PermissionMode, attachments: attachments})
+		buildOptions{PersistUserTurn: true, MeterPrompt: true, Mode: req.Mode, PermissionMode: req.PermissionMode, Attachments: attachments})
 
 	response := map[string]interface{}{
 		"id":                   prompt.ID,
@@ -403,7 +404,7 @@ func (h *PromptHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.streamBuild(ctx, w, flusher, req.ProjectID, prompt.ID, userID, req.Prompt,
-		buildOptions{persistUserTurn: true, meterPrompt: true, mode: req.Mode, permissionMode: req.PermissionMode, attachments: attachments})
+		buildOptions{PersistUserTurn: true, MeterPrompt: true, Mode: req.Mode, PermissionMode: req.PermissionMode, Attachments: attachments})
 }
 
 // resumePrompt is the synthetic instruction a resumed turn injects. It is not
@@ -496,7 +497,7 @@ func (h *PromptHandler) Resume(w http.ResponseWriter, r *http.Request) {
 	// The synthetic prompt is neither persisted nor metered — resuming an
 	// interrupted turn is a continuation, not a new prompt.
 	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, instruction,
-		buildOptions{persistUserTurn: false, meterPrompt: false, mode: "build"})
+		buildOptions{PersistUserTurn: false, MeterPrompt: false, Mode: "build"})
 }
 
 // answerRequest is the body of POST /v1/prompts/{id}/answer: the user's reply
@@ -651,7 +652,7 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, body.Answer,
-		buildOptions{persistUserTurn: false, meterPrompt: false, answer: true, mode: "build"})
+		buildOptions{PersistUserTurn: false, MeterPrompt: false, Answer: true, Mode: "build"})
 }
 
 // Discard marks an interrupted turn as abandoned so a later reload stops
@@ -1049,18 +1050,24 @@ func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event)
 // prompt as a new user text turn, runBuild injects it as the tool_result for the
 // pending ask_user call, so the model reads it as the answer to its question.
 type buildOptions struct {
-	persistUserTurn bool
-	meterPrompt     bool
-	answer          bool
-	// attachments rides fresh turns only: claimed files this turn carries.
+	PersistUserTurn bool
+	MeterPrompt     bool
+	Answer          bool
+	// Attachments rides fresh turns only: claimed files this turn carries.
 	// Answer, steer, and resume replay stored turns and never set it.
-	attachments []store.Attachment
-	// mode is "plan" or "build": routing classifies the turn from it.
-	mode string
-	// permissionMode is the W9 session override from the request body
+	Attachments []store.Attachment
+	// Mode is "plan" or "build": routing classifies the turn from it.
+	Mode string
+	// PermissionMode is the W9 session override from the request body
 	// ("" when the client sent none — the project posture decides).
-	permissionMode string
+	PermissionMode string
 }
+
+// BuildOptions is the exported view of the turn options a caller hands
+// NewAgentTurn — an alias, so the prompt route and the headless profile
+// assemble the SAME turn shape with no second struct to drift. The field
+// meanings live on buildOptions, where runBuild's callers document them.
+type BuildOptions = buildOptions
 
 // runBuild executes one agentic turn: replay the stored conversation, run the
 // loop, persist what happened, and checkpoint the files it changed.
@@ -1126,12 +1133,82 @@ func (h *PromptHandler) runBuild(
 		}()
 	}
 
+	// One turn's wiring — the real build session (registry, executor, seam,
+	// hooks, posture), the project-map grounding, the plan seed, and the turn
+	// history. W14.3 moved it into NewAgentTurn so the headless profile boots
+	// the SAME composition; this route owns only what happens around the loop.
+	turn, err := h.NewAgentTurn(sess, projectID, promptID, userPrompt, bo, commandOutputWriter{emitter: sess.Emitter})
+	if err != nil {
+		return nil, err
+	}
+	defer turn.Close()
+
+	turnStart := time.Now()
+	outcome, runErr := h.orch.RunAgentLoop(ctx, sess, turn.opts)
+
+	// Everything below runs whether or not the loop succeeded: a failed turn
+	// still changed files and still cost tokens, and losing that record is how
+	// the next turn ends up contradicting this one.
+	h.finalizeTurn(projectID, promptID, userID, outcome, runErr, bo.MeterPrompt, time.Since(turnStart))
+	h.checkpoint(projectID, promptID, userPrompt, turn.Journal())
+
+	if outcome != nil && len(outcome.FilesTouched) > 0 {
+		h.checkNativeRebuild(ctx, projectID, workspacePath, outcome.FilesTouched, sess)
+	}
+
+	return outcome, runErr
+}
+
+// AgentTurn is one turn's full wiring: the build session (the real tool
+// registry, executor, approval seam, hook registry, permission posture),
+// the project-map grounding, the plan seed, the turn history, and the
+// RunOptions the loop runs. Extracted from runBuild for the headless
+// profile (H11/W14.3) so CI boots the SAME composition the server runs —
+// one wiring, nothing to drift. The caller owns post-loop bookkeeping:
+// finalize/checkpoint for the server, the scorecard for headless.
+type AgentTurn struct {
+	bs        *buildSession
+	opts      orchestrator.RunOptions
+	workspace string
+}
+
+// Options is the RunOptions to hand RunAgentLoop.
+func (t *AgentTurn) Options() orchestrator.RunOptions { return t.opts }
+
+// Close releases the turn's per-request resources — W11 MCP process groups
+// die with the request, the registry's per-request philosophy. Every turn
+// defers it, exactly where runBuild used to defer closeMCP. A turn that is
+// never closed leaks its MCP children for the life of the process.
+func (t *AgentTurn) Close() { t.bs.closeMCP() }
+
+// Journal is the filesystem journal for the caller's checkpoint. The server
+// checkpoints every finished turn; headless does not (CI has no user
+// rollback surface to journal into).
+func (t *AgentTurn) Journal() []tools.FileSnapshot { return t.bs.fs.Journal() }
+
+// Workspace reports the resolved workspace this turn runs in.
+func (t *AgentTurn) Workspace() string { return t.workspace }
+
+// NewAgentTurn assembles one turn exactly as the prompt route's runBuild
+// always has, in the same order: build session → grounding → plan seed →
+// history → RunOptions. bo is BuildOptions (the exported alias) — the same
+// struct fresh/answer/resume turns pass. output mirrors command-running
+// tool output (the server streams it to the SSE emitter; headless passes
+// os.Stderr so CI logs show the gates). The caller must Close the result.
+func (h *PromptHandler) NewAgentTurn(
+	sess *orchestrator.SessionState,
+	projectID, promptID int64,
+	userPrompt string,
+	bo BuildOptions,
+	output io.Writer,
+) (*AgentTurn, error) {
+	workspacePath, err := h.workspacePath(projectID)
+	if err != nil {
+		return nil, err
+	}
 	// The output writer mirrors the sink for the command-running tools, so a
 	// tool's subprocess output appears in the terminal pane as it happens.
-	bs := h.newBuildSession(workspacePath, projectID, promptID, h.adbTargetFor(projectID), commandOutputWriter{emitter: sess.Emitter}, bo.permissionMode)
-	// W11: per-request MCP servers die with the request (stdio process
-	// groups included) — the registry's per-request philosophy extended.
-	defer bs.closeMCP()
+	bs := h.newBuildSession(workspacePath, projectID, promptID, h.adbTargetFor(projectID), output, bo.PermissionMode)
 
 	// Ground the model in what already exists before the first round: capture
 	// a map of the project's files, their exports, and their imports, and hand
@@ -1156,13 +1233,12 @@ func (h *PromptHandler) runBuild(
 
 	history := h.turnHistory(projectID, promptID, userPrompt, bo)
 
-	turnStart := time.Now()
-	outcome, runErr := h.orch.RunAgentLoop(ctx, sess, orchestrator.RunOptions{
+	opts := orchestrator.RunOptions{
 		SystemPrompt: h.systemPrompt(),
-		Mode:         bo.mode,
+		Mode:         bo.Mode,
 		// W9: the turn's seam + permission posture — the device-build gate
-		// asks through the same seam tier-2 shell escalations use, with
-		// the session's mode composed (nil-safe for bare harnesses).
+		// asks through the same seam tier-2 shell escalations use, with the
+		// session's mode composed (nil-safe for bare harnesses).
 		Approval:       bs.seam,
 		PermissionMode: bs.permMode,
 		// W10: the workspace's hook registry — nil when TALONSTUDIO_HOOKS
@@ -1217,19 +1293,9 @@ func (h *PromptHandler) runBuild(
 		// model-call retry lands here so it survives a reload instead of
 		// living only in the SSE trace.
 		EventLog: h.slog.get(h.store, projectID),
-	})
-
-	// Everything below runs whether or not the loop succeeded: a failed turn
-	// still changed files and still cost tokens, and losing that record is how
-	// the next turn ends up contradicting this one.
-	h.finalizeTurn(projectID, promptID, userID, outcome, runErr, bo.meterPrompt, time.Since(turnStart))
-	h.checkpoint(projectID, promptID, userPrompt, bs.fs.Journal())
-
-	if outcome != nil && len(outcome.FilesTouched) > 0 {
-		h.checkNativeRebuild(ctx, projectID, workspacePath, outcome.FilesTouched, sess)
 	}
 
-	return outcome, runErr
+	return &AgentTurn{bs: bs, opts: opts, workspace: workspacePath}, nil
 }
 
 // turnHistory assembles the conversation the loop replays for this turn and
@@ -1247,7 +1313,7 @@ func (h *PromptHandler) runBuild(
 // The loop's own rounds are persisted separately through the Persist callback,
 // so nothing here is stored twice.
 func (h *PromptHandler) turnHistory(projectID, promptID int64, userPrompt string, bo buildOptions) []ai.Message {
-	if bo.answer {
+	if bo.Answer {
 		// Resuming a turn paused on ask_user. The raw tail ends with the
 		// unanswered tool_use; answer it in place rather than letting the trim
 		// drop it as an orphan and losing the question the user is replying to.
@@ -1267,7 +1333,7 @@ func (h *PromptHandler) turnHistory(projectID, promptID int64, userPrompt string
 	}
 
 	history := h.conversation(projectID)
-	userTurn := h.buildUserTurn(bo.attachments, userPrompt)
+	userTurn := h.buildUserTurn(bo.Attachments, userPrompt)
 	// A fresh prompt sent while an earlier turn is still waiting on ask_user:
 	// the replay trim drops the trailing orphan tool_use, so without this the
 	// model never sees the question the user may be replying to ("go with your
@@ -1313,7 +1379,7 @@ func (h *PromptHandler) turnHistory(projectID, promptID int64, userPrompt string
 	// is real user input). Only a plain resume's synthetic prompt stays
 	// unpersisted. The loop's own turns are persisted round by round through
 	// Persist, so nothing here is stored twice.
-	if bo.persistUserTurn || bo.answer {
+	if bo.PersistUserTurn || bo.Answer {
 		h.persistTurn(projectID, promptID, userTurn, "user turn")
 	}
 	return history
