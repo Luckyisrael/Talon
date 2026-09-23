@@ -80,6 +80,18 @@ func DefaultFailureIndex() []FailurePattern {
 			"disk full", "clear caches and build outputs, not source", "", cd),
 		mustPattern("", `user rejected|rejected the request|user cancelled|dismissed`,
 			"user dismissed the wallet sheet", "treat as cancelled, restore resting UI; it is not a crash", "wallet-mwa", cd),
+		// W12: delegation refusals key on their structured prefix — before
+		// the generic throttle pattern, whose "just retry" fix would be
+		// wrong advice during a cooldown or against a spend cap.
+		mustPattern("", `delegation_(pool|cooldown|spend|wall)`,
+			"the fan-out is capped (pool full, rate-limited, over budget, or past its wall-clock)",
+			"poll list_children and keep working elsewhere; delegate again when a slot or budget frees", "", cd),
+		mustPattern("", `delegation_depth`,
+			"children cannot spawn children",
+			"do this piece yourself in this turn instead of delegating it", "", cd),
+		mustPattern("", `delegation_isolation`,
+			"mutating children are disabled in this session",
+			"finish the file work here, or run mutating children under TALONSTUDIO_CHILD_ISOLATION=worktree", "", cd),
 		mustPattern("", `rate limit|too many requests|quota exceeded`,
 			"provider throttling", "back off and retry with a smaller step", "", cd),
 		mustPattern("build_apk", `gradle|assemble|lintvital|aapt`,

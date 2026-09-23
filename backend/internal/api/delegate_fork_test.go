@@ -81,12 +81,13 @@ func TestDelegateForkSeedsChildFromParentPrefix(t *testing.T) {
 	var gotHistory []ai.Message
 	var gotDefs []ai.ToolDefinition
 	r := &childRunner{
-		build: func() *buildSession {
+		workspace: t.TempDir(),
+		build: func(root string, mutate bool) *buildSession {
 			return &buildSession{defs: []ai.ToolDefinition{
 				{Name: "read_file"}, {Name: "shell"}, {Name: "list_children"},
 			}}
 		},
-		newSession: func() *orchestrator.SessionState {
+		newSession: func(workspace string) *orchestrator.SessionState {
 			return orchestrator.NewSession(0, proj.ID, t.TempDir(), events.NewSessionEmitter(0, 64))
 		},
 		systemPrompt: "child system",

@@ -175,12 +175,19 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// directly when not (bare handlers); a nil log still builds a seam.
 	bs.seam = h.buildApprovalSeam(h.projectLog(projectID), projectID, promptID)
 
-	// H9: opt-in delegation. The child runner is a second orchestrator loop
-	// over this same workspace with a read-scoped registry: children inspect
-	// and report; they never mutate (a review child must not be able to
-	// edit). Pool 2 is the rate-limit-aware default.
+	// H9: opt-in delegation. The child runner is a second orchestrator
+	// loop over this same workspace: read-only children get the
+	// read-scoped registry (inspect and report; never mutate), and W12
+	// adds the cap stack — pool 2, the turn's spend bound
+	// (ROUTING_PRICING_JSON prices the tokens that fill it), the
+	// per-child wall-clock, and the isolation posture for mutating
+	// children (readonly default = byte-identical shared path).
 	if subagentsEnabled() {
-		bs.children = subagent.NewService(childRunnerFor(h, workspacePath, projectID, adbTarget, output), 2)
+		svc := subagent.NewService(childRunnerFor(h, workspacePath, projectID, adbTarget, output), 2)
+		svc.SetWorktreeIsolation(childIsolationWorktree())
+		svc.SetSpendCap(childSpendCapFromEnv())
+		svc.SetWall(childWallFromEnv())
+		bs.children = svc
 	}
 
 	// Reading and searching. read_file also resolves spill locators (W1.2):
@@ -906,35 +913,56 @@ func subagentsEnabled() bool {
 	return false
 }
 
+// childBuildFor assembles one child's build session rooted at root — the
+// W12.1 seam both isolation postures share. Two laws are enforced here:
+//
+//   - depth 1's second wall: the four delegation tools are REMOVED from
+//     the child's registry, not merely unadvertised — a model that
+//     hallucinates an unadvertised delegate must find nothing to execute
+//     (law 12: the comment must be true).
+//   - scope: a non-mutating child keeps today's read-only registry filter
+//     (shared workspace, zero cost); a mutating child (worktree posture)
+//     gets the full scoped set — writes confined to root, which the
+//     runner made the child's private worktree.
+func childBuildFor(h *PromptHandler, projectID int64, adbTarget string, output io.Writer) func(root string, mutate bool) *buildSession {
+	return func(root string, mutate bool) *buildSession {
+		child := h.newBuildSession(root, projectID, 0, adbTarget, output)
+		for _, name := range []string{"delegate", "delegate_fork", "list_children", "run_workflow"} {
+			child.reg.Remove(name)
+		}
+		defs := make([]ai.ToolDefinition, 0, len(child.defs))
+		for _, d := range child.reg.List() {
+			if !mutate && !child.reg.IsReadOnly(d.Name) {
+				continue
+			}
+			defs = append(defs, ai.ToolDefinition{
+				Name: d.Name, Description: d.Description, InputSchema: d.InputSchema,
+			})
+		}
+		child.defs = defs
+		// Depth wall #1's mirror: the child holds no delegation service
+		// even though its registry was assembled like any session's.
+		child.children = nil
+		return child
+	}
+}
+
 // childRunnerFor assembles the H9 in-process runner: the child gets a
-// read-only build session over the same workspace (inspect and report;
-// never mutate), the orchestrator's loop, and the session handler's prompts.
-// A fork child additionally seeds from the parent's live conversation and
-// forks the project's session log (W1.5).
+// build session rooted where the isolation posture puts it (shared
+// workspace read-only, or its private worktree when mutating), the
+// orchestrator's loop, and the session handler's prompts. A fork child
+// additionally seeds from the parent's live conversation and forks the
+// project's session log (W1.5).
 func childRunnerFor(h *PromptHandler, workspacePath string, projectID int64, adbTarget string, output io.Writer) subagent.Runner {
 	eventLog := h.slog.get(h.store, projectID)
 	return &childRunner{
-		build: func() *buildSession {
-			// A child's registry: the read tools only. bs.defs is rebuilt
-			// because newBuildSession would register the full set including
-			// delegate (depth-1 wall #2: the child cannot see the tool).
-			child := h.newBuildSession(workspacePath, projectID, 0, adbTarget, output)
-			readOnly := child.reg
-			readDefs := make([]ai.ToolDefinition, 0, len(child.defs))
-			for _, d := range child.defs {
-				if readOnly.IsReadOnly(d.Name) {
-					readDefs = append(readDefs, d)
-				}
-			}
-			child.defs = readDefs
-			child.children = nil
-			return child
-		},
-		newSession: func() *orchestrator.SessionState {
+		workspace: workspacePath,
+		build:     childBuildFor(h, projectID, adbTarget, output),
+		newSession: func(workspace string) *orchestrator.SessionState {
 			// A real emitter: the loop emits phase marks and tool calls from
 			// round one; a nil emitter panics on the first Emit. The channel
 			// is drained so the child loop never blocks on a full buffer.
-			sess := orchestrator.NewSession(0, projectID, workspacePath, events.NewSessionEmitter(0, 64))
+			sess := orchestrator.NewSession(0, projectID, workspace, events.NewSessionEmitter(0, 64))
 			go drain(sess)
 			return sess
 		},

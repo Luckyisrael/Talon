@@ -11,6 +11,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
 	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
+	"github.com/luckyisrael/talon/backend/internal/harness/worktree"
 	"github.com/luckyisrael/talon/backend/internal/hooks"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/store"
@@ -21,10 +22,19 @@ import (
 // Nothing interlaces into the parent transcript — the child's outcome is
 // its Result alone, delivered through the delegate tool.
 type childRunner struct {
-	// build assembles one buildSession for the workspace (scoped registry).
-	build func() *buildSession
-	// newSession creates the child's session state.
-	newSession func() *orchestrator.SessionState
+	// workspace is the parent's directory: the shared root for
+	// read-only children (today's path, zero cost) and the merge target
+	// for a mutating child's private worktree (W12.1).
+	workspace string
+	// build assembles one buildSession rooted at root. mutate selects the
+	// registry class: false keeps the read-only filter, true gives the
+	// full scoped set (writes confined to root — the worktree for a
+	// mutating child).
+	build func(root string, mutate bool) *buildSession
+	// newSession creates the child's session state for its workspace
+	// root — the private worktree when mutating, so phase marks and the
+	// emitter describe where the child actually works.
+	newSession func(workspace string) *orchestrator.SessionState
 	// systemPrompt is the child's base prompt.
 	systemPrompt string
 	// forkHistory resolves the parent prefix a fork child seeds from — at
@@ -48,9 +58,10 @@ type childRunner struct {
 
 // RunChild executes one child to completion. The loop is the same
 // RunAgentLoop the parent uses — the scope is the difference: tools the
-// child lacks are simply not in its registry, and delegate itself is never
-// registered (depth 1 is enforced at the service seam; the tool not being
-// present is the second wall).
+// child lacks are simply not in its registry, and the delegation tools are
+// REMOVED from the child's registry (depth 1 is enforced at the service
+// seam; un-executability is the second wall). A mutating child additionally
+// works in a private git worktree whose diff merges back on dispose.
 func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent.Result {
 	prompt := strings.TrimSpace(spec.Prompt)
 	if prompt == "" && !spec.Fork {
@@ -60,14 +71,39 @@ func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent
 		prompt = subagent.DefaultForkTask
 	}
 
-	bs := r.build()
+	// W12.1: the overlay opens before anything is assembled. The service
+	// already vetted the posture (DELEGATION_ISOLATION), so a failure
+	// here is git reality — non-git workspace, no commits — refused
+	// structured with CHILD_WORKTREE's stage text. The deferred discard
+	// guarantees no early return (nil session, refused hook) leaks a
+	// registered worktree.
+	var overlay *worktree.Overlay
+	disposed := false
+	root := r.workspace
+	if spec.Mutating {
+		ov, err := worktree.Open(r.workspace)
+		if err != nil {
+			return subagent.Result{Errored: true, Err: err.Error()}
+		}
+		overlay = ov
+		root = ov.Root
+		defer func() {
+			if overlay != nil && !disposed {
+				if derr := overlay.Discard(); derr != nil {
+					log.Printf("child %s: worktree cleanup after early exit: %v", spec.Label, derr)
+				}
+			}
+		}()
+	}
+
+	bs := r.build(root, spec.Mutating)
 	// W11: a child's dialled MCP servers reap with the child, exactly like
 	// the parent's — closeMCP is idempotent and nil-safe.
 	defer bs.closeMCP()
 	if bs == nil {
 		return subagent.Result{Errored: true, Err: "child could not be assembled in this session"}
 	}
-	sess := r.newSession()
+	sess := r.newSession(root)
 	if sess == nil {
 		return subagent.Result{Errored: true, Err: "child session state could not be created"}
 	}
@@ -160,6 +196,28 @@ func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent
 		return subagent.Result{Errored: true, Err: "child loop runner is not configured in this session"}
 	}
 	outcome, err := r.runLoop(ctx, sess, bs, defs, history, system)
+
+	// W12.1 dispose, before anything reports the outcome: success merges
+	// the child's diff back (a conflict is a structured apply error — the
+	// lost-update class surfacing instead of winning silently); failure
+	// discards the overlay so a broken child's partial state never
+	// touches the parent. Cleanup runs inside both paths either way.
+	var disposeErr error
+	if overlay != nil {
+		disposed = true
+		if err != nil || outcome == nil {
+			if derr := overlay.Discard(); derr != nil {
+				log.Printf("child %s: worktree discard: %v", spec.Label, derr)
+			}
+		} else {
+			disposeErr = overlay.MergeBack()
+		}
+	}
+	var cost float64
+	if outcome != nil {
+		cost = outcome.CostUSD
+	}
+
 	// W10 SubagentStop: notify-class — the child turn is over whatever
 	// happened, so this event's own failure only logs (DSH: an extension
 	// never corrupts what already finished). Async entries (slack) spawn
@@ -173,6 +231,8 @@ func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent
 		switch {
 		case err != nil:
 			sp.Outcome, sp.Reason = "failure", err.Error()
+		case disposeErr != nil:
+			sp.Outcome, sp.Reason = "failure", disposeErr.Error()
 		case outcome == nil || outcome.Stalled || outcome.HookStop:
 			sp.Outcome = "failure"
 		default:
@@ -183,13 +243,22 @@ func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent
 		})
 	}
 	if err != nil {
-		return subagent.Result{Errored: true, Err: fmt.Sprintf("child loop failed: %v", err)}
+		return subagent.Result{Errored: true, Err: fmt.Sprintf("child loop failed: %v", err), CostUSD: cost}
 	}
 	if outcome == nil {
 		return subagent.Result{Errored: true, Err: "child produced no outcome"}
 	}
+	if disposeErr != nil {
+		return subagent.Result{
+			Errored: true, Rounds: outcome.Rounds, CostUSD: cost,
+			Err: fmt.Sprintf("the child finished (%d rounds), but its isolated changes did not merge back: %v",
+				outcome.Rounds, disposeErr),
+		}
+	}
 	if outcome.Stalled {
-		return subagent.Result{Errored: true, Err: "child stalled: repeated full responses with no tool calls"}
+		return subagent.Result{Errored: true,
+			Err:    "child stalled: repeated full responses with no tool calls",
+			Rounds: outcome.Rounds, CostUSD: cost}
 	}
 	final := strings.TrimSpace(outcome.FinalText)
 	if final == "" {
@@ -203,7 +272,7 @@ func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent
 			log.Printf("fork child: final report append failed: %v", err)
 		}
 	}
-	return subagent.Result{FinalText: final, Rounds: outcome.Rounds}
+	return subagent.Result{FinalText: final, Rounds: outcome.Rounds, CostUSD: cost}
 }
 
 func outcomeLabel(o *orchestrator.BuildOutcome) string {

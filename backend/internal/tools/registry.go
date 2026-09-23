@@ -56,6 +56,25 @@ func (r *Registry) Get(name string) (Tool, bool) {
 	return t, ok
 }
 
+// Remove drops a tool entirely. Child builds use it for the delegation
+// tools: filtering the advertised defs is not enough — a model that
+// hallucinates an unadvertised name must find nothing to execute, or
+// depth-1's "second wall" is a comment, not a wall (law 12).
+func (r *Registry) Remove(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.tools[name]; !ok {
+		return
+	}
+	delete(r.tools, name)
+	for i, n := range r.order {
+		if n == name {
+			r.order = append(r.order[:i], r.order[i+1:]...)
+			break
+		}
+	}
+}
+
 // List returns tool definitions in a stable, name-sorted order. Order matters:
 // tool definitions sit in the cached prefix of every request, and iterating a
 // Go map would reshuffle them on each call and invalidate the prompt cache.
