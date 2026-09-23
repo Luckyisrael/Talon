@@ -68,6 +68,23 @@ func goldenPath(taskFile string) string {
 // build-finished check would honestly fail a build that produced no
 // code, and reporting green on that would lie.
 func TestGoldenSuite(t *testing.T) {
+	runGoldenSuite(t)
+}
+
+// TestGoldenSuiteUnderDriver is W14.1's second parity clause: the same six
+// tasks replayed with TALONSTUDIO_LOOP=driver armed must satisfy the same
+// committed goldens — bit-identical transcripts, request digests included,
+// across loop polarities on the fake provider. That is H2's eval gate as
+// the plan states it: legacy vs driver produce identical transcripts.
+func TestGoldenSuiteUnderDriver(t *testing.T) {
+	t.Setenv("TALONSTUDIO_LOOP", "driver")
+	runGoldenSuite(t)
+}
+
+// runGoldenSuite is the suite body both flag polarities run: discover the
+// fixtures, pin the plan's six, replay each against its golden, and hold
+// the 3-minute budget.
+func runGoldenSuite(t *testing.T) {
 	files := suiteFiles(t)
 	for _, id := range planTasks {
 		// LoadTask fatals if the fixture is missing or invalid.

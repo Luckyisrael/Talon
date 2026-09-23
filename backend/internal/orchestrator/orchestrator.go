@@ -88,6 +88,11 @@ type Orchestrator struct {
 	// reconciliation-on-touch discipline — no watcher). A factory instead of
 	// a single loader because workspaces are per-project.
 	instructionsChain func(workspacePath string) string
+	// loopSubs is the W14.1/H2 listener bus (looplisteners.go): composition
+	// subscriptions the TALONSTUDIO_LOOP=driver flag routes the §2.4 events
+	// to. Zero value is ready; flag off means the slices are never read —
+	// today's path, byte-identical.
+	loopSubs loopSubscriptions
 	// verifyReport is the chain report accumulator the run_gate tool reads. It is
 	// reset at the start of every verify call and populated as each gate runs.
 	// Atomic.Pointer so run_gate can read it without holding the mutex.
@@ -1837,48 +1842,8 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	return outcome, nil
 }
 
-// enforcePeriodicVerify counts successful writes since the last passing check
-// and appends a verify-now nudge at the threshold. Only a *passing* check
-// resets the count: a failed check means the code is still unverified, and a
-// tool error means the check never ran. Past twice the threshold the nudge
-// names the changed files so the check lands where the drift is.
-func (o *Orchestrator) enforcePeriodicVerify(sess *SessionState, calls []ai.ToolUseBlock, results []ai.Block, opts RunOptions, conversation *[]ai.Message, outcome *BuildOutcome) {
-	byID := make(map[string]ai.Block, len(results))
-	for _, r := range results {
-		if r.ToolUseID != "" {
-			byID[r.ToolUseID] = r
-		}
-	}
-	for _, u := range calls {
-		r, ok := byID[u.ID]
-		if !ok || r.IsError {
-			continue
-		}
-		switch u.Name {
-		case "write_file", "edit_file", "multi_edit":
-			sess.NoteWrite()
-		case "run_checks", "run_typecheck", "run_lint":
-			var vr verifyResult
-			if json.Unmarshal([]byte(r.Content), &vr) == nil && vr.Passed {
-				sess.NoteVerified()
-			}
-		}
-	}
-	n := sess.WritesUnverified()
-	if n < verifyEnforceThreshold {
-		return
-	}
-	msg := fmt.Sprintf("You have made %d file writes since the last passing verification. "+
-		"Call run_checks now, fix what it reports, then continue building.", n)
-	if n >= 2*verifyEnforceThreshold {
-		if touched := o.touchedFiles(opts); len(touched) > 0 {
-			msg += "\nFiles changed this turn: " + strings.Join(touched, ", ")
-		}
-	}
-	nudge := ai.UserText(msg)
-	*conversation = append(*conversation, nudge)
-	outcome.Messages = append(outcome.Messages, nudge)
-}
+// enforcePeriodicVerify moved to looplisteners.go (W14.1 — §2.4 row 6: the
+// FSWrite counter listener's built-in, extracted out of the loop file).
 
 // askUserRequest reports whether this turn's tool calls include an ask_user,
 // and if so returns its id and the question and choices to surface. ask_user is
@@ -2141,6 +2106,10 @@ func (o *Orchestrator) touchedFiles(opts RunOptions) []string {
 // on id while some OpenAI-compatible backends are order-sensitive.
 func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, calls []ai.ToolUseBlock, opts RunOptions) []ai.Block {
 	results := make([]ai.Block, len(calls))
+	// W14.1: the §2.4 cross-cutting seams resolve once per batch (the driver
+	// flag read once, so a mid-flight env change cannot split one batch
+	// across polarities). See looplisteners.go.
+	cc := o.loopSeam()
 
 	// A batch that writes or deletes the same file more than once carries an order
 	// the model may not have meant. Execution keeps the request order (any write
@@ -2227,13 +2196,16 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		// Guardrails run before anything else: a refused call never executes, never
 		// emits a "running" row, and comes back as a failed tool_result so the model
 		// reads why and corrects. This is where the always-on rules become binding.
-		if dec := o.guardrail(sess, call.Name, call.Input, opts); !dec.Allowed {
+		// W14.1: the call routes through the ToolPolicy seam — built-in
+		// deterministic guardrails first (unchanged), then, driver only, the
+		// composition listeners (first veto wins, panics fail closed).
+		if r := cc.toolPolicy(o, sess, call, opts); r != nil {
 			metrics.Default.ObserveGuardrailReject()
-			sess.Emitter.EmitGuardrail(dec.Rule, dec.Message)
+			sess.Emitter.EmitGuardrail(r.Rule, r.Message)
 			return ai.Block{
 				Type:      "tool_result",
 				ToolUseID: call.ID,
-				Content:   "Blocked by a project guardrail (" + dec.Rule + "): " + dec.Message,
+				Content:   "Blocked by a project guardrail (" + r.Rule + "): " + r.Message,
 				IsError:   true,
 			}
 		}
@@ -2290,7 +2262,9 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 
 		verb := describeTool(call.Name, call.Input, sess.WorkspacePath)
 		target := toolTarget(call.Name, call.Input)
-		sess.Emitter.EmitToolCall(call.ID, call.Name, target, verb, "running")
+		// W14.1: the "running" row is §2.4's ToolDispatch point — emit first
+		// (legacy bytes are the prefix), driver publishes to observers after.
+		cc.emitDispatch(sess, call.ID, call.Name, target, verb)
 
 		if taskID := taskIDForTool(call.Name); taskID != "" {
 			sess.EmitTaskUpdate(taskID, verb, "in_progress", "")
@@ -2326,11 +2300,11 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		probeNote := ""
 		failReminder := ""
 
-		status := "completed"
-		if isError {
-			status = "error"
-		}
-		sess.Emitter.EmitToolCall(call.ID, call.Name, target, verb, status)
+		// W14.1: the completed/error row is §2.4's ToolResult point — the
+		// seam emits, then driver publishes the result (with the post-
+		// spill/prune output) to observers. The task update below reads
+		// isError directly, as before.
+		cc.emitResult(sess, call.ID, call.Name, target, verb, output, isError)
 		if taskID := taskIDForTool(call.Name); taskID != "" {
 			detail := "success"
 			if isError {
@@ -2403,42 +2377,15 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			}
 		}
 
-		// A file the model just wrote or edited is one it now knows the contents of.
-		// Count it as read so a follow-up edit this turn is not refused by the
-		// read-before-write guardrail — the model created that content, it is not
-		// working from an assumption.
-		if !isError {
-			switch call.Name {
-			case "write_file", "edit_file", "multi_edit":
-				var w struct {
-					Path string `json:"path"`
-				}
-				if json.Unmarshal(call.Input, &w) == nil && w.Path != "" {
-					sess.MarkFileRead(w.Path)
-					if mt, ok := fileMtime(sess.WorkspacePath, w.Path); ok {
-						sess.NoteFileKnown(w.Path, mt)
-					}
-					// Two rewrites are iteration; the third is thrash. Stop and
-					// re-read the errors instead of writing a fourth version blind.
-					if n := sess.NoteFileWrite(w.Path); n == rewriteWatchThreshold {
-						watchNote = fmt.Sprintf("\n\nNote: this is your %drd write to %s this turn. "+
-							"Stop writing it. Re-read the failing errors and the relevant files first, "+
-							"then make one deliberate fix.", n, w.Path)
-					}
-				}
-			}
-		}
+		// W14.1: §2.4 row 4 — the write bookkeeping and thrash nudge live in
+		// the fsWrite seam (looplisteners.go); driver publishes FSWrite per
+		// successful write with a parsed path.
+		watchNote = cc.fsWrite(sess, call, isError)
 
-		// A skill the model reads for itself counts as delivered: auto-attach must
-		// not then inject the same body again when a trigger fires this turn.
-		if call.Name == "read_skill" && !isError {
-			var rs struct {
-				Name string `json:"name"`
-			}
-			if json.Unmarshal(call.Input, &rs) == nil && rs.Name != "" {
-				sess.MarkSkillSeen(rs.Name)
-			}
-		}
+		// W14.1: §2.4 row 3 — a successful read_skill counts as delivered
+		// (so auto-attach will not re-inject); the seam lives in
+		// looplisteners.go and driver publishes the dispatch event.
+		cc.skillDelivered(sess, call, isError)
 
 		// Failure-pattern lookup: if the result matches a known pattern and
 		// its cooldown has expired, inject a one-line reminder so the model
@@ -2925,41 +2872,8 @@ func (o *Orchestrator) deviceBuildApproved(sess *SessionState, opts RunOptions) 
 	}) == approval.AllowedOnce
 }
 
-// autoAttachSkills injects the bodies of any auto-attach skills whose triggers
-// fired on the tool calls just made — each at most once per session — and returns
-// the text to append as a follow-up user turn (or "" if nothing new applies).
-// Handing the model the current, version-pinned guidance the moment it acts in a
-// skill's area is what holds quality up on models that would not otherwise know
-// the exact API shipped here.
-//
-// Returns context blocks rather than a text blob: the skill body is guidance
-// the model needs verbatim, but a user never typed it, and rendering it as a
-// chat bubble put a 400-line skill document in the middle of the conversation.
-// One block per skill, titled with the skill name, so the transcript shows a
-// single line and the body stays collapsed until it is asked for.
-func (o *Orchestrator) autoAttachSkills(sess *SessionState, calls []ai.ToolUseBlock) []ai.Block {
-	if o.knowledge == nil {
-		return nil
-	}
-	var out []ai.Block
-	for _, call := range calls {
-		for _, s := range o.knowledge.AutoAttachFor(call.Name, call.Input) {
-			if !sess.MarkSkillSeen(s.Name) {
-				continue // already delivered this session
-			}
-			body := s.Body
-			if body == "" {
-				continue
-			}
-			out = append(out, ai.Context("skill", "Applied the "+s.Name+" skill", body))
-			// Show it in the trace too: an auto-attached skill is a real thing
-			// that happened, and the timeline should say so rather than inject
-			// silently.
-			sess.Emitter.EmitToolCall("", "read_skill", "", "Applied the "+s.Name+" skill", "completed")
-		}
-	}
-	return out
-}
+// autoAttachSkills moved to looplisteners.go (W14.1 — §2.4 row 3: the
+// auto-attach listener, extracted out of the loop file).
 
 type verifyVerdict struct {
 	ok       bool
