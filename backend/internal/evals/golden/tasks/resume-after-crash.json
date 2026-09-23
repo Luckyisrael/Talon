@@ -1,0 +1,37 @@
+{
+  "id": "resume-after-crash",
+  "mode": "build",
+  "system": "build",
+  "history": [
+    {"role": "user", "content": "Resume the build: it crashed right after writing app/orders.tsx, before lib/orders.ts landed. Finish the work without redoing what is already done."}
+  ],
+  "seed": {
+    "index.js": "import 'expo-router/entry';\n",
+    "app/index.tsx": "export default function Home() {\n  return null;\n}\n",
+    "package.json": "{\n  \"name\": \"golden-fixture\",\n  \"main\": \"expo-router/entry\"\n}\n",
+    "app/orders.tsx": "import { fetchOrders } from '../lib/orders';\n\nexport default function Orders() {\n  void fetchOrders;\n  return null;\n}\n"
+  },
+  "script": [
+    {"tool": "list_files", "args": {}},
+    {"tool": "read_file", "args": {"path": "app/orders.tsx"}},
+    {"tool": "write_file", "args": {"path": "lib/orders.ts", "content": "export function fetchOrders(): Promise<string[]> {\n  return Promise.resolve([]);\n}\n"}},
+    {"finish": "Resumed: lib/orders.ts now satisfies the existing import; app/orders.tsx was left untouched."}
+  ],
+  "expect": {
+    "outcome": "verified",
+    "max_rounds": 4,
+    "tools": ["list_files", "read_file", "write_file"],
+    "files_touched": ["lib/orders.ts"],
+    "content": {
+      "lib/orders.ts": ["fetchOrders"],
+      "app/orders.tsx": ["../lib/orders"]
+    },
+    "eval": {
+      "id": "resume-after-crash",
+      "expect": {
+        "creates_file_matching": ["lib/orders"],
+        "imports_any_of": ["lib/orders"]
+      }
+    }
+  }
+}

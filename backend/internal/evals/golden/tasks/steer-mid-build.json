@@ -1,0 +1,35 @@
+{
+  "id": "steer-mid-build",
+  "mode": "build",
+  "system": "build",
+  "history": [
+    {"role": "user", "content": "Build a settings screen with a custom brand palette."},
+    {"role": "assistant", "content": "Started: app/settings.tsx now carries the palette."},
+    {"role": "user", "content": "Steer — drop the custom palette entirely: use the platform default colors instead, and add a notification toggle switch."}
+  ],
+  "seed": {
+    "index.js": "import 'expo-router/entry';\n",
+    "app/index.tsx": "export default function Home() {\n  return null;\n}\n",
+    "package.json": "{\n  \"name\": \"golden-fixture\",\n  \"main\": \"expo-router/entry\"\n}\n",
+    "app/settings.tsx": "import { View } from 'react-native';\n\nconst palette = { bg: '#123456', fg: '#fedcba' };\n\nexport default function Settings() {\n  return <View style={palette} />;\n}\n"
+  },
+  "script": [
+    {"tool": "read_file", "args": {"path": "app/settings.tsx"}},
+    {"tool": "edit_file", "args": {"path": "app/settings.tsx", "old_string": "const palette = { bg: '#123456', fg: '#fedcba' };", "new_string": "import { Switch } from 'react-native';\n\nlet notify = false;"}},
+    {"tool": "edit_file", "args": {"path": "app/settings.tsx", "old_string": "  return <View style={palette} />;", "new_string": "  return (\n    <View>\n      <Switch value={notify} onValueChange={(v) => (notify = v)} />\n    </View>\n  );"}},
+    {"finish": "Steered: custom palette dropped for platform defaults; notification toggle added."}
+  ],
+  "expect": {
+    "outcome": "verified",
+    "max_rounds": 4,
+    "tools": ["read_file", "edit_file", "edit_file"],
+    "files_touched": ["app/settings.tsx"],
+    "content": {
+      "app/settings.tsx": ["import { Switch }", "!#123456", "!palette"]
+    },
+    "eval": {
+      "id": "steer-mid-build",
+      "expect": {"imports_any_of": ["react-native"]}
+    }
+  }
+}

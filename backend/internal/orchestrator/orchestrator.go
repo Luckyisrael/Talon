@@ -2197,6 +2197,15 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 	}
 
 	runCall := func(i int, call ai.ToolUseBlock) (block ai.Block) {
+		// W13: one observation per dispatched call — every failed
+		// tool_result counts against the tool error rate (deliberate
+		// refusals break out separately through ObserveGuardrailReject).
+		// Declared before the recover below: defers run LIFO, so this one
+		// runs after recovery and still counts a panicked tool's
+		// synthesized error result.
+		defer func() {
+			metrics.Default.ObserveToolCall(block.IsError)
+		}()
 		// A tool that panics must not take the build down with it. Recover here,
 		// at the body both the parallel and sequential paths invoke, and turn the
 		// crash into a failed tool_result the model can react to. Without this a
@@ -2219,6 +2228,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		// emits a "running" row, and comes back as a failed tool_result so the model
 		// reads why and corrects. This is where the always-on rules become binding.
 		if dec := o.guardrail(sess, call.Name, call.Input, opts); !dec.Allowed {
+			metrics.Default.ObserveGuardrailReject()
 			sess.Emitter.EmitGuardrail(dec.Rule, dec.Message)
 			return ai.Block{
 				Type:      "tool_result",
@@ -2299,10 +2309,12 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		if o.spill != nil {
 			if rep, spilled, err := o.spill.Spill(call.Name, output); err == nil && spilled {
 				output = rep
+				metrics.Default.ObserveSpill()
 			}
 		}
 		if compaction.NeedsPrune(output) {
 			output = compaction.Prune(output)
+			metrics.Default.ObservePrune()
 		}
 
 		// readNote/watchNote/probeNote carry cross-turn knowledge into this result. They

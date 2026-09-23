@@ -1,0 +1,30 @@
+{
+  "id": "plan-existing-feature",
+  "mode": "plan",
+  "system": "plan",
+  "history": [
+    {"role": "user", "content": "Plan a settings screen layered on top of the existing profile feature. Read what is there first; do not change any files."}
+  ],
+  "seed": {
+    "index.js": "import 'expo-router/entry';\n",
+    "app/index.tsx": "export default function Home() {\n  return null;\n}\n",
+    "package.json": "{\n  \"name\": \"golden-fixture\",\n  \"main\": \"expo-router/entry\"\n}\n",
+    "app/profile.tsx": "import { userName } from '../lib/user';\n\nexport default function Profile() {\n  void userName;\n  return null;\n}\n",
+    "lib/user.ts": "export function userName(id: string): string {\n  return id;\n}\n"
+  },
+  "script": [
+    {"tool": "list_files", "args": {}},
+    {"tool": "read_file", "args": {"path": "app/profile.tsx"}},
+    {"tool": "read_file", "args": {"path": "lib/user.ts"}},
+    {"finish": "Plan: add app/settings.tsx wired from the profile screen, reuse lib/user.ts for identity, no data migrations. No files were changed."}
+  ],
+  "expect": {
+    "outcome": "done",
+    "max_rounds": 4,
+    "tools": ["list_files", "read_file", "read_file"],
+    "files_touched": [],
+    "content": {
+      "app/profile.tsx": ["../lib/user"]
+    }
+  }
+}

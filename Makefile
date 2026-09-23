@@ -2,9 +2,9 @@
 # unit suite plus the phase-guard eval set (one case per PLAN.md phase,
 # healthy and fault-injected polarities). `make ci` mirrors the CI workflow.
 
-.PHONY: evals ci vet test scorecard bench
+.PHONY: evals ci vet test scorecard golden bench nightly e2e-live
 
-evals: vet scorecard test
+evals: vet scorecard golden test
 
 vet:
 	cd backend && go vet ./...
@@ -15,6 +15,14 @@ vet:
 # yardstick still measures.
 scorecard:
 	cd backend && go test -count=1 -run 'TestFixtureScorecard|TestGrade' ./internal/evals/
+
+# W13: the recorded-provider replay suite is its own named stage — the
+# agent-behavior gate. Prompt/tool/guardrail edits red it until the golden
+# transcripts are re-recorded (TALONSTUDIO_UPDATE_GOLDEN=1) and the diff is
+# reviewed; the rounds budgets in the fixtures are the rounds-to-green
+# regression threshold that blocks the offending merge.
+golden:
+	cd backend && go test -count=1 ./internal/evals/golden/
 
 test:
 	cd backend && go test -count=1 ./...
@@ -33,3 +41,11 @@ ci: evals
 # the drive, and teardown.
 e2e-live:
 	./e2e/run-live.sh
+
+# W13.5: nightly scorecard. The same live run, with the published artifact —
+# cmd/e2e's report() writes e2e/reports/nightly-latest.md on every exit path
+# when E2E_REPORT is set (run-live.sh sets it by default). CI stays
+# secret-free by law (no AI key, no device there), so the nightly runs
+# where the stack lives — a cron/systemd timer invoking this target — and
+# the report file is the artifact that gets reviewed and published.
+nightly: e2e-live

@@ -1,0 +1,36 @@
+{
+  "id": "scaffold-weather-app",
+  "mode": "build",
+  "system": "build",
+  "history": [
+    {"role": "user", "content": "Build a weather screen: current temperature plus a three-day forecast, offline-friendly."}
+  ],
+  "seed": {
+    "index.js": "import 'expo-router/entry';\n",
+    "app/index.tsx": "export default function Home() {\n  return null;\n}\n",
+    "package.json": "{\n  \"name\": \"golden-fixture\",\n  \"main\": \"expo-router/entry\"\n}\n"
+  },
+  "script": [
+    {"tool": "list_files", "args": {}},
+    {"tool": "write_file", "args": {"path": "lib/weather.ts", "content": "export type Forecast = { high: number; low: number };\n\nexport function summarize(f: Forecast): string {\n  return `forecast ${f.high} / ${f.low}`;\n}\n"}},
+    {"tool": "write_file", "args": {"path": "app/weather.tsx", "content": "import { summarize } from '../lib/weather';\n\nexport function forecastLine(f: { high: number; low: number }): string {\n  return summarize(f);\n}\n\nexport default function WeatherScreen() {\n  return null;\n}\n"}},
+    {"finish": "Scaffolded the weather feature: lib/weather.ts holds the forecast model and app/weather.tsx renders it as a new route."}
+  ],
+  "expect": {
+    "outcome": "verified",
+    "max_rounds": 4,
+    "tools": ["list_files", "write_file", "write_file"],
+    "files_touched": ["app/weather.tsx", "lib/weather.ts"],
+    "content": {
+      "app/weather.tsx": ["lib/weather"],
+      "lib/weather.ts": ["Forecast", "!bip39"]
+    },
+    "eval": {
+      "id": "scaffold-weather",
+      "expect": {
+        "creates_file_matching": ["app/weather"],
+        "imports_any_of": ["lib/weather"]
+      }
+    }
+  }
+}

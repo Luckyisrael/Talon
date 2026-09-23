@@ -98,16 +98,16 @@ const (
 )
 
 type stageRun struct {
-	name   string
+	name string
 	verdict
 	detail string
 	took   time.Duration
 }
 
 var (
-	stages     []stageRun
-	curStart   time.Time
-	runFailed   bool
+	stages    []stageRun
+	curStart  time.Time
+	runFailed bool
 )
 
 func begin(name string) { curStart = time.Now() }
@@ -155,8 +155,8 @@ func detailSuffix(d string) string {
 
 var (
 	// Session creation claims a container from the warm pool (cold boots can
-// take minutes); the E2E waits for the claim, not a fast header.
-httpc = &http.Client{Timeout: 3 * time.Minute}
+	// take minutes); the E2E waits for the claim, not a fast header.
+	httpc = &http.Client{Timeout: 3 * time.Minute}
 	token string
 )
 
@@ -494,7 +494,7 @@ func main() {
 			fmt.Printf("  → answering question on prompt %d (round %d)\n", pendingQuestion, answers)
 			buildEvents, buildErr = readSSE(sseReq{method: "POST",
 				path: fmt.Sprintf("/v1/prompts/%d/answer", pendingQuestion),
-				body:   map[string]interface{}{"answer": "Yes, proceed — this E2E run approves workspace writes and device probes."}},
+				body: map[string]interface{}{"answer": "Yes, proceed — this E2E run approves workspace writes and device probes."}},
 				20*time.Minute,
 				func(ev sseEvent) bool { return ev.Kind == "done" })
 			continue
@@ -561,10 +561,8 @@ func main() {
 		}
 	}
 
-
 	deviceStages(started, projectID)
 }
-
 
 // deviceStages is stages 5–10: the device half of the product loop. Split
 // out of main so resume mode (-resume) can run it against the prior full
@@ -730,6 +728,8 @@ func waitSession(id int64, want string, maxWait time.Duration) error {
 func report(started time.Time) {
 	fmt.Println("\n─ run report " + strings.Repeat("─", 30))
 	passed, skipped, failed := 0, 0, 0
+	var body strings.Builder
+	fmt.Fprintf(&body, "# e2e-live scorecard — %s\n\n", time.Now().Format(time.RFC3339))
 	for _, s := range stages {
 		mark := "PASS"
 		switch s.verdict {
@@ -741,9 +741,23 @@ func report(started time.Time) {
 			passed++
 		}
 		fmt.Printf("  %-4s %-15s %s\n", mark, s.name, s.detail)
+		fmt.Fprintf(&body, "- %s **%s** — %s\n", mark, s.name, s.detail)
 	}
+	fmt.Fprintf(&body, "\n%d passed, %d skipped, %d failed — %s total\n",
+		passed, skipped, failed, time.Since(started).Truncate(time.Second))
 	fmt.Printf("\n%d passed, %d skipped, %d failed — %s total\n",
 		passed, skipped, failed, time.Since(started).Truncate(time.Second))
+	// W13.5: publish — every exit path passes through here, so a nightly
+	// run always leaves the scorecard at the same reviewable path. The
+	// directory belongs to the caller (run-live.sh mkdir -p's it), keeping
+	// this file free of path imports.
+	if path := os.Getenv("E2E_REPORT"); path != "" {
+		if err := os.WriteFile(path, []byte(body.String()), 0o644); err != nil {
+			fmt.Printf("scorecard publish failed: %v\n", err)
+		} else {
+			fmt.Printf("scorecard published: %s\n", path)
+		}
+	}
 	if failed > 0 {
 		os.Exit(1)
 	}

@@ -1,0 +1,20 @@
+{
+  "task": "wallet-connect-flow",
+  "outcome": "verified",
+  "rounds": 4,
+  "tools": [
+    "list_files",
+    "write_file",
+    "write_file"
+  ],
+  "files_touched": [
+    "app/connect.tsx",
+    "lib/wallet.ts"
+  ],
+  "request_digests": [
+    "1eb08a3cc2107e6c234e4560cd5794763ec552cc299fecdedcc62030d642e919",
+    "0002c79565c5ccd52e037cc0a68235640d2819608e3da799c68cfb92badfa7be",
+    "4f53cf97a9ff8d824cd892d588972e3597f1811140f5e33966f4e55b216798ce",
+    "0bba6f0565d172e69d8e6b4a580ba12146f6eabcc51d06bfb405d500318d41c6"
+  ]
+}

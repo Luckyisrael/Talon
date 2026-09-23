@@ -1,0 +1,37 @@
+{
+  "id": "wallet-connect-flow",
+  "mode": "build",
+  "system": "build",
+  "history": [
+    {"role": "user", "content": "Add a wallet connect screen using Mobile Wallet Adapter for the Seeker dapp."}
+  ],
+  "seed": {
+    "index.js": "import 'expo-router/entry';\n",
+    "app/index.tsx": "export default function Home() {\n  return null;\n}\n",
+    "package.json": "{\n  \"name\": \"golden-fixture\",\n  \"main\": \"expo-router/entry\"\n}\n"
+  },
+  "script": [
+    {"tool": "list_files", "args": {}},
+    {"tool": "write_file", "args": {"path": "lib/wallet.ts", "content": "import { transact } from '@solana-mobile/mobile-wallet-adapter-protocol';\n\nexport async function connect(): Promise<void> {\n  await transact(async () => {\n    // authorize the dapp for this session\n  });\n}\n"}},
+    {"tool": "write_file", "args": {"path": "app/connect.tsx", "content": "import { connect } from '../lib/wallet';\n\nexport default function ConnectScreen() {\n  void connect;\n  return null;\n}\n"}},
+    {"finish": "Connect flow: lib/wallet.ts owns the MWA session, app/connect.tsx is the new route."}
+  ],
+  "expect": {
+    "outcome": "verified",
+    "max_rounds": 4,
+    "tools": ["list_files", "write_file", "write_file"],
+    "files_touched": ["app/connect.tsx", "lib/wallet.ts"],
+    "content": {
+      "lib/wallet.ts": ["@solana-mobile/mobile-wallet-adapter-protocol", "!wallet-standard"],
+      "app/connect.tsx": ["../lib/wallet"]
+    },
+    "eval": {
+      "id": "wallet-connect",
+      "expect": {
+        "uses_mwa": true,
+        "creates_file_matching": ["app/connect"],
+        "imports_any_of": ["lib/wallet"]
+      }
+    }
+  }
+}

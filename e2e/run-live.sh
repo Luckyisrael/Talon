@@ -12,6 +12,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND="$ROOT/backend"
+# W13.5: publish the scorecard — cmd/e2e writes this path on every exit
+# path (the PASS/SKIP/FAIL table), so a nightly run always leaves the same
+# reviewable artifact. Override E2E_REPORT to keep per-run copies.
+export E2E_REPORT="${E2E_REPORT:-$ROOT/e2e/reports/nightly-latest.md}"
+mkdir -p "$(dirname "$E2E_REPORT")"
 WORKSPACES="$BACKEND/workspaces-e2e"
 DB="$BACKEND/talon-e2e.db"
 PORT="${E2E_PORT:-8099}"

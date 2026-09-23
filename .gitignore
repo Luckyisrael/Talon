@@ -102,6 +102,8 @@ backend/e2e
 backend/workspaces-e2e/
 backend/scrcpy-server.jar
 e2e/live-run*.log
+# W13.5: nightly scorecard publications (local artifacts, not sources)
+e2e/reports/
 
 # stale committed build artifacts
 

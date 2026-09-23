@@ -1,0 +1,34 @@
+{
+  "id": "fix-broken-import",
+  "mode": "build",
+  "system": "build",
+  "history": [
+    {"role": "user", "content": "The build is broken: app/report.tsx imports './lib/summarize' but that path does not exist from app/. Fix the import."}
+  ],
+  "seed": {
+    "index.js": "import 'expo-router/entry';\n",
+    "app/index.tsx": "export default function Home() {\n  return null;\n}\n",
+    "package.json": "{\n  \"name\": \"golden-fixture\",\n  \"main\": \"expo-router/entry\"\n}\n",
+    "lib/summarize.ts": "export function summarize(text: string): string {\n  return text.slice(0, 80);\n}\n",
+    "app/report.tsx": "import { summarize } from './lib/summarize';\n\nexport default function Report() {\n  void summarize;\n  return null;\n}\n"
+  },
+  "script": [
+    {"tool": "read_file", "args": {"path": "app/report.tsx"}},
+    {"tool": "read_file", "args": {"path": "lib/summarize.ts"}},
+    {"tool": "edit_file", "args": {"path": "app/report.tsx", "old_string": "import { summarize } from './lib/summarize';", "new_string": "import { summarize } from '../lib/summarize';"}},
+    {"finish": "Fixed: the import now resolves from app/ to lib/summarize."}
+  ],
+  "expect": {
+    "outcome": "verified",
+    "max_rounds": 4,
+    "tools": ["read_file", "read_file", "edit_file"],
+    "files_touched": ["app/report.tsx"],
+    "content": {
+      "app/report.tsx": ["../lib/summarize", "!from './lib/summarize'"]
+    },
+    "eval": {
+      "id": "fix-broken-import",
+      "expect": {"imports_any_of": ["lib/summarize"]}
+    }
+  }
+}

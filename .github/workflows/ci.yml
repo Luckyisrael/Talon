@@ -35,6 +35,14 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # W13 agent-behavior gate: prompt/tool/guardrail edits change the
+      # recorded request digests, so this reds until the goldens are
+      # re-recorded (TALONSTUDIO_UPDATE_GOLDEN=1) — the transcript diff is
+      # then what the PR reviews. The tree guard below proves the suite
+      # never rewrites its own goldens inside CI.
+      - name: Golden transcripts (agent-behavior gate)
+        run: go test -count=1 ./internal/evals/golden/
+
       - name: Tests (with race detector)
         run: go test -count=1 -race ./...
 

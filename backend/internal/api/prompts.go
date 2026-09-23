@@ -1437,6 +1437,10 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 		elapsed.Milliseconds(),
 		int64(outcome.Usage.InputTokens), int64(outcome.Usage.OutputTokens),
 		int64(cost*1e6))
+	// W13: the agent-behavior half — rounds-to-green and cost per verified
+	// build, keyed on the BUILD's green verdict (outcome.Verified), which
+	// is a different thing from the turn's error status above.
+	metrics.Default.ObserveAgentTurn(int64(outcome.Rounds), outcome.Verified, int64(cost*1e6))
 	if meterPrompt {
 		h.store.IncrementPrompts(userID)
 	}
