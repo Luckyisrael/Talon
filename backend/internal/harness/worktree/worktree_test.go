@@ -88,7 +88,7 @@ func TestMergeBackAppliesChildDiffAndCleansUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ov.MergeBack(); err != nil {
+	if _, err := ov.MergeBack(); err != nil {
 		t.Fatalf("MergeBack: %v", err)
 	}
 	if got := read(t, filepath.Join(ws, "child-new.txt")); got != "child work\n" {
@@ -125,7 +125,7 @@ func TestMergeBackConflictIsStructuredAndStillCleansUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = ov.MergeBack()
+	_, err = ov.MergeBack()
 	if err == nil {
 		t.Fatal("a same-line conflict must not merge silently")
 	}
@@ -168,7 +168,7 @@ func TestMergeBackWithNoChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ov.MergeBack(); err != nil {
+	if _, err := ov.MergeBack(); err != nil {
 		t.Fatalf("no-change merge: %v", err)
 	}
 	if _, err := os.Stat(ov.Root); !os.IsNotExist(err) {

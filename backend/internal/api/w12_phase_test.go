@@ -17,6 +17,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/harness/subagent"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/tools"
 )
 
 // W12.1 phase gates, end to end through the real child build (childBuildFor)
@@ -128,7 +129,7 @@ func w12StubLoop(_ context.Context, _ *orchestrator.SessionState, bs *buildSessi
 // w12Fixture wires a mutating-capable service over ws exactly as
 // newBuildSession does (childBuildFor + the env-read cap config), with the
 // loop stubbed to real file work.
-func w12Fixture(t *testing.T, ws string) *subagent.Service {
+func w12Fixture(t *testing.T, ws string, parentFS *tools.FS) *subagent.Service {
 	t.Helper()
 	st, err := store.New(t.TempDir() + "/t.db")
 	if err != nil {
@@ -147,6 +148,7 @@ func w12Fixture(t *testing.T, ws string) *subagent.Service {
 	build := childBuildFor(h, proj.ID, "", io.Discard)
 	runner := &childRunner{
 		workspace: ws,
+		parentFS:  parentFS,
 		build:     build,
 		newSession: func(workspace string) *orchestrator.SessionState {
 			return orchestrator.NewSession(0, proj.ID, workspace, events.NewSessionEmitter(0, 64))
@@ -193,7 +195,7 @@ func TestPhaseW12MutatingChildrenIsolated(t *testing.T) {
 	t.Run("readonly posture refuses the mutating spawn", func(t *testing.T) {
 		t.Setenv("TALONSTUDIO_CHILD_ISOLATION", "") // default = readonly
 		ws := w12Repo(t)
-		svc := w12Fixture(t, ws)
+		svc := w12Fixture(t, ws, nil)
 		res, err := svc.Spawn(context.Background(), subagent.Spec{
 			Label: "refused", Prompt: "create nope.txt x", Mutating: true,
 		})
@@ -212,7 +214,7 @@ func TestPhaseW12MutatingChildrenIsolated(t *testing.T) {
 		t.Setenv("TALONSTUDIO_CHILD_ISOLATION", "worktree")
 		w12NeedGit(t)
 		plain := t.TempDir() // never git-init'd
-		svc := w12Fixture(t, plain)
+		svc := w12Fixture(t, plain, nil)
 		res, err := svc.Spawn(context.Background(), subagent.Spec{
 			Label: "non-git", Prompt: "create nope.txt x", Mutating: true,
 		})
@@ -230,7 +232,7 @@ func TestPhaseW12MutatingChildrenIsolated(t *testing.T) {
 			t.Setenv("TALONSTUDIO_CHILD_ISOLATION", "worktree")
 			ws := w12Repo(t)
 			before := w12TempSnapshot()
-			svc := w12Fixture(t, ws)
+			svc := w12Fixture(t, ws, nil)
 
 			specs := []subagent.Spec{
 				{Label: "child-alpha", Mutating: true,

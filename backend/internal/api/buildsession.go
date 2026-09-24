@@ -183,7 +183,7 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	// per-child wall-clock, and the isolation posture for mutating
 	// children (readonly default = byte-identical shared path).
 	if subagentsEnabled() {
-		svc := subagent.NewService(childRunnerFor(h, workspacePath, projectID, adbTarget, output), 2)
+		svc := subagent.NewService(childRunnerFor(h, workspacePath, projectID, adbTarget, output, fs), 2)
 		svc.SetWorktreeIsolation(childIsolationWorktree())
 		svc.SetSpendCap(childSpendCapFromEnv())
 		svc.SetWall(childWallFromEnv())
@@ -953,10 +953,16 @@ func childBuildFor(h *PromptHandler, projectID int64, adbTarget string, output i
 // orchestrator's loop, and the session handler's prompts. A fork child
 // additionally seeds from the parent's live conversation and forks the
 // project's session log (W1.5).
-func childRunnerFor(h *PromptHandler, workspacePath string, projectID int64, adbTarget string, output io.Writer) subagent.Runner {
+//
+// parentFS is THIS turn's journal (the fs newBuildSession just built —
+// the same instance NewAgentTurn closes unionTouched over): the runner
+// marks a mutating child's merge-back into it, so files_touched, the
+// verify law and undo all see child-written files.
+func childRunnerFor(h *PromptHandler, workspacePath string, projectID int64, adbTarget string, output io.Writer, parentFS *tools.FS) subagent.Runner {
 	eventLog := h.slog.get(h.store, projectID)
 	return &childRunner{
 		workspace: workspacePath,
+		parentFS:  parentFS,
 		build:     childBuildFor(h, projectID, adbTarget, output),
 		newSession: func(workspace string) *orchestrator.SessionState {
 			// A real emitter: the loop emits phase marks and tool calls from

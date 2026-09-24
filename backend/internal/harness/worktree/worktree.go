@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -173,22 +174,68 @@ func lockFor(workspace string) *sync.Mutex {
 	return mu
 }
 
+// stagedNames lists the paths staged in the worktree's own index — the
+// same index patch() stages through — NUL-separated so git can neither
+// quote nor escape them: what a caller reads is byte-for-byte the path to
+// mark in the parent journal.
+func (o *Overlay) stagedNames() ([]string, error) {
+	out, err := git(o.Root, "diff", "--cached", "--name-only", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("CHILD_WORKTREE: changed-file listing failed: %w", err)
+	}
+	var names []string
+	for _, n := range strings.Split(string(out), "\x00") {
+		if n != "" {
+			names = append(names, n)
+		}
+	}
+	return names, nil
+}
+
+// ChangedFiles enumerates the paths the child's work WOULD change in the
+// parent workspace, staging through the worktree's own index exactly as
+// MergeBack does so enumeration and capture always agree. Callers use it
+// BEFORE MergeBack to journal pre-images against the pre-merge state —
+// the merge then reports what actually landed.
+func (o *Overlay) ChangedFiles() ([]string, error) {
+	if _, err := git(o.Root, "add", "-A"); err != nil {
+		return nil, fmt.Errorf("CHILD_WORKTREE: changed-file listing (stage) failed: %w", err)
+	}
+	return o.stagedNames()
+}
+
 // MergeBack applies the child's diff to the parent workspace, verifies it
 // landed, then removes the worktree. A no-change child skips straight to
 // cleanup. Every failure names its stage; cleanup is attempted on all
 // paths, and its own error joins the stage error rather than hiding it.
-func (o *Overlay) MergeBack() error {
+//
+// The returned paths are what ACTUALLY landed in the parent workspace:
+// nil when the patch never applied (git apply without --reject is
+// all-or-nothing), the full list when it did — even when the
+// reverse-check verify then complained, because those bytes are in the
+// tree and the parent's touched set must not miss them.
+func (o *Overlay) MergeBack() ([]string, error) {
 	mu := lockFor(o.workspace)
 	defer mu.Unlock()
+	var landed []string
 	patch, capErr := o.patch()
 	if capErr == nil && len(patch) > 0 {
-		if err := o.apply(patch, false); err != nil {
-			capErr = fmt.Errorf("CHILD_WORKTREE: merge apply failed (the child's base and the workspace now disagree — resolve the conflict by hand; its diff is preserved below):\n%s\n%w", patch, err)
-		} else if err := o.apply(patch, true); err != nil {
-			capErr = fmt.Errorf("CHILD_WORKTREE: merge verify failed (the patch was accepted but does not reverse-check against the workspace): %w", err)
+		// Name the files from the just-staged index BEFORE apply, so
+		// every failure below still knows precisely what is (not) in the
+		// parent tree.
+		if names, nerr := o.stagedNames(); nerr != nil {
+			capErr = nerr
+		} else {
+			landed = names
+			if err := o.apply(patch, false); err != nil {
+				landed = nil // all-or-nothing: nothing entered the tree
+				capErr = fmt.Errorf("CHILD_WORKTREE: merge apply failed (the child's base and the workspace now disagree — resolve the conflict by hand; its diff is preserved below):\n%s\n%w", patch, err)
+			} else if err := o.apply(patch, true); err != nil {
+				capErr = fmt.Errorf("CHILD_WORKTREE: merge verify failed (the patch was accepted but does not reverse-check against the workspace): %w", err)
+			}
 		}
 	}
-	return errors.Join(capErr, o.cleanup())
+	return landed, errors.Join(capErr, o.cleanup())
 }
 
 // Discard removes the worktree without merging — the child failed, so its

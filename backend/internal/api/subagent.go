@@ -15,6 +15,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/hooks"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/store"
+	"github.com/luckyisrael/talon/backend/internal/tools"
 )
 
 // childRunner is the H9 in-process subagent backend: a child runs a second
@@ -26,6 +27,14 @@ type childRunner struct {
 	// read-only children (today's path, zero cost) and the merge target
 	// for a mutating child's private worktree (W12.1).
 	workspace string
+	// parentFS is the PARENT turn's journal — the same instance
+	// NewAgentTurn closes unionTouched over onto the prompt row. A
+	// mutating child's merge-back lands through git apply, never the file
+	// tools, so the runner registers the landed files here (the child's
+	// own journal dies with its worktree): files_touched, the verify law
+	// and undo then see child work like any parent write. nil = no parent
+	// journal (bare harnesses); every use is nil-guarded.
+	parentFS *tools.FS
 	// build assembles one buildSession rooted at root. mutate selects the
 	// registry class: false keeps the read-only filter, true gives the
 	// full scoped set (writes confined to root — the worktree for a
@@ -210,7 +219,37 @@ func (r *childRunner) RunChild(ctx context.Context, spec subagent.Spec) subagent
 				log.Printf("child %s: worktree discard: %v", spec.Label, derr)
 			}
 		} else {
-			disposeErr = overlay.MergeBack()
+			// The merge-back lands files through git apply — never the
+			// file tools — so the PARENT turn's journal is updated here.
+			// Enumerate and mark BEFORE the patch applies: pre-images must
+			// be the pre-merge state (undo then reverts child work like
+			// any parent write). MergeBack then reports what actually
+			// landed; anything from this staging absent from that list
+			// never entered the tree, so it leaves the touched set —
+			// files_touched must not claim a merge that refused.
+			var newly []string
+			if r.parentFS != nil {
+				if names, cerr := overlay.ChangedFiles(); cerr == nil {
+					newly = r.parentFS.MarkChanged(names...)
+				} else {
+					log.Printf("child %s: could not enumerate the merge-back files: %v", spec.Label, cerr)
+				}
+			}
+			var landed []string
+			landed, disposeErr = overlay.MergeBack()
+			if r.parentFS != nil && len(newly) > 0 {
+				landedSet := make(map[string]bool, len(landed))
+				for _, p := range landed {
+					landedSet[p] = true
+				}
+				var drop []string
+				for _, p := range newly {
+					if !landedSet[p] {
+						drop = append(drop, p)
+					}
+				}
+				r.parentFS.UnmarkChanged(drop...)
+			}
 		}
 	}
 	var cost float64
