@@ -459,6 +459,9 @@ func main() {
 
 		r.Get("/v1/projects/{projectID}/conversation", promptHandler.GetConversation)
 		r.Get("/v1/projects/{projectID}/conversation/search", promptHandler.SearchConversation)
+		// W6's durable sweep row, read for the header badge: absence is
+		// 404 — "no verification recorded", never a green claim.
+		r.Get("/v1/projects/{projectID}/verify-state", promptHandler.GetVerifyState)
 		r.Get("/v1/projects/{id}/prompts", promptHandler.ListPrompts)
 		r.Post("/v1/projects/{projectID}/feedback", promptHandler.RecordFeedback)
 		r.Get("/v1/projects/{projectID}/feedback", promptHandler.ProjectFeedback)

@@ -58,6 +58,17 @@ type Block struct {
 	Error  string `json:"error,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
 
+	// Verify is the marker's evidence payload: the durable twin of the
+	// build stream's done frame — files_touched, verified,
+	// verified_best_effort, verify_policy, skipped_gates — written from
+	// the same outcome at the same instant, so a reload restores what
+	// this turn changed and how it was checked exactly as it streamed.
+	// Absent on legacy markers, crash paths (no outcome) and non-build
+	// turns; an EMPTY payload means "finished, nothing to verify", never
+	// "unknown". Deliberately raw JSON: the fields are turn_end's alone,
+	// not a shared vocabulary with other block types.
+	Verify json.RawMessage `json:"verify,omitempty"`
+
 	// context is machine text the orchestrator injects to steer the model —
 	// an auto-attached skill body, or the repair feedback after a verify gate
 	// fails. It is real context the model needs and must replay verbatim, but

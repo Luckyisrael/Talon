@@ -1190,6 +1190,16 @@ func (t *AgentTurn) Journal() []tools.FileSnapshot { return t.bs.fs.Journal() }
 // Workspace reports the resolved workspace this turn runs in.
 func (t *AgentTurn) Workspace() string { return t.workspace }
 
+// wireStrings keeps JSON arrays arrays: a nil slice marshals to null, and
+// the marker's evidence payload must read "no files" ([]), never null —
+// the same never-nil law unionTouched holds for the done frame.
+func wireStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
+}
+
 // unionTouched merges the durable prior-leg set with this run's live journal:
 // empties dropped, duplicates collapsed, sorted, never nil. The loop's law is
 // "changed code verifies before done" — a turn spans legs (fresh, resume,
@@ -1641,6 +1651,26 @@ func (h *PromptHandler) persistTurnEnd(projectID, promptID int64, status string,
 		Error:  errMsg,
 		Rounds: rounds,
 	}
+	// The marker's evidence payload: the durable twin of the build
+	// stream's done frame — same outcome fields, written at the same
+	// instant — so a reload restores what this turn changed and how it
+	// was checked exactly as it streamed. Absent only when there was no
+	// outcome (crash paths): an EMPTY payload means "finished, nothing
+	// to verify", never "unknown".
+	if outcome != nil {
+		evidence := map[string]interface{}{
+			"files_touched":        wireStrings(outcome.FilesTouched),
+			"verified":             outcome.Verified,
+			"verified_best_effort": outcome.VerifiedBestEffort,
+			"verify_policy":        outcome.VerifyPolicy,
+			"skipped_gates":        wireStrings(outcome.SkippedGates),
+		}
+		if raw, merr := json.Marshal(evidence); merr == nil {
+			block.Verify = raw
+		} else {
+			log.Printf("project %d: turn-end verify payload marshal failed: %v", projectID, merr)
+		}
+	}
 	if err := h.store.AppendMessage(projectID, promptID, "assistant",
 		ai.MarshalBlocks([]ai.Block{block}), 0, 0); err != nil {
 		log.Printf("project %d: could not store the turn-end marker: %v", projectID, err)
@@ -1958,6 +1988,32 @@ func (h *PromptHandler) GetMemory(w http.ResponseWriter, r *http.Request) {
 // the chat after a reload. Paged by message seq: the default call returns the
 // tail (latest 60); ?before_seq=N walks older pages. latest_seq rides every
 // response as the "anything new" watermark clients poll on return.
+// GetVerifyState reads the project's last finished verification sweep —
+// the durable ProjectVerifyState row export and release already fail
+// closed on. Absence is 404: no recorded sweep reads as "not verified",
+// and the caller decides what that means (the Topbar badge simply never
+// claims otherwise).
+func (h *PromptHandler) GetVerifyState(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	if _, ok := h.ownedProject(w, r, projectID); !ok {
+		return
+	}
+	found, st, err := h.store.GetProjectVerifyState(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load verify state")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "no verification recorded")
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
 func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
 	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
 	if err != nil {
