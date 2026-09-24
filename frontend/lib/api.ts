@@ -278,6 +278,22 @@ export const projects = {
 
 // ── Conversation ──────────────────────────────────────
 
+/**
+ * The turn_end marker's verify evidence — the durable twin of the build
+ * stream's done frame (row 44): same outcome fields, written at the same
+ * instant, so a reload restores exactly what streamed. ABSENT (not empty)
+ * on legacy markers and crash paths: absence means "no evidence recorded",
+ * which the client must render as a claim-free footer rather than as a
+ * failed check.
+ */
+export interface TurnVerifyEvidence {
+  files_touched?: string[];
+  verified?: boolean;
+  verified_best_effort?: boolean;
+  verify_policy?: string;
+  skipped_gates?: string[];
+}
+
 /** One stored turn, in the provider-neutral block shape the backend persists. */
 export interface ConversationBlock {
   type:
@@ -303,6 +319,12 @@ export interface ConversationBlock {
   status?: string;
   error?: string;
   rounds?: number;
+  // turn_end's verify evidence (row 44): the durable twin of the done frame,
+  // so a reload restores what the turn changed and how it was checked exactly
+  // as it streamed. ABSENT on legacy markers and crash paths (no outcome) —
+  // the client must then render "no evidence", never a claim; present-and-
+  // empty means "finished, nothing to verify".
+  verify?: TurnVerifyEvidence;
   // context: machine guidance the orchestrator injected (a skill body, or the
   // repair note after a verify gate fails). title is the one line the transcript
   // shows; body stays collapsed. kind is "skill" | "verify".
@@ -354,6 +376,9 @@ export interface TurnIndexEntry {
  * working) can be resumed; `completed` and `abandoned` cannot. `waiting` is a
  * turn paused on an ask_user question — it resumes by answering the question
  * (POST /answer), not by the resume button, so isResumable omits it.
+ * `stalled` is terminal and deliberately not resumable either: the turn
+ * settled without finishing and the server persisted it as-is, so a fresh
+ * prompt — not a replay — is the way forward.
  */
 export interface LatestPrompt {
   id: number;
@@ -365,11 +390,13 @@ export interface LatestPrompt {
     | "completed"
     | "cancelled"
     | "failed"
-    | "abandoned";
+    | "abandoned"
+    | "stalled";
   round: number;
 }
 
-/** A resumable turn is a build turn whose last run did not finish cleanly. */
+/** A resumable turn is a build turn whose last run did not finish cleanly.
+ *  `stalled` is absent on purpose — terminal, never resumable (row 45). */
 export function isResumable(latest: LatestPrompt | null): boolean {
   return (
     latest !== null &&
@@ -574,6 +601,19 @@ export const prompts = {
     });
   },
 
+  // The prompt row itself. Mid-flight turns (paused/waiting) deliberately have
+  // no turn_end marker to restore evidence from — this row's files_touched is
+  // the only durable record of the legs' writes, so the restored changed-files
+  // panel reads it (row 45).
+  get(promptId: number) {
+    return request<{
+      id: number;
+      status?: string;
+      round?: number;
+      files_touched?: string[];
+    }>(`/v1/prompts/${promptId}`);
+  },
+
   // Deliver a message to a running build turn (H2 steer): the text lands in
   // the next model request the loop makes — a mid-build redirect without
   // aborting the turn. Class "inject" adds context without redirecting. The
@@ -585,6 +625,65 @@ export const prompts = {
       `/v1/prompts/${promptId}/steer`,
       { method: "POST", body: JSON.stringify({ message, class: klass }) },
     );
+  },
+};
+
+// ── Project verify state ──────────────────────────────
+
+/**
+ * The project's last finished verification sweep — the durable row export
+ * and release already fail closed on (row 44). `status` speaks the sweep's
+ * vocabulary: verified | best-effort | refused.
+ */
+export interface ProjectVerifyState {
+  project_id: number;
+  status: string;
+  policy: string;
+  skipped: string[];
+  remaining: string[];
+  reason: string;
+  updated_at: string;
+}
+
+/** Relative time for a timestamp, in the phrasing the badge already uses.
+ *  (CheckpointMenu keeps its own private copy — it predates this module's
+ *  claim on the phrasing; folding it in is tracked separately.) */
+function ago(iso: string): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "";
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/**
+ * The Topbar badge's rule in one place: only a PASSING sweep claims
+ * "Build verified · ago". A refused sweep, or no recorded sweep at all
+ * (the endpoint answers 404 → null), claims nothing — absence is the
+ * signal, exactly what export/release already read it as.
+ */
+export function verifyBadge(state: ProjectVerifyState | null): string | null {
+  if (!state) return null;
+  if (state.status !== "verified" && state.status !== "best-effort") return null;
+  return ago(state.updated_at);
+}
+
+export const verifyState = {
+  /** The project's last sweep. 404 (never verified) reads as null, not as an
+   *  error worth banner-ing: the badge simply does not appear. */
+  async get(projectId: number): Promise<ProjectVerifyState | null> {
+    try {
+      return await request<ProjectVerifyState>(
+        `/v1/projects/${projectId}/verify-state`,
+      );
+    } catch (err) {
+      if (err instanceof APIError && err.status === 404) return null;
+      throw err;
+    }
   },
 };
 
@@ -674,6 +773,15 @@ export interface StreamEventData {
   verified?: boolean;
   skipped_gates?: string[];
   rounds?: number;
+  // done — the policy the sweep ran under, whether required gates could not
+  // run (best-effort), what is left to do, and (router on only) what the turn
+  // cost and who served it.
+  verified_best_effort?: boolean;
+  verify_policy?: string;
+  remaining_tasks?: string[];
+  cost_usd?: number;
+  routed_provider?: string;
+  budget_stop?: string;
 }
 
 export interface StreamEvent {

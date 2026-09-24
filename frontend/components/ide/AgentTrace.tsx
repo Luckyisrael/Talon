@@ -350,7 +350,10 @@ function TraceRowItem({ row }: { row: TraceRow }) {
 // message, a 400-line skill document landed in the middle of the chat. This
 // row shows the one-line title and keeps the body a click away, so the
 // information survives without owning the scroll.
-function ContextRow({
+// Exported for the workspace transcript (row 45): AgentWorkspace renders the
+// same terminal-marker row so a failed/stalled tail and machine guidance read
+// identically in both transcript surfaces.
+export function ContextRow({
   title,
   body,
   kind,
@@ -388,7 +391,7 @@ function ContextRow({
 // writes a turn_end block; this row is what makes that legible. Only the
 // non-clean outcomes render — a completed turn is already ended by its own
 // narration, and a line of "turn finished" per prompt would be noise.
-function EndRow({
+export function EndRow({
   ending,
   error,
   rounds,

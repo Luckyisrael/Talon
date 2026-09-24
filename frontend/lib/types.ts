@@ -386,11 +386,27 @@ export interface StreamMessage {
   /** Set by the `plan` event when a planning turn returns structured output. */
   plan?: PlanData | null;
   planMessage?: string;
-  /** From the terminal `done` event. */
+  /** From the terminal `done` event — and, for restored turns, from the
+      turn_end marker's verify payload (row 44). `verified`'s PRESENCE is the
+      evidence flag: a legacy marker leaves it undefined and the footer must
+      claim nothing about checks. */
   filesTouched?: string[];
   verified?: boolean;
-  /** Verify stages that could not run (missing infra) when verified=true. */
+  /** Gates that could not run (missing infra) — verified && this (or
+      skippedGates non-empty) is a best-effort pass, rendered amber. */
+  verifiedBestEffort?: boolean;
+  /** The policy the sweep ran under ("strict" | "besteffort"); carried as a
+      tooltip so an honest chip never becomes unexplained color. */
+  verifyPolicy?: string;
+  /** Verify stages that could not run (missing infra). */
   skippedGates?: string[];
+  /** What the sweep says is left to build — shown as its own chip while it
+      is non-empty, so "verified" never silently means "and nothing remains". */
+  remainingTasks?: string[];
+  /** Turn spend (router on only); restored turns predate/don't carry it. */
+  costUsd?: number;
+  routedProvider?: string;
+  budgetStop?: string;
   rounds?: number;
   /** True for turns restored from the stored conversation rather than streamed. */
   restored?: boolean;

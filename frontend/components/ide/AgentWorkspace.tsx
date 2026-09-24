@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "@/components/ui/Markdown";
 import CodeEditor from "./CodeEditor";
-import { PlanProgress } from "./AgentTrace";
+import { ContextRow, EndRow, PlanProgress } from "./AgentTrace";
 import type { PlanTask, TraceRow } from "@/lib/types";
 import { conversation } from "@/lib/api";
 
@@ -327,6 +327,17 @@ function TranscriptRow({ row }: { row: TraceRow }) {
           {row.text}
         </div>
       );
+    case "end":
+      // Same law as the chat trace (row 45): only non-clean endings render —
+      // a completed turn is ended by its own narration. Without this case the
+      // workspace dropped the row to null and a failed/stalled tail vanished.
+      return row.ending && row.ending !== "completed" ? (
+        <EndRow ending={row.ending} error={row.text} rounds={row.rounds} />
+      ) : null;
+    case "context":
+      return row.title ? (
+        <ContextRow title={row.title} body={row.body} kind={row.ctxKind} />
+      ) : null;
     default:
       return null;
   }

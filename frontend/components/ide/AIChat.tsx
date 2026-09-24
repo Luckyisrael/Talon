@@ -281,6 +281,21 @@ function turnsToEntries(
     // tool_result (the reply) locks it; an unanswered one on a still-waiting
     // final turn is the live question this reload must let the user answer.
     let restoredQuestion: StreamMessage["question"] | undefined;
+    // The terminal marker's verify evidence (row 44 payload), applied to the
+    // entry below so the footer restores exactly what streamed. Absent on
+    // legacy/crash markers: those keep `verified` undefined and the footer
+    // claims nothing about checks — rounds ride the marker either way.
+    let restoredEvidence:
+      | Pick<
+          StreamMessage,
+          | "filesTouched"
+          | "verified"
+          | "verifiedBestEffort"
+          | "verifyPolicy"
+          | "skippedGates"
+          | "rounds"
+        >
+      | undefined;
     const isLastTurn = i === turns.length - 1;
     for (const [j, block] of blocks.entries()) {
       if (block.type === "text" && block.text?.trim()) {
@@ -309,6 +324,20 @@ function turnsToEntries(
           text: block.error,
           rounds: block.rounds,
         });
+        if (block.verify) {
+          restoredEvidence = {
+            filesTouched: block.verify.files_touched ?? [],
+            verified: block.verify.verified,
+            verifiedBestEffort: block.verify.verified_best_effort,
+            verifyPolicy: block.verify.verify_policy,
+            skippedGates: block.verify.skipped_gates ?? [],
+            rounds: block.rounds,
+          };
+        } else if (block.rounds !== undefined) {
+          // Legacy marker (no verify payload): the round count is still
+          // something the marker actually knows — report it, claim no checks.
+          restoredEvidence = { rounds: block.rounds };
+        }
       }
       if (block.type === "context") {
         // Machine guidance, not a user message: renders as a single line so a
@@ -413,6 +442,7 @@ function turnsToEntries(
       entry.planMessage = rows.find((r) => r.kind === "narration")?.text ?? "";
     }
     if (restoredQuestion) entry.question = restoredQuestion;
+    if (restoredEvidence) Object.assign(entry, restoredEvidence);
     entries.push(entry);
   });
 
@@ -530,6 +560,47 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     const pinnedRef = useRef(true);
 
     // ── History ──
+
+    // A reload must not forget what the last turn changed: the changed-files
+    // panel (and the git/badge refreshes keyed off it) is fed live by
+    // onFilesTouched, so restore re-feeds it from the FINAL assistant entry
+    // that knows — mirroring the live path, where each done frame overwrites
+    // with its own set. Mid-flight turns (paused/waiting) deliberately have
+    // no marker, so their leg files come from the prompt row instead.
+    const seedRestoredFiles = (
+      entries: Entry[],
+      latestRow: LatestPrompt | null,
+      isCancelled: () => boolean,
+    ) => {
+      const last = entries
+        .slice()
+        .reverse()
+        .find((e): e is StreamMessage => isAssistant(e));
+      if (last?.filesTouched?.length) {
+        onFilesTouched?.(last.filesTouched);
+        return;
+      }
+      // The newest turn never carried a marker: still mid-flight
+      // (running/paused/waiting), aborted (cancelled/failed), or predating
+      // row 44's verify payload. Its legs' union in the prompt row (row 42)
+      // is the only thing that knows what it changed — restricting this to
+      // paused/waiting made a mid-build or post-abort refresh fall back to
+      // the whole diff (row-45 live E2E: the reload cut the SSE stream, the
+      // row became `cancelled`, and the panel forgot the turn's file).
+      if (latestRow) {
+        prompts
+          .get(latestRow.id)
+          .then((row) => {
+            if (!isCancelled() && row?.files_touched?.length) {
+              onFilesTouched?.(row.files_touched);
+            }
+          })
+          .catch(() => {
+            // No row, no panel seed — the git badge still tells the truth.
+          });
+      }
+    };
+
     useEffect(() => {
       let cancelled = false;
       conversation
@@ -537,7 +608,9 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         .then(({ turns, latest, usage, planTasks }) => {
           if (cancelled) return;
           if (usage) setSessionUsage(usage);
-          setMessages(turnsToEntries(turns, latest));
+          const entries = turnsToEntries(turns, latest);
+          setMessages(entries);
+          seedRestoredFiles(entries, latest, () => cancelled);
           // Offer resume only for a build turn whose last run did not finish.
           // A waiting turn is not resumable this way — its question card owns it.
           setResumable(isResumable(latest) ? latest : null);
@@ -1134,29 +1207,72 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               runningPromptIdRef.current = 0;
               const touched = d.files_touched ?? [];
               const skipped = Array.isArray(d.skipped_gates) ? d.skipped_gates : [];
-              patch((prev) => ({
-                ...prev,
-                isStreaming: false,
-                phase:
-                  d.status === "failed"
+              const stalled = d.status === "stalled";
+              const failed = d.status === "failed";
+              patch((prev) => {
+                // Adopt the frame's message as narration only when the turn
+                // streamed no words of its own (a restarted stream, a tools-
+                // only round): the turn still ends with what it had to say,
+                // and a turn that DID narrate never doubles.
+                const hasWords = prev.traceRows.some(
+                  (r) =>
+                    r.kind === "narration" && (r.text ?? "").trim() !== "",
+                );
+                const narrated =
+                  !failed && !hasWords && d.message?.trim()
+                    ? [
+                        ...prev.traceRows,
+                        {
+                          id: `${prev.id}-msg`,
+                          kind: "narration" as const,
+                          text: d.message.trim(),
+                        },
+                      ]
+                    : prev.traceRows;
+                // The live twin of the stored turn_end block: a stalled or
+                // failed turn must SAY it stopped — restore renders exactly
+                // this row — instead of collapsing into a generic DONE.
+                const rows =
+                  stalled || failed
+                    ? [
+                        ...narrated,
+                        {
+                          id: `${prev.id}-end`,
+                          kind: "end" as const,
+                          ending: (failed ? "failed" : "stalled") as TraceRow["ending"],
+                          rounds: d.rounds,
+                        },
+                      ]
+                    : narrated;
+                return {
+                  ...prev,
+                  isStreaming: false,
+                  phase: failed
                     ? "FAILED_NEEDS_USER"
                     : d.status === "waiting" || d.status === "paused"
                       ? "WAITING_FOR_USER"
-                      : "DONE",
-                filesTouched: touched,
-                verified: d.verified,
-                skippedGates: skipped,
-                rounds: d.rounds,
-                traceRows: prev.traceRows.map((r) => {
-                  // The turn is over: running rows settle, and every
-                  // streaming flag drops — a narration/thinking row that
-                  // never received its end frame (error paths, aborted
-                  // streams) must not shimmer or blink forever after.
-                  if (r.status === "running") return { ...r, status: "done", streaming: false };
-                  if (r.streaming) return { ...r, streaming: false };
-                  return r;
-                }),
-              }));
+                      : stalled
+                        ? "STALLED"
+                        : "DONE",
+                  filesTouched: touched,
+                  verified: d.verified,
+                  verifiedBestEffort: d.verified_best_effort,
+                  verifyPolicy: d.verify_policy,
+                  skippedGates: skipped,
+                  rounds: d.rounds,
+                  remainingTasks: Array.isArray(d.remaining_tasks)
+                    ? d.remaining_tasks
+                    : undefined,
+                  ...(d.cost_usd !== undefined
+                    ? {
+                        costUsd: d.cost_usd,
+                        routedProvider: d.routed_provider,
+                        budgetStop: d.budget_stop,
+                      }
+                    : {}),
+                  traceRows: rows,
+                };
+              });
               // Refetch rather than trusting the paths: the old code inserted
               // each path with empty content, so opening a file the agent had
               // just written showed a blank editor.
@@ -2290,29 +2406,103 @@ function AssistantEntry({
 }
 
 function TurnFooter({ msg }: { msg: StreamMessage }) {
-  if (msg.isStreaming || msg.restored) return null;
+  if (msg.isStreaming) return null;
 
-  const parts: string[] = [];
-  if (msg.filesTouched?.length) {
-    parts.push(`${msg.filesTouched.length} ${msg.filesTouched.length === 1 ? "file" : "files"}`);
-  }
-  if (msg.rounds) parts.push(`${msg.rounds} ${msg.rounds === 1 ? "round" : "rounds"}`);
-  if (msg.usage?.input_tokens || msg.usage?.output_tokens) {
-    parts.push(
-      `${compactTokens(msg.usage.input_tokens ?? 0)} in · ${compactTokens(msg.usage.output_tokens ?? 0)} out`,
+  // Evidence decides whether there is anything to report: a legacy restored
+  // marker predates the verify payload (row 44), so its footer states only
+  // what the marker actually knows (rounds) and claims nothing about checks
+  // in either direction. `verified`'s PRESENCE is the flag.
+  const skips = msg.skippedGates ?? [];
+  const hasEvidence =
+    msg.verified !== undefined ||
+    (msg.filesTouched?.length ?? 0) > 0 ||
+    (msg.remainingTasks?.length ?? 0) > 0 ||
+    msg.costUsd !== undefined ||
+    msg.rounds !== undefined;
+  const usageParts =
+    msg.usage?.input_tokens || msg.usage?.output_tokens
+      ? `${compactTokens(msg.usage?.input_tokens ?? 0)} in · ${compactTokens(
+          msg.usage?.output_tokens ?? 0,
+        )} out`
+      : "";
+  if (!hasEvidence && !usageParts) return null;
+
+  // Every chip explains itself on hover: color never carries the claim
+  // alone — policy, skipped gates, and what remains sit in the tooltip.
+  const titleBits: string[] = [];
+  if (msg.verifyPolicy) titleBits.push(`verify policy: ${msg.verifyPolicy}`);
+  if (skips.length) titleBits.push(`did not run: ${skips.join(", ")}`);
+  if (msg.remainingTasks?.length) titleBits.push(`left: ${msg.remainingTasks.join(", ")}`);
+  if (msg.budgetStop) titleBits.push(`budget stop: ${msg.budgetStop}`);
+  const verifyTitle = titleBits.length ? titleBits.join(" · ") : undefined;
+
+  const chips: React.ReactNode[] = [];
+  if (msg.verified === true) {
+    chips.push(
+      msg.verifiedBestEffort || skips.length > 0 ? (
+        <span key="verify" className="text-amber-400" title={verifyTitle}>
+          verified{skips.length ? ` · skipped: ${skips.join(", ")}` : " (best effort)"}
+        </span>
+      ) : (
+        <span key="verify" className="text-[var(--ok)]" title={verifyTitle}>
+          verified
+        </span>
+      ),
+    );
+  } else if (msg.verified === false) {
+    // Red only when evidence says so: an absent payload renders nothing.
+    chips.push(
+      <span key="verify" className="text-coral-red" title={verifyTitle}>
+        checks did not pass
+      </span>,
     );
   }
-  if (parts.length === 0) return null;
+  if (msg.remainingTasks?.length) {
+    chips.push(
+      <span key="left" className="text-amber-400" title={msg.remainingTasks.join(", ")}>
+        {msg.remainingTasks.length} left
+      </span>,
+    );
+  }
 
+  const parts: React.ReactNode[] = [];
+  if (msg.filesTouched?.length) {
+    parts.push(
+      <span key="f">
+        {msg.filesTouched.length} {msg.filesTouched.length === 1 ? "file" : "files"}
+      </span>,
+    );
+  }
+  if (msg.rounds) {
+    parts.push(
+      <span key="r">
+        {msg.rounds} {msg.rounds === 1 ? "round" : "rounds"}
+      </span>,
+    );
+  }
+  if (msg.costUsd) {
+    const costBits = [
+      msg.routedProvider ? `via ${msg.routedProvider}` : "",
+      msg.budgetStop ? `budget stop: ${msg.budgetStop}` : "",
+    ].filter(Boolean);
+    parts.push(
+      <span key="c" title={costBits.length ? costBits.join(" · ") : undefined}>
+        ${msg.costUsd.toFixed(3)}
+      </span>,
+    );
+  }
+  if (usageParts) parts.push(<span key="u">{usageParts}</span>);
+
+  if (chips.length === 0 && parts.length === 0) return null;
+  const nodes = [...chips, ...parts];
   return (
-    <p className="gauge tnum flex items-center gap-2">
-      {msg.verified === false && <span className="text-coral-red">checks did not pass</span>}
-      {msg.verified && msg.skippedGates && msg.skippedGates.length > 0 && (
-        <span className="text-amber-400" title={`Did not run: ${msg.skippedGates.join(", ")}`}>
-          verified (static only — {msg.skippedGates.join(", ")} could not run)
-        </span>
-      )}
-      {parts.join("  ·  ")}
+    <p className="gauge tnum flex flex-wrap items-center gap-2">
+      {nodes.map((node, i) => (
+        <Fragment key={i}>
+          {i > 0 ? <span aria-hidden>·</span> : null}
+          {node}
+        </Fragment>
+      ))}
     </p>
   );
 }

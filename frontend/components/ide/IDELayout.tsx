@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { conversations, git, projects, sessions } from "@/lib/api";
+import { conversations, git, projects, sessions, verifyBadge, verifyState } from "@/lib/api";
 import { useIDEStore } from "@/lib/store";
 import type { PlanData } from "@/lib/types";
 import AIChat, { type AIChatHandle } from "./AIChat";
@@ -62,21 +62,45 @@ export default function IDELayout({
     [],
   );
   const [gitMeta, setGitMeta] = useState<null | { branch: string; dirty: number; ahead: number; behind: number; last_commit: string }>(null);
-  const refreshGit = useCallback(async () => {
-    try {
-      const g = await git.getProjectStatus(projectId);
-      setGitMeta(g);
-    } catch {
-      // No git yet or workspace missing — badge stays hidden.
-    }
-  }, [projectId]);
+  // ── Topbar badges: git branch/dirty, and "Build verified · ago" (row 45) ──
+  // Both re-read on project change and whenever a turn writes files (the
+  // verify ladder runs at turn end — the only moment the verdict can change).
+  // The setState calls live in the promise callbacks, not the effect body
+  // (the shape react-hooks/set-state-in-effect accepts), and each fetch is
+  // cancelled on re-run so a late reply from the previous project never
+  // flashes its badges onto the new one's topbar. The verify result is also
+  // keyed by project: only a PASSING sweep (verified | best-effort) claims
+  // the badge; refused, never-verified (404 → null), and transient failures
+  // all claim nothing.
+  const [verifiedBadge, setVerifiedBadge] = useState<{
+    projectId: number;
+    ago: string | null;
+  } | null>(null);
   useEffect(() => {
-    void refreshGit();
-  }, [refreshGit]);
-  // Refresh the branch/dirty badge after each turn writes files.
-  useEffect(() => {
-    if (liveTouchedFiles.length > 0) void refreshGit();
-  }, [liveTouchedFiles, refreshGit]);
+    let cancelled = false;
+    git.getProjectStatus(projectId)
+      .then((g) => {
+        if (!cancelled) setGitMeta(g);
+      })
+      .catch(() => {
+        // No git yet or workspace missing — badge stays hidden.
+      });
+    verifyState
+      .get(projectId)
+      .then((state) => {
+        if (!cancelled) {
+          setVerifiedBadge({ projectId, ago: verifyBadge(state) });
+        }
+      })
+      .catch(() => {
+        // A transient verify-state failure claims nothing — the badge hides
+        // rather than showing a verdict it cannot confirm.
+        if (!cancelled) setVerifiedBadge(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, liveTouchedFiles]);
 
   // ── Dock: Files/Terminal/Memory/Triage/Device, opened from the topbar.
   // Device starts open — it's the product's core feature, not an
@@ -226,6 +250,12 @@ export default function IDELayout({
   const handleFilesTouched = useCallback(
     async (paths: string[]) => {
       if (paths.length === 0) return;
+      // Feed the dock panel (and the git/verify refreshes keyed off this
+      // state): the live done frame and the restore seed both arrive here,
+      // and pre-fix only live trace events ever wrote it — a reloaded turn's
+      // panel kept rendering every diff file instead of the turn's set
+      // (caught by F9 and the row-45 live browser E2E).
+      setLiveTouchedFiles(paths);
       await refetchFiles();
       const state = useIDEStore.getState();
       if (!state.selectedFile && paths.length > 0) {
@@ -497,6 +527,7 @@ export default function IDELayout({
         <Topbar
           projectName={projectName}
           projectStatus={projectStatus}
+          verifiedAgo={verifiedBadge?.projectId === projectId ? verifiedBadge.ago : null}
           gitBranch={gitMeta?.branch ?? null}
           gitDirty={gitMeta?.dirty ?? null}
           gitAheadBehind={
