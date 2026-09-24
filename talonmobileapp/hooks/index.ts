@@ -29,6 +29,7 @@ import {
   type PlanTask,
   type Session,
   type StreamEvent,
+  type TurnEvidence,
 } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -152,11 +153,19 @@ export interface TurnState {
    *  optimistic part of the turn: it shows immediately and retires with the
    *  rest of the tail when history absorbs the prompt. */
   userEcho?: string;
+  /** Evidence the done frame carried (files/verified/policy/skips/rounds/
+   *  remaining/cost), mapped by reduceEvent on 'done'. The live twin of the
+   *  restored marker's verify row — the web footer's fields, the same claims
+   *  in the same words. Undefined until a done frame lands; absent keys on
+   *  the frame itself claim nothing (the marker's absence rule, mirrored). */
+  evidence?: TurnEvidence;
 }
 
 const initialTurn: TurnState = { phase: 'idle', text: '', thinking: '', output: '', tasks: [], toolCalls: [] };
 
-function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
+// Exported as a test seam (mobile row 46): the done-frame mapping is pure
+// state math and must be pin-able without a live SSE round trip.
+export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
   let data: Record<string, unknown> = {};
   try {
     data = JSON.parse(ev.data) as Record<string, unknown>;
@@ -237,8 +246,29 @@ function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
       };
     case 'error':
       return { ...state, phase: 'error', error: String(data.message ?? 'the turn failed') };
-    case 'done':
-      return { ...state, phase: 'done' };
+    case 'done': {
+      // The done frame is the live twin of the turn_end marker (rows 44/45):
+      // the same outcome fields at the same instant. Map them so the footer
+      // claims files/rounds/policy now instead of waiting for the history
+      // refetch — and ABSENT keys stay undefined, claiming nothing (the
+      // marker's absence rule, mirrored). Failure frames without an outcome
+      // carry only {status} → evidence renders as nothing.
+      const evidence: TurnEvidence = {
+        filesTouched: Array.isArray(data.files_touched) ? (data.files_touched as string[]) : [],
+        verified: typeof data.verified === 'boolean' ? data.verified : undefined,
+        verifiedBestEffort: typeof data.verified_best_effort === 'boolean' ? data.verified_best_effort : undefined,
+        verifyPolicy: typeof data.verify_policy === 'string' ? data.verify_policy : undefined,
+        skippedGates: Array.isArray(data.skipped_gates) ? (data.skipped_gates as string[]) : [],
+        rounds: typeof data.rounds === 'number' ? data.rounds : undefined,
+        remainingTasks: Array.isArray(data.remaining_tasks) ? (data.remaining_tasks as string[]) : undefined,
+        costUsd: typeof data.cost_usd === 'number' ? data.cost_usd : undefined,
+      };
+      // Adopt the frame's message when the turn streamed no words: a turn
+      // that ends in tools alone still said something (web's narration
+      // adoption, AIChat done handler).
+      const adopted = state.text === '' && typeof data.message === 'string' && data.message ? data.message : undefined;
+      return { ...state, phase: 'done', evidence, ...(adopted ? { text: adopted } : {}) };
+    }
     default:
       return state;
   }

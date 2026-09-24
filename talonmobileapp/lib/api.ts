@@ -46,7 +46,12 @@ async function parseResponse<T>(res: Response): Promise<T> {
       } catch {}
     }
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.error || `request failed (${res.status})`)
+    // Attach the HTTP status: callers must be able to tell "missing" (404 →
+    // verify-state reads as no-row, no claim) from "broken" (anything else →
+    // rethrow, the badge hides). Additive — the message is unchanged.
+    const error = new Error(body.error || `request failed (${res.status})`) as Error & { status?: number }
+    error.status = res.status
+    throw error
   }
   if (res.status === 204) return undefined as T
   const text = await res.text()
@@ -83,6 +88,36 @@ export async function refreshAccessToken(): Promise<string> {
 
 // ── Shapes (mirrored from the web client; the backend is the contract) ──
 
+/** The turn_end marker's verify evidence — the durable twin of the build
+ *  stream's done frame (rows 44/45): same outcome fields, written at the same
+ *  instant, so a reload restores exactly what streamed. Field-for-field the
+ *  web client's TurnVerifyEvidence (frontend/lib/api.ts) — both clients read
+ *  one payload and must name the same claims the same way. ABSENT (not empty)
+ *  on legacy markers and crash paths: absence means "no evidence recorded",
+ *  which renders as a claim-free row, never as a failed check; present-and-
+ *  empty means "finished, nothing to verify". */
+export interface TurnVerifyEvidence {
+  files_touched?: string[]
+  verified?: boolean
+  verified_best_effort?: boolean
+  verify_policy?: string
+  skipped_gates?: string[]
+}
+
+/** Rendered evidence: the marker/done-frame payload after mapping — the shape
+ *  VerifyEvidenceRow draws from. An ABSENT key claims nothing in either
+ *  direction (the web TurnFooter's hasEvidence gate, mirrored). */
+export interface TurnEvidence {
+  filesTouched?: string[]
+  verified?: boolean
+  verifiedBestEffort?: boolean
+  verifyPolicy?: string
+  skippedGates?: string[]
+  rounds?: number
+  remainingTasks?: string[]
+  costUsd?: number
+}
+
 /** One stored turn block. Image and doc blocks reference prompt attachments
  *  by id; bytes resolve through attachmentsApi, never inline. */
 export interface ConversationBlock {
@@ -104,6 +139,11 @@ export interface ConversationBlock {
   status?: string
   error?: string
   rounds?: number
+  /** turn_end's verify evidence (row 44 payload): the durable twin of the done
+   *  frame, so a reload restores what the turn changed and how it was checked
+   *  exactly as it streamed. ABSENT on legacy markers and crash paths (no
+   *  outcome) — render "no evidence", never a claim. */
+  verify?: TurnVerifyEvidence
   /** context: machine guidance the orchestrator injects (a skill body, or the
    *  repair note after a verify gate fails). The model needs it verbatim, but
    *  the user never typed it — rendering it as a chat bubble is what put a
@@ -532,6 +572,15 @@ export const promptsApi = {
       { id: number; mode: string; title: string; status: string; round: number; created_at: string }[]
     >(`/v1/projects/${projectId}/prompts`)
   },
+
+  /** The single-prompt row — the union seed. The index endpoint is metadata
+   *  only (PromptIndexEntry), so a marker-less turn's files_touched lives
+   *  here; same route and shape as the web's prompts.get (rows 44/45). */
+  get(promptId: number) {
+    return request<{ id: number; status?: string; round?: number; files_touched?: string[] }>(
+      `/v1/prompts/${promptId}`,
+    )
+  },
 }
 
 // ── Prompt attachments ─────────────────────────────
@@ -600,6 +649,60 @@ export const planApi = {
 export const usageApi = {
   get() {
     return request<Usage>('/v1/usage')
+  },
+}
+
+// ── Project verify state (the build-verified badge) ──
+// Field-for-field the web's ProjectVerifyState: the project's last finished
+// verification sweep, vocabulary verified | best-effort | refused.
+
+export interface ProjectVerifyState {
+  project_id: number
+  status: string
+  policy: string
+  skipped: string[]
+  remaining: string[]
+  reason: string
+  updated_at: string
+}
+
+/** Relative time for a timestamp, in the phrasing the badge already uses —
+ *  a verbatim mirror of the web's ago(). */
+function ago(iso: string): string {
+  const then = Date.parse(iso)
+  if (Number.isNaN(then)) return ''
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
+  if (secs < 60) return 'just now'
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
+/** The badge's rule in one place: only a PASSING sweep claims "Build verified
+ *  · ago". A refused sweep, or no recorded sweep at all (404 → null), claims
+ *  nothing — absence is the signal, exactly what export/release read it as.
+ *  Verbatim mirror of the web's verifyBadge: both clients must agree on when
+ *  to claim, in the same words. */
+export function verifyBadge(state: ProjectVerifyState | null): string | null {
+  if (!state) return null
+  if (state.status !== 'verified' && state.status !== 'best-effort') return null
+  return ago(state.updated_at)
+}
+
+export const verifyState = {
+  /** The project's last sweep. 404 (never verified) reads as null, not as an
+   *  error worth banner-ing: the badge simply does not appear. parseResponse
+   *  attaches the HTTP status, so "missing" is told from "broken" — a broken
+   *  endpoint throws (badge hides), never claims. */
+  async get(projectId: number): Promise<ProjectVerifyState | null> {
+    try {
+      return await request<ProjectVerifyState>(`/v1/projects/${projectId}/verify-state`)
+    } catch (err) {
+      if ((err as { status?: number }).status === 404) return null
+      throw err
+    }
   },
 }
 

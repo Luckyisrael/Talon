@@ -4,16 +4,19 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { Add, ArrowUp, Stop } from 'iconsax-react-native';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Field, GhostButton, Screen, UIText } from '@/components/ui';
 import { StagedAttachments } from '@/components/build/Attachments';
 import { RestoredTranscript, type RestoredTurn } from '@/components/build/Transcript';
 import { TraceRow } from '@/components/build/TraceRow';
 import { PixelGrid } from '@/components/build/PixelGrid';
 import { QuestionCard } from '@/components/build/QuestionCard';
+import { VerifyBadge } from '@/components/build/VerifyBadge';
+import { VerifyEvidenceRow } from '@/components/build/VerifyEvidence';
 import { FileBrowser } from '@/components/files/FileBrowser';
 import { Colors, Spacing, Type } from '@/constants/theme';
 import { useActiveProject, usePromptStream } from '@/hooks';
-import { attachmentsApi, conversationApi, type PlanTask } from '@/lib/api';
+import { attachmentsApi, conversationApi, promptsApi, type PlanTask } from '@/lib/api';
 import { loadSnapshot, saveSnapshot } from '@/lib/history-cache';
 import {
   MAX_ATTACHMENTS,
@@ -75,6 +78,33 @@ export default function BuildScreen() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [waitingId, setWaitingId] = React.useState<number | null>(null);
 
+  // M4 union seed: the newest turn may lack its turn_end marker (running,
+  // waiting, failed, or legacy pre-marker) — its prompt row's files_touched is
+  // the only durable record of what it wrote. One fetch, cached by row id; the
+  // marker always wins when present. Mirrors web F8/F10/F11 (files only, never
+  // a verdict).
+  const seedPromptId = React.useMemo(() => {
+    for (let i = history.length - 1; i >= 0; i--) {
+      const t = history[i];
+      if (t.role === 'user') continue;
+      const hasMarker = (t.blocks ?? []).some((b) => b.kind === 'turn_end');
+      return !hasMarker && t.prompt_id != null ? t.prompt_id : undefined;
+    }
+    return undefined;
+  }, [history]);
+  const { data: seedRow } = useQuery({
+    queryKey: ['prompt-row', seedPromptId],
+    enabled: seedPromptId != null,
+    queryFn: () => promptsApi.get(seedPromptId as number),
+  });
+  const promptEvidence = React.useMemo(
+    () =>
+      seedPromptId != null && seedRow?.files_touched?.length
+        ? { [seedPromptId]: { files_touched: seedRow.files_touched } }
+        : undefined,
+    [seedPromptId, seedRow],
+  );
+
   const loadHistory = React.useCallback(
     async (opts?: { silent?: boolean }) => {
       if (!projectId) return;
@@ -115,9 +145,15 @@ export default function BuildScreen() {
       alive = false;
     };
   }, [projectId, loadHistory]);
+  // The sweep row lands with the turn: refresh the badge's claim alongside the
+  // history refetch that carries the marker it reads from.
+  const qc = useQueryClient();
   React.useEffect(() => {
-    if (turn.phase === 'done' || turn.phase === 'error') void loadHistory({ silent: true });
-  }, [turn.phase, loadHistory]);
+    if (turn.phase === 'done' || turn.phase === 'error') {
+      void loadHistory({ silent: true });
+      if (projectId != null) void qc.invalidateQueries({ queryKey: ['verify-state', projectId] });
+    }
+  }, [turn.phase, loadHistory, qc, projectId]);
   useFocusEffect(
     React.useCallback(() => {
       void loadHistory({ silent: true });
@@ -278,6 +314,10 @@ export default function BuildScreen() {
             ))}
           </View>
         )}
+        {/* Project-level sweep claim — persistent chrome, so it lives in the
+            header like the web Topbar's badge, not in the turn's status line.
+            Renders nothing unless GET /verify-state 200s a passing sweep. */}
+        {projectId != null && <VerifyBadge projectId={projectId} />}
         {turn.phase === 'done' && (
           <UIText variant="bodySm" tone="faint">
             turn finished
@@ -329,6 +369,7 @@ export default function BuildScreen() {
                 projectId={projectId}
                 waitingPromptId={waitingId}
                 onAnswer={(pid, text) => void answerPrompt(pid, text)}
+                promptEvidence={promptEvidence}
               />
             </View>
           )}
@@ -435,6 +476,12 @@ export default function BuildScreen() {
                   {turn.text}
                 </UIText>
               )}
+
+              {/* The done frame's verify evidence — the live twin of the
+                  restored marker's footer, so the claim lands when the turn
+                  lands, not one refetch later. Undefined until the frame
+                  arrives; absent fields claim nothing. */}
+              {turn.evidence ? <VerifyEvidenceRow evidence={turn.evidence} /> : null}
 
               {busy && <PixelGrid label={turn.activity ?? 'Working'} variant="Drive" />}
             </View>

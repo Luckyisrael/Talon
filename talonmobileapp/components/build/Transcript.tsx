@@ -1,11 +1,11 @@
 import React from 'react'
 import { StyleSheet, TouchableOpacity, View } from 'react-native'
-import { MarkdownView } from '@/components/ui'
+import { MarkdownView, UIText } from '@/components/ui'
 import { TraceRow } from '@/components/build/TraceRow'
 import { QuestionCard } from '@/components/build/QuestionCard'
 import { TurnAttachments } from '@/components/build/Attachments'
-import { UIText } from '@/components/ui'
 import { Colors, Spacing } from '@/constants/theme'
+import { VerifyEvidenceRow, evidenceFromMarker } from '@/components/build/VerifyEvidence'
 import { stripInlineDocs, type SentAttachment } from '@/lib/attachments'
 import type { ConversationBlock } from '@/lib/api'
 
@@ -33,11 +33,16 @@ export function RestoredTranscript({
   projectId,
   waitingPromptId,
   onAnswer,
+  promptEvidence,
 }: {
   turns: RestoredTurn[]
   projectId: number
   waitingPromptId?: number | null
   onAnswer: (promptId: number, text: string) => void
+  /** The newest marker-less turn's prompt-row union, keyed by prompt id
+   *  (files_touched only — the union carries no verdict, so a seed can never
+   *  claim a check ran or passed). Supplied by the screen via promptsApi.get. */
+  promptEvidence?: Record<number, { files_touched?: string[] }>
 }) {
   // Tool outcomes arrive in later turns keyed by call id: collect them
   // first so every tool row resolves to done or fail, live or restored.
@@ -92,7 +97,11 @@ export function RestoredTranscript({
         const tools = (t.blocks ?? []).filter((b) => b.kind === 'tool_use')
         const question = (t.blocks ?? []).find((b) => b.kind === 'tool_use' && b.name === 'ask_user')
         const ending = (t.blocks ?? []).find((b) => b.kind === 'turn_end')
-        if (!narration && tools.length === 0 && !ending) return null
+        // M4: a marker-less newest turn has no footer to rebuild — seed it from
+        // the prompt row's files_touched union. Files only: the union carries
+        // no verdict, so a seed can never claim a check ran or passed.
+        const seedFiles = !ending && t.prompt_id != null ? promptEvidence?.[t.prompt_id]?.files_touched : undefined
+        if (!narration && tools.length === 0 && !ending && !seedFiles?.length) return null
         return (
           <View key={i} style={styles.assistantWrap}>
             {narration ? <MarkdownView>{narration}</MarkdownView> : null}
@@ -111,7 +120,11 @@ export function RestoredTranscript({
                   />
                 )
               })}
-            {ending ? <TurnEndRow block={ending} /> : null}
+            {ending ? (
+              <TurnEndRow block={ending} />
+            ) : seedFiles?.length ? (
+              <VerifyEvidenceRow evidence={{ filesTouched: seedFiles }} />
+            ) : null}
             {question && waitingPromptId ? (
               <QuestionCard
                 question={str(inputOf(question, 'question')) ?? 'The agent asked a question.'}
@@ -199,10 +212,18 @@ function ContextRow({ block }: { block: ConversationBlock }) {
 
 function TurnEndRow({ block }: { block: ConversationBlock }) {
   const status = block.status ?? ''
+  // The evidence row renders in both directions: the verify payload when the
+  // marker carries one (verified true/false — the claim), or rounds alone on a
+  // completed legacy marker (the marker's only knowledge, no claim). Absent
+  // both → nothing below.
+  const evidence = evidenceFromMarker(block)
+  const evidenceRow = evidence ? <VerifyEvidenceRow evidence={evidence} /> : null
+
   // A turn that completed cleanly needs no announcement: the assistant text
   // already ends it. Interrupted is the restart sweep's marker; failed and
-  // cancelled are the two a user needs to see.
-  if (status === 'completed') return null
+  // cancelled are the two a user needs to see — their status row keeps the
+  // rounds sentence, so the evidence row below never repeats them.
+  if (status === 'completed') return evidenceRow
 
   const tone = status === 'failed' || status === 'interrupted' ? Colors.coralRed : Colors.fog
   const label =
@@ -222,6 +243,7 @@ function TurnEndRow({ block }: { block: ConversationBlock }) {
           {detail}
         </UIText>
       ) : null}
+      {evidenceRow}
     </View>
   )
 }

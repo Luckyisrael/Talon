@@ -13,7 +13,19 @@
     "lint": "expo lint --fix",
     "lint:check": "expo lint",
     "start": "expo start",
+    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
     "web": "expo start --web"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "moduleNameMapper": {
+      "^@/(.*)$": "<rootDir>/$1"
+    },
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/android/",
+      "/\\.expo/"
+    ]
   },
   "displayName": "Talon",
   "description": "Talon companion app — build Solana apps by talking.",
@@ -81,10 +93,16 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@react-native/jest-preset": "^0.86.3",
+    "@testing-library/react-native": "^14.0.1",
+    "@types/jest": "^30.0.0",
     "@types/react": "~19.2.14",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~55.0.0",
+    "jest": "^29.0.0",
+    "jest-expo": "^55.0.22",
     "prettier": "^3.8.1",
+    "test-renderer": "^1.0.0",
     "typescript": "~5.9.2"
   },
   "private": true
