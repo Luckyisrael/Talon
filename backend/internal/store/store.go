@@ -77,6 +77,13 @@ type Prompt struct {
 	SkippedGatesJSON string     `json:"skipped_gates,omitempty"`
 	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
+	// FilesTouched is the union of workspace paths every leg of this turn
+	// changed — the durable cross-leg set. Each leg's tools.NewFS journal is
+	// run-scoped, so without this row a resumed turn that writes nothing new
+	// would claim no changes and skip verify over earlier legs' files, while
+	// export fails closed on the missing project_verify_state row. Empty
+	// omits the key on the wire.
+	FilesTouched []string `json:"files_touched,omitempty"`
 }
 
 type Session struct {
@@ -600,6 +607,12 @@ func (s *Store) migrate() error {
 	// truncated prompt otherwise; never blank.
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN title TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE prompts ADD COLUMN route_reason TEXT DEFAULT ''")
+	// The turn's durable cross-leg touched-set (JSON string array): a resumed
+	// leg's fresh journal cannot see earlier legs' files, so the row carries
+	// the union the verify gate and fail-closed export read. Existing rows
+	// default to empty — they finished (or were discarded) before this law
+	// had a set to enforce.
+	s.db.Exec("ALTER TABLE prompts ADD COLUMN files_touched TEXT DEFAULT '[]'")
 	s.db.Exec("ALTER TABLE usage ADD COLUMN cost_usd REAL DEFAULT 0")
 
 	// Migration: run-status tracking, so an interrupted turn is distinguishable
@@ -1149,7 +1162,7 @@ func truncateTitleForList(s string) string {
 	return s
 }
 
-const promptColumns = "id, project_id, mode, prompt, response, status, round, skipped_gates, updated_at, created_at, title"
+const promptColumns = "id, project_id, mode, prompt, response, status, round, skipped_gates, updated_at, created_at, title, files_touched"
 
 // scanPrompt reads one prompt row in promptColumns order, mapping the nullable
 // updated_at (existing rows predate it) onto the optional struct field.
@@ -1157,11 +1170,19 @@ func scanPrompt(row *sql.Row) (*Prompt, error) {
 	p := &Prompt{}
 	var updatedAt sql.NullTime
 	var skipped sql.NullString
-	if err := row.Scan(&p.ID, &p.ProjectID, &p.Mode, &p.Prompt, &p.Response, &p.Status, &p.Round, &skipped, &updatedAt, &p.CreatedAt, &p.Title); err != nil {
+	var touched sql.NullString
+	if err := row.Scan(&p.ID, &p.ProjectID, &p.Mode, &p.Prompt, &p.Response, &p.Status, &p.Round, &skipped, &updatedAt, &p.CreatedAt, &p.Title, &touched); err != nil {
 		return nil, err
 	}
 	if skipped.Valid && strings.TrimSpace(skipped.String) != "" {
 		p.SkippedGatesJSON = skipped.String
+	}
+	// Corrupt JSON degrades to an empty set — the turn then verifies over
+	// this run's journal alone, exactly the pre-row behavior, never worse.
+	if touched.Valid && touched.String != "" {
+		if err := json.Unmarshal([]byte(touched.String), &p.FilesTouched); err != nil {
+			log.Printf("prompt %d: corrupt files_touched: %v", p.ID, err)
+		}
 	}
 	if updatedAt.Valid {
 		t := updatedAt.Time
@@ -1248,6 +1269,19 @@ func (s *Store) UpdatePromptSkippedGates(id int64, gates []string) {
 		raw = []byte("[]")
 	}
 	_, _ = s.db.Exec("UPDATE prompts SET skipped_gates = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", string(raw), id)
+}
+
+// UpdatePromptFilesTouched persists the union of files every leg of this
+// turn changed, as a JSON string array. The loop's FS journal is run-scoped
+// (a fresh tools.NewFS per resume), so this row is the durable cross-leg set
+// a resumed turn's verify gate reads. Best-effort per caller intent: a
+// bookkeeping failure never fails a finished turn.
+func (s *Store) UpdatePromptFilesTouched(id int64, files []string) {
+	raw, err := json.Marshal(files)
+	if err != nil {
+		raw = []byte("[]")
+	}
+	_, _ = s.db.Exec("UPDATE prompts SET files_touched = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", string(raw), id)
 }
 
 // UpdatePromptStatus records the run state of a turn and how far it got. The

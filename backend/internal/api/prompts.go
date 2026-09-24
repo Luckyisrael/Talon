@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1189,6 +1190,55 @@ func (t *AgentTurn) Journal() []tools.FileSnapshot { return t.bs.fs.Journal() }
 // Workspace reports the resolved workspace this turn runs in.
 func (t *AgentTurn) Workspace() string { return t.workspace }
 
+// unionTouched merges the durable prior-leg set with this run's live journal:
+// empties dropped, duplicates collapsed, sorted, never nil. The loop's law is
+// "changed code verifies before done" — a turn spans legs (fresh, resume,
+// answer), each with its own run-scoped tools.NewFS journal, so only the
+// union across legs is the turn's true touched set. Never nil keeps
+// files_touched:[] (not null) on the wire for a turn that changed nothing.
+func unionTouched(prior, live []string) []string {
+	seen := make(map[string]struct{}, len(prior)+len(live))
+	out := make([]string, 0, len(prior)+len(live))
+	for _, f := range prior {
+		if f == "" {
+			continue
+		}
+		if _, ok := seen[f]; ok {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, f)
+	}
+	for _, f := range live {
+		if f == "" {
+			continue
+		}
+		if _, ok := seen[f]; ok {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// storedTouched reads the durable cross-leg set from the prompt row. Nil when
+// unreadable — the turn then verifies over this run's journal alone, never
+// worse than the pre-row behavior. promptID <= 0 (a child run, which records
+// nothing) reads nothing.
+func (h *PromptHandler) storedTouched(promptID int64) []string {
+	if h.store == nil || promptID <= 0 {
+		return nil
+	}
+	p, err := h.store.GetPrompt(promptID)
+	if err != nil {
+		log.Printf("prompt %d: could not read files_touched: %v", promptID, err)
+		return nil
+	}
+	return p.FilesTouched
+}
+
 // NewAgentTurn assembles one turn exactly as the prompt route's runBuild
 // always has, in the same order: build session → grounding → plan seed →
 // history → RunOptions. bo is BuildOptions (the exported alias) — the same
@@ -1233,6 +1283,13 @@ func (h *PromptHandler) NewAgentTurn(
 
 	history := h.turnHistory(projectID, promptID, userPrompt, bo)
 
+	// The durable set earlier legs recorded on the row, read once and closed
+	// over below: this run's fresh journal must union with it, or a resume
+	// that writes nothing new would see an empty touched set, claim no
+	// changes, and skip verify over files earlier legs wrote — while export
+	// fails closed on the absent project_verify_state row.
+	prior := h.storedTouched(promptID)
+
 	opts := orchestrator.RunOptions{
 		SystemPrompt: h.systemPrompt(),
 		Mode:         bo.Mode,
@@ -1249,7 +1306,7 @@ func (h *PromptHandler) NewAgentTurn(
 		Execute:      bs.executor(),
 		Timeouts:     tooltimeout.DefaultPolicy(),
 		ReadOnlyTool: bs.reg.IsReadOnly,
-		FilesTouched: bs.fs.Touched,
+		FilesTouched: func() []string { return unionTouched(prior, bs.fs.Touched()) },
 		Exists:       bs.fs.Exists,
 		// W6: boot/vision/interact are required gates only when a device
 		// backs this turn; device-less runs classify them best-effort.
@@ -1258,6 +1315,10 @@ func (h *PromptHandler) NewAgentTurn(
 		// keeps the rounds that already finished — the difference between a crash
 		// costing one round and costing the whole turn.
 		Persist: func(msgs []ai.Message) {
+			// Crash durability: every round flush carries the union onto the
+			// row, so a process that dies before finalizeTurn still leaves
+			// this leg's writes visible to the resume that continues it.
+			h.store.UpdatePromptFilesTouched(promptID, unionTouched(prior, bs.fs.Touched()))
 			lg := h.slog.get(h.store, projectID)
 			for _, m := range msgs {
 				if err := h.store.AppendMessage(projectID, promptID, m.Role,
@@ -1448,6 +1509,16 @@ func (h *PromptHandler) finalizeTurn(projectID, promptID, userID int64, outcome 
 
 	if outcome == nil {
 		return
+	}
+
+	// The durable cross-leg set, finalized: re-read the row so files the
+	// round flushes already recorded are merged, never clobbered — an
+	// ask-pause carries no FilesTouched and a done-no-changes leg an empty
+	// one, and both must leave earlier legs' files in place. Skipped when
+	// the merge is empty so a turn that changed nothing keeps the row's
+	// wire key absent.
+	if merged := unionTouched(h.storedTouched(promptID), outcome.FilesTouched); len(merged) > 0 {
+		h.store.UpdatePromptFilesTouched(promptID, merged)
 	}
 
 	response := outcome.FinalText
