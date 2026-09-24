@@ -63,7 +63,7 @@ func (h *PromptHandler) ListPrompts(w http.ResponseWriter, r *http.Request) {
 // prompt ids clients need to scroll to them — excerpts would strand the
 // reader with no way to jump.
 func (h *PromptHandler) SearchConversation(w http.ResponseWriter, r *http.Request) {
-	projectID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid project id")
 		return

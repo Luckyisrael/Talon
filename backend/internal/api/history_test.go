@@ -139,15 +139,20 @@ func TestSearchConversationEscapesWildcards(t *testing.T) {
 	seedTurn(t, st, pid, 1, "user", "discount 100% today")
 	seedTurn(t, st, pid, 2, "user", "unrelated hello")
 
+	// Through a real chi router carrying the production path pattern, not a
+	// hand-built RouteContext: injecting params by hand mirrors whatever the
+	// handler assumes, which is exactly how a route/param name mismatch
+	// (reading "id" while the route declares "{projectID}") stays invisible
+	// until a live request 400s on every call.
+	router := chi.NewRouter()
+	router.Get("/v1/projects/{projectID}/conversation/search", h.SearchConversation)
 	search := func(q string) (int, []any) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet,
+			"/v1/projects/"+fmt.Sprintf("%d", pid)+"/conversation/search", nil)
 		req = req.WithContext(context.WithValue(req.Context(), UserIDKey, int64(1)))
-		rctx := chi.NewRouteContext()
-		rctx.URLParams.Add("id", fmt.Sprintf("%d", pid))
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 		req.URL.RawQuery = "q=" + q
 		rec := httptest.NewRecorder()
-		h.SearchConversation(rec, req)
+		router.ServeHTTP(rec, req)
 		var body map[string]any
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
 		turns, _ := body["turns"].([]any)
