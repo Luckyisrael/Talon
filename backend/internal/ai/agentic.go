@@ -355,191 +355,49 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 	// chunks as they arrive, forwarding text and reasoning to the sink and
 	// accumulating the same fields the buffered path returns — the caller's
 	// result contract is unchanged, only its latency is.
+	// M2: the read runs under an attempt loop. A provider that drops the
+	// connection mid-response, or that closes cleanly without
+	// finish_reason or [DONE], gets the SAME request resent
+	// byte-identically, up to c.streamRestarts times (hand-built clients
+	// with 0 keep the single attempt they have today). Each attempt
+	// accumulates into fresh sink state, so text from a killed attempt
+	// can never reach the result — the sink may already have forwarded it
+	// (accepted cosmetic duplication), but the returned text is the
+	// completing attempt's alone. openAIStreamAttempt performs one
+	// attempt and classifies how it ended.
 	var sinkText, sinkReasoning strings.Builder
 	if sink != nil {
-		stream, err := c.openStream(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
-			req.Header.Set("Authorization", "Bearer "+c.apiKey)
-			req.Header.Set("HTTP-Referer", "https://talon.app")
-			req.Header.Set("X-Title", "Talon")
-		})
-		if err != nil {
-			return nil, err
-		}
-		defer stream.Close()
+		for attempt := 0; ; attempt++ {
+			sinkText.Reset()
+			sinkReasoning.Reset()
 
-		// Not every provider honours the stream flag — some return one buffered
-		// JSON object no matter what was asked. Peek the head of the body: an
-		// SSE stream begins with "data:", and anything else means the response
-		// is a single object that must be parsed whole. Serving both shapes is
-		// what keeps this branch safe against a provider that ignores the flag.
-		buf := bufio.NewReaderSize(stream, 256*1024)
-		head, _ := buf.Peek(64)
-		if !bytes.HasPrefix(bytes.TrimLeft(head, " \t\r\n"), []byte("data:")) {
-			bodyBytes, err := io.ReadAll(buf)
-			if err != nil {
-				return nil, fmt.Errorf("could not read the response: %w", err)
+			result, scanErr, complete, fatal := c.openAIStreamAttempt(ctx, body, sink, &sinkText, &sinkReasoning)
+			if fatal != nil {
+				return nil, fatal
 			}
-			return c.parseBufferedOpenAITools(ctx, bodyBytes)
-		}
-		scanner := newSSEScanner(buf)
-		var toolCalls []struct {
-			ID       string `json:"id"`
-			Function struct {
-				Name      string `json:"name"`
-				Arguments string `json:"arguments"`
-			} `json:"function"`
-			ExtraContent struct {
-				Google struct {
-					ThoughtSignature string `json:"thought_signature"`
-				} `json:"google"`
-			} `json:"extra_content"`
-		}
-		var finishReason string
-		var usage struct {
-			PromptTokens        int `json:"prompt_tokens"`
-			CompletionTokens    int `json:"completion_tokens"`
-			PromptTokensDetails struct {
-				CachedTokens int `json:"cached_tokens"`
-			} `json:"prompt_tokens_details"`
-		}
-		for scanner.Next() {
-			event := scanner.Event()
-			if len(event.Data) == 0 {
-				continue
+			if scanErr == nil && complete {
+				return result, nil
 			}
-			if bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) {
-				break
-			}
-			var chunk struct {
-				Choices []struct {
-					Delta struct {
-						Content          string `json:"content"`
-						Reasoning        string `json:"reasoning"`
-						ReasoningContent string `json:"reasoning_content"`
-						ToolCalls        []struct {
-							Index    int    `json:"index"`
-							ID       string `json:"id"`
-							Function struct {
-								Name      string `json:"name"`
-								Arguments string `json:"arguments"`
-							} `json:"function"`
-						} `json:"tool_calls"`
-					} `json:"delta"`
-					FinishReason string `json:"finish_reason"`
-				} `json:"choices"`
-				Usage *struct {
-					PromptTokens        int `json:"prompt_tokens"`
-					CompletionTokens    int `json:"completion_tokens"`
-					PromptTokensDetails struct {
-						CachedTokens int `json:"cached_tokens"`
-					} `json:"prompt_tokens_details"`
-				} `json:"usage"`
-				Error *struct {
-					Message string `json:"message"`
-				} `json:"error"`
-			}
-			if err := json.Unmarshal(event.Data, &chunk); err != nil {
-				continue // keep-alives and provider-specific frames are not fatal
-			}
-			if chunk.Error != nil {
-				return nil, fmt.Errorf("provider error: %s", chunk.Error.Message)
-			}
-			if chunk.Usage != nil {
-				usage = *chunk.Usage
-			}
-			if len(chunk.Choices) == 0 {
-				continue
-			}
-			choice := chunk.Choices[0]
-
-			reasoning := choice.Delta.Reasoning
-			if reasoning == "" {
-				reasoning = choice.Delta.ReasoningContent
-			}
-			if reasoning != "" {
-				sinkReasoning.WriteString(reasoning)
-				sink(reasoning, true)
-			}
-			if choice.Delta.Content != "" {
-				sinkText.WriteString(choice.Delta.Content)
-				sink(choice.Delta.Content, false)
-			}
-			// Tool calls arrive incrementally: the name and id land on the first
-			// fragment for an index, arguments arrive as successive fragments
-			// that must be concatenated in order.
-			for _, tc := range choice.Delta.ToolCalls {
-				for tc.Index >= len(toolCalls) {
-					toolCalls = append(toolCalls, struct {
-						ID       string `json:"id"`
-						Function struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
-						} `json:"function"`
-						ExtraContent struct {
-							Google struct {
-								ThoughtSignature string `json:"thought_signature"`
-							} `json:"google"`
-						} `json:"extra_content"`
-					}{})
+			if attempt >= c.streamRestarts {
+				// Out of budget. A read error stays terminal with the
+				// exact wording clients match on; a clean-but-truncated
+				// close is accepted as-is — what this branch has always
+				// done when no restart budget existed.
+				if scanErr != nil {
+					return nil, fmt.Errorf("the AI stream ended early: %w", scanErr)
 				}
-				if tc.ID != "" {
-					toolCalls[tc.Index].ID = tc.ID
-				}
-				if tc.Function.Name != "" {
-					toolCalls[tc.Index].Function.Name = tc.Function.Name
-				}
-				toolCalls[tc.Index].Function.Arguments += tc.Function.Arguments
+				log.Printf("ChatWithTools(OpenAI stream): no finish after %d attempt(s); accepting partial (%d chars)",
+					attempt+1, len(result.Text))
+				return result, nil
 			}
-			if choice.FinishReason != "" {
-				finishReason = choice.FinishReason
+			log.Printf("ChatWithTools(OpenAI stream): attempt %d/%d ended early (complete=%v err=%v); restarting byte-identically",
+				attempt+1, c.streamRestarts+1, complete, scanErr)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(streamRestartBackoff):
 			}
 		}
-		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("the AI stream ended early: %w", err)
-		}
-
-		result := &AgenticChatResult{
-			Text: sinkText.String(),
-			Usage: Usage{
-				InputTokens:     usage.PromptTokens,
-				OutputTokens:    usage.CompletionTokens,
-				CacheReadTokens: usage.PromptTokensDetails.CachedTokens,
-			},
-		}
-		if sinkReasoning.Len() > 0 {
-			result.Blocks = append(result.Blocks, Block{Type: "thinking", Text: sinkReasoning.String()})
-		}
-		if result.Text != "" {
-			result.Blocks = append(result.Blocks, Block{Type: "text", Text: result.Text})
-		}
-		for _, tc := range toolCalls {
-			args := tc.Function.Arguments
-			if args == "" {
-				args = "{}"
-			}
-			id := tc.ID
-			if id == "" {
-				id = fmt.Sprintf("call_%s_%d", tc.Function.Name, len(result.ToolUses))
-			}
-			result.ToolUses = append(result.ToolUses, ToolUseBlock{
-				Type: "tool_use", ID: id, Name: tc.Function.Name, Input: json.RawMessage(args),
-			})
-			result.Blocks = append(result.Blocks, Block{
-				Type: "tool_use", ID: id, Name: tc.Function.Name, Input: json.RawMessage(args),
-			})
-		}
-		switch {
-		case len(result.ToolUses) > 0:
-			result.StopReason = "tool_use"
-		case finishReason == "length":
-			result.StopReason = "max_tokens"
-		default:
-			result.StopReason = "end_turn"
-		}
-		log.Printf("ChatWithTools(OpenAI stream): stop=%s text=%d tools=%d in=%d out=%d",
-			result.StopReason, len(result.Text), len(result.ToolUses),
-			result.Usage.InputTokens, result.Usage.OutputTokens)
-		return result, nil
 	}
 
 	respBody, err := c.doWithEnvelopeRetry(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
@@ -548,6 +406,225 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 		req.Header.Set("X-Title", "Talon")
 	}, "ChatWithTools(OpenAI)")
 	return c.parseBufferedOpenAITools(ctx, respBody)
+}
+
+// openAIStreamAttempt performs ONE streaming attempt of the sink branch
+// (M2) and classifies how it ended:
+//
+//	fatal  != nil          terminal: openStream exhausted its own
+//	                        retries, the provider sent an error frame,
+//	                        or a buffered body failed to parse. Return
+//	                        as-is, never restarted.
+//	scanErr != nil         a mid-stream read failure — restart
+//	                        candidate; at budget end it becomes the
+//	                        terminal "the AI stream ended early".
+//	complete               finish_reason or [DONE] was seen: done.
+//	!complete && scanErr   a clean-but-truncated close — restart
+//	    == nil             candidate; at budget end the partial is
+//	                        accepted, as it always was.
+//
+// result is assembled from THIS attempt's sink state alone (nil only
+// when the attempt never reached reading — the fatal paths), so a killed
+// attempt's text can never leak into what the turn returns. The stream
+// body is closed before this returns, so a restart never inherits one.
+func (c *Client) openAIStreamAttempt(
+	ctx context.Context,
+	body []byte,
+	sink StreamSink,
+	sinkText, sinkReasoning *strings.Builder,
+) (result *AgenticChatResult, scanErr error, complete bool, fatal error) {
+	stream, err := c.openStream(ctx, c.baseURL+"/chat/completions", body, func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("HTTP-Referer", "https://talon.app")
+		req.Header.Set("X-Title", "Talon")
+	})
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer stream.Close()
+
+	// Not every provider honours the stream flag — some return one buffered
+	// JSON object no matter what was asked. Peek the head of the body: an
+	// SSE stream begins with "data:", and anything else means the response
+	// is a single object that must be parsed whole. Serving both shapes is
+	// what keeps this branch safe against a provider that ignores the flag.
+	buf := bufio.NewReaderSize(stream, 256*1024)
+	head, _ := buf.Peek(64)
+	if !bytes.HasPrefix(bytes.TrimLeft(head, " \t\r\n"), []byte("data:")) {
+		bodyBytes, err := io.ReadAll(buf)
+		if err != nil {
+			// A buffered body cut short is a read failure like any other:
+			// it joins the restart decision instead of dying outright.
+			return nil, err, false, nil
+		}
+		parsed, perr := c.parseBufferedOpenAITools(ctx, bodyBytes)
+		if perr != nil {
+			return nil, nil, false, perr
+		}
+		return parsed, nil, true, nil
+	}
+	scanner := newSSEScanner(buf)
+	var toolCalls []struct {
+		ID       string `json:"id"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+		ExtraContent struct {
+			Google struct {
+				ThoughtSignature string `json:"thought_signature"`
+			} `json:"google"`
+		} `json:"extra_content"`
+	}
+	var finishReason string
+	var sawDone bool
+	var usage struct {
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+	}
+	for scanner.Next() {
+		event := scanner.Event()
+		if len(event.Data) == 0 {
+			continue
+		}
+		if bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) {
+			sawDone = true
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content          string `json:"content"`
+					Reasoning        string `json:"reasoning"`
+					ReasoningContent string `json:"reasoning_content"`
+					ToolCalls        []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage *struct {
+				PromptTokens        int `json:"prompt_tokens"`
+				CompletionTokens    int `json:"completion_tokens"`
+				PromptTokensDetails struct {
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
+			} `json:"usage"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(event.Data, &chunk); err != nil {
+			continue // keep-alives and provider-specific frames are not fatal
+		}
+		if chunk.Error != nil {
+			return nil, nil, false, fmt.Errorf("provider error: %s", chunk.Error.Message)
+		}
+		if chunk.Usage != nil {
+			usage = *chunk.Usage
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		choice := chunk.Choices[0]
+
+		reasoning := choice.Delta.Reasoning
+		if reasoning == "" {
+			reasoning = choice.Delta.ReasoningContent
+		}
+		if reasoning != "" {
+			sinkReasoning.WriteString(reasoning)
+			sink(reasoning, true)
+		}
+		if choice.Delta.Content != "" {
+			sinkText.WriteString(choice.Delta.Content)
+			sink(choice.Delta.Content, false)
+		}
+		// Tool calls arrive incrementally: the name and id land on the first
+		// fragment for an index, arguments arrive as successive fragments
+		// that must be concatenated in order.
+		for _, tc := range choice.Delta.ToolCalls {
+			for tc.Index >= len(toolCalls) {
+				toolCalls = append(toolCalls, struct {
+					ID       string `json:"id"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+					ExtraContent struct {
+						Google struct {
+							ThoughtSignature string `json:"thought_signature"`
+						} `json:"google"`
+					} `json:"extra_content"`
+				}{})
+			}
+			if tc.ID != "" {
+				toolCalls[tc.Index].ID = tc.ID
+			}
+			if tc.Function.Name != "" {
+				toolCalls[tc.Index].Function.Name = tc.Function.Name
+			}
+			toolCalls[tc.Index].Function.Arguments += tc.Function.Arguments
+		}
+		if choice.FinishReason != "" {
+			finishReason = choice.FinishReason
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		scanErr = err
+	}
+	complete = sawDone || finishReason != ""
+
+	result = &AgenticChatResult{
+		Text: sinkText.String(),
+		Usage: Usage{
+			InputTokens:     usage.PromptTokens,
+			OutputTokens:    usage.CompletionTokens,
+			CacheReadTokens: usage.PromptTokensDetails.CachedTokens,
+		},
+	}
+	if sinkReasoning.Len() > 0 {
+		result.Blocks = append(result.Blocks, Block{Type: "thinking", Text: sinkReasoning.String()})
+	}
+	if result.Text != "" {
+		result.Blocks = append(result.Blocks, Block{Type: "text", Text: result.Text})
+	}
+	for _, tc := range toolCalls {
+		args := tc.Function.Arguments
+		if args == "" {
+			args = "{}"
+		}
+		id := tc.ID
+		if id == "" {
+			id = fmt.Sprintf("call_%s_%d", tc.Function.Name, len(result.ToolUses))
+		}
+		result.ToolUses = append(result.ToolUses, ToolUseBlock{
+			Type: "tool_use", ID: id, Name: tc.Function.Name, Input: json.RawMessage(args),
+		})
+		result.Blocks = append(result.Blocks, Block{
+			Type: "tool_use", ID: id, Name: tc.Function.Name, Input: json.RawMessage(args),
+		})
+	}
+	switch {
+	case len(result.ToolUses) > 0:
+		result.StopReason = "tool_use"
+	case finishReason == "length":
+		result.StopReason = "max_tokens"
+	default:
+		result.StopReason = "end_turn"
+	}
+	log.Printf("ChatWithTools(OpenAI stream): stop=%s text=%d tools=%d in=%d out=%d complete=%v",
+		result.StopReason, len(result.Text), len(result.ToolUses),
+		result.Usage.InputTokens, result.Usage.OutputTokens, complete)
+	return result, scanErr, complete, nil
 }
 
 // parseBufferedOpenAITools turns one whole Chat Completions object into an

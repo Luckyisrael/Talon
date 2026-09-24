@@ -36,6 +36,24 @@ type Client struct {
 	httpClient   *http.Client
 	workspaceDir string
 
+	// streamClient serves openStream — every streaming path — and nothing
+	// else. Its Timeout is deliberately 0 (M2): the shared 10-minute
+	// httpClient timeout killed healthy long streams, a reasoning round
+	// can think silently past any fixed total. Liveness is the pair of
+	// silence bounds instead: the transport's ResponseHeaderTimeout cuts
+	// a provider that never sends headers, and stalledBody cuts one that
+	// sends headers then goes quiet, measured between bytes. Nil on
+	// hand-built test clients, which fall back to httpClient — the old
+	// behavior, byte-identical.
+	streamClient *http.Client
+	// streamStall is the between-bytes watchdog for open stream bodies
+	// (0 = off). See stallbody.go.
+	streamStall time.Duration
+	// streamRestarts is the sink-branch restart budget: how many times a
+	// stream that died or truncated mid-turn is resent byte-identically
+	// (0 = single attempt, today's behavior).
+	streamRestarts int
+
 	// lastErr records the most recent provider failure for health checks.
 	// A healthy provider never writes here; readyz degrades only on fresh
 	// failures, never on ancient history.
@@ -193,6 +211,20 @@ func New() (*Client, error) {
 		workspaceDir = os.TempDir()
 	}
 
+	// M2 stream-liveness knobs: one bound for silence before headers,
+	// one for silence between bytes, one for the restart budget. An
+	// explicit stall budget doubles as the header budget (one silence
+	// limit to reason about); an explicit AI_STREAM_HEADER_TIMEOUT wins
+	// outright, and 0 disables that bound deliberately.
+	stall, stallOK := durationKnob("AI_STREAM_STALL", defaultStreamStall)
+	headerTimeout := defaultStreamHeaderTimeout
+	if stallOK && stall > 0 {
+		headerTimeout = stall
+	}
+	if h, hOK := durationKnob("AI_STREAM_HEADER_TIMEOUT", defaultStreamHeaderTimeout); hOK {
+		headerTimeout = h
+	}
+
 	return &Client{
 		protocol: Provider(cfg.Protocol),
 		baseURL:  strings.TrimSuffix(cfg.BaseURL, "/"),
@@ -202,9 +234,14 @@ func New() (*Client, error) {
 		providerName: DefaultProviderName,
 		// Generous: an agentic turn asks for up to 16k output tokens and a
 		// reasoning model can spend minutes on one before the first byte.
-		httpClient:   &http.Client{Timeout: 10 * time.Minute},
-		workspaceDir: workspaceDir,
-		pacer:        newRequestPacer(),
+		httpClient: &http.Client{Timeout: 10 * time.Minute},
+		// Timeout-free by design — the silence bounds are the only clock
+		// (see the streamClient field doc).
+		streamClient:   &http.Client{Transport: newStreamTransport(headerTimeout)},
+		streamStall:    stall,
+		streamRestarts: restartKnob(),
+		workspaceDir:   workspaceDir,
+		pacer:          newRequestPacer(),
 	}, nil
 }
 
@@ -232,27 +269,31 @@ func (c *Client) PacingInterval() time.Duration {
 }
 
 // clone returns an independent Client sharing the read-only pieces (http
-// client, workspace dir, pacer, retry hook) and a *snapshot* of the health
-// state, taken under the lock so a clone racing a noteFailure reads a
-// consistent pair instead of a torn one. Built field-by-field, never
-// struct-copied: a struct copy duplicates the health mutex — rejected by
-// copylocks vet (W0), and two mutexes around one client's lastErr is exactly
-// the split-brain the single mutex exists to prevent.
+// client, stream client and its liveness knobs, workspace dir, pacer,
+// retry hook) and a *snapshot* of the health state, taken under the lock
+// so a clone racing a noteFailure reads a consistent pair instead of a
+// torn one. Built field-by-field, never struct-copied: a struct copy
+// duplicates the health mutex — rejected by copylocks vet (W0), and two
+// mutexes around one client's lastErr is exactly the split-brain the
+// single mutex exists to prevent.
 func (c *Client) clone() Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return Client{
-		protocol:     c.protocol,
-		baseURL:      c.baseURL,
-		apiKey:       c.apiKey,
-		model:        c.model,
-		providerName: c.providerName,
-		httpClient:   c.httpClient,
-		workspaceDir: c.workspaceDir,
-		lastErr:      c.lastErr,
-		lastErrAt:    c.lastErrAt,
-		pacer:        c.pacer,
-		retryHook:    c.retryHook,
+		protocol:       c.protocol,
+		baseURL:        c.baseURL,
+		apiKey:         c.apiKey,
+		model:          c.model,
+		providerName:   c.providerName,
+		httpClient:     c.httpClient,
+		streamClient:   c.streamClient,
+		streamStall:    c.streamStall,
+		streamRestarts: c.streamRestarts,
+		workspaceDir:   c.workspaceDir,
+		lastErr:        c.lastErr,
+		lastErrAt:      c.lastErrAt,
+		pacer:          c.pacer,
+		retryHook:      c.retryHook,
 	}
 }
 
@@ -829,7 +870,15 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 		req.Header.Set("Accept", "text/event-stream")
 		setHeaders(req)
 
-		resp, err := c.httpClient.Do(req)
+		// M2: streams go through the timeout-free client whose transport
+		// bounds only the header wait — the between-bytes watchdog wraps
+		// the body below. Hand-built clients (tests) keep the shared
+		// httpClient, timeout and all, exactly as before.
+		client := c.streamClient
+		if client == nil {
+			client = c.httpClient
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			// A dead connection is transient on every gateway.
 			lastErr = fmt.Errorf("could not reach the AI service: %w", err)
@@ -837,6 +886,9 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 			continue
 		}
 		if resp.StatusCode == http.StatusOK {
+			if c.streamStall > 0 {
+				return newStalledBody(resp.Body, c.streamStall), nil
+			}
 			return resp.Body, nil
 		}
 		// 200 with an error body arrives as an SSE frame and is handled by
