@@ -448,6 +448,12 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 	if pf := h.pluginFileTool(workspacePath); pf != nil {
 		reg.Register(pf)
 	}
+	// Plugin discovery: ranked directory search. Registered whenever the
+	// registry is attached — unlike the tools above it needs no pins,
+	// because its whole purpose is finding the plugin to pin.
+	if sp := h.pluginSearchTool(workspacePath); sp != nil {
+		reg.Register(sp)
+	}
 
 	// H9 delegation: scoped children on the same loop. Registered only
 	// when the deployment opted in — delegation multiplies context and cost,

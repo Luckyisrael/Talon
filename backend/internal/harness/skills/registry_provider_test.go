@@ -34,6 +34,7 @@ func fixtureRegistry(t *testing.T) *httptest.Server {
 				"name": "web3-components", "version": "1.0.0",
 				"path":        "plugins/web3-components",
 				"description": "Wallet bits.", "license": "MIT",
+				"keywords": []string{"wallet", "connect", "balance", "web3"},
 			}},
 		})
 	})

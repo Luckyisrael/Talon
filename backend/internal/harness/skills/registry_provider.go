@@ -67,6 +67,10 @@ type registryEntry struct {
 	Description string `json:"description"`
 	License     string `json:"license"`
 	Repo        string `json:"repo"`
+	// Keywords are extra search terms the one-line description does not
+	// carry (optional — a directory entry without them still matches on
+	// name and description).
+	Keywords []string `json:"keywords,omitempty"`
 }
 
 type pluginManifest struct {
@@ -643,6 +647,156 @@ func (p RegistryProvider) loadCachedPlugin(name, version, why string) ([]knowled
 		s.AutoAttach = false
 		s.Triggers = nil
 		out = append(out, *s)
+	}
+	return out, nil
+}
+
+// SearchHit is one directory match: catalog metadata only (name, version,
+// license, why it matched). Skill bodies never ride search results — they
+// reach the model only through read_skill after a pin exists.
+type SearchHit struct {
+	Name        string
+	Version     string
+	Description string
+	License     string
+	Keywords    []string
+	// Matched lists the query terms this entry scored on — the honest
+	// "why this one" the model can repeat to the user.
+	Matched []string
+	// Pinned is true when the asking workspace already pins this plugin,
+	// so search output never tells the model to enable what is enabled.
+	Pinned bool
+}
+
+// searchStopwords are filler a capability query usually carries; dropping
+// them keeps ranking on the words that actually name the job.
+var searchStopwords = map[string]bool{
+	"a": true, "an": true, "and": true, "are": true, "can": true,
+	"do": true, "does": true, "for": true, "from": true, "how": true,
+	"i": true, "in": true, "is": true, "it": true, "me": true,
+	"my": true, "need": true, "needs": true, "of": true, "on": true,
+	"or": true, "please": true, "that": true, "the": true, "this": true,
+	"to": true, "use": true, "using": true, "want": true, "wants": true,
+	"with": true, "plugin": true, "plugins": true, "talon": true,
+}
+
+// searchTerms lowercases and tokenizes a query, dropping stopwords,
+// one-character tokens, and duplicates. An empty result means "list
+// everything" — a blank query is the directory index, not a refusal.
+func searchTerms(query string) []string {
+	fields := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
+	out := make([]string, 0, len(fields))
+	seen := map[string]bool{}
+	for _, f := range fields {
+		if len(f) < 2 || searchStopwords[f] || seen[f] {
+			continue
+		}
+		seen[f] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+// scoreRegistryEntry ranks one directory entry against the query terms:
+// exact name beats name substring, which beats a keyword hit, which beats
+// a description mention. It returns the score and the terms that scored
+// (empty score = no fit; empty terms = unfiltered listing).
+func scoreRegistryEntry(e registryEntry, terms []string) (int, []string) {
+	if len(terms) == 0 {
+		return 0, nil
+	}
+	name := strings.ToLower(e.Name)
+	desc := strings.ToLower(e.Description)
+	keywords := make([]string, 0, len(e.Keywords))
+	for _, k := range e.Keywords {
+		keywords = append(keywords, strings.ToLower(k))
+	}
+	score := 0
+	var matched []string
+	for _, t := range terms {
+		switch {
+		case name == t:
+			score += 100
+			matched = append(matched, t)
+		case strings.Contains(name, t):
+			score += 50
+			matched = append(matched, t)
+		default:
+			hit := false
+			for _, k := range keywords {
+				if k == t || strings.Contains(k, t) || strings.Contains(t, k) {
+					score += 40
+					hit = true
+					break
+				}
+			}
+			if !hit && strings.Contains(desc, t) {
+				score += 20
+				hit = true
+			}
+			if hit {
+				matched = append(matched, t)
+			}
+		}
+	}
+	return score, matched
+}
+
+// Search resolves the directory index and ranks it against a plain-words
+// capability query. This is the discovery half of the plugin system: the
+// model asks what the request needs and gets candidates to choose ONE
+// from — no bodies, no bulk loading, nothing enabled by the search itself.
+// The pins argument only annotates hits as already-enabled; a nil map
+// means "nothing pinned". An unreachable index returns an error the tool
+// surfaces honestly; it never falls back to guesses.
+func (p RegistryProvider) Search(query string, pins map[string]string) ([]SearchHit, error) {
+	indexURL := p.IndexURL
+	if indexURL == "" {
+		indexURL = DefaultRegistry
+	}
+	index, err := p.fetchIndex(indexURL)
+	if err != nil {
+		return nil, err
+	}
+	terms := searchTerms(query)
+	type ranked struct {
+		hit   SearchHit
+		score int
+	}
+	var hits []ranked
+	for _, e := range index.Plugins {
+		score, matched := scoreRegistryEntry(e, terms)
+		if len(terms) > 0 && score == 0 {
+			continue
+		}
+		hits = append(hits, ranked{
+			hit: SearchHit{
+				Name:        e.Name,
+				Version:     e.Version,
+				Description: e.Description,
+				License:     e.License,
+				Keywords:    e.Keywords,
+				Matched:     matched,
+				Pinned:      strings.TrimSpace(pins[e.Name]) != "",
+			},
+			score: score,
+		})
+	}
+	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].score != hits[j].score {
+			return hits[i].score > hits[j].score
+		}
+		return hits[i].hit.Name < hits[j].hit.Name
+	})
+	const maxHits = 6
+	if len(hits) > maxHits {
+		hits = hits[:maxHits]
+	}
+	out := make([]SearchHit, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, h.hit)
 	}
 	return out, nil
 }

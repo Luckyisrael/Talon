@@ -14,4 +14,5 @@ func (t *FindFiles) ReadOnly() bool      { return true }
 func (t *Explore) ReadOnly() bool        { return true }
 func (t *ReadMemory) ReadOnly() bool     { return true }
 func (t *ReadPluginFile) ReadOnly() bool { return true }
+func (t *SearchPlugins) ReadOnly() bool  { return true }
 func (t *RunGate) ReadOnly() bool        { return true }

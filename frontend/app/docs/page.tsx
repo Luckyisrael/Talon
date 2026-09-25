@@ -124,12 +124,15 @@ export default function DocsPage() {
               <p className="text-sm text-fog leading-relaxed mb-4">
                 Pin the plugin for your project in{" "}
                 <span className="font-mono text-[13px] text-mist">.talon/plugins.json</span>
-                {" "}— that file is the approval, and nothing loads without it:{" "}
+                {" "}— that file is what you review, and nothing loads without it:{" "}
                 <span className="font-mono text-[13px] text-mist">talon-mobile-ui@1.0.0</span>.
-                Then just describe what you want. Ask for a wallet screen and the agent
+                When a build needs a capability the project doesn&apos;t have — a payment
+                provider, a new API — the agent searches the directory with{" "}
+                <span className="font-mono text-[13px] text-mist">search_plugins</span>,
+                shows you the matching plugins with their version and license, and enables
+                only the one the request chose. Then just describe what you want: the agent
                 loads the one matching skill itself — connect, balance, or send —
-                one at a time, never several just in case. The first time a new plugin loads,
-                you approve its manifest, license, and pinned version. State-changing
+                one at a time, never several just in case. State-changing
                 mainnet calls always ask you in the UI before anything is sent.
                 Updates never land silently: your build keeps serving the pinned
                 version and tells you the exact version to adopt when the directory

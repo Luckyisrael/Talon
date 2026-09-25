@@ -53,8 +53,9 @@ func TestWorkingDiscipline(t *testing.T) {
 			t.Errorf("%s tier should add a discipline block", name)
 		}
 		// All three steer toward the behaviors the deterministic layers depend on:
-		// consult the skill, and typecheck.
-		for _, want := range []string{"read_skill", "run_typecheck"} {
+		// consult the skill, typecheck, and reach for the plugin directory before
+		// hand-rolling a third-party integration.
+		for _, want := range []string{"read_skill", "run_typecheck", "search_plugins"} {
 			if !strings.Contains(block, want) {
 				t.Errorf("%s discipline block should mention %q, got %q", name, want, block)
 			}
