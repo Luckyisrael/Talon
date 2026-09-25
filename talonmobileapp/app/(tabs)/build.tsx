@@ -84,9 +84,14 @@ export default function BuildScreen() {
   // the bottom of this screen in every sub-view.
   const project = useActiveProject();
   const projectId = project?.id ?? null;
-  const { turn, send, answer, answerPrompt, resume, discard, stop, diag } = usePromptStream(projectId);
+  const { turn, send, answer, answerPrompt, resume, discard, steer, parkQueue, stop, diag } = usePromptStream(projectId);
   const [draft, setDraft] = React.useState('');
   const [mode, setMode] = React.useState<'plan' | 'build'>('build');
+  // H2 delivery toggle, the web's queueInstead: OFF (default) a submitted
+  // message steers the running build or parks with the plan; ON it stays in
+  // the composer until this turn ends. Persists until tapped again, one
+  // visible decision at a time.
+  const [queueInstead, setQueueInstead] = React.useState(false);
   const [answers, setAnswers] = React.useState<string[]>([]);
   const [subView, setSubView] = React.useState<'chat' | 'files'>('chat');
   const [staged, setStaged] = React.useState<LocalAttachment[]>([]);
@@ -271,7 +276,7 @@ export default function BuildScreen() {
 
   async function submit() {
     const text = draft.trim();
-    if (busy || uploading) return;
+    if (uploading) return;
     if (projectId == null) {
       setAttError('Pick a project first');
       return;
@@ -282,6 +287,25 @@ export default function BuildScreen() {
     // the live card and the restored one history restored for us.
     if ((turn.phase === 'waiting' && turn.question) || waitingId != null) {
       setAttError('answer the question in the transcript first');
+      return;
+    }
+    // H2 while a turn runs: a submitted message steers the running build by
+    // default, or parks for the next turn when the current call is a plan —
+    // the web's delivery rules. Queue-instead leaves the draft right where
+    // it is (it goes out when this turn ends). Nothing is ever silently
+    // dropped: a steer shows its row and its failure, a park shows a parked
+    // row until delivery; steer() returning false (the phase event has not
+    // named the turn yet) keeps the draft for the retry.
+    if (busy) {
+      if (queueInstead) return;
+      if (!text) return;
+      setAttError(null);
+      if (turn.planStream) {
+        parkQueue(text);
+        setDraft('');
+      } else if (steer(text)) {
+        setDraft('');
+      }
       return;
     }
     if (!text) {
@@ -468,6 +492,36 @@ export default function BuildScreen() {
                 </UIText>
               ) : null}
 
+              {/* Steered messages: marked rows, honest that they redirect
+                  into THIS running turn rather than starting one — a failed
+                  delivery lands on its own row (the web's dimmed bubble). */}
+              {(turn.steers ?? []).map((s) => (
+                <View key={s.id} style={styles.parkedRow}>
+                  <UIText variant="caption" tone="muted" numberOfLines={2}>
+                    ↳ {s.text}
+                  </UIText>
+                  {s.error ? (
+                    <UIText variant="monoSm" tone="danger">
+                      {s.error}
+                    </UIText>
+                  ) : null}
+                </View>
+              ))}
+
+              {/* Parked messages: visible and labelled as not-yet-sent — each
+                  fires as its own plan turn when this call settles (the web's
+                  queued bubble, "queued — sends when the plan lands"). */}
+              {(turn.queue ?? []).map((q, i) => (
+                <View key={`queued-${i}`} style={styles.parkedRow}>
+                  <UIText variant="caption" tone="muted" numberOfLines={2}>
+                    {q.text}
+                  </UIText>
+                  <UIText variant="monoSm" tone="faint">
+                    queued — sends when the plan lands
+                  </UIText>
+                </View>
+              ))}
+
               {/* Live task updates, the plan shape the agent is working to. */}
               {turn.tasks.map((t: PlanTask) => (
                 <View key={t.id} style={styles.taskRow}>
@@ -652,6 +706,22 @@ export default function BuildScreen() {
           onRemove={(key) => setStaged((prev) => prev.filter((a) => a.key !== key))}
           error={attError}
         />
+        {/* H2: while a turn runs the mode pill makes way for the delivery
+            toggle — steer the running build (default) or park for the next
+            turn, one visible decision at a time, like the web's pill. */}
+        {busy && (
+          <Pressable
+            onPress={() => setQueueInstead((q) => !q)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: queueInstead }}
+            accessibilityLabel={queueInstead ? 'Queue for the next turn' : 'Steer the running build'}
+            style={[styles.deliveryPill, queueInstead && styles.deliveryPillOn]}
+          >
+            <UIText variant="monoSm" tone={queueInstead ? 'accent' : 'faint'}>
+              {queueInstead ? 'QUEUE INSTEAD' : 'STEERS THE BUILD'}
+            </UIText>
+          </Pressable>
+        )}
         <View style={styles.composerRow}>
           <Pressable
             onPress={pickAttach}
@@ -668,11 +738,22 @@ export default function BuildScreen() {
           <Field
             value={draft}
             onChangeText={setDraft}
-            placeholder="Tell the agent what to do…"
+            placeholder={
+              (turn.phase === 'waiting' && turn.question) || waitingId != null
+                ? 'Answer the question above to continue…'
+                : busy
+                  ? queueInstead
+                    ? 'Queue for the next turn…'
+                    : 'Steer the running build…'
+                  : 'Tell the agent what to do…'
+            }
             multiline
             style={styles.input}
           />
-          {busy ? (
+          {/* Stop and Send coexist while a turn runs: Stop ends the call,
+              Send takes the composer's text wherever the toggle says — the
+              web shows both buttons in the streaming state. */}
+          {busy && (
             <Pressable
               onPress={stop}
               accessibilityLabel="Stop this turn"
@@ -680,20 +761,25 @@ export default function BuildScreen() {
             >
               <Stop size={20} color={Colors.coralRed} variant="Bold" />
             </Pressable>
-          ) : (
-            <Pressable
-              onPress={submit}
-              disabled={!draft.trim() || uploading}
-              accessibilityLabel="Send"
-              style={({ pressed }) => [
-                styles.sendBtn,
-                pressed && styles.pressed,
-                (!draft.trim() || uploading) && styles.btnOff,
-              ]}
-            >
-              <ArrowUp size={20} color={Colors.acidLimeInk} variant="Linear" />
-            </Pressable>
           )}
+          <Pressable
+            onPress={submit}
+            disabled={!draft.trim() || uploading}
+            accessibilityLabel={
+              busy
+                ? queueInstead
+                  ? 'Queue for the next turn'
+                  : 'Steer the running build'
+                : 'Send'
+            }
+            style={({ pressed }) => [
+              styles.sendBtn,
+              pressed && styles.pressed,
+              (!draft.trim() || uploading) && styles.btnOff,
+            ]}
+          >
+            <ArrowUp size={20} color={Colors.acidLimeInk} variant="Linear" />
+          </Pressable>
         </View>
       </View>
       )}
@@ -741,6 +827,19 @@ const styles = StyleSheet.create({
   },
   composer: { gap: Spacing.s8, paddingTop: Spacing.s8 },
   composerRow: { flexDirection: 'row', gap: Spacing.s8, alignItems: 'flex-end', marginBottom: Spacing.s12 },
+  // The streaming delivery toggle: a small mono pill, self-start above the
+  // composer row — lime-washed when armed to queue, quiet when steering.
+  deliveryPill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 9999,
+    backgroundColor: Colors.carbon,
+  },
+  deliveryPillOn: { backgroundColor: 'rgba(228,242,34,0.12)' },
+  // A steered or parked message: its own quiet surface in the live tail, the
+  // mobile reading of the web's dimmed / queued bubbles.
+  parkedRow: { gap: 2, padding: 8, backgroundColor: Colors.carbon, borderRadius: 6 },
   // The resume offer sits directly above the composer — the place you would
   // have typed the continuation — as one surface with a copy line over a
   // two-button row, Resume carrying the flex.

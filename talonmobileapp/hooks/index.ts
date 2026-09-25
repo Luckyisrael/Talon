@@ -154,6 +154,16 @@ export interface TurnState {
    *  message so raw narration and JSON envelopes never render over it. */
   plan?: PlanData;
   planMessage?: string;
+  /** Messages steered into THIS running turn (H2). Rendered as marked rows
+   *  in the live tail — a delivery failure lands on its own row, never
+   *  silently dropped. Cleared with the turn. */
+  steers?: { id: number; text: string; error?: string }[];
+  /** Messages typed while a plan call ran, parked until the call settles —
+   *  the web's plan queue. Visible rows, delivered one per settled turn. */
+  queue?: { text: string }[];
+  /** Whether the in-flight turn was SENT as a plan call: decides steer vs
+   *  park for what the composer submits while it streams. */
+  planStream?: boolean;
   /** What the agent is doing right now, from the phase event — "Planning",
    *  "Writing code". Without it a long model call shows a blind spinner while
    *  the web client names the phase; the backend sends this every round. */
@@ -360,6 +370,9 @@ export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
 export function usePromptStream(projectId: number | null) {
   const [turn, setTurn] = useState<TurnState>(initialTurn);
   const closeRef = useRef<(() => void) | null>(null);
+  // Steer rows key on a local id so two in-flight deliveries never mark each
+  // other's failure.
+  const steerSeqRef = useRef(0);
   const qc = useQueryClient();
 
   useEffect(() => () => closeRef.current?.(), []);
@@ -395,7 +408,16 @@ export function usePromptStream(projectId: number | null) {
     // transcript immediately and retires with the rest of the turn once the
     // durable log absorbs it. Nothing is cleared — the transcript above is
     // untouched, which is why sending never makes the conversation vanish.
-    setTurn({ ...initialTurn, phase: 'streaming', userEcho: prompt });
+    // A parked plan-queue entry rides through the reset (the delivery effect
+    // shifts it first): the next parked message waits for THIS turn to end,
+    // one per turn, exactly like the web's planQueueRef.
+    setTurn((prev) => ({
+      ...initialTurn,
+      phase: 'streaming',
+      userEcho: prompt,
+      queue: prev.queue ?? [],
+      planStream: mode === 'plan',
+    }));
     closeRef.current = await promptsApi.stream(
       pid,
       mode,
@@ -404,6 +426,37 @@ export function usePromptStream(projectId: number | null) {
       (err) => setTurn((prev) => ({ ...prev, phase: 'error', error: err.message })),
       attachmentIds,
     );
+  }
+
+  // Deliver a message to the running build (H2 steer, the web's steerRunning):
+  // the text lands in the loop's next model request and the row below marks it
+  // as a redirect, not a new prompt. Returns false when the phase event has not
+  // named this turn yet — the draft stays in the composer rather than being
+  // swallowed by a POST that cannot address its target.
+  function steer(raw: string): boolean {
+    const message = raw.trim();
+    const pid = turn.promptId;
+    if (!message || pid == null || pid <= 0) return false;
+    const id = (steerSeqRef.current += 1);
+    setTurn((prev) => ({ ...prev, steers: [...(prev.steers ?? []), { id, text: message }] }));
+    void promptsApi.steer(pid, message).catch((err: unknown) => {
+      const text = err instanceof Error ? err.message : 'steer failed';
+      setTurn((prev) => ({
+        ...prev,
+        steers: (prev.steers ?? []).map((s) => (s.id === id ? { ...s, error: text } : s)),
+      }));
+    });
+    return true;
+  }
+
+  // Park what was typed while a plan call ran: a visible row in the live tail
+  // (honest that it has not gone out yet) that the delivery effect fires as
+  // its own plan turn the moment the call settles. One in-flight model request
+  // cannot be interrupted with new input — this replaces the silent drop.
+  function parkQueue(raw: string) {
+    const message = raw.trim();
+    if (!message) return;
+    setTurn((prev) => ({ ...prev, queue: [...(prev.queue ?? []), { text: message }] }));
   }
 
   async function answer(text: string) {
@@ -425,10 +478,11 @@ export function usePromptStream(projectId: number | null) {
 
   // Resume the interrupted turn — the web's resume(), same route: the server
   // replays the transcript and the agent picks up where it stopped. No echo,
-  // this continues the existing turn rather than starting one.
+  // this continues the existing turn rather than starting one. A parked queue
+  // rides through (the web's planQueueRef is not cleared by resume either).
   async function resume(promptId: number) {
     closeRef.current?.();
-    setTurn({ ...initialTurn, phase: 'streaming' });
+    setTurn((prev) => ({ ...initialTurn, phase: 'streaming', queue: prev.queue ?? [] }));
     closeRef.current = await promptsApi.resume(
       promptId,
       applyEvents(() => {}),
@@ -450,7 +504,21 @@ export function usePromptStream(projectId: number | null) {
     qc.invalidateQueries({ queryKey: ['projects'] });
   }
 
-  return { turn, send, answer, answerPrompt, resume, discard, stop, diag };
+  // Deliver what was typed while a plan call was running — the web's
+  // delivery effect, same trigger: the call has settled (done, error, or
+  // stop), so the composer is free again. One message per turn: the shift
+  // and the send land together, so the next parked message waits for THIS
+  // delivery to end. 'waiting' never delivers — the question owns the
+  // conversation until it is answered.
+  useEffect(() => {
+    if (turn.phase !== 'done' && turn.phase !== 'error') return;
+    const next = (turn.queue ?? [])[0];
+    if (!next || projectId == null) return;
+    setTurn((prev) => ({ ...prev, queue: (prev.queue ?? []).slice(1) }));
+    void send('plan', next.text, [], projectId);
+  }, [turn.phase, turn.queue, projectId, send]);
+
+  return { turn, send, answer, answerPrompt, resume, discard, stop, steer, parkQueue, diag };
 }
 
 // ── Device session ────────────────────────────────────
