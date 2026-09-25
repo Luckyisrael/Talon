@@ -1623,9 +1623,9 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		// above and gets persisted by the deferred flush, so the paused transcript
 		// ends on that unanswered call — exactly what resume looks for. Detected
 		// before executeTools so no sibling tool runs while the user is deciding.
-		if id, question, choices, ok := askUserRequest(result.ToolUses); ok {
+		if id, question, choices, multiSelect, ok := askUserRequest(result.ToolUses); ok {
 			sess.TransitionTo(PhaseWaiting)
-			sess.Emitter.EmitQuestion(id, question, choices)
+			sess.Emitter.EmitQuestion(id, question, choices, multiSelect)
 			outcome.Paused = true
 			outcome.PendingToolUseID = id
 			logTurn("paused-for-user")
@@ -1846,23 +1846,25 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 // FSWrite counter listener's built-in, extracted out of the loop file).
 
 // askUserRequest reports whether this turn's tool calls include an ask_user,
-// and if so returns its id and the question and choices to surface. ask_user is
-// handled specially — it pauses the loop — so it is detected before any tool
-// runs. A malformed input still pauses (with an empty question) rather than
-// being executed as an ordinary call: the model asked to stop and wait.
-func askUserRequest(uses []ai.ToolUseBlock) (id, question string, choices []string, ok bool) {
+// and if so returns its id and the question, choices, and multi-select flag to
+// surface. ask_user is handled specially — it pauses the loop — so it is
+// detected before any tool runs. A malformed input still pauses (with an empty
+// question) rather than being executed as an ordinary call: the model asked to
+// stop and wait.
+func askUserRequest(uses []ai.ToolUseBlock) (id, question string, choices []string, multiSelect, ok bool) {
 	for _, u := range uses {
 		if u.Name != "ask_user" {
 			continue
 		}
 		var a struct {
-			Question string   `json:"question"`
-			Choices  []string `json:"choices"`
+			Question    string   `json:"question"`
+			Choices     []string `json:"choices"`
+			MultiSelect bool     `json:"multi_select"`
 		}
 		_ = json.Unmarshal(u.Input, &a)
-		return u.ID, a.Question, a.Choices, true
+		return u.ID, a.Question, a.Choices, a.MultiSelect, true
 	}
-	return "", "", nil, false
+	return "", "", nil, false, false
 }
 
 // applyMarkTaskDone processes any mark_task_done calls in this turn, flipping the

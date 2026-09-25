@@ -739,9 +739,12 @@ export interface StreamEventData {
   message?: string;
   // question — the agent paused on ask_user. prompt_id addresses POST /answer
   // (a fresh build turn learns its prompt id no other way); id is the pending
-  // ask_user tool_use the reply resolves; choices are the suggested answers.
+  // ask_user tool_use the reply resolves; choices are the suggested answers;
+  // multi_select tells the sheet to render checkboxes so the user can pick
+  // more than one before sending.
   question?: string;
   choices?: string[];
+  multi_select?: boolean;
   prompt_id?: number;
   // skills_group — pre-flight skill names for this turn
   skills?: string[];

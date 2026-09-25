@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   attachments,
   conversation,
@@ -358,6 +359,7 @@ function turnsToEntries(
           pattern?: string;
           question?: string;
           choices?: string[];
+          multi_select?: boolean;
           // write_adr / write_memory, for the decision-card reconstruction below
           decision?: string;
           outcome?: string;
@@ -378,6 +380,7 @@ function turnsToEntries(
               promptId: liveWaiting && latest ? latest.id : 0,
               text: input.question ?? "The agent asked a question.",
               choices: Array.isArray(input.choices) ? input.choices : [],
+              multiSelect: !!input.multi_select,
               ...(answered ? { answered } : {}),
             };
             continue;
@@ -1207,6 +1210,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                   promptId: d.prompt_id ?? 0,
                   text: d.question ?? "The agent has a question.",
                   choices: Array.isArray(d.choices) ? d.choices : [],
+                  multiSelect: !!d.multi_select,
                 },
               }));
               break;
@@ -1941,20 +1945,16 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           </div>
         )}
 
-        {/* The agent's question anchors here, above the composer — a decision
-            waiting on the person, not another line of scrollback. This is
-            the one place it renders while unanswered; AssistantEntry only
-            shows the small "answer sent" receipt once it settles. */}
+        {/* The agent's question renders as a modal bottom sheet (portaled
+            to <body> — see QuestionCard) so it floats over the whole shell
+            like Claude Desktop's AskUserQuestion. Answered, AssistantEntry
+            shows the small "Answer sent" receipt inline. */}
         {pendingQuestion && (
-          <div className="px-7 pb-2">
-            <div className="mx-auto max-w-[760px]">
-              <QuestionCard
-                question={pendingQuestion}
-                busy={isStreaming}
-                onAnswer={(reply) => answerQuestion(pendingQuestion.promptId, reply)}
-              />
-            </div>
-          </div>
+          <QuestionCard
+            question={pendingQuestion}
+            busy={isStreaming}
+            onAnswer={(reply) => answerQuestion(pendingQuestion.promptId, reply)}
+          />
         )}
 
         {/* An interrupted turn waits on a human decision: continue it from where
@@ -2791,6 +2791,11 @@ function QuestionCard({
     );
   }
 
+  // Multi-select mode keeps a set of picked choices; the freeform draft can be
+  // added alongside them. Single-select fires on click (this stays empty).
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const multi = !!question.multiSelect;
+
   const submit = (reply: string) => {
     if (busy) return;
     const r = reply.trim();
@@ -2798,85 +2803,160 @@ function QuestionCard({
     onAnswer(r);
   };
 
-  return (
-    <div className="card !p-0 overflow-hidden !shadow-none" style={{ animation: "fade-up 380ms cubic-bezier(0.23,1,0.32,1) both" }}>
-      <div className="flex items-start gap-2 border-b border-graphite p-3">
-        <span className="lamp mt-0.5 flex-shrink-0" data-state="waiting" />
-        <div className="min-w-0">
-          <p className="gauge mb-1">The agent needs an answer</p>
-          <p className="text-[13px] text-paper">{question.text}</p>
-        </div>
-      </div>
+  const submitMulti = () => {
+    if (busy) return;
+    const parts = Array.from(picked)
+      .sort((a, b) => a - b)
+      .map((i) => question.choices[i])
+      .filter(Boolean);
+    const draftTrim = draft.trim();
+    if (draftTrim) parts.push(draftTrim);
+    if (parts.length === 0) return;
+    onAnswer(parts.join(", "));
+  };
 
-      {question.choices.length > 0 && (
-        <div className="flex flex-col gap-1 border-b border-graphite p-3">
-          {question.choices.map((choice, i) => (
-            <button
-              key={`${choice}-${i}`}
-              type="button"
-              disabled={busy}
-              aria-pressed="false"
-              onClick={() => submit(choice)}
-              className="group relative flex items-center gap-2 rounded-md px-1 py-1 text-left transition-colors duration-100 hover:bg-white/5 disabled:opacity-50"
-            >
-              <span className="flex size-4 shrink-0 items-center justify-center rounded-full text-transparent shadow-[inset_0_0_0_1.5px_var(--color-smoke)] transition-colors duration-200 group-hover:shadow-[inset_0_0_0_1.5px_var(--color-fog)]">
-                <span className="size-1.5 rounded-full bg-acid-lime transition-transform duration-200 scale-0 group-hover:scale-50" />
-              </span>
-              <span className="text-xs leading-none text-fog transition-colors duration-200 group-hover:text-mist">
-                {choice}
-              </span>
-            </button>
-          ))}
-          <label className="relative flex items-center gap-2 rounded-md px-1 py-1 transition-colors duration-100">
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && draft.trim()) {
-                  e.preventDefault();
-                  submit(draft);
-                }
-              }}
-              placeholder="Something else…"
-              aria-label="Custom answer"
-              className="min-w-0 flex-1 bg-transparent pl-1.5 text-xs text-mist outline-none placeholder:text-ash"
-              disabled={busy}
-            />
-          </label>
-        </div>
-      )}
+  const togglePick = (i: number) => {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  };
 
-      <div className="flex items-center justify-between gap-3 p-3">
-        <span className="font-mono text-xs tabular-nums text-ash">1 / 1</span>
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            disabled={busy || !draft.trim()}
-            onClick={() => submit(draft)}
-            className="btn btn-go h-8 flex-shrink-0"
-          >
-            Send ⏎
-          </button>
+  // ── Bottom sheet: portaled to <body> so it can float over the whole
+  // viewport (backdrop dims the shell, sheet slides up from below), and
+  // stays out of the chat's overflow-clipping. Clicking outside does NOT
+  // dismiss — the agent is genuinely blocked on this answer, hiding the
+  // sheet would strand the paused turn.
+  //
+  // Single-select (multi === false): a click on any choice fires the reply
+  // immediately (no explicit Send needed) — one option becomes the answer.
+  // Multi-select (multi === true): choices toggle, freeform text appends to
+  // the picked set, and Send joins them into one comma-separated answer so
+  // the same tool_result shape works either way.
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Talon needs your input"
+      className="fixed inset-0 z-[60] flex items-end justify-center"
+      style={{ animation: "fade-in 220ms ease both" }}
+    >
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" aria-hidden />
+      <div
+        className="relative m-3 w-full max-w-[640px] overflow-hidden rounded-2xl border border-[var(--seam-strong)] bg-[var(--panel-2)] shadow-[0_24px_80px_rgb(0_0_0/0.6)]"
+        style={{ animation: "sheet-up 320ms cubic-bezier(0.22, 1, 0.36, 1) both" }}
+      >
+        {/* Grabber — visual affordance only, mirrors iOS/Claude Desktop */}
+        <div className="flex justify-center pt-2 pb-1">
+          <span className="h-1 w-9 rounded-full bg-[var(--seam-strong)]" aria-hidden />
         </div>
-      </div>
-      {question.choices.length === 0 && (
-        <div className="px-3 pb-3">
+
+        {/* Header — the question itself, given room to breathe */}
+        <div className="flex items-start gap-3 px-5 pt-2 pb-4">
+          <span className="lamp mt-1 flex-shrink-0" data-state="waiting" />
+          <div className="min-w-0 flex-1">
+            <p className="gauge mb-1.5">Talon needs your input</p>
+            <p className="text-[15px] leading-snug text-[var(--label)]">{question.text}</p>
+          </div>
+        </div>
+
+        {/* Suggested choices — single-select fires on click; multi-select
+            toggles and defers submission to the Send button below. */}
+        {question.choices.length > 0 && (
+          <div className="flex flex-col gap-1 border-t border-[var(--seam)] p-2">
+            {question.choices.map((choice, i) => {
+              const isPicked = multi && picked.has(i);
+              return (
+                <button
+                  key={`${choice}-${i}`}
+                  type="button"
+                  disabled={busy}
+                  role={multi ? "checkbox" : "button"}
+                  aria-checked={multi ? isPicked : undefined}
+                  onClick={() => (multi ? togglePick(i) : submit(choice))}
+                  className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors duration-150 disabled:opacity-40 ${
+                    isPicked ? "bg-[var(--panel-3)]" : "hover:bg-[var(--panel-3)]"
+                  }`}
+                >
+                  {multi ? (
+                    <span
+                      className={`flex size-5 flex-shrink-0 items-center justify-center rounded-md transition-colors duration-150 ${
+                        isPicked
+                          ? "bg-[var(--accent)] text-[#241611]"
+                          : "shadow-[inset_0_0_0_1.5px_var(--color-smoke)] group-hover:shadow-[inset_0_0_0_1.5px_var(--accent)]"
+                      }`}
+                    >
+                      {isPicked && (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <path d="M20 6L9 17l-5-5" />
+                        </svg>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="flex size-5 flex-shrink-0 items-center justify-center rounded-full shadow-[inset_0_0_0_1.5px_var(--color-smoke)] transition-colors duration-150 group-hover:shadow-[inset_0_0_0_1.5px_var(--accent)]">
+                      <span className="size-2 scale-0 rounded-full bg-[var(--accent)] transition-transform duration-150 group-hover:scale-100" />
+                    </span>
+                  )}
+                  <span
+                    className={`text-[13.5px] leading-snug transition-colors duration-150 ${
+                      isPicked
+                        ? "text-[var(--label)]"
+                        : "text-[var(--label-2)] group-hover:text-[var(--label)]"
+                    }`}
+                  >
+                    {choice}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Freeform answer — always available so the person can override or
+            supplement the suggestions with their own words. */}
+        <div className="flex items-end gap-2 border-t border-[var(--seam)] p-3">
           <textarea
+            autoFocus
             rows={1}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
-                submit(draft);
+                if (multi) submitMulti();
+                else submit(draft);
               }
             }}
-            placeholder="Type your answer"
-            className="field resize-none leading-snug"
+            placeholder={
+              multi
+                ? question.choices.length > 0
+                  ? "Add your own answer to the selection…"
+                  : "Type your answers, one per line or comma-separated…"
+                : question.choices.length > 0
+                  ? "Or type your own answer…"
+                  : "Type your answer…"
+            }
+            aria-label="Custom answer"
             disabled={busy}
+            className="min-h-9 flex-1 resize-none rounded-lg border border-[var(--seam)] bg-[var(--panel-3)] px-3 py-2 text-[14px] leading-snug text-[var(--label)] outline-none placeholder:text-[var(--label-4)] focus:border-[var(--accent)]"
           />
+          <button
+            type="button"
+            disabled={busy || (multi ? picked.size === 0 && !draft.trim() : !draft.trim())}
+            onClick={() => (multi ? submitMulti() : submit(draft))}
+            className="btn btn-go h-9 flex-shrink-0"
+            title="Send answer (⏎)"
+          >
+            {multi && picked.size > 0
+              ? `Send (${picked.size + (draft.trim() ? 1 : 0)})`
+              : "Send"}
+          </button>
         </div>
-      )}
-    </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

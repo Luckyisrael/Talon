@@ -626,6 +626,18 @@ body {
   }
 }
 
+/* Bottom-sheet reveal: slide up from below with a slight scale, spring-eased. */
+@keyframes sheet-up {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @keyframes pop-in {
   from {
     opacity: 0;

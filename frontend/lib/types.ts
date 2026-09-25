@@ -422,12 +422,15 @@ export interface StreamMessage {
    * Set by the `question` event when the agent paused on ask_user: the turn is
    * waiting for the user. The chat renders a question card from it. `promptId`
    * addresses POST /answer; `choices` are the suggested replies, if any;
+   * `multiSelect` is true when the tool call declared the question as one that
+   * admits several answers at once (the sheet then renders as checkboxes);
    * `answered` holds the user's reply once sent, which locks the card.
    */
   question?: {
     promptId: number;
     text: string;
     choices: string[];
+    multiSelect: boolean;
     answered?: string;
   };
 }
