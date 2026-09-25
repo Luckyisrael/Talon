@@ -120,6 +120,14 @@ export default function DocsPage() {
                 a plugin when your task touches its area and adapts its patterns to
                 your screens. Nothing installs itself and nothing runs unseen.
               </p>
+              <p className="mb-4">
+                <Link
+                  href="/plugins"
+                  className="text-sm text-mist underline underline-offset-2 hover:text-paper transition-colors"
+                >
+                  Browse the plugin directory →
+                </Link>
+              </p>
               <h3 className="text-[15px] font-medium text-paper mb-2 mt-6">Using plugins</h3>
               <p className="text-sm text-fog leading-relaxed mb-4">
                 Pin the plugin for your project in{" "}

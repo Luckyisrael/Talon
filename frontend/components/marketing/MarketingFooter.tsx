@@ -28,6 +28,7 @@ export default function MarketingFooter() {
               <li><Link href="/pricing" className="text-sm text-fog hover:text-paper transition-colors">Pricing</Link></li>
               <li><Link href="/dashboard" className="text-sm text-fog hover:text-paper transition-colors">App</Link></li>
               <li><Link href="/docs" className="text-sm text-fog hover:text-paper transition-colors">Documentation</Link></li>
+              <li><Link href="/plugins" className="text-sm text-fog hover:text-paper transition-colors">Plugins</Link></li>
             </ul>
           </div>
 

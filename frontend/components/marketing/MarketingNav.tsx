@@ -19,6 +19,9 @@ export default function MarketingNav() {
         <Link href="/docs" className="text-[13px] text-mist hover:text-paper transition-colors px-3 py-2">
           Docs
         </Link>
+        <Link href="/plugins" className="text-[13px] text-mist hover:text-paper transition-colors px-3 py-2">
+          Plugins
+        </Link>
         <Link href="/pricing" className="text-[13px] text-mist hover:text-paper transition-colors px-3 py-2">
           Pricing
         </Link>
