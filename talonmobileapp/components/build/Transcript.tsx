@@ -6,8 +6,9 @@ import { QuestionCard } from '@/components/build/QuestionCard'
 import { TurnAttachments } from '@/components/build/Attachments'
 import { Colors, Spacing } from '@/constants/theme'
 import { VerifyEvidenceRow, evidenceFromMarker } from '@/components/build/VerifyEvidence'
+import { PlanCard } from '@/components/build/PlanCard'
 import { stripInlineDocs, type SentAttachment } from '@/lib/attachments'
-import type { ConversationBlock } from '@/lib/api'
+import { normalizePlan, type ConversationBlock, type PlanData } from '@/lib/api'
 
 // A block longer than this renders clamped behind a Show-more toggle. Six is
 // enough to read a normal sentence or two; anything past it is a document, and
@@ -33,12 +34,17 @@ export function RestoredTranscript({
   projectId,
   waitingPromptId,
   onAnswer,
+  onApprovePlan,
   promptEvidence,
 }: {
   turns: RestoredTurn[]
   projectId: number
   waitingPromptId?: number | null
   onAnswer: (promptId: number, text: string) => void
+  /** Hand a restored plan to the approve flow (PLAN.md + build turn), the
+   *  same action the live card offers. Optional: screens without it render
+   *  the plan read-only. */
+  onApprovePlan?: (plan: PlanData) => void
   /** The newest marker-less turn's prompt-row union, keyed by prompt id
    *  (files_touched only — the union carries no verdict, so a seed can never
    *  claim a check ran or passed). Supplied by the screen via promptsApi.get. */
@@ -56,6 +62,18 @@ export function RestoredTranscript({
       }
     }
     return map
+  }, [turns])
+
+  // The newest plan block wins: older plans are superseded, and only the
+  // current one earns the approve action — a plan kept approving after three
+  // more plans is how a build gets built to the wrong spec. Keyed by turn
+  // index so the card lands inside the turn that produced it.
+  const restoredPlan = React.useMemo(() => {
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const b = (turns[i].blocks ?? []).find((x) => x.kind === 'plan')
+      if (b && b.plan) return { turn: i, plan: normalizePlan(b.plan) }
+    }
+    return null
   }, [turns])
 
   return (
@@ -97,14 +115,18 @@ export function RestoredTranscript({
         const tools = (t.blocks ?? []).filter((b) => b.kind === 'tool_use')
         const question = (t.blocks ?? []).find((b) => b.kind === 'tool_use' && b.name === 'ask_user')
         const ending = (t.blocks ?? []).find((b) => b.kind === 'turn_end')
+        const isPlanTurn = restoredPlan?.turn === i
         // M4: a marker-less newest turn has no footer to rebuild — seed it from
         // the prompt row's files_touched union. Files only: the union carries
         // no verdict, so a seed can never claim a check ran or passed.
         const seedFiles = !ending && t.prompt_id != null ? promptEvidence?.[t.prompt_id]?.files_touched : undefined
-        if (!narration && tools.length === 0 && !ending && !seedFiles?.length) return null
+        if (!narration && tools.length === 0 && !ending && !seedFiles?.length && !isPlanTurn) return null
         return (
           <View key={i} style={styles.assistantWrap}>
             {narration ? <MarkdownView>{narration}</MarkdownView> : null}
+            {isPlanTurn && restoredPlan ? (
+              <PlanCard plan={restoredPlan.plan} onApprove={onApprovePlan} />
+            ) : null}
             {tools
               .filter((b) => b.name !== 'ask_user')
               .map((b, j) => {

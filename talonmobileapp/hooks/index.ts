@@ -16,6 +16,7 @@ import { useAppStore } from '@/stores/app';
 import {
   exportApi,
   meApi,
+  normalizePlan,
   notificationsApi,
   planApi,
   projectsApi,
@@ -26,6 +27,7 @@ import {
   usageApi,
   openMetroStream,
   type MetroEvent,
+  type PlanData,
   type PlanTask,
   type Session,
   type StreamEvent,
@@ -135,11 +137,23 @@ export interface TurnState {
    *  memory; the tail is what tells the user what is happening right now. */
   output: string;
   tasks: PlanTask[];
-  toolCalls: { name: string; status: string }[];
+  /** target rides along when the event itself says what was acted on — a
+   *  guardrail rejection's error line, a decision's title. The label map can
+   *  only know the tool name. */
+  toolCalls: { name: string; status: string; target?: string }[];
   error?: string;
   /** The prompt id a pending question belongs to (ask_user pause). */
   questionPromptId?: number;
   question?: string;
+  /** The choices the ask_user frame carried. The question card renders these
+   *  instead of a guessed pair — the model asked for MWA or an email link,
+   *  not Yes/No. Empty when the backend sent none. */
+  questionChoices?: string[];
+  /** The parsed plan from the `plan` frame (web's PlanData). Canonical reply
+   *  of a plan turn: when it lands, text/thinking are replaced by the plan
+   *  message so raw narration and JSON envelopes never render over it. */
+  plan?: PlanData;
+  planMessage?: string;
   /** What the agent is doing right now, from the phase event — "Planning",
    *  "Writing code". Without it a long model call shows a blind spinner while
    *  the web client names the phase; the backend sends this every round. */
@@ -192,14 +206,17 @@ export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
       // thinking phase rendered as nothing — the blank screen during a build.
       // Accumulate it and render it as its own live row, as the web does.
       return { ...state, thinking: state.thinking + String(data.text ?? '') };
-    case 'tool_call':
+    case 'tool_call': {
+      const name = String(data.name ?? '');
+      // write_adr / write_memory render as the decision card the `decision`
+      // frame carries, not as a bare tool row — the same suppression the web
+      // applies, so one recorded decision never shows twice.
+      if (name === 'write_adr' || name === 'write_memory') return state;
       return {
         ...state,
-        toolCalls: [
-          ...state.toolCalls,
-          { name: String(data.name ?? ''), status: String(data.status ?? '') },
-        ],
+        toolCalls: [...state.toolCalls, { name, status: String(data.status ?? '') }],
       };
+    }
     case 'verify':
       // A verification result (typecheck, lint, boot). The web renders this as
       // a trace row; without it the mobile shows a tool running and then
@@ -243,7 +260,53 @@ export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
         phase: 'waiting',
         question: String(data.question ?? ''),
         questionPromptId: Number(data.prompt_id ?? 0),
+        questionChoices: Array.isArray(data.choices)
+          ? (data.choices as unknown[]).filter((c): c is string => typeof c === 'string')
+          : [],
       };
+    case 'plan': {
+      // The parsed plan is the canonical reply (the web's plan case): it
+      // replaces the streamed narration, so the model's private reasoning or
+      // raw JSON envelope never renders over the plan the user approves.
+      const plan = normalizePlan(data.plan);
+      const msg = typeof data.message === 'string' && data.message ? data.message : 'Plan ready.';
+      return { ...state, plan, planMessage: msg, text: msg, thinking: '' };
+    }
+    case 'guardrail_reject': {
+      // A guardrail refused an action: a visible failed row, the web's
+      // "Blocked" trace line. Dropped (the old default), the model was
+      // stopped and the screen said nothing at all.
+      const firstLine = typeof data.error === 'string' && data.error ? data.error.split('\n')[0] : '';
+      return {
+        ...state,
+        toolCalls: [
+          ...state.toolCalls,
+          {
+            name: 'Blocked',
+            status: 'error',
+            target: firstLine || (typeof data.tool === 'string' ? data.tool : ''),
+          },
+        ],
+      };
+    }
+    case 'decision': {
+      // The agent recorded an architecture decision or a durable memory —
+      // the web's decision card, as one trace row carrying its title.
+      const variant = data.variant === 'adr' ? 'ADR' : 'memory';
+      const head =
+        typeof data.decision === 'string' && data.decision
+          ? data.decision
+          : typeof data.content === 'string'
+            ? data.content
+            : '';
+      return {
+        ...state,
+        toolCalls: [
+          ...state.toolCalls,
+          { name: `Recorded ${variant}`, status: 'completed', target: head.split('\n')[0] || undefined },
+        ],
+      };
+    }
     case 'error':
       return { ...state, phase: 'error', error: String(data.message ?? 'the turn failed') };
     case 'done': {
@@ -267,6 +330,21 @@ export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
       // that ends in tools alone still said something (web's narration
       // adoption, AIChat done handler).
       const adopted = state.text === '' && typeof data.message === 'string' && data.message ? data.message : undefined;
+      const status = String(data.status ?? 'success');
+      // A pause is not the end of the turn: on 'waiting' the ask_user card
+      // owns the conversation and must survive the frame that closes the
+      // stream — the answer continues THIS turn (web keeps its identity the
+      // same way). On 'failed' the turn died: phase error, never the header's
+      // "turn finished" over a failure — and the banner's resume detection
+      // reads the failed status from history right after.
+      if (status === 'waiting' && state.phase === 'waiting') {
+        return { ...state, evidence, ...(adopted ? { text: adopted } : {}) };
+      }
+      if (status === 'failed') {
+        const message =
+          state.error ?? (typeof data.message === 'string' && data.message ? data.message : 'the turn failed');
+        return { ...state, phase: 'error', error: message, evidence };
+      }
       return { ...state, phase: 'done', evidence, ...(adopted ? { text: adopted } : {}) };
     }
     default:
@@ -345,6 +423,26 @@ export function usePromptStream(projectId: number | null) {
     );
   }
 
+  // Resume the interrupted turn — the web's resume(), same route: the server
+  // replays the transcript and the agent picks up where it stopped. No echo,
+  // this continues the existing turn rather than starting one.
+  async function resume(promptId: number) {
+    closeRef.current?.();
+    setTurn({ ...initialTurn, phase: 'streaming' });
+    closeRef.current = await promptsApi.resume(
+      promptId,
+      applyEvents(() => {}),
+      (err) => setTurn((prev) => ({ ...prev, phase: 'error', error: err.message })),
+    );
+  }
+
+  // Discard the interrupted turn so a reload stops offering it — the banner's
+  // other button, same route as the web's discard.
+  async function discard(promptId: number) {
+    await promptsApi.discard(promptId);
+    qc.invalidateQueries({ queryKey: ['projects'] });
+  }
+
   function stop() {
     closeRef.current?.();
     closeRef.current = null;
@@ -352,7 +450,7 @@ export function usePromptStream(projectId: number | null) {
     qc.invalidateQueries({ queryKey: ['projects'] });
   }
 
-  return { turn, send, answer, answerPrompt, stop, diag };
+  return { turn, send, answer, answerPrompt, resume, discard, stop, diag };
 }
 
 // ── Device session ────────────────────────────────────

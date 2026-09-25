@@ -5,18 +5,28 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { Add, ArrowUp, Stop } from 'iconsax-react-native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Field, GhostButton, Screen, UIText } from '@/components/ui';
+import { Card, Field, GhostButton, LimeButton, Screen, UIText } from '@/components/ui';
 import { StagedAttachments } from '@/components/build/Attachments';
 import { RestoredTranscript, type RestoredTurn } from '@/components/build/Transcript';
 import { TraceRow } from '@/components/build/TraceRow';
 import { PixelGrid } from '@/components/build/PixelGrid';
+import { PlanCard } from '@/components/build/PlanCard';
 import { QuestionCard } from '@/components/build/QuestionCard';
 import { VerifyBadge } from '@/components/build/VerifyBadge';
 import { VerifyEvidenceRow } from '@/components/build/VerifyEvidence';
 import { FileBrowser } from '@/components/files/FileBrowser';
 import { Colors, Spacing, Type } from '@/constants/theme';
 import { useActiveProject, usePromptStream } from '@/hooks';
-import { attachmentsApi, conversationApi, promptsApi, type PlanTask } from '@/lib/api';
+import {
+  attachmentsApi,
+  conversationApi,
+  isResumable,
+  projectsApi,
+  promptsApi,
+  type LatestPrompt,
+  type PlanData,
+  type PlanTask,
+} from '@/lib/api';
 import { loadSnapshot, saveSnapshot } from '@/lib/history-cache';
 import {
   MAX_ATTACHMENTS,
@@ -57,6 +67,16 @@ function toolRow(name: string) {
   return base;
 }
 
+// One sentence per resumable status, the web's banner copy in miniature:
+// say what actually happened, then what Resume does about it. Unknown
+// statuses fall to the failure line — isResumable only admits four.
+function resumeCopy(latest: LatestPrompt): string {
+  if (latest.status === 'running') return 'The turn was interrupted mid-run. Resume picks up where it stopped.';
+  if (latest.status === 'cancelled') return 'This turn was stopped early. Resume continues it.';
+  if (latest.status === 'paused') return 'This turn hit its round budget while still working.';
+  return 'This turn ended with an error. Resume retries from where it stopped.';
+}
+
 export default function BuildScreen() {
   const router = useRouter();
   // The composer belongs to a project: select or create one on the Projects
@@ -64,7 +84,7 @@ export default function BuildScreen() {
   // the bottom of this screen in every sub-view.
   const project = useActiveProject();
   const projectId = project?.id ?? null;
-  const { turn, send, answer, answerPrompt, stop, diag } = usePromptStream(projectId);
+  const { turn, send, answer, answerPrompt, resume, discard, stop, diag } = usePromptStream(projectId);
   const [draft, setDraft] = React.useState('');
   const [mode, setMode] = React.useState<'plan' | 'build'>('build');
   const [answers, setAnswers] = React.useState<string[]>([]);
@@ -77,6 +97,11 @@ export default function BuildScreen() {
   const [historyStale, setHistoryStale] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
   const [waitingId, setWaitingId] = React.useState<number | null>(null);
+  // The resume/discard offer: history's latest build turn left in a state
+  // that can be picked up again — the web's banner reads the same `latest`
+  // row. Every history load recomputes it (a completed turn clears it, a
+  // fresh failure re-sets it), and a new send clears it outright.
+  const [resumable, setResumable] = React.useState<LatestPrompt | null>(null);
 
   // M4 union seed: the newest turn may lack its turn_end marker (running,
   // waiting, failed, or legacy pre-marker) — its prompt row's files_touched is
@@ -113,6 +138,7 @@ export default function BuildScreen() {
         const r = await conversationApi.get(projectId);
         setHistory((r.turns ?? []) as RestoredTurn[]);
         setWaitingId(r.latest?.status === 'waiting' ? (r.latest.id ?? null) : null);
+        setResumable(isResumable(r.latest) ? r.latest : null);
         setHistoryStale(false);
         void saveSnapshot(projectId, r.turns ?? []);
       } catch {
@@ -250,6 +276,14 @@ export default function BuildScreen() {
       setAttError('Pick a project first');
       return;
     }
+    // A pending question owns the conversation — the web blocks the composer
+    // the same way. The answer continues the paused turn through /answer;
+    // a fresh prompt here would strand the agent mid-question. Covers both
+    // the live card and the restored one history restored for us.
+    if ((turn.phase === 'waiting' && turn.question) || waitingId != null) {
+      setAttError('answer the question in the transcript first');
+      return;
+    }
     if (!text) {
       if (staged.length > 0) setAttError('describe what the files are for');
       return;
@@ -273,12 +307,52 @@ export default function BuildScreen() {
       setDraft('');
       setAttError(null);
       setAnswers([]);
+      setResumable(null);
       send(mode, text, ids, projectId);
     } catch (e) {
       setAttError(e instanceof Error ? e.message : 'could not start the turn');
     } finally {
       setUploading(false);
     }
+  }
+
+  // Approve hands the plan to a build turn — the web's approvePlan, same
+  // contract: PLAN.md lands in the workspace first (best effort — the plan
+  // still lives in the conversation), the mode flips to build, and the build
+  // prompt names the screens to implement. Shared by the live plan card and
+  // the restored one, so either path builds the same PLAN.md.
+  async function approvePlan(plan: PlanData) {
+    if (projectId == null || busy) return;
+    const screens = (plan.screens ?? []).map((s) => s.name).filter(Boolean);
+    const lines = ['# Build plan', ''];
+    if (screens.length > 0) {
+      lines.push('## Screens');
+      for (const s of plan.screens ?? []) {
+        lines.push(`- ${s.name}${s.description ? ` — ${s.description}` : ''}`);
+      }
+      lines.push('');
+    }
+    if (plan.navigation) lines.push('## Navigation', plan.navigation, '');
+    const features = plan.features ?? [];
+    if (features.length > 0) lines.push('## Features', ...features.map((f) => `- ${f}`), '');
+    const packages = plan.packages ?? [];
+    if (packages.length > 0) lines.push('## Packages', ...packages.map((p) => `- ${p}`), '');
+    try {
+      await projectsApi.writeFiles(projectId, [{ path: 'PLAN.md', content: lines.join('\n') + '\n' }]);
+    } catch {
+      // The plan still lives in the conversation; the build proceeds.
+    }
+    const list = screens.length > 0 ? screens.join(', ') : 'the plan we just agreed on';
+    setMode('build');
+    setResumable(null);
+    setAttError(null);
+    setAnswers([]);
+    send(
+      'build',
+      `Build ${list} per PLAN.md in the workspace. Implement every screen fully — no placeholders, no TODOs — and wire up the navigation from the plan. Mark each plan item done as you finish it.`,
+      [],
+      projectId,
+    );
   }
 
   return (
@@ -369,6 +443,7 @@ export default function BuildScreen() {
                 projectId={projectId}
                 waitingPromptId={waitingId}
                 onAnswer={(pid, text) => void answerPrompt(pid, text)}
+                onApprovePlan={approvePlan}
                 promptEvidence={promptEvidence}
               />
             </View>
@@ -420,17 +495,21 @@ export default function BuildScreen() {
                     key={i}
                     tool={c.name.split(' ')[0]}
                     label={meta.label}
-                    target={meta.target ?? c.name}
+                    target={c.target ?? meta.target ?? c.name}
                     status={c.status === 'completed' ? 'done' : c.status === 'error' ? 'fail' : 'running'}
                   />
                 );
               })}
 
-              {/* The ask_user pause, the negotiation-first law, mobile side. */}
+              {/* The ask_user pause, the negotiation-first law, mobile side.
+                  Choices come from the question frame when the model named
+                  them — MWA vs email, plan vs build — not a guessed pair. */}
               {turn.phase === 'waiting' && turn.question && (
                 <QuestionCard
                   question={turn.question}
-                  choices={['Yes, proceed', 'No, stop']}
+                  choices={
+                    turn.questionChoices?.length ? turn.questionChoices : ['Yes, proceed', 'No, stop']
+                  }
                   onAnswer={(a) => {
                     setAnswers((prev) => [...prev, a]);
                     answer(a);
@@ -487,6 +566,14 @@ export default function BuildScreen() {
             </View>
           )}
 
+          {/* The parsed plan outlives the live tail: it renders even after
+              history absorbs this turn, until the restored card in the
+              transcript above takes over (historyHasTurn) or the next send
+              clears it — the approve button never disappears mid-decision. */}
+          {turn.plan && !historyHasTurn ? (
+            <PlanCard plan={turn.plan} message={turn.planMessage} onApprove={approvePlan} />
+          ) : null}
+
           {/* A settled turn's failure, shown only briefly before loadHistory
               absorbs it into the transcript above. */}
           {!liveVisible && turn.phase === 'error' && (
@@ -512,6 +599,50 @@ export default function BuildScreen() {
           )}
         </View>
       </ScrollView>
+      )}
+
+      {/* The resume/discard offer for a build turn that died before it
+          finished — the web's banner, same honest copy: running means the
+          server dropped it, cancelled it was stopped, paused it hit the
+          round budget, failed it errored out. Waiting turns are NOT
+          resumable (isResumable), so this never competes with a question
+          card. */}
+      {projectId != null && subView === 'chat' && resumable != null && !busy && (
+        <Card style={styles.resumeBanner}>
+          <UIText variant="bodySm" tone="muted">
+            {resumeCopy(resumable)}
+            {resumable.round != null ? ` · reached round ${resumable.round}` : ''}
+          </UIText>
+          <View style={styles.resumeBtns}>
+            <LimeButton
+              title="Resume"
+              style={styles.resumeBtn}
+              onPress={() => {
+                const id = resumable.id;
+                setResumable(null);
+                setAttError(null);
+                setMode('build');
+                void resume(id);
+              }}
+            />
+            <GhostButton
+              title="Discard"
+              style={styles.resumeBtn}
+              onPress={() => {
+                const id = resumable.id;
+                void discard(id)
+                  .then(() => {
+                    setResumable(null);
+                    return loadHistory({ silent: true });
+                  })
+                  .catch(() => {
+                    // A failed discard keeps the offer: the turn really is
+                    // still resumable, and claiming otherwise would lie.
+                  });
+              }}
+            />
+          </View>
+        </Card>
       )}
 
       {projectId != null && (
@@ -610,6 +741,12 @@ const styles = StyleSheet.create({
   },
   composer: { gap: Spacing.s8, paddingTop: Spacing.s8 },
   composerRow: { flexDirection: 'row', gap: Spacing.s8, alignItems: 'flex-end', marginBottom: Spacing.s12 },
+  // The resume offer sits directly above the composer — the place you would
+  // have typed the continuation — as one surface with a copy line over a
+  // two-button row, Resume carrying the flex.
+  resumeBanner: { gap: Spacing.s8, padding: Spacing.s12, marginBottom: Spacing.s8 },
+  resumeBtns: { flexDirection: 'row', gap: Spacing.s8 },
+  resumeBtn: { flex: 1 },
   input: { flex: 1, borderWidth: 0, borderRadius: 20 },
   attachBtn: {
     width: 48,

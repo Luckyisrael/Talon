@@ -190,6 +190,68 @@ export interface PlanTask {
   result?: string
 }
 
+/** One screen in a parsed plan. Field-for-field the web's PlanScreen
+ *  (frontend/lib/types.ts): both clients render the same plan payload. */
+export interface PlanScreen {
+  name: string
+  description: string
+}
+
+/** The parsed plan the `plan` SSE frame carries — the web's PlanData, same
+ *  fields: screens/features always, navigation and packages when the model
+ *  named them. This is the canonical reply of a plan turn; approve turns it
+ *  into PLAN.md + a build prompt (see PlanCard / build.tsx approvePlan). */
+export interface PlanData {
+  screens: PlanScreen[]
+  features: string[]
+  navigation: string
+  packages: string[]
+}
+
+/** The conversation endpoint's `latest` row — the web's LatestPrompt, same
+ *  four claims. It is what the resume/discard offer reads: mode decides
+ *  whether the turn can be resumed at all, status decides whether it should. */
+export interface LatestPrompt {
+  id: number
+  mode: string
+  status: string
+  round?: number
+}
+
+/** A build turn whose run can be picked up again — the web's isResumable,
+ *  word for word. Plan turns never resume; 'waiting' answers through
+ *  /answer (the question card), not this banner; 'stalled' and terminal
+ *  states are out on purpose — absence of a banner is the honest claim. */
+export function isResumable(latest: LatestPrompt | null | undefined): latest is LatestPrompt {
+  return (
+    latest != null &&
+    latest.mode === 'build' &&
+    (latest.status === 'running' ||
+      latest.status === 'cancelled' ||
+      latest.status === 'failed' ||
+      latest.status === 'paused')
+  )
+}
+
+/** Normalize an untyped plan payload — the `plan` SSE frame's data.plan, or
+ *  a stored history block's plan — into PlanData. One shape for the live card
+ *  and the restored card, so an approve from either builds the same PLAN.md. */
+export function normalizePlan(raw: unknown): PlanData {
+  const p = (raw ?? {}) as Partial<PlanData>
+  const asStrings = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  const screens = (Array.isArray(p.screens) ? p.screens : []) as (Partial<PlanScreen> | null)[]
+  return {
+    screens: screens.map((s) => ({
+      name: String(s?.name ?? ''),
+      description: String(s?.description ?? ''),
+    })),
+    features: asStrings(p.features),
+    navigation: typeof p.navigation === 'string' ? p.navigation : '',
+    packages: asStrings(p.packages),
+  }
+}
+
 export interface Usage {
   prompts_used: number
   prompts_limit: number
@@ -342,7 +404,7 @@ export const conversationApi = {
     const query = params.toString()
     const res = await request<{
       turns: { role: string; blocks: ConversationBlock[]; prompt_id?: number; seq?: number; at: string }[] | null
-      latest?: { id: number; status: string } | null
+      latest?: LatestPrompt | null
       latest_seq?: number
       usage?: Usage | null
       planTasks?: PlanTask[] | null
