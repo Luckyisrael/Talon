@@ -1,4 +1,4 @@
-# Talon CI — gates every push and pull request.
+# Talon CI — gates every pull request.
 #
 # Deliberately secret-free: unit, integration (faked providers/devices), and
 # static checks only. No AI keys, no payment keys, no database access. A
@@ -6,12 +6,16 @@
 # there is nothing here worth stealing.
 #
 # Jobs run in parallel; the merge gate requires all of them green.
+#
+# NOTE: push triggers are temporarily DISABLED — CI only runs on pull
+# requests for now. To restore push gating before a deploy, uncomment the
+# `push:` block below.
 
 name: CI
 
 on:
-  push:
-    branches: [main]
+  # push:                 # temporarily disabled — re-enable before deploying
+  #   branches: [main]
   pull_request:
 
 jobs:
