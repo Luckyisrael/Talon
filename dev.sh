@@ -93,10 +93,13 @@ kill_pidfile() {
 start_backend() {
   echo "▸ backend  :$BACKEND_PORT  (model: ${AI_MODEL:-unset})"
   cd "$BACKEND"
-  # setsid gives the server its own process group so stop can kill the
-  # whole tree — `go run` would otherwise leave a compiled child holding
-  # the port after a plain kill of the launcher.
-  setsid nohup go run ./cmd/server > "$LOGS/backend.log" 2>&1 &
+  # macOS doesn't ship setsid; jpeg-turbo (used by internal/video) is keg-only,
+  # so its headers aren't on the default include path either. Exporting the
+  # brew prefix here means the launcher works out-of-the-box on macOS without
+  # a wrapper — Linux hosts pick up their standard paths from the shell.
+  export CGO_CFLAGS="-I$(brew --prefix)/include"
+  export CGO_LDFLAGS="-L$(brew --prefix)/lib"
+  nohup go run ./cmd/server > "$LOGS/backend.log" 2>&1 &
   echo $! > "$LOGS/backend.pid"
   cd "$ROOT"
   for _ in $(seq 1 90); do
@@ -115,7 +118,7 @@ start_backend() {
 start_frontend() {
   echo "▸ frontend :$FRONTEND_PORT  → API at $API_URL"
   cd "$FRONTEND"
-  setsid env NEXT_PUBLIC_API_URL="$API_URL" PORT="$FRONTEND_PORT" \
+  env NEXT_PUBLIC_API_URL="$API_URL" PORT="$FRONTEND_PORT" \
     nohup npx next dev -p "$FRONTEND_PORT" > "$LOGS/frontend.log" 2>&1 &
   echo $! > "$LOGS/frontend.pid"
   cd "$ROOT"

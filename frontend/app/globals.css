@@ -17,24 +17,30 @@
  */
 
 :root {
-  /* ── Linear Strict surfaces ──────────────────────────────────────── */
-  --color-void: #08090a;
-  --color-carbon: #0f1011;
-  --color-obsidian: #161718;
-  --color-graphite: #23252a;
-  --color-smoke: #383b3f;
+  /* ── Warm-graphite surfaces ────────────────────────────────────────
+     Warm graphite ramp — the top brand tokens the whole shell resolves
+     through. Kept the historical --color-void / --color-acid-lime NAMES
+     so every downstream var() and Tailwind mapping keeps working; only
+     the values retone. --surface-1..4 below stay warm too. */
+  --color-void: #1a1918;
+  --color-carbon: #211f1e;
+  --color-obsidian: #2a2725;
+  --color-graphite: #363130;
+  --color-smoke: #46403d;
 
-  /* ── Linear Strict text ────────────────────────────────────────── */
-  --color-ash: #62666d;
-  --color-fog: #8a8f98;
-  --color-mist: #d0d6e0;
-  --color-bone: #e5e5e6;
-  --color-paper: #ffffff;
+  /* ── Warm text ───────────────────────────────────────────────── */
+  --color-ash: #665e57;
+  --color-fog: #94897f;
+  --color-mist: #cbc2b9;
+  --color-bone: #ece6de;
+  --color-paper: #f5f1ea;
 
-  /* ── Linear Strict accents ────────────────────────────────────── */
-  --color-acid-lime: #e4f222;
-  --color-pulse-green: #27a644;
-  --color-coral-red: #eb5757;
+  /* ── Clay accents ─────────────────────────────────────────────
+     Clay (#cc785c) replaces acid lime as the single chromatic accent;
+     the token name is kept so downstream references need no rewrite. */
+  --color-acid-lime: #cc785c;
+  --color-pulse-green: #6fae5a;
+  --color-coral-red: #d9584a;
   --color-signal-teal: #02b8cc;
   --color-iris-violet: #6366f1;
   --color-lavender: #8b5cf6;
@@ -89,8 +95,8 @@
   --label-3: var(--color-fog);
   --label-4: var(--color-ash);
   --accent: var(--color-acid-lime);
-  --accent-2: #f0f970;
-  --accent-soft: rgba(228, 242, 34, 0.16);
+  --accent-2: #e0a084;
+  --accent-soft: rgba(204, 120, 92, 0.16);
   --ok: var(--color-pulse-green);
   --err: var(--color-coral-red);
   --warn: #f2b234;
@@ -427,7 +433,7 @@ body {
   border-radius: var(--radius-full);
   background: #ffffff;
   border-color: #ffffff;
-  color: #08090a;
+  color: #241611;
   font-family: var(--font-inter-variable);
   font-size: 13px;
   font-weight: 510;
@@ -437,7 +443,7 @@ body {
 .btn-pill:hover:not(:disabled) {
   background: var(--color-bone);
   border-color: var(--color-bone);
-  color: #08090a;
+  color: #241611;
 }
 
 /* ── Pill / badge ──────────────────────────────────────────────── */
@@ -814,7 +820,7 @@ body {
 @keyframes turn-flash {
   0%,
   60% {
-    background: rgb(228 242 34 / 7%);
+    background: rgb(204 120 92 / 7%);
     border-radius: 12px;
   }
   100% {
@@ -1012,7 +1018,7 @@ body {
 .icon-btn svg { width: 15px; height: 15px; }
 .send-btn {
   width: 34px; height: 34px; border-radius: 50%;
-  background: var(--accent); color: #08090a;
+  background: var(--accent); color: #241611;
   display: grid; place-items: center;
   transition: background var(--dur-out) ease-out, transform var(--dur-out) ease-out;
 }
