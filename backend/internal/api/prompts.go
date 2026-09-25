@@ -691,10 +691,60 @@ func (h *PromptHandler) Discard(w http.ResponseWriter, r *http.Request) {
 
 // streamPlan proxies the model's stream to the client, then parses the finished
 // text into a plan.
+// planPhaseInterval is how long the plan stream may stay silent before the
+// heartbeat re-asserts its phase frame. A var, not a const, so the liveness
+// test can shorten it without sleeping out a real 15 seconds.
+var planPhaseInterval = 15 * time.Second
+
+// writePlanPhase is the plan stream's heartbeat frame: the turn's id, the
+// phase the client's live strip renders, and a status honest about the call
+// still running. Sent once when the plan starts and re-sent every
+// planPhaseInterval of silence after that.
+func writePlanPhase(w http.ResponseWriter, promptID int64) {
+	writeSSE(w, "phase", map[string]interface{}{"phase": "PLAN", "status": "planning", "prompt_id": promptID})
+}
+
+// planHeartbeat re-asserts the plan phase every planPhaseInterval while one
+// long model call runs, and returns a stop func that waits for any in-flight
+// frame so the caller's own writes never race the heartbeat's. Used by the
+// plan-tools path, whose loop is a single blocking call; the plain
+// ChatStream path ticks from its own select loop instead.
+func planHeartbeat(w http.ResponseWriter, flusher http.Flusher, promptID int64) func() {
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		t := time.NewTicker(planPhaseInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				writePlanPhase(w, promptID)
+				flusher.Flush()
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-stopped
+	}
+}
+
 func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID, userID int64, userTurn ai.Message) {
 	// W3.2: per-project prompt (map + survey + AGENTS chain) with the flag
 	// on; byte-identical h.planPrompt with it off — the assembly checks the
 	// flag before touching workspace, cache, or model.
+	//
+	// Name the turn before the model produces a byte: this frame is what the
+	// client's live strip renders as "Planning", and the prompt id it carries
+	// is what makes the running plan addressable. Previously the plan path
+	// wrote zero bytes until the parsed plan landed — minutes of dead air
+	// with no phase, no id, and no sign the turn was alive.
+	writePlanPhase(w, promptID)
+	flusher.Flush()
+
 	sys := h.planSystemPrompt(ctx, projectID)
 	var raw string
 	if planToolsEnabled() {
@@ -702,7 +752,9 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 		// directly. Its failures land in the same terminal handling the
 		// stream error path applies, and the tail below parses raw exactly
 		// as it always has (the Answer door inherits this path unchanged).
+		stopHeartbeat := planHeartbeat(w, flusher, promptID)
 		loopRaw, err := h.planWithTools(ctx, projectID, sys, h.planHistory(projectID, userTurn))
+		stopHeartbeat()
 		if err != nil {
 			writeSSE(w, "error", map[string]string{"message": friendlyAIError(err)})
 			h.store.UpdatePromptResponse(promptID, "Error: "+friendlyAIError(err))
@@ -728,27 +780,53 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 		var full strings.Builder
 		sawError := false
 
-		for event := range stream {
-			switch event.Type {
-			case "thinking.start", "thinking.delta", "thinking.end":
-				// Plan replies are JSON; the model's private reasoning is not the
-				// reply. Streaming it verbatim dumped raw chain-of-thought into the
-				// chat. Nothing is forwarded here — the parsed plan carries the
-				// message the user actually reads.
-			case "text.start", "text.end":
-				// The streamed text is the raw JSON envelope, not something the user
-				// should watch form. It is buffered below and reaches the client only
-				// as the parsed plan/message.
-			case "text.delta":
-				if td, ok := event.Data.(ai.StreamTextDelta); ok {
-					full.WriteString(td.Text)
+		// One select, one writer: model frames and the heartbeat take
+		// turns on the wire. The heartbeat keeps a silent stretch from
+		// looking like a dead connection (and keeps intermediaries from
+		// timing an idle stream out) while the client's elapsed timer keeps
+		// ticking.
+		heartbeat := time.NewTicker(planPhaseInterval)
+		defer heartbeat.Stop()
+	loop:
+		for {
+			select {
+			case event, ok := <-stream:
+				if !ok {
+					break loop
 				}
-			case "error":
-				sawError = true
-				writeSSE(w, "error", map[string]string{"message": event.Error})
-				h.store.UpdatePromptResponse(promptID, "Error: "+event.Error)
+				switch event.Type {
+				case "thinking.start", "thinking.delta", "thinking.end":
+					// The reasoning streams as live trace — the same
+					// thinking rows the build stream produces, which is the
+					// conversation streaming people already watch. The plan
+					// reply itself (raw JSON) stays buffered below and
+					// reaches the client only as the parsed plan, but the
+					// minutes it takes to arrive are no longer silent.
+					if td, ok := event.Data.(ai.StreamTextDelta); ok {
+						writeSSE(w, event.Type, map[string]string{"text": td.Text})
+					} else {
+						writeSSE(w, event.Type, map[string]string{})
+					}
+				case "text.start", "text.end":
+					// The streamed text is the raw JSON envelope, not something the user
+					// should watch form. It is buffered below and reaches the client only
+					// as the parsed plan/message.
+				case "text.delta":
+					if td, ok := event.Data.(ai.StreamTextDelta); ok {
+						full.WriteString(td.Text)
+					}
+				case "error":
+					sawError = true
+					writeSSE(w, "error", map[string]string{"message": event.Error})
+					h.store.UpdatePromptResponse(promptID, "Error: "+event.Error)
+				}
+				flusher.Flush()
+			case <-heartbeat.C:
+				writePlanPhase(w, promptID)
+				flusher.Flush()
+			case <-ctx.Done():
+				break loop
 			}
-			flusher.Flush()
 		}
 
 		if sawError || ctx.Err() != nil {
@@ -1289,7 +1367,14 @@ func (h *PromptHandler) NewAgentTurn(
 	// Push the settled plan to the client as a checklist before the first round,
 	// so the developer sees every screen and feature the build will work through —
 	// checked off live as the agent finishes them — not just the ones that change.
-	sess.EmitPlanSeed()
+	// Fresh turns only: an answer or resume replays into a client that already
+	// holds this checklist (live in memory, or restored from plan_task_status on
+	// load), and re-emitting the whole list would inject every screen and feature
+	// into the new entry a second time — the double-injection bug. PersistUserTurn
+	// marks exactly the fresh legs; the continuation legs pass it false.
+	if bo.PersistUserTurn {
+		sess.EmitPlanSeed()
+	}
 
 	history := h.turnHistory(projectID, promptID, userPrompt, bo)
 

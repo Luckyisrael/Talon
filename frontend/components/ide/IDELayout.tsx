@@ -403,7 +403,12 @@ export default function IDELayout({
       </div>
 
       {store.currentPlan ? (
-        <div className="surface-2 flex-shrink-0 overflow-y-auto p-3 shadow-[0_1px_0_var(--seam)]">
+        // Fixed height band with the scroll inside PlanViewer: the old
+        // content-sized wrapper grew past the column (flex-shrink-0) so its
+        // own overflow never engaged and the panel — Approve button included
+        // — was clipped by the canvas. Capped, the inner scroller takes over
+        // and the CTA stays reachable at any window size.
+        <div className="surface-2 h-[50vh] flex-shrink-0 overflow-hidden p-3 shadow-[0_1px_0_var(--seam)]">
           <PlanViewer
             message={store.currentPlan.message}
             plan={store.currentPlan.plan}

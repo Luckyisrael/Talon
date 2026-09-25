@@ -502,6 +502,14 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     // route is addressed by it.
     const [queueInstead, setQueueInstead] = useState(false);
     const runningPromptIdRef = useRef<number>(0);
+    // Plan-mode input: a plan turn is ONE model request — there is no loop on
+    // the server that can absorb a message mid-call. `planStreamRef` marks the
+    // stream currently running as a plan call; `planQueueRef` parks what the
+    // user typed meanwhile (as visible queued bubbles) to send as follow-up
+    // plan turns the moment the call returns. Nothing typed is dropped or
+    // silently rejected.
+    const planStreamRef = useRef(false);
+    const planQueueRef = useRef<{ id: string; text: string }[]>([]);
     // §7: the live turn's touched files, set as write tools fire. State, not
     // a ref: the lifted trace effect must re-run when the set changes, so the
     // workspace's Diff tab appears the moment a file changes.
@@ -752,6 +760,21 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
 
           const appendRow = (row: TraceRow) =>
             patch((prev) => ({ ...prev, traceRows: [...prev.traceRows, row] }));
+
+          // Like appendRow, but replaces an existing row with the same id.
+          // Events whose id is deterministic within a turn (task updates key
+          // on the task id) arrive more than once — running → completed is
+          // two frames for one row — and pushing both would duplicate the row
+          // and collide its React key.
+          const upsertRow = (row: TraceRow) =>
+            patch((prev) => {
+              const i = prev.traceRows.findIndex((r) => r.id === row.id);
+              if (i === -1)
+                return { ...prev, traceRows: [...prev.traceRows, row] };
+              const rows = [...prev.traceRows];
+              rows[i] = row;
+              return { ...prev, traceRows: rows };
+            });
 
           switch (event.type) {
             // The agent's spoken prose streams as narration; its private
@@ -1059,13 +1082,16 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               }
               break;
 
-            case "task_update":
+            case "task_update": {
               // §7: plan: prefixed updates upsert the checklist state; all
               // task updates keep their trace row.
-              if (typeof d.id === "string" && d.id.startsWith("plan:")) {
+              const taskKey =
+                typeof d.id === "string" && d.id.length > 0 ? d.id : undefined;
+              if (taskKey?.startsWith("plan:")) {
                 const task: PlanTask = {
-                  id: d.id,
-                  label: typeof d.description === "string" ? d.description : d.id,
+                  id: taskKey,
+                  label:
+                    typeof d.description === "string" ? d.description : taskKey,
                   status:
                     d.status === "completed"
                       ? "completed"
@@ -1084,16 +1110,27 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                   return next;
                 });
               }
-              appendRow({
-                id: `${id}-k${d.id ?? Math.random().toString(36).slice(2, 8)}`,
-                kind: "tool",
-                tool: "task",
-                label: d.description ?? "Task",
-                target: "",
-                status: rowStatus(d.status),
-                summary: d.result ? firstLine(d.result) : undefined,
-              });
+              // A seeded-but-not-started plan item is checklist state, not
+              // activity: the plan seed blasts every screen and feature at
+              // once, and rendering each pending one as a running row put a
+              // spinner on the left of the whole plan the moment a build was
+              // approved. The row appears when the item actually starts or
+              // lands; until then the checklist already shows it pending.
+              const seededPending =
+                taskKey?.startsWith("plan:") && d.status === "pending";
+              if (!seededPending) {
+                upsertRow({
+                  id: `${id}-k${taskKey ?? Math.random().toString(36).slice(2, 8)}`,
+                  kind: "tool",
+                  tool: "task",
+                  label: d.description ?? "Task",
+                  target: "",
+                  status: rowStatus(d.status),
+                  summary: d.result ? firstLine(d.result) : undefined,
+                });
+              }
               break;
+            }
 
             case "rebuild":
               if (d.detail) {
@@ -1203,8 +1240,16 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               break;
 
             case "done": {
-              // The turn is over: no more steers can be delivered to it.
-              runningPromptIdRef.current = 0;
+              // The turn can accept no more steers — except a pause (waiting
+              // or paused) is not the end of the turn: the answer or resume
+              // continues THIS turn. Zeroing the id here made the
+              // continuation's first phase frame look like a new turn, which
+              // wiped the checklist so the replayed tasks re-seeded from
+              // scratch — the double injection after answering a question.
+              // A paused turn can't be steered anyway: streaming has ended.
+              if (d.status !== "waiting" && d.status !== "paused") {
+                runningPromptIdRef.current = 0;
+              }
               const touched = d.files_touched ?? [];
               const skipped = Array.isArray(d.skipped_gates) ? d.skipped_gates : [];
               const stalled = d.status === "stalled";
@@ -1278,10 +1323,11 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               // just written showed a blank editor.
               if (touched.length > 0) onFilesTouched?.(touched);
               // A turn that reached its round budget ended cleanly but is not
-              // done. Pull the server's now-'paused' latest status so the resume
+              // done, and a turn that failed outright has the files it already
+              // wrote. Pull the server's latest status for either so the resume
               // banner appears at once — the same affordance a reload offers —
               // without rebuilding (and flickering) the just-streamed transcript.
-              if (d.status === "paused") {
+              if (d.status === "paused" || d.status === "failed") {
                 conversation
                   .get(projectId, { conversationId })
                   .then(({ latest }) =>
@@ -1299,9 +1345,17 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
     // ── Sending ──
 
     const send = useCallback(
-      async (raw: string, forcedMode?: "plan" | "build") => {
+      async (
+        raw: string,
+        forcedMode?: "plan" | "build",
+        // existingUserBubble: this send IS a queued message finally going out
+        // — its bubble is already in the transcript, so no second copy is
+        // pushed. Only the plan queue (see planQueueRef) passes it.
+        opts?: { existingUserBubble?: string },
+      ) => {
         const prompt = raw.trim();
         if (!prompt || isStreaming || uploading) return;
+        const effectiveMode = forcedMode ?? mode;
 
         // Staged files upload first (downscaled when they are large images),
         // then the turn claims them by id. An upload failure stops the send
@@ -1336,16 +1390,24 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
         pinnedRef.current = true;
 
         const streamId = uuid();
+        // Mark the stream as a plan call while it runs: submitted input
+        // during it queues visibly instead of steering (a plan turn has no
+        // loop to steer) — see submitInput.
+        planStreamRef.current = effectiveMode === "plan";
         setMessages((prev) => [
           ...prev,
-          {
-            id: uuid(),
-            role: "user",
-            content: prompt,
-            timestamp: Date.now(),
-            ...(sent.length > 0 ? { attachments: sent } : {}),
-          },
-          { id: streamId, role: "assistant", traceRows: [], isStreaming: true },
+          ...(opts?.existingUserBubble
+            ? []
+            : [
+                {
+                  id: uuid(),
+                  role: "user" as const,
+                  content: prompt,
+                  timestamp: Date.now(),
+                  ...(sent.length > 0 ? { attachments: sent } : {}),
+                },
+              ]),
+          { id: streamId, role: "assistant" as const, traceRows: [], isStreaming: true },
         ]);
 
         const patch = (fn: (prev: StreamMessage) => StreamMessage) =>
@@ -1369,7 +1431,7 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
           // tick; React state has not re-rendered yet, so the closure's `mode`
           // would still read "plan" and the build would re-plan forever. The
           // explicit argument makes the caller decide, not the render cycle.
-          forcedMode ?? mode,
+          effectiveMode,
           handleEvent(streamId, patch),
           (err) => patch((prev) => ({ ...prev, isStreaming: false, error: err.message })),
           { attachmentIds: sent.map((a) => a.id), conversationId },
@@ -1377,6 +1439,25 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       },
       [handleEvent, isStreaming, uploading, mode, projectId, staged, conversationId],
     );
+
+    // Deliver what was typed while a plan call was running: the call has
+    // ended (done, error, or stop), so the composer is free again. One
+    // message per turn — each flips from "queued" to an ordinary prompt as it
+    // goes out, and the next one follows when that turn ends. Uploading
+    // blocks delivery the same way it blocks send, so staged files never ride
+    // a message the composer no longer shows.
+    useEffect(() => {
+      if (isStreaming || uploading) return;
+      const next = planQueueRef.current[0];
+      if (!next) return;
+      planQueueRef.current.shift();
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === next.id && m.role === "user" ? { ...m, queued: false } : m,
+        ),
+      );
+      void send(next.text, "plan", { existingUserBubble: next.id });
+    }, [isStreaming, uploading, send]);
 
     // Resume the interrupted turn: no new user message, since this continues the
     // existing turn rather than starting one. The server replays the persisted
@@ -1386,6 +1467,9 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       if (!resumable || isStreaming) return;
       const promptId = resumable.id;
       setResumable(null);
+      // A resume runs a build loop: input during it steers like any other
+      // build stream, never queues as a plan follow-up.
+      planStreamRef.current = false;
         filesReadRef.current = new Set();
         pinnedRef.current = true;
 
@@ -1440,6 +1524,9 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       (promptId: number, reply: string) => {
         const answer = reply.trim();
         if (!answer || isStreaming || promptId <= 0) return;
+        // The answer resumes a paused turn's loop — a build turn's loop
+        // steers, so the plan-queue classification must not leak into it.
+        planStreamRef.current = false;
 
         // Lock the asking card. The prompt id names the paused turn uniquely, so
         // it is enough to find the one card to close.
@@ -1523,6 +1610,29 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       [],
     );
 
+    // Park a message typed while a plan is being written: it lands in the
+    // transcript as a queued bubble (visible, honest that it has not gone out
+    // yet) and the delivery effect after `send` fires it as its own plan turn
+    // the moment the current call returns. One in-flight model request cannot
+    // be interrupted with new input — this replaces the old silent drop.
+    function queuePlanMessage(raw: string) {
+      const message = raw.trim();
+      if (!message) return;
+      setInput("");
+      const bubbleId = uuid();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: bubbleId,
+          role: "user" as const,
+          content: message,
+          timestamp: Date.now(),
+          queued: true,
+        },
+      ]);
+      planQueueRef.current.push({ id: bubbleId, text: message });
+    }
+
     // Declared after `send` on purpose: reading it from above the declaration is
     // a temporal-dead-zone hazard, and it only worked because the handle body
     // does not run until after the first render.
@@ -1556,7 +1666,19 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
       // message stays in the composer — it sends as the next turn when this
       // one ends. Nothing is silently dropped or held in hidden state.
       if (isStreaming) {
-        if (!queueInstead) void steerRunning(input);
+        if (!queueInstead) {
+          // A plan call is one in-flight model request with nothing on the
+          // server that can absorb a message mid-call: park it visibly as a
+          // queued bubble rather than steering into a 409 or dropping it —
+          // it goes out as its own plan turn when the call returns. With
+          // staged files the text stays in the composer instead: a queued
+          // bubble cannot show chips it has not claimed yet.
+          if (planStreamRef.current) {
+            if (staged.length === 0) queuePlanMessage(input);
+          } else {
+            void steerRunning(input);
+          }
+        }
         return;
       }
       void send(input);
@@ -1762,7 +1884,11 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                       <div className="body">
                         <div className="flex min-w-0 flex-col items-end gap-2">
                           <div className="bubble whitespace-pre-wrap break-words text-sm leading-relaxed">
-                            {msg.steer ? (
+                            {msg.queued ? (
+                              <span className="mr-1.5 font-mono text-[10px] uppercase tracking-wider text-[var(--accent-2)]/70">
+                                queued — sends when the plan lands
+                              </span>
+                            ) : msg.steer ? (
                               <span className="mr-1.5 font-mono text-[10px] uppercase tracking-wider text-[var(--accent-2)]/70">
                                 {msg.steerError ? "steer failed" : "steer — not a new turn"}
                               </span>
@@ -2555,7 +2681,9 @@ function PlanCard({
                 <span className="min-w-0">
                   <span className="block text-[13px] font-medium text-mist">{screen.name}</span>
                   {screen.description && (
-                    <span className="block font-mono text-xs text-fog">{screen.description}</span>
+                    <span className="block text-[13px] leading-relaxed text-fog">
+                      {screen.description}
+                    </span>
                   )}
                 </span>
               </li>

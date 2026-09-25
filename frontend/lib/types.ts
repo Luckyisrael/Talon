@@ -143,6 +143,11 @@ export interface ChatMessage {
    * capture and send). Shows on the bubble so the user knows their words never
    * reached the build. */
   steerError?: string | null;
+  /** True while this message waits for an in-flight plan call to finish — a
+   * plan turn is one model request with nothing on the server that can absorb
+   * a mid-call message, so the text is parked visibly instead of dropped or
+   * rejected. The flag clears when the message goes out as its own turn. */
+  queued?: boolean;
   /** The human's rating of this assistant message, from the feedback sidecar.
    * Undefined means unrated — the common case, rendered as no thumb pressed.
    * 1 is good, -1 is bad, 0 is a bare comment. */
