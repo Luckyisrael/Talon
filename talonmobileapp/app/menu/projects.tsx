@@ -101,10 +101,12 @@ export default function ProjectsScreen() {
         </View>
       </ScrollView>
       {/* Agent memory belongs to the active project, so it lives here with
-          it: what the agent knows, readable anywhere, written only by turns. */}
+          it: what the agent knows, readable anywhere, written only by turns.
+          Labeled "Memory" — the same word the IDE dock uses; "Agent memory"
+          read like an internal subsystem name. */}
       {activeId != null && (
         <UIText variant="title" tone="hero" style={styles.memHead}>
-          Agent memory
+          Memory
         </UIText>
       )}
       {activeId != null && memories.length === 0 && (

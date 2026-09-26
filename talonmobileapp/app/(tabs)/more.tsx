@@ -5,6 +5,7 @@ import { Badge, Card, Field, GhostButton, LimeButton, Screen, UIText } from '@/c
 import { Colors, Spacing } from '@/constants/theme';
 import { useActiveProject, useMe, useSaveTriage, useTriage, useUsage } from '@/hooks';
 import { authApi } from '@/lib/api';
+import { SHOW_TRIAGE } from '@/lib/flags';
 import { clearToken } from '@/lib/auth';
 
 const MENU_LINKS = [
@@ -106,8 +107,9 @@ export default function MoreScreen() {
             </UIText>
           </Card>
 
-          {/* Billing cutover triage for the active project. */}
-          {projectId != null && (
+          {/* Billing cutover triage for the active project — internal QA
+              only; hidden from real users unless the build opts in. */}
+          {SHOW_TRIAGE && projectId != null && (
             <Card>
               <View style={styles.triage}>
                 <UIText variant="title" tone="hero">

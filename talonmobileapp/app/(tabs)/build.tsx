@@ -176,6 +176,26 @@ export default function BuildScreen() {
       alive = false;
     };
   }, [projectId, loadHistory]);
+
+  // Stream-degraded fallback: the turn runs server-side regardless of this
+  // device's connection, so when the live tail dies (connect timeout, drop)
+  // while the newest turn still lacks its turn_end marker, poll history
+  // silently — the user keeps seeing progress instead of staring at a dead
+  // screen until they remember to refresh. Polling stops by itself the
+  // moment the turn ends (seedPromptId clears), with a hard cap regardless.
+  const streamDead = turn.phase === 'error';
+  React.useEffect(() => {
+    if (!streamDead || !projectId) return;
+    void loadHistory({ silent: true });
+    if (seedPromptId == null) return;
+    let ticks = 0;
+    const iv = setInterval(() => {
+      ticks += 1;
+      void loadHistory({ silent: true });
+      if (ticks >= 180) clearInterval(iv); // ~12 min hard cap
+    }, 4000);
+    return () => clearInterval(iv);
+  }, [streamDead, seedPromptId, projectId, loadHistory]);
   // The sweep row lands with the turn: refresh the badge's claim alongside the
   // history refetch that carries the marker it reads from.
   const qc = useQueryClient();
@@ -638,11 +658,12 @@ export default function BuildScreen() {
 
           {/* TEMP DIAGNOSTIC — shows exactly what the SSE stream delivered to
               this app, so we can see whether events arrive live or only at the
-              end. Remove once streaming works. */}
-          {turn.phase !== 'idle' && (
+              end. Dev builds only, clearly labeled so it doesn't read as a
+              feature. Remove once streaming is verified end to end. */}
+          {__DEV__ && turn.phase !== 'idle' && (
             <View style={styles.diagBox}>
               <UIText variant="monoSm" tone="faint">
-                DIAG events={diag.count} kinds={diag.kinds.join(',') || 'none'}
+                stream debug (dev): events={diag.count} kinds={diag.kinds.join(',') || 'none'}
               </UIText>
               {diag.lastData ? (
                 <UIText variant="monoSm" tone="faint" numberOfLines={3}>

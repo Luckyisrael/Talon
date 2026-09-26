@@ -34,6 +34,7 @@ import {
   type TurnEvidence,
 } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { SHOW_TRIAGE } from '@/lib/flags';
 
 // ── Auth bootstrap ─────────────────────────────────────
 
@@ -617,7 +618,8 @@ export function useTestInfo(projectId: number | null) {
 export function useTriage(projectId: number | null) {
   return useQuery({
     queryKey: ['triage', projectId],
-    enabled: projectId != null,
+    // Same gate as the card: a hidden form should not poll the endpoint.
+    enabled: projectId != null && SHOW_TRIAGE,
     queryFn: () => triageApi.get(projectId!),
   });
 }

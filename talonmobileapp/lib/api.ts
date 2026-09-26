@@ -466,8 +466,16 @@ export const sessionsApi = {
   // client — is invisible to this app otherwise, because the id was never in
   // this device's SecureStore. The server is the source of truth; asking it
   // is what keeps every client showing the same device. 204 means idle.
-  live(projectId: number) {
-    return request<Session | null>(`/v1/projects/${projectId}/live-session`)
+  // request() resolves 204 as undefined, and react-query v5 rejects
+  // query functions that resolve undefined — map idle to null here so the
+  // ["live-session", projectId] query never dies with "Query data cannot be
+  // undefined".
+  async live(projectId: number) {
+    return (
+      (await request<Session | null>(
+        `/v1/projects/${projectId}/live-session`,
+      )) ?? null
+    )
   },
   destroy(id: number) {
     return request<void>(`/v1/sessions/${id}`, { method: 'DELETE' })
@@ -514,10 +522,31 @@ export async function openStream(
     marks.push(stage)
     onEvent({ kind: 'diag', data: stage })
   }
+  // Connect deadline: fetch() resolving IS the response headers arriving, so
+  // this only bounds the wait for first byte — body reads stay unbounded (a
+  // build turn streams for minutes). Without it a dead connection parks the
+  // screen at fetch-start forever with no error to show.
+  const CONNECT_TIMEOUT_MS = 15_000
+  let connectTimedOut = false
+  const fetchConnect = async (url: string, opts: RequestInit) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        connectTimedOut = true
+        reject(new Error(`connect timeout after ${CONNECT_TIMEOUT_MS}ms`))
+        controller.abort()
+      }, CONNECT_TIMEOUT_MS)
+    })
+    try {
+      return await Promise.race([fetch(url, opts), deadline])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
   ;(async () => {
     try {
       mark('fetch-start')
-      let res = await fetch(`${BASE}${path}`, {
+      let res = await fetchConnect(`${BASE}${path}`, {
         ...init,
         signal: controller.signal,
         headers,
@@ -528,7 +557,7 @@ export async function openStream(
       if (res.status === 401 && token) {
         try {
           const fresh = await refreshAccessToken()
-          res = await fetch(`${BASE}${path}`, {
+          res = await fetchConnect(`${BASE}${path}`, {
             ...init,
             signal: controller.signal,
             headers: { ...headers, Authorization: `Bearer ${fresh}` },
@@ -572,7 +601,16 @@ export async function openStream(
       }
       mark('loop-exit')
     } catch (err) {
-      if (!controller.signal.aborted) {
+      if (connectTimedOut) {
+        // The race can settle with either our deadline error or the abort
+        // rejection — report the one truth we care about either way.
+        mark(`error:connect-timeout-${CONNECT_TIMEOUT_MS}ms-no-headers`)
+        onError?.(
+          new Error(
+            `The server never answered this stream (no response headers after ${CONNECT_TIMEOUT_MS}ms). Check the backend and that the app can reach it.`,
+          ),
+        )
+      } else if (!controller.signal.aborted) {
         mark(`error:${err instanceof Error ? err.message : String(err)}`)
         onError?.(err instanceof Error ? err : new Error(String(err)))
       } else {
