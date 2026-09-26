@@ -64,6 +64,8 @@ Thumbs.db
 
 # Workspaces (runtime)
 workspaces/
+# Breaktest scratch workspace (e2e/run-breaktest.sh wipes it per run)
+workspaces-breaktest/
 
 # Staging
 .staging/

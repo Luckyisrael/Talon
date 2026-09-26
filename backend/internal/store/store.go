@@ -1075,9 +1075,73 @@ func (s *Store) UpdateProjectPlan(id int64, planJSON string) error {
 	return err
 }
 
+// projectChildTables is every table with a foreign key into projects, and it
+// must stay exhaustive over the schema: a table missing here makes
+// DeleteProject fail with a constraint error, so the project could not be
+// deleted at all (the used-project 500 breaktest BT-8.2 found). No table
+// here references another, so their relative deletion order is free.
+var projectChildTables = []string{
+	"conversations", "prompts", "sessions", "project_memory",
+	"architecture_decisions", "conversation_messages", "checkpoints",
+	"turn_approvals", "build_receipts", "plan_task_status",
+	"message_feedback", "project_git_remotes", "project_keystores",
+	"export_jobs", "project_verify_state", "project_assets",
+	"prompt_attachments", "triage_reports",
+}
+
+// projectScopedTables carry a project_id column without a foreign key, so
+// SQLite never blocks their deletion — which is worse than blocking: the
+// rows would outlive the project, and since project ids are rowids (no
+// AUTOINCREMENT), a later project that draws the same id would inherit a
+// dead project's file index. audit_log deliberately stays out: it is an
+// audit trail keyed by user, and history of a deleted project is exactly
+// what an audit log must keep.
+var projectScopedTables = []string{"code_files", "code_chunks", "code_symbols", "code_edges"}
+
+// DeleteProject removes the project and everything hanging off it in one
+// transaction: foreign-key children first (SQLite enforces immediately),
+// then the FK-less project-scoped index rows, then the project's session
+// log, then the project row. Either everything goes or nothing does — a
+// partial delete would strand the workspace on disk with no row to attach
+// it to, which is how the old single DELETE turned every used project into
+// a 500 that could not be retried away.
 func (s *Store) DeleteProject(id int64) error {
-	_, err := s.db.Exec("DELETE FROM projects WHERE id = ?", id)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // no-op once Commit succeeds
+
+	for _, table := range projectChildTables {
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE project_id = ?", id); err != nil {
+			return fmt.Errorf("delete %s: %w", table, err)
+		}
+	}
+	for _, table := range projectScopedTables {
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE project_id = ?", id); err != nil {
+			return fmt.Errorf("delete %s: %w", table, err)
+		}
+	}
+	if _, err := tx.Exec("DELETE FROM session_events WHERE log_key = ?", ProjectLogKey(id)); err != nil {
+		return fmt.Errorf("delete session_events: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM projects WHERE id = ?", id); err != nil {
+		return fmt.Errorf("delete project: %w", err)
+	}
+	return tx.Commit()
+}
+
+// HasRunningPrompt reports whether any turn of the project is mid-loop.
+// The delete handler consults it before touching the database: destroying
+// the workspace under a live loop, then letting its finalize write rows for
+// a project that no longer exists, is worse than refusing the delete
+// (breaktest BT-8.3).
+func (s *Store) HasRunningPrompt(projectID int64) bool {
+	var n int
+	err := s.db.QueryRow(
+		"SELECT COUNT(*) FROM prompts WHERE project_id = ? AND status = 'running'", projectID,
+	).Scan(&n)
+	return err == nil && n > 0
 }
 
 func (s *Store) CreatePrompt(projectID int64, mode, prompt string) (*Prompt, error) {

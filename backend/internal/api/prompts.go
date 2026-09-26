@@ -218,6 +218,17 @@ func (h *PromptHandler) validate(w http.ResponseWriter, r *http.Request, req *pr
 	if _, ok := h.ownedProject(w, r, req.ProjectID); !ok {
 		return false
 	}
+	// A conversation id must name a thread of this very project. It used to
+	// ride straight into CreateTitledPromptInConversation, writing the turn
+	// into another account's thread (breaktest BT-6.3/6.4). Checked before
+	// quota so a rejected request never spends a metered call.
+	if req.ConversationID > 0 {
+		conv, err := h.store.GetConversationByID(req.ConversationID)
+		if err != nil || conv.ProjectID != req.ProjectID {
+			writeError(w, http.StatusNotFound, "conversation not found")
+			return false
+		}
+	}
 	return h.checkQuota(w, GetUserID(r.Context()))
 }
 
@@ -471,6 +482,13 @@ func (h *PromptHandler) Resume(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "this server cannot stream responses")
 		return
 	}
+	// The session gate above is a check, not a lock: two resumes can both see
+	// nil and both start loops. The claim closes that window, and it is taken
+	// before the headers go out so the loser can still answer 409.
+	if !h.orch.ClaimTurn(id) {
+		writeError(w, http.StatusConflict, "this turn is still running")
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -577,6 +595,13 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "this server cannot stream responses")
 		return
 	}
+	// Same admission law as Resume: the GetSession check above cannot
+	// serialize two concurrent answers, the claim can — taken before the
+	// headers so the loser still has a 409 to send.
+	if !h.orch.ClaimTurn(id) {
+		writeError(w, http.StatusConflict, "this turn is still running")
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -650,6 +675,10 @@ func (h *PromptHandler) Answer(w http.ResponseWriter, r *http.Request) {
 	// plan turn — this is the second half of one planning exchange.
 	if prompt.Mode == "plan" {
 		h.streamPlan(r.Context(), w, flusher, id, prompt.ProjectID, userID, h.buildUserTurn(nil, body.Answer))
+		// Plan turns never reach runBuild, whose defer would otherwise be
+		// the only thing releasing the claim — give it back here, after the
+		// loop has finished.
+		h.orch.ReleaseTurn(id)
 		return
 	}
 	h.streamBuild(r.Context(), w, flusher, prompt.ProjectID, id, userID, body.Answer,
@@ -672,6 +701,15 @@ func (h *PromptHandler) Discard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok := h.ownedProject(w, r, prompt.ProjectID); !ok {
+		return
+	}
+
+	// A finished turn is history: discard exists to stop offering resume on
+	// interrupted turns, not to rewrite a completed run — and re-discarding
+	// an abandoned turn changes nothing. Both answer 409 instead of quietly
+	// flipping the marker (breaktest BT-7.9 caught the flip).
+	if prompt.Status == "completed" || prompt.Status == "abandoned" {
+		writeError(w, http.StatusConflict, "this turn has already finished")
 		return
 	}
 
@@ -1160,6 +1198,13 @@ func (h *PromptHandler) runBuild(
 	emitterCh chan<- *events.SessionEmitter,
 	bo buildOptions,
 ) (*orchestrator.BuildOutcome, error) {
+	// First defer registered, so it runs last: after finalizeTurn has written
+	// the terminal status and after RemoveSession has unpublished the agent.
+	// Every exit — including the early workspace and hook failures below,
+	// which return before a session exists — must give the turn claim back,
+	// or the prompt would be unresumable until the process restarts.
+	defer h.orch.ReleaseTurn(promptID)
+
 	workspacePath, err := h.workspacePath(projectID)
 	if err != nil {
 		return nil, err
@@ -2129,6 +2174,16 @@ func (h *PromptHandler) GetConversation(w http.ResponseWriter, r *http.Request) 
 		cid, perr := strconv.ParseInt(cidStr, 10, 64)
 		if perr != nil {
 			writeError(w, http.StatusBadRequest, "invalid conversation_id")
+			return
+		}
+		// The thread must belong to this project. The lookup below used to be
+		// keyed on the conversation id alone, so any account could replay
+		// someone else's thread through their own project id (breaktest
+		// BT-6.1). Foreign and missing answer the same way — the endpoint
+		// must not confirm that an id exists.
+		conv, cerr := h.store.GetConversationByID(cid)
+		if cerr != nil || conv.ProjectID != projectID {
+			writeError(w, http.StatusNotFound, "conversation not found")
 			return
 		}
 		stored, err = h.store.GetConversationThread(cid, limit)

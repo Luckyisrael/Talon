@@ -386,6 +386,16 @@ func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refuse while a turn is mid-loop: the loop is writing into the
+	// workspace we are about to destroy, and its finalize would resurrect
+	// rows for a project that no longer exists. 409 instead of a racing
+	// destroy (breaktest BT-8.3 — without this check the delete fell
+	// through to the foreign-key failure and answered 500).
+	if h.store.HasRunningPrompt(project.ID) {
+		writeError(w, http.StatusConflict, "a turn is still running in this project")
+		return
+	}
+
 	if err := h.store.DeleteProject(project.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete the project")
 		return
@@ -421,6 +431,13 @@ func resolveInside(root, rel string) (string, error) {
 	inside, err := filepath.Rel(absRoot, full)
 	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
 		return "", errPath("that path is outside the project: " + rel)
+	}
+
+	// The workspace root is not a file. "path=." — and "app/..", which cleans
+	// to the same place — used to resolve to absRoot itself and hand
+	// DeleteFile's os.RemoveAll the entire workspace (breaktest BT-4.8).
+	if inside == "." {
+		return "", errPath("a path inside the project is required: " + rel)
 	}
 
 	// Reject anything under a directory the editor does not manage — a write into

@@ -2,11 +2,21 @@ package store
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/luckyisrael/talon/backend/internal/harness/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
 )
+
+// ProjectLogKey is the stable session-log key for one project's build
+// conversation. It lives here — not in the api bridge that writes the log —
+// because DeleteProject purges by this key: writer and purge must not be
+// able to drift apart, or a deleted project's event log survives and a
+// reused project id inherits it.
+func ProjectLogKey(projectID int64) string {
+	return "project-" + strconv.FormatInt(projectID, 10)
+}
 
 // This file is the SQLite backend for the harness session log (H1): the
 // append-only event record behind every agent turn. It implements the

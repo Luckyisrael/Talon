@@ -68,6 +68,14 @@ type Orchestrator struct {
 	// round boundary. Publish is rollback-covered: CreateSession registers
 	// only after the session is fully initialized, RemoveSession unpublishes.
 	agents *harnessagent.Registry
+	// claims is the turn-loop admission ledger, keyed by prompt id.
+	// GetSession(id) == nil is only a check, not a lock: two concurrent
+	// resumes both see no session and both start a loop against one prompt
+	// row and one workspace (breaktest BT-7.7 races exactly this window).
+	// ClaimTurn is taken after every validation and before the SSE headers
+	// so the loser can still answer 409; runBuild releases it on every exit.
+	claims   map[int64]bool
+	claimsMu sync.Mutex
 	// spill is the H8 oversized-output store. Nil until the composition
 	// provides a directory; nil means outputs keep today's 32KB hard cap.
 	spill *compaction.SpillStore
@@ -685,6 +693,37 @@ func (o *Orchestrator) GetSession(id int64) *SessionState {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return o.sessions[id]
+}
+
+// ClaimTurn takes the exclusive right to run a prompt's turn loop. Exactly
+// one caller can hold a given prompt's claim; the rest are told the turn is
+// still running. The claim exists because a nil-check cannot serialize
+// anything: two resumes passing GetSession together start two agent loops
+// over one prompt row and one workspace, and their finalizes fight over the
+// status (breaktest BT-7.7: both resumed answers came back 200).
+func (o *Orchestrator) ClaimTurn(id int64) bool {
+	o.claimsMu.Lock()
+	defer o.claimsMu.Unlock()
+	if o.claims[id] {
+		return false
+	}
+	if o.claims == nil {
+		o.claims = make(map[int64]bool)
+	}
+	o.claims[id] = true
+	return true
+}
+
+// ReleaseTurn gives the claim back. runBuild defers it as its very first
+// statement, so every exit path releases — including the early workspace
+// and hook failures that return before a session ever exists. Being the
+// first defer it also runs last, after finalizeTurn has written the terminal
+// status, so a resumer that observes "cancelled" or "completed" never meets
+// a claim that is still held.
+func (o *Orchestrator) ReleaseTurn(id int64) {
+	o.claimsMu.Lock()
+	defer o.claimsMu.Unlock()
+	delete(o.claims, id)
 }
 
 func (o *Orchestrator) RemoveSession(id int64) {

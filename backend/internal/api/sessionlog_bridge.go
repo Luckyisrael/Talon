@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/luckyisrael/talon/backend/internal/ai"
 	"github.com/luckyisrael/talon/backend/internal/harness/events"
 	"github.com/luckyisrael/talon/backend/internal/harness/sessionlog"
+	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
 // The H1 session-log bridge: every conversation write the prompt paths make
@@ -25,8 +25,10 @@ import (
 // is the only place that knows both types exist.
 
 // sessionLogKey is the stable log key for one project's build conversation.
+// The format itself lives in store.ProjectLogKey — DeleteProject purges the
+// log by that key, and two definitions of one key is how they drift apart.
 func sessionLogKey(projectID int64) string {
-	return "project-" + strconv.FormatInt(projectID, 10)
+	return store.ProjectLogKey(projectID)
 }
 
 // sessionLogCache holds one open Log per project. Logs are opened lazily and
