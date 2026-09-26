@@ -3,8 +3,11 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -253,5 +256,126 @@ func TestAgentLoopRambleCounterResets(t *testing.T) {
 	defer mu.Unlock()
 	if modelCalls != 7 {
 		t.Errorf("expected 7 calls (reset on tool rounds 1 and 4), got %d", modelCalls)
+	}
+}
+
+// The turn state card must reach the provider on the WIRE — regenerated
+// every round from this turn's own activity — and never leak into the
+// persisted transcript. The script is the observed failure shape: four
+// reads with no writes (the read spiral), then one write, then end. The
+// fake provider captures each request body, so the assertions are about
+// what the model actually saw, not about internal state.
+func TestAgentLoopTurnStateCardOnWire(t *testing.T) {
+	var mu sync.Mutex
+	var requests []string
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		requests = append(requests, string(body))
+		n := len(requests)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		call := func(id, name string, input map[string]any) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"content": []map[string]any{{
+					"type":  "tool_use",
+					"id":    id,
+					"name":  name,
+					"input": input,
+				}},
+				"stop_reason": "tool_use",
+				"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},
+			})
+		}
+		switch {
+		case n <= 4: // the spiral: read, read, read, read — nothing written
+			call(fmt.Sprintf("read-%d", n), "read_file",
+				map[string]any{"path": fmt.Sprintf("app/file%d.tsx", n)})
+		case n == 5: // the directive lands, the model finally edits
+			call("write-1", "write_file",
+				map[string]any{"path": "app/index.tsx", "content": "x"})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"content":     []map[string]any{{"type": "text", "text": "done"}},
+				"stop_reason": "end_turn",
+				"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},
+			})
+		}
+	}))
+	defer model.Close()
+
+	t.Setenv("AI_PROTOCOL", "anthropic")
+	t.Setenv("AI_BASE_URL", model.URL)
+	t.Setenv("AI_API_KEY", "test-key")
+	t.Setenv("AI_MODEL", "test-model")
+
+	aiClient, err := ai.New()
+	if err != nil {
+		t.Fatalf("ai.New: %v", err)
+	}
+	o := New(aiClient, nil, loadKnowledge(t))
+	sess := newTestSession(t)
+
+	executor := func(_ context.Context, name string, _ json.RawMessage) (string, bool) {
+		switch name {
+		case "read_file":
+			return "export const x = 1", false
+		case "write_file":
+			return `{"ok":true}`, false
+		default:
+			out, _ := json.Marshal(map[string]any{"passed": true, "summary": "clean"})
+			return string(out), false
+		}
+	}
+
+	outcome, err := o.RunAgentLoop(context.Background(), sess, RunOptions{
+		SystemPrompt: "build it",
+		Mode:         "build",
+		History:      []ai.Message{ai.UserText("make a screen")},
+		Execute:      executor,
+		FilesTouched: func() []string { return []string{"app/index.tsx"} },
+	})
+	if err != nil {
+		t.Fatalf("loop failed: %v", err)
+	}
+	if outcome == nil {
+		t.Fatal("expected an outcome")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 6 {
+		t.Fatalf("expected 6 model requests (4 reads, 1 write, 1 finish), got %d", len(requests))
+	}
+
+	// Round 1: the card rides the first request with the turn's goal.
+	if !strings.Contains(requests[0], "## Turn state") ||
+		!strings.Contains(requests[0], "Goal: make a screen") {
+		t.Errorf("first request missing the turn state card:\n%s", requests[0])
+	}
+	// Round 2: before the idle threshold the directive stays soft.
+	if strings.Contains(requests[1], "No file writes") {
+		t.Errorf("round 2 fired the idle directive early:\n%s", requests[1])
+	}
+	// Round 4: four rounds, zero writes — the read-spiral case must say so,
+	// with the read counts that justify it (3 reads so far).
+	if !strings.Contains(requests[3], "Round 4/60") ||
+		!strings.Contains(requests[3], "No file writes after 4 rounds") ||
+		!strings.Contains(requests[3], "reads: 3") {
+		t.Errorf("round 4 request missing the idle directive:\n%s", requests[3])
+	}
+	// After the write the card reports it and the directive moves on.
+	if !strings.Contains(requests[5], "writes: 1 (app/index.tsx)") {
+		t.Errorf("post-write request missing the write count:\n%s", requests[5])
+	}
+
+	// The card is wire-only: nothing in the persisted transcript carries it.
+	for _, m := range outcome.Messages {
+		for _, b := range m.Blocks {
+			if strings.Contains(b.Text, "## Turn state") ||
+				strings.Contains(b.Content, "## Turn state") {
+				t.Errorf("card leaked into the persisted transcript: role=%s", m.Role)
+			}
+		}
 	}
 }

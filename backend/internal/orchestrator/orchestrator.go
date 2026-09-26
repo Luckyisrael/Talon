@@ -1055,6 +1055,13 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	conversation := make([]ai.Message, len(opts.History))
 	copy(conversation, opts.History)
 
+	// stateFrom is where this turn's own messages begin, for the turn state
+	// card: one past the last turn_end marker, since every settled turn
+	// writes exactly one. Steers, nudges and the resume instruction all
+	// arrive after the boundary, so everything the card counts belongs to
+	// this turn — including the legs of a resumed one.
+	stateFrom := turnStateStart(conversation)
+
 	// With named returns (W10), outcome is the return slot itself — the
 	// TurnStop defer below observes the same value every exit path returns.
 	outcome = &BuildOutcome{}
@@ -1334,6 +1341,15 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			} else {
 				conversation = ai.Compact(conversation, MaxContextTokens*3/4)
 			}
+			// Compaction drops from the front, so the turn-state boundary
+			// moves with it — clamped at 0 for a compaction that reached
+			// into this turn's own messages.
+			if dropped := before - len(conversation); dropped > 0 {
+				stateFrom -= dropped
+				if stateFrom < 0 {
+					stateFrom = 0
+				}
+			}
 			sess.Emitter.EmitToolCall("", "compact", "", fmt.Sprintf("Compacted context (%d → %d turns)",
 				before, len(conversation)), "completed")
 			if opts.OnCompacted != nil {
@@ -1348,6 +1364,14 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		// copy for the wire only — `conversation` (and the blocks it shares with
 		// outcome.Messages, which is what gets persisted) keeps its full fidelity.
 		sendConversation := ai.TrimSupersededToolOutput(conversation)
+
+		// The turn state card: a situation report derived from this turn's
+		// transcript (reads, writes, check verdicts, last error), appended to
+		// the trailing user message of the WIRE copy only. Fresh every round,
+		// never persisted, and riding the last message so the provider's
+		// cache breakpoint (len-2) lands one message earlier, untouched.
+		sendConversation = appendTurnState(sendConversation, conversation,
+			stateFrom, round, o.maxRounds, opts.Mode, sess)
 
 		// Route this round: classify from mode, prompt size, and repair state,
 		// then point a client copy at the tier's model. A model change mid-turn
