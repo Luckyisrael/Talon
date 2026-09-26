@@ -31,7 +31,9 @@ func (t *ReadFile) Name() string { return "read_file" }
 
 func (t *ReadFile) Description() string {
 	return "Read a file from the project. Output is prefixed with line numbers so you can quote exact " +
-		"text back to edit_file. Reads up to 2000 lines; use offset and limit for longer files. " +
+		"text back to edit_file. Reads up to 2000 lines — take the whole file in one call by default; " +
+		"only pass offset/limit for files longer than that. Prefer one whole-file read over several " +
+		"small overlapping windows of the same file. " +
 		"Oversized tool outputs that were spilled to disk are read back the same way: pass the " +
 		"locator line you were shown (or its path) as the path."
 }
