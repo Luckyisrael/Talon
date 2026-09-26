@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { SHOW_TRIAGE } from "@/lib/flags";
 import type { DockPanel } from "./IDELayout";
 
 interface TopbarProps {
@@ -107,7 +108,11 @@ export default function Topbar({
       </span>
 
       <div className="flex items-center gap-0.5">
-        {(Object.keys(DOCK_ICONS) as DockPanel[]).map((key) => (
+        {(Object.keys(DOCK_ICONS) as DockPanel[])
+          // Triage is an internal QA panel; no dock button unless the build
+          // opted in (see lib/flags.ts).
+          .filter((key) => key !== "triage" || SHOW_TRIAGE)
+          .map((key) => (
           <DockButton
             key={key}
             label={DOCK_ICONS[key].label}

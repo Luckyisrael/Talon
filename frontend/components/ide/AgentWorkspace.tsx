@@ -429,6 +429,36 @@ function DiffView({ projectId, files }: { projectId: number; files: string[] }) 
     };
   }, [projectId, files.length]);
 
+  // Render cap: a turn that touches many files (or a generated bundle) can
+  // produce a diff of tens of thousands of lines, and one span per line froze
+  // the whole tab while layout ran. Show the head in full and summarise the
+  // rest — the user needs shape and verdict, not every hunk. Hooks run before
+  // the early returns below.
+  const { visible, hiddenLines, hiddenChars } = useMemo(() => {
+    const MAX_LINES = 3000;
+    const MAX_LINE_CHARS = 400;
+    const lines = diff.split("\n");
+    const head = lines.slice(0, MAX_LINES);
+    const shown = head.map((line) =>
+      line.length > MAX_LINE_CHARS
+        ? `${line.slice(0, MAX_LINE_CHARS)}… [line truncated]`
+        : line,
+    );
+    // Characters the cap removed: over-long lines trimmed here, plus every
+    // line beyond the window. A diff that is few lines but enormous
+    // (minified files) lands in the first term, so it reports too.
+    const trimmed = head.reduce(
+      (n, line) => n + Math.max(0, line.length - MAX_LINE_CHARS),
+      0,
+    );
+    const beyondWindow = lines.slice(head.length).reduce((n, l) => n + l.length, 0);
+    return {
+      visible: shown,
+      hiddenLines: lines.length - head.length,
+      hiddenChars: trimmed + beyondWindow,
+    };
+  }, [diff]);
+
   if (err) {
     return <div className="p-6 text-sm text-fog">{err}</div>;
   }
@@ -444,7 +474,7 @@ function DiffView({ projectId, files }: { projectId: number; files: string[] }) 
   return (
     <div className="h-full overflow-y-auto p-4">
       <pre className="mx-auto max-w-4xl whitespace-pre-wrap rounded-lg border border-graphite bg-ink/30 p-4 font-mono text-xs leading-relaxed">
-        {diff.split("\n").map((line, i) => (
+        {visible.map((line, i) => (
           <span
             key={i}
             className={
@@ -461,6 +491,14 @@ function DiffView({ projectId, files }: { projectId: number; files: string[] }) 
             {"\n"}
           </span>
         ))}
+        {hiddenLines > 0 || hiddenChars > 0 ? (
+          <span className="text-fog">
+            … {hiddenLines > 0 ? `${hiddenLines} more lines` : ""}
+            {hiddenLines > 0 && hiddenChars > 0 ? " " : ""}
+            {hiddenChars > 0 ? `(${hiddenChars.toLocaleString()} characters)` : ""}{" "}
+            truncated — the full diff is on disk via git.
+          </span>
+        ) : null}
       </pre>
     </div>
   );

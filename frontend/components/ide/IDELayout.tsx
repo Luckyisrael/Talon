@@ -17,6 +17,7 @@ import TestOnPhone from "./TestOnPhone";
 import PlanViewer from "./PlanViewer";
 import Topbar from "./Topbar";
 import TriageForm from "./TriageForm";
+import { SHOW_TRIAGE } from "@/lib/flags";
 import Terminal from "./Terminal";
 
 interface IDELayoutProps {
@@ -121,6 +122,9 @@ export default function IDELayout({
   const [panelFlex, setPanelFlex] = useState<Partial<Record<DockPanel, number>>>({});
   const sectionRefs = useRef<Partial<Record<DockPanel, HTMLElement | null>>>({});
   const togglePanel = useCallback((panel: DockPanel) => {
+    // Triage is internal QA: a build without the flag cannot open it, no
+    // matter what future call sites offer (see lib/flags.ts).
+    if (panel === "triage" && !SHOW_TRIAGE) return;
     setOpenPanels((prev) => ({ ...prev, [panel]: !prev[panel] }));
     setPanelFlex({});
   }, []);
@@ -513,7 +517,9 @@ export default function IDELayout({
     }
   };
 
-  const dockOrder: DockPanel[] = ["device", "files", "terminal", "memory", "triage"];
+  const dockOrder: DockPanel[] = (
+    ["device", "files", "terminal", "memory", "triage"] as DockPanel[]
+  ).filter((p) => p !== "triage" || SHOW_TRIAGE);
   const openOrder = dockOrder.filter((p) => openPanels[p]);
 
   return (

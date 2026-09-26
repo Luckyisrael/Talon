@@ -606,6 +606,20 @@ body {
   color: transparent !important;
 }
 
+/* Code surfaces and controls keep their own paint: an opaque <pre>
+   background painted over transparent glyphs rendered a blank block
+   beneath file-read/grep output. The wash stays on prose only. */
+.prose-streaming pre,
+.prose-streaming pre * {
+  color: var(--color-mist) !important;
+}
+
+.prose-streaming .gauge,
+.prose-streaming button,
+.prose-streaming button * {
+  color: var(--color-mist) !important;
+}
+
 @keyframes fade-up {
   from {
     opacity: 0;

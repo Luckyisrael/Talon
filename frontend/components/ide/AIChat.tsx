@@ -1708,8 +1708,14 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                 ...m,
                 isStreaming: false,
                 error: "You stopped this turn. The files it already wrote are still there.",
+                // Settle the rows like every other exit path does: a stopped
+                // turn must not leave narration shimmering forever.
                 traceRows: m.traceRows.map((r) =>
-                  r.status === "running" ? { ...r, status: "fail" } : r,
+                  r.status === "running"
+                    ? { ...r, status: "fail", streaming: false }
+                    : r.streaming
+                      ? { ...r, streaming: false }
+                      : r,
                 ),
               }
             : m,
