@@ -167,3 +167,53 @@ func TestSearchConversationEscapesWildcards(t *testing.T) {
 		t.Errorf("short query: status %d, want 400", code)
 	}
 }
+
+// The replay the model carries must open on the user's actual request, not
+// on a fragment of a long previous turn. The row budget is 60; turn 1 below
+// writes 71 rows, so the raw tail starts mid-turn — without turn alignment,
+// TrimToValidHistory trims that fragment forward to the one user-text row
+// that survives (a harness nudge) and the model opens its conversation on
+// system prose instead of the request it is continuing. This is the shape
+// a 41-round spiral turn leaves behind for every prompt that follows it.
+func TestConversationReplayOpensAtTurnOpener(t *testing.T) {
+	st, pid := testHistoryStore(t)
+
+	// Turn 1 (prompt 1): opener + 34 tool rounds + a verify nudge + final
+	// text = 71 rows — past the 60-row window on its own.
+	if err := st.AppendMessage(pid, 1, "user",
+		`[{"type":"text","text":"the original request"}]`, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	for r := 0; r < 34; r++ {
+		call := fmt.Sprintf("call_%d", r)
+		if err := st.AppendMessage(pid, 1, "assistant",
+			`[{"type":"tool_use","id":"`+call+`","name":"read_file","input":{"path":"a.tsx"}}]`, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AppendMessage(pid, 1, "user",
+			`[{"type":"tool_result","tool_use_id":"`+call+`","content":"body"}]`, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedTurn(t, st, pid, 1, "user",
+		"You have made 8 file writes since the last passing verification.")
+	seedTurn(t, st, pid, 1, "assistant", "finished the work")
+
+	// Turn 2 (prompt 2): a short follow-up, so the window's cut lands inside
+	// turn 1 no matter which rows it takes.
+	seedTurn(t, st, pid, 2, "user", "follow up")
+	seedTurn(t, st, pid, 2, "assistant", "on it")
+
+	h := &PromptHandler{store: st, workspaceDir: t.TempDir(), slog: newSessionLogCache()}
+	msgs := h.conversation(pid)
+	if len(msgs) == 0 {
+		t.Fatal("replay is empty")
+	}
+	got := strings.TrimSpace(msgs[0].Text())
+	if got != "the original request" {
+		t.Errorf("replay opens on %q, want the turn opener — the window starts mid-turn", got)
+	}
+	if strings.Contains(got, "file writes since") {
+		t.Errorf("replay opens on a harness nudge: %q", got)
+	}
+}

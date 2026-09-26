@@ -168,6 +168,119 @@ func TestGetConversationTailInOrder(t *testing.T) {
 	}
 }
 
+// seedTurn writes one turn the way the loop persists it: the opener row,
+// then an assistant tool_use / user tool_result pair per round, all rows
+// sharing the turn's prompt_id.
+func seedTurn(t *testing.T, s *Store, pid, promptID int64, opener string, rounds int) {
+	t.Helper()
+	if err := s.AppendMessage(pid, promptID, "user",
+		`[{"type":"text","text":"`+opener+`"}]`, 0, 0); err != nil {
+		t.Fatalf("append opener: %v", err)
+	}
+	for r := 0; r < rounds; r++ {
+		call := fmt.Sprintf(`c%d_%d`, promptID, r)
+		if err := s.AppendMessage(pid, promptID, "assistant",
+			`[{"type":"tool_use","id":"`+call+`","name":"read_file","input":{"path":"a.tsx"}}]`, 0, 0); err != nil {
+			t.Fatalf("append tool_use: %v", err)
+		}
+		if err := s.AppendMessage(pid, promptID, "user",
+			`[{"type":"tool_result","tool_use_id":"`+call+`","content":"file body"}]`, 0, 0); err != nil {
+			t.Fatalf("append tool_result: %v", err)
+		}
+	}
+}
+
+// The model's replay window must open on a turn's opener, never on a
+// fragment of a long previous turn. The raw tail of a turn that wrote more
+// rows than the budget starts mid-round; the window pulls back to the row
+// where prompt_id changes so the goal the model needs is in frame.
+func TestGetConversationWindowExtendsToTurnStart(t *testing.T) {
+	s := newTestStore(t)
+	pid := seedProject(t, s)
+	seedTurn(t, s, pid, 1, "the original request", 3) // seq 1-7
+	seedTurn(t, s, pid, 2, "follow up", 1)            // seq 8-10
+
+	// The defect being fixed: a 4-row tail starts at seq 7 — mid-turn-1.
+	raw, err := s.GetConversation(pid, 4)
+	if err != nil {
+		t.Fatalf("raw tail: %v", err)
+	}
+	if len(raw) != 4 || raw[0].Seq == 1 {
+		t.Fatalf("fixture wrong: raw tail seqs start at %d, want 7 (mid-turn)", raw[0].Seq)
+	}
+
+	win, err := s.GetConversationWindow(pid, 4, 24)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	if len(win) != 10 {
+		t.Fatalf("window has %d rows, want the full history (7+3)", len(win))
+	}
+	if win[0].Seq != 1 || win[0].PromptID != 1 {
+		t.Errorf("window opens at seq %d (prompt %d), want the turn-1 opener seq 1 (prompt 1)",
+			win[0].Seq, win[0].PromptID)
+	}
+	if win[len(win)-1].Seq != 10 {
+		t.Errorf("window tail at seq %d, want 10 (the newest row)", win[len(win)-1].Seq)
+	}
+}
+
+// A window that already starts at a turn boundary is returned untouched —
+// alignment must not churn the common case where the budget lands exactly
+// on an opener.
+func TestGetConversationWindowNoOpAtBoundary(t *testing.T) {
+	s := newTestStore(t)
+	pid := seedProject(t, s)
+	seedTurn(t, s, pid, 1, "first", 3) // seq 1-7
+	seedTurn(t, s, pid, 2, "second", 1)
+
+	// keep=3 starts exactly at turn 2's opener (seq 8).
+	raw, err := s.GetConversation(pid, 3)
+	if err != nil {
+		t.Fatalf("raw tail: %v", err)
+	}
+	win, err := s.GetConversationWindow(pid, 3, 40)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	if len(win) != len(raw) {
+		t.Fatalf("aligned window has %d rows, want %d (no extension at a boundary)", len(win), len(raw))
+	}
+	for i := range win {
+		if win[i].Seq != raw[i].Seq {
+			t.Fatalf("window differs from raw tail at %d: seq %d vs %d", i, win[i].Seq, raw[i].Seq)
+		}
+	}
+
+	// A degenerate budget (max <= keep) is the raw tail by contract.
+	bounded, err := s.GetConversationWindow(pid, 3, 3)
+	if err != nil {
+		t.Fatalf("bounded window: %v", err)
+	}
+	if len(bounded) != 3 || bounded[0].Seq != 8 {
+		t.Errorf("max<=keep must be the raw tail, got %d rows from seq %d", len(bounded), bounded[0].Seq)
+	}
+}
+
+// One turn longer than the whole budget: the extension fills the window up
+// to `max` and stops there — bounded degradation, never unbounded growth.
+func TestGetConversationWindowBoundsExtension(t *testing.T) {
+	s := newTestStore(t)
+	pid := seedProject(t, s)
+	seedTurn(t, s, pid, 1, "a very long turn", 6) // seq 1-13, one prompt_id
+
+	win, err := s.GetConversationWindow(pid, 4, 8)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	if len(win) != 8 {
+		t.Fatalf("window has %d rows, want the max (8)", len(win))
+	}
+	if win[0].Seq != 6 || win[len(win)-1].Seq != 13 {
+		t.Errorf("window covers seq %d..%d, want 6..13 (extended to the bound)", win[0].Seq, win[len(win)-1].Seq)
+	}
+}
+
 // W1.3: search unions FTS5 and LIKE behind one signature. Each leg covers a
 // class the other misses — porter stems for FTS, mid-token substrings and
 // literal metacharacters for LIKE — a turn both legs match comes back

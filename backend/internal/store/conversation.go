@@ -256,6 +256,51 @@ func (s *Store) GetConversationBefore(projectID, beforeSeq int64, limit int) ([]
 	return scanConversationRows(rows)
 }
 
+// GetConversationWindow returns the most recent `keep` messages, extended at
+// the front to the start of the turn the tail cut through, bounded by `max`
+// rows in total.
+//
+// The raw tail can begin mid-turn: a turn writes two rows per round (plus
+// nudges, steers and receipts), so after a long turn the last `keep` rows
+// hold only that turn's middle. Its opening prompt — the goal the model
+// needs to continue — falls outside the window, and TrimToValidHistory then
+// trims the fragment forward to whatever user text survived, so the replay
+// opens on a harness nudge as if it were the user's actual request. Rows of
+// one turn share a prompt_id (fresh, resume and answer legs all carry the
+// original prompt's id), so the fix is to pull back to the row where
+// prompt_id changes: the window then always starts at a real turn opener
+// and the validity trim has nothing to trim.
+//
+// Degradation is bounded, not wrong: a single turn longer than `max-keep`
+// rows still starts mid-turn (closer to the start than the raw tail was),
+// and the validity trim falls back exactly as it does today. The extension
+// read is best-effort — a failure returns the raw tail rather than killing
+// the turn, the way the derive read path falls back on log errors.
+func (s *Store) GetConversationWindow(projectID int64, keep, max int) ([]ConversationMessage, error) {
+	tail, err := s.GetConversation(projectID, keep)
+	if err != nil || len(tail) == 0 || max <= keep {
+		return tail, err
+	}
+	// The rows immediately older than the window. If the window's oldest row
+	// continues a turn, the trailing chunk of this page shares its prompt_id
+	// and belongs in front of it.
+	before, err := s.GetConversationBefore(projectID, tail[0].Seq, max-keep)
+	if err != nil || len(before) == 0 {
+		return tail, nil // best-effort extension: the raw tail still answers
+	}
+	head := len(before)
+	for head > 0 && before[head-1].PromptID == tail[0].PromptID {
+		head--
+	}
+	if head == len(before) {
+		return tail, nil // the window already starts at its turn's first row
+	}
+	out := make([]ConversationMessage, 0, len(before)-head+len(tail))
+	out = append(out, before[head:]...)
+	out = append(out, tail...)
+	return out, nil
+}
+
 // MaxConversationSeq is the watermark clients poll for "anything new": the
 // highest stored seq, or 0 for a fresh project.
 func (s *Store) MaxConversationSeq(projectID int64) (int64, error) {

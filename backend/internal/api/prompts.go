@@ -1855,6 +1855,11 @@ func truncateLabel(s string, n int) string {
 // ends with an unanswered tool_use that TrimToValidHistory would drop as an
 // orphan, which is the one turn resume must keep so it can answer it.
 //
+// The window is turn-aligned (store.GetConversationWindow): even when the
+// 60-row budget cuts through a long turn, the replay starts at that turn's
+// opener rather than mid-round, so what the model carries back opens on the
+// user's actual request.
+//
 // H1: when TALONSTUDIO_SESSIONLOG=derive, the read comes from the append-only
 // session log's projection instead of conversation_messages — the flag flip
 // the dual-write migration ends on. Off (the default) reads the legacy table
@@ -1864,7 +1869,7 @@ func (h *PromptHandler) storedConversation(projectID int64) []ai.Message {
 	if derived := h.deriveFromLog(projectID); derived != nil {
 		return h.resolveImages(projectID, derived)
 	}
-	stored, err := h.store.GetConversation(projectID, historyTurns)
+	stored, err := h.store.GetConversationWindow(projectID, historyTurns, historyTurns*4)
 	if err != nil {
 		log.Printf("project %d: could not load the conversation: %v", projectID, err)
 		return nil

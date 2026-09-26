@@ -85,13 +85,26 @@ Persist callback ─────────► conversation_messages   ← CANO
 
 `turnHistory` (`api/prompts.go:1471`) assembles the replay in three shapes:
 
-1. **Fresh turn** — `conversation()` = last **60 rows**
-   (`historyTurns`, `:158`) passed through `TrimToValidHistory`
+1. **Fresh turn** — `conversation()` = the turn-aligned window of the last
+   **60 rows** (`historyTurns`, `:158`) passed through `TrimToValidHistory`
    (`ai/messages.go:539`: must start on a clean user boundary, end on an
    assistant turn, no orphaned tool_use), then the user's prompt appended
    and persisted up front. Pending questions are carried forward inside the
    prompt (`:1498-1502`), and unread **build receipts** are injected once,
    ack-on-read (`:1508-1527`).
+
+   **Turn alignment** (`store.GetConversationWindow`): the row budget alone
+   can cut a long turn in half — a turn writes two rows per round, so after
+   a 40-round spiral the last 60 rows hold only that turn's middle. Its
+   opener (the goal) falls outside the window and `TrimToValidHistory` then
+   trims the fragment forward to whatever user text survived, opening the
+   replay on a harness nudge as if it were the user's actual request. The
+   window therefore extends its front back to the row where `prompt_id`
+   changes — all legs of a turn (fresh, resume, answer) carry the original
+   prompt's id — bounded at 4× the budget; a single turn longer than the
+   bound degrades to the old tail behavior, never unbounded growth. Pinned
+   by `TestConversationReplayOpensAtTurnOpener` (fails by opening on the
+   nudge without alignment) and the `GetConversationWindow` store tests.
 2. **Answer to a paused `ask_user`** — the raw tail is kept, the pending
    `tool_use` is answered in place (`ai.AnsweredHistory`); the validity
    trim is deliberately skipped so the question survives.
@@ -294,10 +307,13 @@ no-mutation of the shared slice, flag-off, assistant-tail fallback.
 ## 7. Roadmap
 
 **Phase 1 — done (this change):**
-turn state card + NEXT directives; read-discipline prompt (one whole-file
-read per path per turn, grep for ranges); Maestro opt-in only on explicit
-request; gates green (orchestrator/ai/api/golden suites; goldens
-re-recorded — digest-only diff, invariants unchanged).
+turn state card + NEXT directives; turn-aligned replay windows
+(`store.GetConversationWindow` — a long previous turn can no longer hide
+its opener and open the next turn on a harness nudge); read-discipline
+prompt (one whole-file read per path per turn, grep for ranges); Maestro
+opt-in only on explicit request; gates green (orchestrator/ai/api/store/
+golden suites; goldens re-recorded — digest-only diff, invariants
+unchanged).
 
 **Phase 2 — context economy:**
 - *Age-based tool-result decay*: results older than the last K messages
@@ -324,7 +340,14 @@ to default once soak is clean.
 ## 8. Verification
 
 - `orchestrator/turnstate_test.go` — unit coverage of scan, directives,
-  card shape, wire-only/no-alias guarantee, flag-off.
+  card shape, wire-only/no-alias guarantee, flag-off; plus the loop-level
+  `TestAgentLoopTurnStateCardOnWire` (captured provider requests show the
+  card arriving with correct state, firing the idle directive exactly at
+  round 4, and never appearing in `outcome.Messages`).
+- `store` window tests + `api/TestConversationReplayOpensAtTurnOpener` —
+  the aligned replay opens on the turn opener; the api test fails by
+  opening on a harness nudge with alignment removed (verified by
+  reverting the wiring).
 - Golden suite (`evals/golden`) re-recorded after the card: only
   `request_digests` changed — tool sequences, rounds, outcomes, files
   touched identical (the card changes what the model is sent, not what the
