@@ -1522,6 +1522,23 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			}
 		}
 		client = client.WithRetryHook(retryHook)
+		// L8: tool-argument fragments are progress the sink cannot carry — a
+		// large write_file input generates for minutes with nothing else on
+		// the wire (Run 2's true top gap, 191 s). One frame per second, tool
+		// name and fragment size only: the payload rides the request itself;
+		// this is the notice that it is still arriving.
+		var lastArgFrame atomic.Int64
+		client = client.WithToolArgs(func(tool, fragment string) {
+			if tool == "" {
+				return
+			}
+			now := time.Now().UnixNano()
+			last := lastArgFrame.Load()
+			if now-last < int64(time.Second) || !lastArgFrame.CompareAndSwap(last, now) {
+				return
+			}
+			sess.Emitter.EmitToolInputDelta(tool, len(fragment))
+		})
 		if client.Model() != routedModel {
 			log.Printf("orchestrator: round %d routed to %s (%s)", round, client.Model(), reason)
 			routedModel = client.Model()

@@ -43,20 +43,32 @@ SCREEN_RE = re.compile(r"(^|/)app/[^ ]*\.tsx$")
 
 
 def parse_stream(path):
-    """Returns (raw_events, calls, timestamped).
+    """Returns (raw_events, calls, timestamped, timeline).
 
     The emitter writes `running` then a terminal event per call — naive
     counting doubles every tool (Run 1's "46 writes" were 23). Calls pair the
     two: `running` opens a slot keyed by (tool, path), the terminal closes it;
     a terminal with no open slot is a standalone call (read_skill emits only
     `completed`). Each call keeps its start and end timestamps.
+
+    timeline is every timestamped frame as (ts, event-type): S12 measures
+    gaps over it, never over tool events alone — the tool-only reading
+    reported 514 s max for Run 2 while the all-frames truth is 191 s
+    (thinking/text were flowing inside that "gap"). `heartbeat` frames are
+    excluded at measurement time (FM-L8a): a liveness ping must never hide
+    a stalled turn.
     """
     events = []
+    timeline = []
+    pending_type, pending_ts = None, None
     for raw in Path(path).read_text(errors="replace").splitlines():
         ts, line = None, raw
         m = re.match(r"^(\d{2}:\d{2}:\d{2}(?:\.\d+)?) (.*)$", raw)
         if m:
             ts, line = m.group(1), m.group(2)
+        if line.startswith("event: "):
+            pending_type, pending_ts = line[7:].strip(), ts
+            continue
         if not line.startswith("data: "):
             continue
         try:
@@ -65,6 +77,10 @@ def parse_stream(path):
             continue
         if not isinstance(d, dict):
             continue
+        frame_ts = ts or pending_ts
+        if frame_ts:
+            timeline.append((frame_ts, pending_type or "?"))
+        pending_type, pending_ts = None, None
         tool = d.get("tool")
         if tool and d.get("status"):
             events.append({
@@ -88,7 +104,7 @@ def parse_stream(path):
                         break
             else:
                 calls.append({**e, "t_end": e["ts"], "terminal": e["status"]})
-    return events, calls, any(e["ts"] for e in events)
+    return events, calls, any(e["ts"] for e in events), timeline
 
 
 def parse_serverlog(path):
@@ -243,7 +259,7 @@ def main():
         sys.exit(f"prompt {args.prompt} not found in {args.db}")
     status, mode, created_at, updated_at = row
 
-    events, calls, ts_ok = (parse_stream(args.stream) if args.stream else ([], [], False))
+    events, calls, ts_ok, timeline = (parse_stream(args.stream) if args.stream else ([], [], False, []))
     srv = parse_serverlog(args.serverlog) if args.serverlog else None
     tr = transcript(args.db, args.project, args.prompt)
     done, total = plan_tasks(args.db, args.project)
@@ -267,11 +283,16 @@ def main():
     start = secs(created_at)
 
     def span(a, b):
-        """b - a in seconds; same-day turn, so a negative means bad data."""
+        """b - a in seconds. The turn is same-day, so a small negative is
+        capture jitter — a second boundary falling between the writer's
+        strftime and time.time() calls (Run 2's log has 6) — and only a
+        large one (past ±12 h) is a midnight wrap."""
         if a is None or b is None:
             return None
         d = b - a
-        return d if d >= 0 else d + 86400
+        if d >= 0:
+            return d
+        return d + 86400 if d < -43200 else 0.0
 
     stream_t0 = next((secs(e["ts"]) for e in events if e["ts"] and secs(e["ts"]) is not None), None) or start
 
@@ -423,17 +444,29 @@ def main():
     add("S11 cost accounting", "every run priced",
         "? (pricing unknown — L7 open)", "?")
 
-    if events and ts_ok:
-        gap, last = 0.0, None
-        for e in events:
-            t = secs(e["ts"]) if e["ts"] else None
-            if t is None:
+    # S12 measures gaps over every real frame (text/thinking/tool/phase/…),
+    # never tool events alone — that reading gave Run 2 a false 514 s while
+    # the all-frames truth was 191 s — and never over heartbeat frames
+    # (FM-L8a: liveness is not progress).
+    real_ts = [t for t, k in timeline if k != "heartbeat"]
+    if real_ts and ts_ok:
+        gaps, last = [], None
+        for t in real_ts:
+            cur = secs(t)
+            if cur is None:
                 continue
             if last is not None:
-                gap = max(gap, span(last, t) or 0)
-            last = t
-        add("S12 progress visibility", "gap ≤ 90 s", f"max {gap:.0f}s between events",
-            "PASS" if gap <= 90 else "FAIL")
+                gaps.append(span(last, cur) or 0)
+            last = cur
+        if gaps:
+            gaps.sort(reverse=True)
+            mx = gaps[0]
+            top = " ".join(f"{g:.0f}" for g in gaps[:5])
+            add("S12 progress visibility", "gap ≤ 90 s",
+                f"max {mx:.0f}s between real events (top5: {top}; heartbeats excluded)",
+                "PASS" if mx <= 90 else "FAIL")
+        else:
+            add("S12 progress visibility", "gap ≤ 90 s", "? (single frame)", "?")
     else:
         add("S12 progress visibility", "gap ≤ 90 s", "? (needs timestamped stream)", "?")
 

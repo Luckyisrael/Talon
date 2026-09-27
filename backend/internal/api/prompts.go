@@ -774,6 +774,15 @@ func (h *PromptHandler) Discard(w http.ResponseWriter, r *http.Request) {
 // test can shorten it without sleeping out a real 15 seconds.
 var planPhaseInterval = 15 * time.Second
 
+// buildHeartbeatInterval is the build stream's liveness ping (L8/FM-L8a).
+// Plan mode answers silence by re-asserting its phase; the build stream used
+// to answer it with nothing — Run 2's longest real gap was 191 s while a
+// large tool input generated. Visibility only: the frame is named
+// `heartbeat`, the scorecard excludes it from S12, and stall detection stays
+// with the provider-stream watchdog — a ping can never make a stuck turn
+// look like progress.
+var buildHeartbeatInterval = 15 * time.Second
+
 // writePlanPhase is the plan stream's heartbeat frame: the turn's id, the
 // phase the client's live strip renders, and a status honest about the call
 // still running. Sent once when the plan starts and re-sent every
@@ -1024,6 +1033,13 @@ func (h *PromptHandler) streamBuild(ctx context.Context, w http.ResponseWriter, 
 	var res result
 	var got bool
 
+	// L8: one writer, one clock. The ticker lives in the same select as the
+	// event forwarding so the heartbeat can never race a frame onto the
+	// ResponseWriter, and it only lands when the loop would otherwise be
+	// idle-selecting — exactly the silence it exists to cover.
+	hb := time.NewTicker(buildHeartbeatInterval)
+	defer hb.Stop()
+
 drain:
 	for {
 		select {
@@ -1038,6 +1054,9 @@ drain:
 				h.dispatchNotification(userID, notify.KindInputNeeded,
 					"Talon needs your input", evt.Text)
 			}
+			flusher.Flush()
+		case <-hb.C:
+			writeSSE(w, "heartbeat", map[string]interface{}{"prompt_id": promptID})
 			flusher.Flush()
 		case res = <-resultCh:
 			got = true
@@ -1167,6 +1186,12 @@ func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event)
 		// whole payload (an events.Decision) rides in Data; the client renders it
 		// inline as a card matching the "What the agent knows" panel.
 		writeSSE(w, "decision", evt.Data)
+	case events.ToolInputDeltaEvent:
+		// L8: tool-argument fragments as progress — the StreamSink contract is
+		// text/thinking only, so a large write_file input streaming produced
+		// nothing on the wire (Run 2's 191 s top gap). Frame carries Data
+		// {tool, bytes}; no status, so tool pairing never counts it.
+		writeSSE(w, "tool_input.delta", evt.Data)
 	case events.UsageEvent:
 		writeSSE(w, "usage", evt.Data)
 	case events.TaskUpdateEvent:

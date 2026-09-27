@@ -100,8 +100,13 @@ def stream_turn(base, token, path, body, out_f, deadline_at, answer_state):
     try:
         for raw in resp:
             line = raw.decode(errors="replace").rstrip("\r\n")
-            out_f.write(time.strftime("%H:%M:%S.") +
-                        f"{int(time.time() * 1000) % 1000:03d} {line}\n")
+            # One clock read per line: strftime and the millisecond digit
+            # split across a second boundary out-of-order stamps (Run 2's
+            # log: 6 backwards frames), which the scorecard's gap math then
+            # had to special-case.
+            now = time.time()
+            out_f.write(time.strftime("%H:%M:%S.", time.localtime(now)) +
+                        f"{int(now * 1000) % 1000:03d} {line}\n")
             out_f.flush()
             if line.startswith("event:"):
                 kind = line[6:].strip()

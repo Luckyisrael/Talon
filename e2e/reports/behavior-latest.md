@@ -17,7 +17,7 @@
 | S10 input economy | prefix stable; tail bounded | system 10399→10399 tok, body→293899 B, rebuilds: 24 | ✅ |
 |   S10 rebuild log | attributed | system prompt rebuilt in round 47: project-map Δ250 bytes (41206 → 41456) |  |
 | S11 cost accounting | every run priced | ? (pricing unknown — L7 open) | ❓ |
-| S12 progress visibility | gap ≤ 90 s | max 514s between events | ❌ |
+| S12 progress visibility | gap ≤ 90 s | max 191s between real events (top5: 191 117 81 79 70; heartbeats excluded) | ❌ |
 
 **Required-row failures: 7** (unmeasured `?` rows also block a pass until measured — §5).
 

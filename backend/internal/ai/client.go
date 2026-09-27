@@ -74,6 +74,13 @@ type Client struct {
 	// turns a silent stall into a visible one: rate limits and transient server
 	// errors otherwise look like a hung request.
 	retryHook func(attempt, maxRetries int, reason string, after time.Duration)
+
+	// toolArgs reports streaming tool-argument fragments (L8). The StreamSink
+	// contract is text/thinking only, but a large write_file input generates
+	// for minutes with nothing else on the wire — Run 2's true top gap,
+	// 191 s. The stream reader calls this with the tool's name and each
+	// fragment as it lands; nil (the default) means nobody is watching.
+	toolArgs func(tool, fragment string)
 }
 
 // requestPacer serializes gateway calls to at most one per interval. It is
@@ -294,6 +301,7 @@ func (c *Client) clone() Client {
 		lastErrAt:      c.lastErrAt,
 		pacer:          c.pacer,
 		retryHook:      c.retryHook,
+		toolArgs:       c.toolArgs,
 	}
 }
 
@@ -317,6 +325,15 @@ func (c *Client) WithModel(model string) *Client {
 func (c *Client) WithRetryHook(fn func(attempt, maxRetries int, reason string, after time.Duration)) *Client {
 	cp := c.clone()
 	cp.retryHook = fn
+	return &cp
+}
+
+// WithToolArgs returns a copy that reports streaming tool-argument fragments
+// to fn as they arrive from the provider (L8). The callback runs on the
+// stream-reader goroutine: callers throttle and must not block.
+func (c *Client) WithToolArgs(fn func(tool, fragment string)) *Client {
+	cp := c.clone()
+	cp.toolArgs = fn
 	return &cp
 }
 

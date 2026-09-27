@@ -606,6 +606,13 @@ func (c *Client) openAIStreamAttempt(
 				toolCalls[tc.Index].Function.Name = tc.Function.Name
 			}
 			toolCalls[tc.Index].Function.Arguments += tc.Function.Arguments
+			// L8: argument fragments are progress the sink cannot represent
+			// (its contract is text/thinking) — report them as they land, so
+			// the wire is not silent for the minutes a large write_file input
+			// generates (Run 2's 191 s top gap).
+			if tc.Function.Arguments != "" && c.toolArgs != nil {
+				c.toolArgs(toolCalls[tc.Index].Function.Name, tc.Function.Arguments)
+			}
 		}
 		if choice.FinishReason != "" {
 			finishReason = choice.FinishReason

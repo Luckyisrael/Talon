@@ -8,21 +8,25 @@ import (
 type EventType string
 
 const (
-	PhaseEvent          EventType = "phase"
-	ToolCallEvent       EventType = "tool_call"
-	VerifyEvent         EventType = "verify"
-	GuardrailEvent      EventType = "guardrail_reject"
-	ErrorEvent          EventType = "error"
-	DoneEvent           EventType = "done"
-	TextEvent           EventType = "text"
-	ThinkingEvent       EventType = "thinking"
-	RebuildEvent        EventType = "rebuild"
-	TaskUpdateEvent     EventType = "task_update"
-	UsageEvent          EventType = "usage"
-	CommandOutputEvent  EventType = "command_output"
-	QuestionEvent       EventType = "question"
-	DecisionEvent       EventType = "decision"
-	SkillsEvent         EventType = "skills_group"
+	PhaseEvent         EventType = "phase"
+	ToolCallEvent      EventType = "tool_call"
+	VerifyEvent        EventType = "verify"
+	GuardrailEvent     EventType = "guardrail_reject"
+	ErrorEvent         EventType = "error"
+	DoneEvent          EventType = "done"
+	TextEvent          EventType = "text"
+	ThinkingEvent      EventType = "thinking"
+	RebuildEvent       EventType = "rebuild"
+	TaskUpdateEvent    EventType = "task_update"
+	UsageEvent         EventType = "usage"
+	CommandOutputEvent EventType = "command_output"
+	QuestionEvent      EventType = "question"
+	DecisionEvent      EventType = "decision"
+	SkillsEvent        EventType = "skills_group"
+	// ToolInputDeltaEvent is L8 progress: a tool's arguments still streaming
+	// from the provider. Distinct from ToolCallEvent so the running/terminal
+	// pairing (S4/S1) never counts it.
+	ToolInputDeltaEvent EventType = "tool_input.delta"
 )
 
 type Phase string
@@ -45,25 +49,25 @@ const (
 )
 
 type Event struct {
-	Type    EventType   `json:"type"`
-	Phase   Phase       `json:"phase,omitempty"`
+	Type  EventType `json:"type"`
+	Phase Phase     `json:"phase,omitempty"`
 	// ID correlates the two tool_call events of one call — start and resolve —
 	// so a watcher updates the row it opened instead of matching by (tool,path)
 	// and stacking a duplicate when the same file is touched twice in a turn.
-	ID      string      `json:"id,omitempty"`
-	Tool    string      `json:"tool,omitempty"`
-	Path    string      `json:"path,omitempty"`
-	Name    string      `json:"name,omitempty"`
-	Status  string      `json:"status,omitempty"`
-	Error   string      `json:"error,omitempty"`
-	Text    string      `json:"text,omitempty"`
-	Attempt int         `json:"attempt,omitempty"`
+	ID      string `json:"id,omitempty"`
+	Tool    string `json:"tool,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
 	// PromptID names the prompt turn this event belongs to. It is set only on the
 	// question event, where the client needs it to address POST /answer: a fresh
 	// build turn learns its prompt id no other way, since the stream is the
 	// response to a request the server assigned the id inside.
 	PromptID int64       `json:"prompt_id,omitempty"`
-	Data    interface{} `json:"data,omitempty"`
+	Data     interface{} `json:"data,omitempty"`
 }
 
 // SessionEmitter fans one build's progress out to whoever is watching.
@@ -141,6 +145,18 @@ func (e *SessionEmitter) EmitPhase(phase Phase, status string) {
 // tools the UI does not model itself.
 func (e *SessionEmitter) EmitToolCall(id, tool, path, name, status string) {
 	e.Emit(Event{Type: ToolCallEvent, ID: id, Tool: tool, Path: path, Name: name, Status: status})
+}
+
+// EmitToolInputDelta reports that a tool's arguments are still streaming from
+// the provider (L8): a large write_file input generates for minutes with no
+// text or thinking on the wire — Run 2's true top gap, 191 s. tool is the
+// tool name, n the fragment's bytes. This is progress, never a call: the
+// payload carries no status, so the running/terminal pairing (S4/S1) never
+// counts it.
+func (e *SessionEmitter) EmitToolInputDelta(tool string, n int) {
+	e.Emit(Event{Type: ToolInputDeltaEvent, Data: map[string]interface{}{
+		"tool": tool, "bytes": n,
+	}})
 }
 
 // EmitVerify reports the outcome of a static check.
@@ -229,7 +245,7 @@ func (e *SessionEmitter) EmitQuestion(id, question string, choices []string) {
 // category, the fact, and the area it applies to for a memory), so a plain
 // tool_call row (which carries no content) never had to.
 type Decision struct {
-	Variant  string `json:"variant"` // "adr" | "memory"
+	Variant string `json:"variant"` // "adr" | "memory"
 	// adr
 	Decision string `json:"decision,omitempty"`
 	Outcome  string `json:"outcome,omitempty"`
