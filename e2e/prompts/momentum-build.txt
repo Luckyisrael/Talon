@@ -1,0 +1,1 @@
+Build Momentum per the settled plan: onboarding gate, then the five tabs (Home with check-off/streaks/weekly chart, Habits list with add/edit modal, Focus timer, Insights heatmap, Settings) with AsyncStorage persistence so it works offline. Keep it compiling.
