@@ -179,6 +179,28 @@ Failure modes (written before the code, TEST_RULES §3):
 - **FM-L10a** — a blanket node_modules read ban breaks legitimate reads
   (configs, root files); scope the refusal to survey-style paths under
   `node_modules/` and answer with `inspect_package`, never silence.
+- **FM-L11a** — the close-out paragraph orders the model to "check the
+  build-plan checklist" but never names `mark_task_done`, the only
+  mechanism that moves it: a compliant model answers in prose and every
+  row stays pending (Run-2: 0/18). Features — whose file mapping is too
+  loose for the heuristic by design — and route-mismatched screens
+  ("Home" living in `app/index.tsx`) have **no** automatic path at all,
+  so the tool call is their only honest marker.
+- **FM-L12a** — marks are gated on the turn's *final* verify, which runs
+  only on a normally-completed turn: a cancelled or failed turn credits
+  nothing (Run-2: build cancelled at round 47 with two route files on
+  disk and a green `run_checks` in the same turn → 0/18). S7's standard
+  is "marked in the same round it lands", so a passing `run_checks`
+  mid-turn must credit the files written **before** it.
+- **FM-L12b** — that mid-turn credit must not reach files written in the
+  *same batch* as the check (a parallel write may not have been compiled
+  by it): snapshot the touched set before dispatch, or the checklist
+  claims compile truth it never had.
+- **FM-L12c (accepted)** — slug matching deliberately under-claims
+  (`app/index.tsx` never matches screen `home-dashboard`) and the audit
+  flips unverifiable completions back rather than trust them; L11's
+  explicit tool call is the honest cover for those rows. No guessing
+  added.
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -186,6 +208,8 @@ Failure modes (written before the code, TEST_RULES §3):
 | L8 | **Build heartbeat (S12)** — the build drain loop gets the same 15 s heartbeat plan mode already has; forward tool-argument deltas as progress if cheap. True Run-2 gap = 191 s (parser correction: scorecard must gap-check **all** events, not only tool events — its current 514 s figure counted tool events only) | S12 row; top-5 true gaps 191/117/81/79/70 s vs the 90 s standard | ⬤ |
 | L9 | **Wire-trim superseded tool_use inputs** — old `write_file`/`edit_file` payloads collapse to a placeholder on the wire copy (FM-L9a rules); expectation: body growth drops well under the observed ~5 KB/round, prefill stops scaling with turn age | test: trimmed / not-trimmed / stored-fidelity; serverlog `body_bytes` slope | ⬤ |
 | L10 | **node_modules survey guardrail** — `read_file`/`grep_codebase`/`find_files` against `node_modules/**` refused with an `inspect_package` hint (contract tier: tool discipline enforced by tools, not prose) | fails-first guard test; Run-2: ~16 min of .d.ts archaeology | ⬤ |
+| L11 | **Close-out names the mechanism** — the checklist sentence in `SystemPromptBuild` tells the model to call `mark_task_done` (batch the finished items, named as the checklist lists them) instead of only "check the checklist" in prose | fails-first prompt-contract test; Run-2 S7 = 0/18 with the tool always advertised (`coreToolSet`) | ⬤ |
+| L12 | **Mark at every passing compile** — `executeTools` credits `markScreenTasksFromFiles` + `auditScreenTasks` right after a passing `run_checks`, using a touched-set snapshot taken before dispatch (FM-L12b); the final verify gate stays exactly as it is | fails-first executeTools test (pass marks / fail does not / same-batch write does not); Run-2: cancelled turn credited nothing | ⬤ |
 
 Still-open P1 rows from the previous list:
 
@@ -195,9 +219,10 @@ Still-open P1 rows from the previous list:
 - **L5 prompt diet** — `SystemPromptBuild` ≤ 4 500 tok: design-bar detail,
   device protocol, navigation semantics move behind `read_skill`; also
   offsets P0.3's digest in the budget.
-- **S7 checklist truth** — 0/18 marks on both runs: `mark_task_done` is
-  never called; needs the forced-verify pattern (a close-out nudge) or an
-  honest drop of the marking claim.
+- **S7 checklist truth** — closed this cycle by L11 (prompt names the
+  mechanism) + L12 (every passing `run_checks` credits the screens it
+  compiled, cancelled turns included); Run-2's 0/18 came from both
+  failure modes at once.
 - **S11 pricing preflight** — blocked: needs real Atria model prices before
   a number can be recorded (unknown price stays an e2e failure).
 

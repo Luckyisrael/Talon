@@ -2685,6 +2685,12 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		}
 	}
 
+	// L12 (FM-L12b): the touched set as it stands BEFORE this batch runs.
+	// A same-batch write may not be in the check below, so it must not
+	// claim compile truth from it — the next passing check or the final
+	// gate credits it.
+	preBatchTouched := o.touchedFiles(opts)
+
 	// H3: the bounded harness pipeline drives batch dispatch by default
 	// (flipped at W8.1); TALONSTUDIO_PIPELINE=0/false/off restores legacy
 	// sequential dispatch. runCall — guardrails, emission, result notes —
@@ -2740,6 +2746,30 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			results[i].Content += fmt.Sprintf(
 				"\n\nNote: you sent multiple write/delete calls to %s in this same batch. They ran in the order you sent them, so the last one is what is on disk now — read the file if that is not what you intended.",
 				path)
+		}
+	}
+
+	// L12 (FM-L12a): a passing run_checks is an honest compile verdict for
+	// everything written BEFORE this batch — credit it now instead of
+	// waiting for the turn's final verify, which a cancelled or failed
+	// turn never reaches (Run-2: cancelled at round 47 with two route
+	// files on disk and a green run_checks in the same turn → 0/18
+	// marked). The audit rides along, so a completion whose route file
+	// vanished flips back the same instant it would at the final gate.
+	// The gate itself is unchanged: this only makes the credit land in
+	// the round it happens — S7's standard.
+	for i, c := range calls {
+		if c.Name != "run_checks" || results[i].IsError {
+			continue
+		}
+		var verdict struct {
+			Passed bool `json:"passed"`
+		}
+		dec := json.NewDecoder(strings.NewReader(results[i].Content))
+		if dec.Decode(&verdict) == nil && verdict.Passed {
+			o.markScreenTasksFromFiles(sess, preBatchTouched)
+			o.auditScreenTasks(sess, opts)
+			break
 		}
 	}
 

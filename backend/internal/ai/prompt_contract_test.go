@@ -116,3 +116,16 @@ func TestPromptBuildOrdersRoutesFirst(t *testing.T) {
 			"under a prompt with only the generic 'write early' sentence")
 	}
 }
+
+// FM-L11a — mechanism absence: the checklist paragraph ordered the model
+// to "check the build-plan checklist" but never named mark_task_done —
+// the only call that writes plan_task_status. A compliant model answers
+// in prose while every row stays pending (Run-2: 0/18, with the tool
+// advertised all along in coreToolSet). The sentence must name it.
+func TestPromptBuildNamesMarkTaskDone(t *testing.T) {
+	if !strings.Contains(SystemPromptBuild, "mark_task_done") {
+		t.Fatal("SystemPromptBuild's checklist paragraph must name mark_task_done (FM-L11a): " +
+			"prose cannot write plan_task_status — Run-2 marked 0/18 under a prompt " +
+			"that only said 'check the build-plan checklist'")
+	}
+}
