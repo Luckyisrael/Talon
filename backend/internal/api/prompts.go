@@ -44,9 +44,16 @@ type PromptHandler struct {
 	// would replace that symlink with a real directory and the workspace would
 	// lose every preinstalled dependency.
 	templateDir string
-	orch        *orchestrator.Orchestrator
-	devClient   *devclient.Manager
-	knowledge   *knowledge.Registry
+	// templateDigest is the static-knowledge block for build turns: the
+	// template's structure map plus the preinstalled package list, rendered
+	// once at startup (ENGINEERING_STANDARDS §4 — the template is a constant,
+	// so every turn that re-surveys it is paying for the same knowledge
+	// again). Constant per process → byte-stable in the cached prefix. Empty
+	// when the template has no source (tests).
+	templateDigest string
+	orch           *orchestrator.Orchestrator
+	devClient      *devclient.Manager
+	knowledge      *knowledge.Registry
 	// planPrompt is the Plan-mode system prompt, assembled once at startup with the
 	// template's preinstalled-package list folded in. Building it here — the one
 	// place that holds both the AI client and the knowledge registry — is what keeps
@@ -98,20 +105,53 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir st
 		preinstalled = knowledge.PreinstalledList()
 	}
 	return &PromptHandler{
-		store:        s,
-		ai:           a,
-		workspaceDir: workspaceDir,
-		templateDir:  templateDir,
-		orch:         orch,
-		devClient:    dc,
-		knowledge:    knowledge,
-		notifier:     n,
-		planPrompt:   ai.PlanSystemPrompt(preinstalled),
-		slog:         newSessionLogCache(),
+		store:          s,
+		ai:             a,
+		workspaceDir:   workspaceDir,
+		templateDir:    templateDir,
+		orch:           orch,
+		devClient:      dc,
+		knowledge:      knowledge,
+		notifier:       n,
+		planPrompt:     ai.PlanSystemPrompt(preinstalled),
+		templateDigest: renderTemplateDigest(templateDir, preinstalled),
+		slog:           newSessionLogCache(),
 
 		planSurveyCache: map[int64]planSurvey{},
 		planSectionFP:   map[int64][]promptsec.Fingerprint{},
 	}
+}
+
+// renderTemplateDigest is the static half of context: what the template ships,
+// generated once at startup instead of re-derived by every turn's exploration.
+// 25_MINUTES §1 applied to this codebase — templates are constant, so their
+// analysis belongs in a cached digest, not in a per-turn read survey (Run 1
+// spent 20 inspect_package + 12 read_file calls rediscovering exactly this).
+// Deterministic bytes (ProjectMapText is lexically ordered and capped), so the
+// block never busts the prompt prefix cache. Empty when there is no template —
+// the section then omits entirely rather than injecting a stub.
+func renderTemplateDigest(templateDir string, preinstalled []string) string {
+	if templateDir == "" {
+		return ""
+	}
+	m := tools.ProjectMapText(templateDir)
+	if m == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n## Template structure digest — static, do not survey\n\n")
+	b.WriteString("Every workspace is provisioned from one template; this is its shape and exports, ")
+	b.WriteString("generated once at server start. Trust it instead of re-learning it: skip list_files, ")
+	b.WriteString("grep, and inspect_package over template sources — read a template file only when you ")
+	b.WriteString("are about to change it. The workspace's `TEMPLATE.md` and `AGENTS.md` are the ")
+	b.WriteString("short curated guides for what to keep, prune, and extend.\n\n")
+	b.WriteString(m)
+	if len(preinstalled) > 0 {
+		b.WriteString("\n\nPreinstalled packages (the dependency set — `inspect_package` only for an API shape): ")
+		b.WriteString(strings.Join(preinstalled, ", "))
+		b.WriteString(".\n")
+	}
+	return b.String()
 }
 
 // AttachSpill provides the H8 spill store to the file tools: read_file
@@ -1433,6 +1473,11 @@ func (h *PromptHandler) NewAgentTurn(
 	opts := orchestrator.RunOptions{
 		SystemPrompt: h.systemPrompt(),
 		Mode:         bo.Mode,
+		// L2: the build turn arms the exploration budget — the one turn that
+		// both surveys and writes. Plan turns never reach this wiring (they
+		// return before runBuild), and the mode check keeps that true by
+		// construction: a read-only mode must never see read refusals.
+		ExplorationBudget: bo.Mode == "build",
 		// W9: the turn's seam + permission posture — the device-build gate
 		// asks through the same seam tier-2 shell escalations use, with the
 		// session's mode composed (nil-safe for bare harnesses).
@@ -1996,6 +2041,10 @@ func (h *PromptHandler) systemPrompt() string {
 			prompt += "\n\n" + al.FormatForPrompt()
 		}
 	}
+	// Template digest last: constant per process, so it extends the stable
+	// prefix; the model gets the template's shape and dependency set without
+	// spending a single exploration call (ENGINEERING_STANDARDS §4).
+	prompt += h.templateDigest
 	return prompt
 }
 

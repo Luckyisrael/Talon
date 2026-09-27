@@ -258,13 +258,32 @@ func mustMarshalJSON(v any) []byte {
 	return b
 }
 
+// toolStripInputTokens is the est-input size above which non-core tools are
+// dropped to shrink the payload (see the call site in chatWithToolsOpenAI).
+// Zero-context: 6500 was a Groq-scoped P1 constant applied to every route, and
+// it fired on every request because the system prompt alone is ~8.5K tokens —
+// the filter meant as a size valve became a permanent capability amputation.
+var toolStripInputTokens = 100_000
+
 var coreToolSet = map[string]bool{
 	"read_file": true, "write_file": true, "edit_file": true, "multi_edit": true,
-	"list_files": true, "grep_codebase": true, "search_files": true, "find_files": true,
+	"delete_file": true,
+	"list_files":  true, "grep_codebase": true, "search_files": true, "find_files": true,
 	"explore": true, "project_map": true, "codebase_search": true, "codebase_graph": true,
 	"inspect_package": true, "read_skill": true,
 	"run_typecheck": true, "run_lint": true, "run_checks": true, "run_prettier": true,
 	"ask_user": true, "mark_task_done": true,
+	// S9 tool contract (ENGINEERING_STANDARDS.md §3): SystemPromptBuild names
+	// these by name — the git-native workflow, run_shell probing, install_package,
+	// and the bundle/gradle rungs — so the filter must never strip them: a tool
+	// the prompt promises and the model never receives is a lie the model plans
+	// around (Run 1: "I have no shell"). delete_file joins on Run-1 evidence:
+	// plan prune entries need it and it was stripped, so demos could not be
+	// removed. Guarded by TestPromptPromisedToolsSurviveCoreFilter.
+	"git_status": true, "git_diff": true, "git_log": true,
+	"git_commit": true, "git_branch": true,
+	"run_shell": true, "install_package": true,
+	"run_bundle": true, "run_gradle": true,
 	// W5: the language-server senses — read-only and instant, the same
 	// contract as read_file/grep. Registered only under TALONSTUDIO_LSP;
 	// listed here so agents that have them are allowed to call them.
@@ -312,12 +331,19 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 			},
 		})
 	}
-	// If still over Groq-class input limit, drop non-core tools and retry.
-	// Core = read/write/verify/project-map — enough to start building; the
-	// rest load via read_skill or next round pagination.
+	// Size valve, not capability valve: drop non-core tools only when the
+	// request is genuinely oversized. The original P1 threshold (6500) was
+	// tuned for Groq's input budget but applied globally — and the system
+	// prompt alone is ~8.5K tokens, so every request stripped its tools and
+	// every tool the prompt promised went missing (S9 / ENGINEERING_STANDARDS
+	// §3, Run 1). coreToolSet now carries each prompt-named tool, so even a
+	// strip that fires keeps the contract; the threshold exists only to shrink
+	// payload on a small-context route. 100K is the safety valve against
+	// pathological bodies — no route in this deployment declares a budget
+	// smaller than it, and an operator adding one sets it alongside model_tier.
 	if len(tools) > 12 {
 		est := (len(system) + len(mustMarshalJSON(messages)) + len(mustMarshalJSON(oaiTools))) / 4
-		if est > 6500 {
+		if est > toolStripInputTokens {
 			oaiTools = filterToCoreTools(oaiTools)
 		}
 	}
@@ -389,6 +415,13 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 				log.Printf("ChatWithTools(OpenAI stream): no finish after %d attempt(s); accepting partial (%d chars)",
 					attempt+1, len(result.Text))
 				return result, nil
+			}
+			if ctx.Err() != nil {
+				// A deliberate cancel (client hang-up) is not a restartable
+				// failure: logging "restarting byte-identically" promises a
+				// retry the dead context kills on arrival (Run 1's ghost
+				// attempt after the stop button). Report the cancel itself.
+				return nil, ctx.Err()
 			}
 			log.Printf("ChatWithTools(OpenAI stream): attempt %d/%d ended early (complete=%v err=%v); restarting byte-identically",
 				attempt+1, c.streamRestarts+1, complete, scanErr)

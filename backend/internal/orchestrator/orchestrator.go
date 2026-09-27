@@ -961,6 +961,13 @@ type RunOptions struct {
 	// attached and best-effort when it is not. Zero value = device-less, which
 	// is what tests and desktop runs without a phone get.
 	DeviceAttached bool
+	// ExplorationBudget arms the L2 read-class budget in executeTools
+	// (ENGINEERING_STANDARDS S4): a build turn that surveys without writing
+	// gets an advisory note at 12 read-class calls, a user-visible warning at
+	// 18, and read-class refusals at 24 until a write-class batch lands. Off
+	// by default — plan turns are read-only by design, child loops run
+	// unbounded on purpose, and only the primary build turn arms it.
+	ExplorationBudget bool
 	// Persist, if set, is handed each round's turns as the loop advances rather
 	// than only at the end, so an interrupted run keeps the rounds that already
 	// finished. It is called at every round boundary (and once more on return)
@@ -1072,6 +1079,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	sess.ClearReadFiles()
 	sess.ResetWriteCounts()
 	sess.ResetToolRepeats()
+	sess.ResetExploration()
 
 	// Pre-flight skill group: classify the user prompt before round 1 and
 	// surface the matched skills as a collapsed hint (names only). No bodies
@@ -1363,8 +1371,31 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		// project_map calls to re-learn the layout it already has in context.
 		mapChanged := o.refreshProjectMap(sess)
 		if adrs, memory, taskVer := len(sess.GetADRs()), len(sess.GetMemory()), sess.TaskVersion(); adrs != lastADRs || memory != lastMemory || taskVer != lastTaskVer || mapChanged {
+			// S10 attribution (ENGINEERING_STANDARDS §2): the enriched prompt's
+			// prefix sections (persona, rules, skills) are byte-stable for the
+			// whole turn — only fingerprinted tail sections (map, ADRs, memory,
+			// checklist) rebuild, each bounded and ordered late so the provider's
+			// cached prefix survives. Name the trigger and the Δ so every
+			// mid-round growth is attributable from the server log instead of
+			// guessed at from a token count.
+			var triggers []string
+			if mapChanged {
+				triggers = append(triggers, "project-map")
+			}
+			if adrs != lastADRs {
+				triggers = append(triggers, "adrs")
+			}
+			if memory != lastMemory {
+				triggers = append(triggers, "memory")
+			}
+			if taskVer != lastTaskVer {
+				triggers = append(triggers, "tasks")
+			}
+			before := len(systemPrompt)
 			systemPrompt = o.enrichPromptWithContext(sess, opts.SystemPrompt)
 			lastADRs, lastMemory, lastTaskVer = adrs, memory, taskVer
+			log.Printf("orchestrator: system prompt rebuilt in round %d: %s Δ%d bytes (%d → %d)",
+				round, strings.Join(triggers, ","), len(systemPrompt)-before, before, len(systemPrompt))
 		}
 
 		if ai.EstimateTokens(conversation) > MaxContextTokens {
@@ -2216,6 +2247,55 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		}
 	}
 
+	// L2 exploration budget (ENGINEERING_STANDARDS S4), counted at the batch
+	// level exactly like H3: read-class calls since the last write-class
+	// batch, decided here before dispatch so the note's carrier is fixed and
+	// parallel reads cannot interleave the count. The ladder is enforced in
+	// code, not requested in prose — Run 1 lived under a prompt that already
+	// forbade surveying and still read for 28 minutes before its first
+	// write (28 read-class calls). Armed per turn: plan turns never write and
+	// child loops stay unbounded by design.
+	budgetNotes := map[int]string{}
+	budgetRefuse := false
+	budgetTotal := 0
+	if opts.ExplorationBudget {
+		readInBatch, writeInBatch := 0, 0
+		firstRead := -1
+		for i, c := range calls {
+			switch {
+			case writeTools[c.Name]:
+				writeInBatch++
+			case readTools[c.Name]:
+				readInBatch++
+				if firstRead < 0 {
+					firstRead = i
+				}
+			}
+		}
+		switch {
+		case writeInBatch > 0:
+			// A write in the batch is the budget doing its job: the streak
+			// resets whether or not the write lands — the model is acting on
+			// what it learned, not surveying.
+			sess.NoteExplorationWrite()
+		case readInBatch > 0:
+			total := sess.NoteExplorationReads(readInBatch)
+			switch {
+			case total >= exploreBudgetHard:
+				budgetRefuse = true
+				budgetTotal = total
+			case total >= exploreBudgetWarning:
+				budgetNotes[firstRead] = explorationReminder(total)
+				if sess.MarkExplorationWarned() {
+					sess.Emitter.EmitToolCall("", "exploration_budget", "",
+						fmt.Sprintf("%d read-class calls without a write", total), "warning")
+				}
+			case total >= exploreBudgetReminder:
+				budgetNotes[firstRead] = explorationReminder(total)
+			}
+		}
+	}
+
 	// Read-only calls can overlap; anything that writes files or shells out
 	// runs alone to keep the workspace consistent.
 	parallel := opts.ReadOnlyTool != nil && len(calls) > 1
@@ -2269,6 +2349,19 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 				Type:      "tool_result",
 				ToolUseID: call.ID,
 				Content:   "Blocked by a project guardrail (" + r.Rule + "): " + r.Message,
+				IsError:   true,
+			}
+		}
+
+		// L2 hard stop: once the exploration budget is exhausted, read-class
+		// calls refuse — guardrail verdicts above still win, and hooks never
+		// see a call that cannot run. The write tools stay open, so the only
+		// way forward is the thing the budget demands.
+		if budgetRefuse && readTools[call.Name] {
+			return ai.Block{
+				Type:      "tool_result",
+				ToolUseID: call.ID,
+				Content:   explorationRefusal(budgetTotal),
 				IsError:   true,
 			}
 		}
@@ -2358,6 +2451,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		// are set by the tracking below and appended to the tool result at the
 		// end of run(): small hints that prevent whole wasted rounds.
 		repeatNote := repeatNotes[i]
+		budgetNote := budgetNotes[i]
 		readNote := ""
 		watchNote := ""
 		probeNote := ""
@@ -2529,7 +2623,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 		return ai.Block{
 			Type:      "tool_result",
 			ToolUseID: call.ID,
-			Content:   output + readNote + watchNote + probeNote + failReminder + repeatNote,
+			Content:   output + readNote + watchNote + probeNote + failReminder + repeatNote + budgetNote,
 			IsError:   isError,
 		}
 	}

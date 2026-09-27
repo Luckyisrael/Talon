@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -123,6 +124,12 @@ type SessionState struct {
 	// toolRepeats counts same-tool calls within the turn, feeding the H3
 	// advisory repeat reminder.
 	toolRepeats map[string]int
+
+	// explorationReads/explorationWarned are the L2 exploration-budget streak
+	// (ENGINEERING_STANDARDS S4): read-class calls since the last write-class
+	// batch, and whether this streak has already fired its one warning event.
+	explorationReads  int
+	explorationWarned bool
 
 	// RuntimePatterns holds failure patterns loaded from project memory on
 	// session start. These are merged with the default index at lookup time.
@@ -625,6 +632,75 @@ func repeatReminder(name string, count int) string {
 	default:
 		return "\n\nNote: eighth " + name + " call this turn. Something is wrong with the approach — stop, describe what you actually need, and step back."
 	}
+}
+
+// Exploration budget (ENGINEERING_STANDARDS S4 / L2): read-class calls since
+// the last write-class batch. Run 1 read for 28 minutes — 28 read-class calls
+// before its first write — under a prompt that already forbade exactly that,
+// which is why the ladder lives here where executeTools enforces it: advisory
+// note at exploreBudgetReminder, a user-visible warning event at
+// exploreBudgetWarning, and read-class refusals at exploreBudgetHard until a
+// write-class batch lands. Counted at the batch level (H3's unit) so parallel
+// siblings are one decision and the reminder's carrier is fixed pre-dispatch.
+const (
+	exploreBudgetReminder = 12
+	exploreBudgetWarning  = 18
+	exploreBudgetHard     = 24
+)
+
+// NoteExplorationReads adds n read-class calls to the streak and returns the
+// running total; the loop maps it onto the escalation ladder.
+func (s *SessionState) NoteExplorationReads(n int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.explorationReads += n
+	return s.explorationReads
+}
+
+// NoteExplorationWrite resets the streak: a write-class batch in the batch is
+// the budget doing its job, and the warning latch clears with it so a later
+// survey streak can warn again.
+func (s *SessionState) NoteExplorationWrite() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.explorationReads = 0
+	s.explorationWarned = false
+}
+
+// MarkExplorationWarned latches the streak's single warning event and reports
+// whether this call claimed it — the emitter fires exactly once per streak.
+func (s *SessionState) MarkExplorationWarned() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.explorationWarned {
+		return false
+	}
+	s.explorationWarned = true
+	return true
+}
+
+// ResetExploration clears the streak at turn start.
+func (s *SessionState) ResetExploration() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.explorationReads = 0
+	s.explorationWarned = false
+}
+
+// explorationReminder rides the batch's first read result once the streak
+// crosses exploreBudgetReminder: one line, the number, the corrective action.
+func explorationReminder(total int) string {
+	return fmt.Sprintf("\n\nNote: %d read-class calls since your last write. "+
+		"Exploration budget is %d — write the first real file now; a survey in the transcript does not survive an interruption, a file on disk does.",
+		total, exploreBudgetReminder)
+}
+
+// explorationRefusal is the hard stop: reads refuse, writes stay open, so the
+// only way forward is the thing the budget demands.
+func explorationRefusal(total int) string {
+	return fmt.Sprintf("Exploration budget exhausted: %d read-class calls without writing anything. "+
+		"Reading more will not advance the build — write_file, edit_file, and multi_edit are the only calls that proceed right now. "+
+		"Start with the smallest real file (a screen stub, the store slice, a theme token) and the budget resets.", total)
 }
 
 // MarkSkillSeen records that a skill's body has been delivered this session and
