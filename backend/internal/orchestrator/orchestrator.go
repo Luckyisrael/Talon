@@ -1429,6 +1429,16 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 
 		sess.Emitter.EmitPhase(events.Phase(sess.GetPhase()), fmt.Sprintf("round %d", round))
 
+		// L3 routes-first: the gate's single user-visible warning at the
+		// 10-minute mark. The card line rides every round below; this event
+		// fires once — every-round warnings would spam the stream (S12).
+		if sess.RouteScaffoldWarnDue(opts.Mode) && sess.MarkRouteWarned() {
+			sess.Emitter.EmitToolCall("", "route_scaffold", "",
+				fmt.Sprintf("no app/ route file written after %d min",
+					int(time.Since(sess.StartedAt).Minutes())),
+				"warning")
+		}
+
 		// Collapse stale read_file/list_files bodies that a later call in this turn
 		// re-fetched: they are otherwise replayed in full every round. This trims a
 		// copy for the wire only — `conversation` (and the blocks it shares with

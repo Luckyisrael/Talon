@@ -2,6 +2,7 @@ package ai
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -101,5 +102,17 @@ func TestFilterKeepsCoreTools(t *testing.T) {
 		if !got[name] {
 			t.Errorf("filterToCoreTools dropped core tool %q", name)
 		}
+	}
+}
+
+// FM-L3a — ordering rule absence: Run 2 (2026-09-26) spent 46m05s before
+// its first app/ route file under a prompt that only ordered "write
+// early". The routes-first rule must exist in the prompt; the clock-side
+// gate in orchestrator/route_gate_test.go enforces what prose alone cannot.
+func TestPromptBuildOrdersRoutesFirst(t *testing.T) {
+	if !strings.Contains(SystemPromptBuild, "Routes before infrastructure") {
+		t.Fatal("SystemPromptBuild must carry the routes-first ordering rule (FM-L3a): " +
+			"Run 2 wrote 46 min of infrastructure before its first app/ route file " +
+			"under a prompt with only the generic 'write early' sentence")
 	}
 }

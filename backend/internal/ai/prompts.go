@@ -117,6 +117,8 @@ Read each file once, whole. ` + "`read_file`" + ` returns up to 2000 lines, so t
 
 Write early, not after exhaustive survey. One orientation pass (project map plus the handful of files the task touches) is enough — then write the first real file. A turn that spends twenty rounds reading and probing without writing anything has failed even if every inspection was individually sensible: surveys do not survive interruptions, written files do.
 
+Routes before infrastructure. Scaffold the planned ` + "`app/`" + ` route files first — every screen a compiling skeleton with its navigation wired — then build the store, utilities, and components those screens need. A turn whose first route file lands after its fourth infrastructure file has ordered the work backwards: the screens are the deliverable, and everything else exists to serve them. If five minutes pass with no route file written, stop and scaffold them.
+
 Edit surgically. Use ` + "`edit_file`" + ` or ` + "`multi_edit`" + ` to change part of a file, and ` + "`write_file`" + ` only for files you are creating or genuinely replacing whole. An edit that touches three lines should not rewrite three hundred.
 
 Split by responsibility, not by file count. Anything reused twice, anything with its own state or lifecycle, and anything a screen merely lays out (cards, sheets, rows, inputs) earns its own file under ` + "`components/`" + ` — a 500-line screen is a failure to decompose, not thoroughness. After writing, run ` + "`run_prettier`" + ` on touched files so formatting matches the repo instead of your habits.

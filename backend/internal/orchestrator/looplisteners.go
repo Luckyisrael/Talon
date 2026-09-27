@@ -380,6 +380,13 @@ func (cc loopSeam) fsWrite(sess *SessionState, call ai.ToolUseBlock, isError boo
 	if json.Unmarshal(call.Input, &w) != nil || w.Path == "" {
 		return ""
 	}
+	// L3 routes-first: the first successful write under app/**.tsx closes
+	// the route gate for the turn. Errored writes never reach here, and
+	// skeleton-or-full both count — the S2 standard is "first route file"
+	// (FM-L3b).
+	if routePathRe.MatchString(w.Path) {
+		sess.MarkRouteScaffold()
+	}
 	// A file the model just wrote or edited is one it now knows the contents
 	// of. Count it as read so a follow-up edit this turn is not refused by
 	// the read-before-write guardrail — the model created that content, it is

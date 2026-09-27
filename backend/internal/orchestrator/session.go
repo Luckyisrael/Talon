@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -130,6 +131,16 @@ type SessionState struct {
 	// batch, and whether this streak has already fired its one warning event.
 	explorationReads  int
 	explorationWarned bool
+
+	// routeScaffolded/routeWarned are the L3 routes-first gate
+	// (ENGINEERING_STANDARDS S2): a build turn that has not written any
+	// app/**.tsx route file gets an advisory line in the round card from
+	// routeScaffoldNoteAt and one warning event from routeScaffoldWarnAt.
+	// Run-2's first route landed at 46m05s behind infra-first sequencing;
+	// prose ordering rules alone failed there (FM-L3a), so the clock lives
+	// here where the loop reads it every round.
+	routeScaffolded bool
+	routeWarned     bool
 
 	// RuntimePatterns holds failure patterns loaded from project memory on
 	// session start. These are merged with the default index at lookup time.
@@ -685,6 +696,84 @@ func (s *SessionState) ResetExploration() {
 	defer s.mu.Unlock()
 	s.explorationReads = 0
 	s.explorationWarned = false
+}
+
+// L3 routes-first gate (ENGINEERING_STANDARDS §6 table, L3; S2 row): the
+// prompt rule says scaffold the planned app/ routes before infrastructure;
+// these thresholds are the loop's clock-side half of it.
+const (
+	// routeScaffoldNoteAt is the advisory threshold — five minutes of build
+	// turn with no app/**.tsx write already spends S2's standard whole.
+	routeScaffoldNoteAt = 5 * time.Minute
+	// routeScaffoldWarnAt is the one-shot warning-event threshold.
+	routeScaffoldWarnAt = 10 * time.Minute
+)
+
+// routePathRe matches a route file exactly the way the E2E scorecard's S2
+// row counts one: any .tsx under an app/ directory — skeleton or full,
+// tabs layout or plain screen.
+var routePathRe = regexp.MustCompile(`(^|/)app/[^ ]*\.tsx$`)
+
+// MarkRouteScaffold records the first successful write to an app/**.tsx
+// route file; the gate closes for the rest of the turn (FM-L3b: any route
+// file counts — the standard is "first route file", and nagging a turn
+// that is legitimately mid-scaffold would make the gate noise).
+func (s *SessionState) MarkRouteScaffold() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.routeScaffolded = true
+}
+
+// RouteScaffoldNote is the round-card line for the gate: empty before
+// routeScaffoldNoteAt (orientation is legitimate), empty in non-build
+// modes (plan turns never write), empty once any route file landed, and
+// escalating after routeScaffoldWarnAt.
+func (s *SessionState) RouteScaffoldNote(mode string) string {
+	if mode != "build" {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.routeScaffolded {
+		return ""
+	}
+	elapsed := time.Since(s.StartedAt)
+	switch {
+	case elapsed < routeScaffoldNoteAt:
+		return ""
+	case elapsed < routeScaffoldWarnAt:
+		return fmt.Sprintf("\n\nROUTE GATE: no app/ route file written in %d min — "+
+			"scaffold the planned routes as compiling screens before more infrastructure (S2: first route ≤ 5 min).",
+			int(elapsed.Minutes()))
+	default:
+		return fmt.Sprintf("\n\nROUTE GATE: %d min into the turn and still no app/ route file — "+
+			"the planned screens are the deliverable; stop building infrastructure and write the route skeletons now.",
+			int(elapsed.Minutes()))
+	}
+}
+
+// RouteScaffoldWarnDue reports whether the warning threshold has passed with
+// no route written; the caller pairs it with MarkRouteWarned to fire the
+// single warning event.
+func (s *SessionState) RouteScaffoldWarnDue(mode string) bool {
+	if mode != "build" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.routeScaffolded && time.Since(s.StartedAt) >= routeScaffoldWarnAt
+}
+
+// MarkRouteWarned latches the route gate's single warning event and reports
+// whether this call is the one that should fire it.
+func (s *SessionState) MarkRouteWarned() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.routeWarned {
+		return false
+	}
+	s.routeWarned = true
+	return true
 }
 
 // explorationReminder rides the batch's first read result once the streak

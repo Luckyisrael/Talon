@@ -143,16 +143,61 @@ its failure modes written before the code (TEST_RULES §3).
 | P0.5 | **L6 cancel hygiene** — a deliberate cancel returns before the "restarting byte-identically" log, so a stopped turn stops (Run 1's ghost attempt after the stop button) | ctx check before restart in `openAIStreamAttempt` | ✅ |
 | P0.6 | **Scorecard calculator** — `e2e/scorecard.py`: SLO table from a run's SSE log + DB rows, compared against Appendix baseline | artifact `e2e/reports/behavior-latest.md` per run | see §5 |
 
-### P1 — truth in planning and execution (next cycle)
+### P1 — screen throughput and round cost (next cycle)
 
-- **L3 scaffold-first + route gate** — every declared route exists (or is
-  being built) before free-form features; route coverage runs as a gate.
+Root cause, measured on Run-2 (`/tmp/opencode/run2-server.log` +
+`run2-build.log`, 47 rounds / 57m07s): **wall time = round time** (round
+durations p50 37 s, p90 196 s, max 470 s, sum 3 410 s ≈ the whole turn;
+tools are only ~6 min of it — installs 3 min, checks 1m35s). The long
+rounds are *generating infrastructure files* (44.6 k out-tok total) on a
+request that grows every round: in-tok 16.8 k → 73.5 k (sum_in 1.93 M,
+body 67 → 294 KB) because every round replays every prior `write_file`
+payload verbatim. And nothing in the system orders the work: first route
+lands at **46m05s** — cleanup (30 s) → deps + node_modules type
+archaeology (~16 min) → store/utils/config → components → *then* screens.
+Grep proof: no "routes first" instruction exists anywhere in
+`SystemPromptBuild`.
+
+Failure modes (written before the code, TEST_RULES §3):
+
+- **FM-L3a** — prose alone does not order work: the prompt already says
+  "write early, not after exhaustive survey", and Run-1's prose ban on
+  surveying still produced 28 min of reading. The ordering rule needs a
+  code-side nudge (L2's pattern), or it will be ignored again.
+- **FM-L3b** — a naive "routes first" that demands finished screens
+  breaks S6 (typecheck must stay green); skeletons must be *compiling*
+  screens, and the nudge must fire on **any** `app/**.tsx` write, not on
+  completion, or it nags a turn that is legitimately mid-scaffold.
+- **FM-L9a** — trimming tool_use args from the wire can make the model
+  re-read a file it wrote; trim only *superseded* calls (file edited
+  since), only older than K rounds, and only on the wire copy — the
+  stored conversation keeps full fidelity (the `TrimSupersededToolOutput`
+  rule).
+- **FM-L8a** — a heartbeat proves *visibility*, not progress; S12 must
+  keep measuring gaps between real events and stall detection stays with
+  `stallbody` — the heartbeat must never be able to satisfy a stuck turn.
+- **FM-L10a** — a blanket node_modules read ban breaks legitimate reads
+  (configs, root files); scope the refusal to survey-style paths under
+  `node_modules/` and answer with `inspect_package`, never silence.
+
+| # | Fix | Evidence / guard | Status |
+|---|-----|------------------|--------|
+| L3 | **Routes-first contract** — (i) `SystemPromptBuild` gains the ordering rule: scaffold every planned `app/` route as a *compiling* skeleton within the first minutes, before infrastructure; (ii) code-side route ladder in the build loop: no `app/**.tsx` write by +5 min → advisory line in the round card, by +10 min → warning event (L2's pattern — prose failed, code enforces). Route coverage stays the gate it is today | fails-first ladder test; Run-2 S2 = 46m05s, S5 = 2.1/h | ⬜ |
+| L8 | **Build heartbeat (S12)** — the build drain loop gets the same 15 s heartbeat plan mode already has; forward tool-argument deltas as progress if cheap. True Run-2 gap = 191 s (parser correction: scorecard must gap-check **all** events, not only tool events — its current 514 s figure counted tool events only) | S12 row; top-5 true gaps 191/117/81/79/70 s vs the 90 s standard | ⬜ |
+| L9 | **Wire-trim superseded tool_use inputs** — old `write_file`/`edit_file` payloads collapse to a placeholder on the wire copy (FM-L9a rules); expectation: body growth drops well under the observed ~5 KB/round, prefill stops scaling with turn age | test: trimmed / not-trimmed / stored-fidelity; serverlog `body_bytes` slope | ⬜ |
+| L10 | **node_modules survey guardrail** — `read_file`/`grep_codebase`/`find_files` against `node_modules/**` refused with an `inspect_package` hint (contract tier: tool discipline enforced by tools, not prose) | fails-first guard test; Run-2: ~16 min of .d.ts archaeology | ⬜ |
+
+Still-open P1 rows from the previous list:
+
 - **L4 plan feasibility** — plan packages must be installed already or
   installable (the digest's dep list feeds the plan prompt); an infeasible
   package fails the plan turn, not hour 58 of the build.
 - **L5 prompt diet** — `SystemPromptBuild` ≤ 4 500 tok: design-bar detail,
   device protocol, navigation semantics move behind `read_skill`; also
   offsets P0.3's digest in the budget.
+- **S7 checklist truth** — 0/18 marks on both runs: `mark_task_done` is
+  never called; needs the forced-verify pattern (a close-out nudge) or an
+  honest drop of the marking claim.
 - **S11 pricing preflight** — blocked: needs real Atria model prices before
   a number can be recorded (unknown price stays an e2e failure).
 
