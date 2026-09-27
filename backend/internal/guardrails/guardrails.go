@@ -9,8 +9,8 @@
 package guardrails
 
 import (
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -89,8 +89,92 @@ func Check(toolName string, rawInput json.RawMessage, st State, preinstalled map
 		return checkEdit(rawInput, st)
 	case "multi_edit":
 		return checkMultiEdit(rawInput, st)
+	case "read_file", "grep_codebase", "search_files", "find_files":
+		return checkNodeModulesSurvey(rawInput)
 	}
 	return allow
+}
+
+// ── L10: node_modules survey guardrail ───────────────────────────────
+
+// checkNodeModulesSurvey refuses survey-style access to dependency
+// internals (L10, contract tier): deep reads, directory targets and
+// path/glob arguments pointing into node_modules/ — Run 2 spent ~16
+// minutes on .d.ts archaeology that inspect_package answers in one call.
+//
+// FM-L10a's scope, by exact path segment: a package's own package.json
+// (a config) and files directly at the node_modules root stay readable,
+// and nothing outside a node_modules segment is ever touched — project
+// root configs and files whose name merely contains "node_modules"
+// pass. grep_codebase's walk already excludes the tree, so a grep that
+// names it is searching for nothing: refusing it with the answer beats
+// silently returning wrong results.
+func checkNodeModulesSurvey(rawInput json.RawMessage) Decision {
+	var a struct {
+		Path string `json:"path"`
+		Glob string `json:"glob"`
+	}
+	if json.Unmarshal(rawInput, &a) != nil {
+		return allow // malformed args fail in the tool itself; nothing to guard
+	}
+	for _, target := range []string{a.Path, a.Glob} {
+		rest, inside := nodeModulesRest(target)
+		if !inside {
+			continue
+		}
+		// FM-L10a exemptions: a real file directly at the node_modules
+		// root ("root files") and a package's own config ("configs"). A
+		// single component that names a package directory or a glob —
+		// node_modules/expo-notifications, node_modules/** — is a survey
+		// target, not a file, and must not slip through here.
+		if rest != "" && !strings.Contains(rest, "/") && isPlainFilePath(rest) {
+			continue
+		}
+		if base := rest[strings.LastIndex(rest, "/")+1:]; base == "package.json" {
+			continue
+		}
+		return reject("node-modules-survey",
+			"Refused: dependency internals under node_modules/ are not directly readable — "+
+				"dependency source is not your source. Call inspect_package with the package name: it returns "+
+				"the version, the entry point and the full type surface. If its output is truncated, work from "+
+				"the signatures it returned and verify your code with run_typecheck. Project files and "+
+				"package.json configs remain readable normally.")
+	}
+	return allow
+}
+
+// nodeModulesRest reports whether p points inside a node_modules directory,
+// returning what lies below the directory itself ("" = the directory or its
+// direct root, "pkg/file.d.ts" = deeper). Segment-exact: "node_modules" must
+// be a whole path element, so node_modules.config.ts and my_node_modules/x
+// never match.
+func nodeModulesRest(p string) (rest string, inside bool) {
+	p = strings.ReplaceAll(strings.TrimSpace(p), "\\", "/")
+	switch {
+	case p == "node_modules":
+		return "", true
+	case strings.HasPrefix(p, "node_modules/"):
+		return p[len("node_modules/"):], true
+	case strings.HasSuffix(p, "/node_modules"):
+		return "", true
+	case strings.Contains(p, "/node_modules/"):
+		return p[strings.Index(p, "/node_modules/")+len("/node_modules/"):], true
+	}
+	return "", false
+}
+
+// isPlainFilePath reports whether a single component directly under
+// node_modules/ names a file rather than a package directory or a glob: it
+// has an extension and carries no glob metacharacter. node_modules/
+// .package-lock.json is a root file (FM-L10a exempt); node_modules/
+// expo-notifications is a package tree and node_modules/** is a glob — both
+// survey targets.
+func isPlainFilePath(component string) bool {
+	if strings.ContainsAny(component, "*?[") {
+		return false
+	}
+	dot := strings.LastIndex(component, ".")
+	return dot > 0 && dot < len(component)-1
 }
 
 // ── install_package ───────────────────────────────────

@@ -231,3 +231,68 @@ func TestRejectionMessagesAreActionable(t *testing.T) {
 		t.Errorf("the browser-wallet refusal should point at transact(), got %q", d.Message)
 	}
 }
+
+// ── L10: node_modules survey guardrail ───────────────────────────────
+//
+// Failure mode, written first (ENGINEERING_STANDARDS §6, FM-L10a): a
+// blanket node_modules read ban breaks legitimate reads — package configs
+// and root files — while the survey it must stop keeps its own failure
+// mode: Run 2 burned ~16 minutes reading .d.ts archaeology under a prompt
+// that already said "use inspect_package". The refusal must cover the
+// survey-style paths (deep reads, directory targets, glob/path targeting),
+// exempt configs and root files by exact segment scope (a false positive
+// on package.json at the project root would be worse than the disease),
+// and never be silent — it answers with inspect_package.
+func TestNodeModulesSurveyRefused(t *testing.T) {
+	refused := []struct {
+		tool string
+		in   map[string]any
+		why  string
+	}{
+		{"read_file", map[string]any{"path": "node_modules/expo-notifications/build/Notifications.types.d.ts"}, "deep .d.ts read (Run-2's actual archaeology)"},
+		{"read_file", map[string]any{"path": "node_modules/@expo/vector-icons/build/Ionicons.d.ts", "limit": 20}, "scoped deep .d.ts read"},
+		{"read_file", map[string]any{"path": "/abs/ws/node_modules/typescript/lib/lib.es5.d.ts"}, "absolute deep read"},
+		{"find_files", map[string]any{"path": "node_modules/expo-notifications", "pattern": "*.d.ts"}, "find targeting a package tree (Run-2)"},
+		{"find_files", map[string]any{"path": "node_modules", "pattern": "*.d.ts"}, "walk of node_modules itself"},
+		{"grep_codebase", map[string]any{"path": "node_modules/expo-notifications", "pattern": "export (type|interface) X"}, "grep with a path arg (Run-2 sent this although the schema never declared it)"},
+		{"grep_codebase", map[string]any{"glob": "node_modules/expo-notifications/**/*.d.ts", "pattern": "X"}, "grep with a node_modules glob (Run-2)"},
+		{"search_files", map[string]any{"glob": "node_modules/**"}, "the search_files alias is the same tool"},
+	}
+	for _, c := range refused {
+		d := Check(c.tool, args(t, c.in), nil, nil)
+		if d.Allowed {
+			t.Errorf("%s %s: not refused", c.tool, c.why)
+			continue
+		}
+		if d.Rule != "node-modules-survey" {
+			t.Errorf("%s %s: rule = %q, want node-modules-survey", c.tool, c.why, d.Rule)
+		}
+		if !strings.Contains(d.Message, "inspect_package") {
+			t.Errorf("%s %s: refusal must answer with inspect_package, got %q", c.tool, c.why, d.Message)
+		}
+	}
+}
+
+func TestNodeModulesSurveyAllowsConfigsRootsAndProjectFiles(t *testing.T) {
+	allowed := []struct {
+		tool string
+		in   map[string]any
+		why  string
+	}{
+		{"read_file", map[string]any{"path": "node_modules/expo-notifications/package.json"}, "a package config (FM-L10a)"},
+		{"read_file", map[string]any{"path": "node_modules/@solana-mobile/mobile-wallet-adapter-protocol-web3js/package.json"}, "a scoped package config"},
+		{"read_file", map[string]any{"path": "node_modules/.package-lock.json"}, "a node_modules root file (FM-L10a)"},
+		{"read_file", map[string]any{"path": "package.json"}, "the project root config — segment scope must not catch it"},
+		{"read_file", map[string]any{"path": "tsconfig.json"}, "a root config"},
+		{"read_file", map[string]any{"path": "src/node_modules.config.ts"}, "a project file whose NAME contains node_modules"},
+		{"read_file", map[string]any{"path": "app/index.tsx"}, "project source"},
+		{"grep_codebase", map[string]any{"pattern": "from ['\"]node_modules/"}, "grep CONTENT referencing node_modules — the walk already excludes the tree"},
+		{"find_files", map[string]any{"path": "app", "pattern": "*.tsx"}, "an ordinary find"},
+	}
+	for _, c := range allowed {
+		d := Check(c.tool, args(t, c.in), nil, nil)
+		if !d.Allowed {
+			t.Errorf("%s %s: wrongly refused (%s)", c.tool, c.why, d.Message)
+		}
+	}
+}
