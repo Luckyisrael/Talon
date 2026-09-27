@@ -1445,6 +1445,12 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 		// outcome.Messages, which is what gets persisted) keeps its full fidelity.
 		sendConversation := ai.TrimSupersededToolOutput(conversation)
 
+		// L9: the same wire-only rule for write payloads — an old write_file/
+		// edit_file input superseded by a later write to the same path, old
+		// enough that it left working memory, collapses to a placeholder. The
+		// persisted transcript keeps every byte (FM-L9a).
+		sendConversation = ai.TrimSupersededToolInputs(sendConversation)
+
 		// The turn state card: a situation report derived from this turn's
 		// transcript (reads, writes, check verdicts, last error), appended to
 		// the trailing user message of the WIRE copy only. Fresh every round,

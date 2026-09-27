@@ -725,6 +725,155 @@ func supersededPointer(tool, path string) string {
 	return fmt.Sprintf("(%s output omitted here — superseded by a later call in this turn.)", tool)
 }
 
+// ── L9: wire-trim of superseded write inputs ─────────────────────────
+
+// payloadWriteTools are the write tools whose inputs carry a file body —
+// the blocks replayed verbatim every round for the life of the turn
+// (Run 2: input 16.8k → 73.5k tok/call). A read's input is a path and a
+// delete's is two short strings — nothing worth trimming there.
+var payloadWriteTools = map[string]bool{
+	"write_file": true,
+	"edit_file":  true,
+	"multi_edit": true,
+}
+
+// payloadInputFields are the string fields that hold a write's body; an
+// oversized one collapses to a placeholder. Any other oversized field
+// (multi_edit's edits array, provider-specific extras) is dropped outright.
+// The path always stays — the model must still know which file this was.
+var payloadInputFields = map[string]bool{
+	"content":    true,
+	"old_string": true,
+	"new_string": true,
+}
+
+const (
+	// minTrimmableInputAge is how many assistant rounds an input must trail
+	// the tail before it may collapse (FM-L9a): recent writes are the
+	// model's working memory, and collapsing them would send it back to
+	// read_file its own work.
+	minTrimmableInputAge = 4
+	// keepInputFieldBelow leaves fields shorter than this alone — trimming
+	// a small field saves nothing and rewrites a cached prefix.
+	keepInputFieldBelow = 128
+	// minTrimmableInputDelta collapses only when it saves at least this
+	// many bytes: a wash of a trim is prefix churn for no win.
+	minTrimmableInputDelta = 256
+)
+
+// supersededInputPlaceholder stands in for a payload a later write replaced.
+// The bytes are stale by definition; the current version arrives from the
+// newer write further down the conversation or from read_file.
+const supersededInputPlaceholder = "[superseded: a later write replaced this version — read_file for the current contents]"
+
+// TrimSupersededToolInputs returns a view of msgs in which an old write
+// payload that a later write to the same path superseded is collapsed on
+// the wire copy — the request body otherwise replays every write_file and
+// edit_file input of the turn in full, every round, forever (Run 2: body
+// 67 → 294 KB, the P1 behind the S2/S5 wall).
+//
+// FM-L9a's three rules, all enforced here: only *superseded* inputs (a
+// later write to the same path exists), only older than
+// minTrimmableInputAge assistant rounds (recent writes stay in working
+// memory), and only on this returned copy — the caller's stored,
+// full-fidelity transcript is never mutated. The tool_use keeps its ID,
+// position and tool_result pairing; only Input changes, on a fresh Block,
+// so no provider ever sees an orphaned call.
+func TrimSupersededToolInputs(msgs []Message) []Message {
+	// Last write per path, and whether anything is a payload write at all.
+	lastWrite := make(map[string]int)
+	for mi, m := range msgs {
+		for _, b := range m.Blocks {
+			if b.Type == "tool_use" && payloadWriteTools[b.Name] {
+				if p := toolPath(b.Input); p != "" && mi >= lastWrite[p] {
+					lastWrite[p] = mi
+				}
+			}
+		}
+	}
+	if len(lastWrite) == 0 {
+		return msgs
+	}
+
+	// assistantAfter[mi] counts assistant messages strictly after mi — the
+	// rounds that have run since, the age gate of FM-L9a.
+	assistantAfter := make([]int, len(msgs))
+	seen := 0
+	for mi := len(msgs) - 1; mi >= 0; mi-- {
+		assistantAfter[mi] = seen
+		if msgs[mi].Role == "assistant" {
+			seen++
+		}
+	}
+
+	trimmable := func(mi int, b Block) bool {
+		if b.Type != "tool_use" || !payloadWriteTools[b.Name] {
+			return false
+		}
+		p := toolPath(b.Input)
+		return p != "" && lastWrite[p] > mi && assistantAfter[mi] >= minTrimmableInputAge
+	}
+
+	out := make([]Message, len(msgs))
+	copy(out, msgs)
+	for mi := range out {
+		var blocks []Block // copied lazily, only if this message has something to trim
+		for bi, b := range out[mi].Blocks {
+			if !trimmable(mi, b) {
+				continue
+			}
+			collapsed, ok := collapseWriteInput(b.Input)
+			if !ok {
+				continue
+			}
+			if blocks == nil {
+				blocks = make([]Block, len(out[mi].Blocks))
+				copy(blocks, out[mi].Blocks)
+			}
+			blocks[bi].Input = collapsed
+		}
+		if blocks != nil {
+			out[mi].Blocks = blocks
+		}
+	}
+	return out
+}
+
+// collapseWriteInput rebuilds one write input without its oversized payload
+// fields, and reports whether the result is actually smaller — a trim that
+// saves less than minTrimmableInputDelta bytes leaves the input alone.
+func collapseWriteInput(input json.RawMessage) (json.RawMessage, bool) {
+	var raw map[string]json.RawMessage
+	if len(input) == 0 || json.Unmarshal(input, &raw) != nil || len(raw) == 0 {
+		return input, false
+	}
+	changed := false
+	for k, v := range raw {
+		if k == "path" || len(v) <= keepInputFieldBelow {
+			continue
+		}
+		if payloadInputFields[k] {
+			ph, err := json.Marshal(supersededInputPlaceholder)
+			if err != nil || len(ph) >= len(v) {
+				continue
+			}
+			raw[k] = ph
+		} else {
+			delete(raw, k)
+		}
+		changed = true
+	}
+	if !changed {
+		return input, false
+	}
+	raw["superseded_note"], _ = json.Marshal("collapsed on the wire: a later write superseded this call")
+	out, err := json.Marshal(raw)
+	if err != nil || len(input)-len(out) < minTrimmableInputDelta {
+		return input, false
+	}
+	return out, true
+}
+
 // ── Legacy bridge ─────────────────────────────────────
 
 // FromPromptMessages adapts the flat {Role, Content} shape used by the
