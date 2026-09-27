@@ -201,6 +201,25 @@ Failure modes (written before the code, TEST_RULES §3):
   flips unverifiable completions back rather than trust them; L11's
   explicit tool call is the honest cover for those rows. No guessing
   added.
+- **FM-L4a** — the plan prompt's prose ("only list packages not in
+  this set") is advisory; Run-1 listed 6 packages — 4 absent from the
+  template — anyway and the plan turn closed `completed`, deferring
+  discovery to the build (10 errored `inspect_package` probes, features
+  promised at plan time and still absent at hour 58). Advisory prose
+  never fails a turn; the gate must be code at the plan doors.
+- **FM-L4b** — an existence probe (`npm view`) is the wrong bar: all
+  six of Run-1's packages **exist**; they failed as installations
+  against that workspace. Feasibility means *resolvable in this
+  workspace* (`npm install --dry-run` against the real template), not
+  "the name is registered".
+- **FM-L4c** — probe flakiness must not fail healthy plans: a timeout
+  or registry outage reports *unknown* and passes the turn; only a
+  definitive resolution failure (404 for a package, ERESOLVE against
+  the workspace) fails it. Availability ≠ feasibility.
+- **FM-L4d** — the probe must not mutate: plan mode is read-only by
+  tool absence (W3, law 6), so the check is `--dry-run` — no
+  package.json edit, no node_modules write. A feasibility gate that
+  mutates the workspace during plan breaks the contract it enforces.
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -210,12 +229,16 @@ Failure modes (written before the code, TEST_RULES §3):
 | L10 | **node_modules survey guardrail** — `read_file`/`grep_codebase`/`find_files` against `node_modules/**` refused with an `inspect_package` hint (contract tier: tool discipline enforced by tools, not prose) | fails-first guard test; Run-2: ~16 min of .d.ts archaeology | ⬤ |
 | L11 | **Close-out names the mechanism** — the checklist sentence in `SystemPromptBuild` tells the model to call `mark_task_done` (batch the finished items, named as the checklist lists them) instead of only "check the checklist" in prose | fails-first prompt-contract test; Run-2 S7 = 0/18 with the tool always advertised (`coreToolSet`) | ⬤ |
 | L12 | **Mark at every passing compile** — `executeTools` credits `markScreenTasksFromFiles` + `auditScreenTasks` right after a passing `run_checks`, using a touched-set snapshot taken before dispatch (FM-L12b); the final verify gate stays exactly as it is | fails-first executeTools test (pass marks / fail does not / same-batch write does not); Run-2: cancelled turn credited nothing | ⬤ |
+| L4 | **Plan feasibility gate** — both plan doors (Send + stream) probe the plan's new packages with `npm install --dry-run` in the real workspace (FM-L4b resolution bar): a definitive failure names the package and **fails the plan turn** — unknown (flaky network) passes (FM-L4c), preinstalled packages skip the probe, and the probe never mutates (FM-L4d) | fails-first door tests (infeasible fails / unknown passes / preinstalled skipped); Run-1: 4 of 6 plan packages unshipped, 10 errored probes at build hour 0 | ⬤ |
 
 Still-open P1 rows from the previous list:
 
-- **L4 plan feasibility** — plan packages must be installed already or
-  installable (the digest's dep list feeds the plan prompt); an infeasible
-  package fails the plan turn, not hour 58 of the build.
+- **L4 plan feasibility** — closed this cycle by the L4 row above:
+  both plan doors now gate the parsed plan's new packages through
+  `npm install --dry-run` in the real workspace (resolution, not
+  name-existence — Run-1's four "not installable" packages all existed
+  on npm), failing the plan turn with the package named instead of
+  hour 58 of the build; unknown probes pass, preinstalled packages skip.
 - **L5 prompt diet** — `SystemPromptBuild` ≤ 4 500 tok: design-bar detail,
   device protocol, navigation semantics move behind `read_skill`; also
   offsets P0.3's digest in the budget.

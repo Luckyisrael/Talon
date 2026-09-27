@@ -59,6 +59,10 @@ type PromptHandler struct {
 	// place that holds both the AI client and the knowledge registry — is what keeps
 	// the plan and build modes from drifting on which packages already ship.
 	planPrompt string
+	// packageProbe is L4's plan-feasibility check (ENGINEERING_STANDARDS §6):
+	// the default resolves the plan's new packages against the real
+	// workspace with npm's resolver in dry mode; tests inject fakes.
+	packageProbe planPackageProbe
 	// slog is the H1 session-log cache: one append-only event log per project,
 	// dual-written alongside conversation_messages until the derivation read
 	// path is flipped on everywhere.
@@ -114,6 +118,7 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir st
 		knowledge:      knowledge,
 		notifier:       n,
 		planPrompt:     ai.PlanSystemPrompt(preinstalled),
+		packageProbe:   npmDryRunProbe,
 		templateDigest: renderTemplateDigest(templateDir, preinstalled),
 		slog:           newSessionLogCache(),
 
@@ -343,6 +348,16 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 			log.Printf("plan failed (user %d, project %d): %v", userID, req.ProjectID, err)
 			h.store.UpdatePromptStatus(prompt.ID, "failed", 0)
 			writeError(w, http.StatusBadGateway, friendlyAIError(err))
+			return
+		}
+		// L4: an infeasible package fails the plan turn here, before any of
+		// the plan is saved — the contract that keeps a package the
+		// workspace cannot install from reaching the build turn hours later.
+		if msg, reject := h.checkPlanFeasibility(ctx, req.ProjectID, planResp.Plan); reject {
+			log.Printf("plan rejected (user %d, project %d): %s", userID, req.ProjectID, msg)
+			h.store.UpdatePromptResponse(prompt.ID, "Error: "+msg)
+			h.store.UpdatePromptStatus(prompt.ID, "failed", 0)
+			writeError(w, http.StatusUnprocessableEntity, msg)
 			return
 		}
 		h.savePlan(req.ProjectID, prompt.ID, planResp)
@@ -937,6 +952,17 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 	// structured plan alongside it.
 	var planResp ai.PlanResponse
 	if json.Unmarshal([]byte(raw), &planResp) == nil && (planResp.Message != "" || planResp.Plan != nil) {
+		// L4: the stream door applies the same feasibility gate as the Send
+		// door — an infeasible package fails the turn with the package
+		// named, before any of the plan is saved (FM-L4a).
+		if msg, reject := h.checkPlanFeasibility(ctx, projectID, planResp.Plan); reject {
+			writeSSE(w, "error", map[string]string{"message": msg})
+			h.store.UpdatePromptResponse(promptID, "Error: "+msg)
+			h.store.UpdatePromptStatus(promptID, "failed", 0)
+			writeSSE(w, "done", map[string]string{"status": "error"})
+			flusher.Flush()
+			return
+		}
 		h.savePlan(projectID, promptID, &planResp)
 		payload, _ := json.Marshal(planResp)
 		h.store.UpdatePromptResponse(promptID, string(payload))
