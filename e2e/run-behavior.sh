@@ -80,7 +80,7 @@ echo "[$LABEL] drive rc=$DRIVE_RC"
 
 # 4. extract ids (RESULT always prints on the success path; tolerate a
 #    partial run so a failed turn still gets scored honestly)
-PROJ="" PPID="" BPID=""
+PROJ="" PLANID="" BPID=""
 eval "$(python3 - "$OUT-drive.log" <<'PY'
 import json, sys
 try:
@@ -89,16 +89,16 @@ except OSError:
     txt = ""
 i = txt.rfind('[drive] RESULT ')
 if i < 0:
-    print('PROJ=""'); print('PPID=""'); print('BPID=""')
+    print('PROJ=""'); print('PLANID=""'); print('BPID=""')
 else:
     blob = txt[i + len('[drive] RESULT '):]
     j = json.loads(blob[blob.find('{'):])
     print(f'PROJ={j.get("project", "")}')
-    print(f'PPID={j.get("plan", {}).get("prompt_id", "")}')
+    print(f'PLANID={j.get("plan", {}).get("prompt_id", "")}')
     print(f'BPID={j.get("build", {}).get("prompt_id", "")}')
 PY
 )"
-echo "[$LABEL] project=$PROJ plan=$PPID build=$BPID"
+echo "[$LABEL] project=$PROJ plan=$PLANID build=$BPID"
 
 if [ -z "$PROJ" ] || [ -z "$BPID" ]; then
   echo "[$LABEL] no build prompt to score — drive failed before the build turn"

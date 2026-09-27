@@ -11,6 +11,7 @@ package guardrails
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -91,6 +92,10 @@ func Check(toolName string, rawInput json.RawMessage, st State, preinstalled map
 		return checkMultiEdit(rawInput, st)
 	case "read_file", "grep_codebase", "search_files", "find_files":
 		return checkNodeModulesSurvey(rawInput)
+	case "run_shell", "run_command":
+		// FM-L10b: the survey moves to shell the moment the file tools
+		// refuse — Run-3 proved it. Same rule, same hint, shell shape.
+		return checkNodeModulesShellSurvey(rawInput)
 	}
 	return allow
 }
@@ -118,27 +123,91 @@ func checkNodeModulesSurvey(rawInput json.RawMessage) Decision {
 		return allow // malformed args fail in the tool itself; nothing to guard
 	}
 	for _, target := range []string{a.Path, a.Glob} {
-		rest, inside := nodeModulesRest(target)
-		if !inside {
-			continue
+		if nodeModulesRefusal(target) {
+			return reject("node-modules-survey", nodeModulesSurveyMessage)
 		}
-		// FM-L10a exemptions: a real file directly at the node_modules
-		// root ("root files") and a package's own config ("configs"). A
-		// single component that names a package directory or a glob —
-		// node_modules/expo-notifications, node_modules/** — is a survey
-		// target, not a file, and must not slip through here.
-		if rest != "" && !strings.Contains(rest, "/") && isPlainFilePath(rest) {
-			continue
+	}
+	return allow
+}
+
+// nodeModulesRefusal reports whether one path/glob target is a survey
+// target under FM-L10a's exemptions: a real file directly at the
+// node_modules root ("root files") and a package's own config
+// ("configs") pass. A single component that names a package directory
+// or a glob — node_modules/expo-notifications, node_modules/** — is a
+// survey target, not a file, and must not slip through. Shared by the
+// file tools and the shell check (FM-L10b) so the two shapes cannot
+// drift on what counts as a survey.
+func nodeModulesRefusal(target string) bool {
+	rest, inside := nodeModulesRest(target)
+	if !inside {
+		return false
+	}
+	if rest != "" && !strings.Contains(rest, "/") && isPlainFilePath(rest) {
+		return false
+	}
+	if base := rest[strings.LastIndex(rest, "/")+1:]; base == "package.json" {
+		return false
+	}
+	return true
+}
+
+const nodeModulesSurveyMessage = "Refused: dependency internals under node_modules/ are not directly readable — " +
+	"dependency source is not your source. Call inspect_package with the package name: it returns " +
+	"the version, the entry point and the full type surface. If its output is truncated, work from " +
+	"the signatures it returned and verify your code with run_typecheck. Project files and " +
+	"package.json configs remain readable normally."
+
+// surveyVerbRe matches the read verbs that make a shell command
+// archaeology (FM-L10b): Run-2/3's actual bypasses were grep/find/
+// sed/cat/ls over package trees. A command that names none of them is
+// not reading dependency internals, whatever else it does (FM-L10c).
+var surveyVerbRe = regexp.MustCompile(`\b(grep|egrep|fgrep|rg|find|fd|cat|sed|head|tail|less|more|nl|awk|wc|ls|tree|stat|du|strings|cut|diff|sort|xxd)\b`)
+
+// pkgPrefixRe is FM-L10c's hard rule: package-manager and toolchain
+// commands pass untouched, even when their pipeline mentions
+// node_modules — npm/gradle running inside the tree is the build doing
+// its job, not a survey. Deliberately NOT containing a shell (bash/sh/
+// sh -c is the trivial bypass).
+var pkgPrefixRe = regexp.MustCompile(`^\s*(npm|npx|yarn|pnpm|pnpx|bun|node|deno|expo|gradle|\./gradlew|adb)\b`)
+
+// shellNodeModulesRe extracts node_modules tokens from a command, with
+// an exact segment boundary: "somenode_modules/x" is a project path
+// whose name merely contains the string, same scope as the file tools.
+// The token ends at the first shell delimiter (whitespace, quote, pipe,
+// redirect, substitution); whatever glob or path text remains is judged
+// by the same exemption rules as the file tools.
+var shellNodeModulesRe = regexp.MustCompile(`(^|[^A-Za-z0-9_.-])(node_modules/[^ \t"'` + "`" + `$;|&<>(){}]+)`)
+
+// checkNodeModulesShellSurvey is FM-L10b: Run-3's model was refused
+// twice on the file tools and routed the identical survey through
+// run_shell — find/grep over .d.ts, one composing straight into the
+// turn's only 183 s gap. The rule keys on the shape of the READ, not
+// the tool carrying it; the hint is the same one that ends the survey
+// in one call.
+func checkNodeModulesShellSurvey(rawInput json.RawMessage) Decision {
+	var a struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(rawInput, &a) != nil {
+		return allow // malformed args fail in the tool itself; nothing to guard
+	}
+	cmd := a.Command
+	if strings.TrimSpace(cmd) == "" {
+		return allow
+	}
+	// FM-L10c first: build and toolchain commands never refuse.
+	if pkgPrefixRe.MatchString(cmd) {
+		return allow
+	}
+	// Only a read verb can be archaeology.
+	if !surveyVerbRe.MatchString(cmd) {
+		return allow
+	}
+	for _, m := range shellNodeModulesRe.FindAllStringSubmatch(cmd, -1) {
+		if nodeModulesRefusal(m[2]) {
+			return reject("node-modules-survey", nodeModulesSurveyMessage)
 		}
-		if base := rest[strings.LastIndex(rest, "/")+1:]; base == "package.json" {
-			continue
-		}
-		return reject("node-modules-survey",
-			"Refused: dependency internals under node_modules/ are not directly readable — "+
-				"dependency source is not your source. Call inspect_package with the package name: it returns "+
-				"the version, the entry point and the full type surface. If its output is truncated, work from "+
-				"the signatures it returned and verify your code with run_typecheck. Project files and "+
-				"package.json configs remain readable normally.")
 	}
 	return allow
 }

@@ -296,3 +296,65 @@ func TestNodeModulesSurveyAllowsConfigsRootsAndProjectFiles(t *testing.T) {
 		}
 	}
 }
+
+// FM-L10b — Run-3 (2026-09-27): the file tools refused the direct
+// attempts (2 node-modules-survey rejects with the inspect_package
+// hint), and the model routed the SAME survey through run_shell —
+// find/grep/sed over .d.ts, one composing straight into the turn's only
+// 183 s S12 gap. The refusal must be tool-shape-independent.
+func TestNodeModulesSurveyRefusedThroughShell(t *testing.T) {
+	refused := []struct {
+		tool string
+		in   map[string]any
+		why  string
+	}{
+		{"run_shell", map[string]any{"command": `grep -rn "getPermissionsAsync" node_modules/expo-notifications`}, "Run-3's actual shell grep"},
+		{"run_shell", map[string]any{"command": `find node_modules/expo-notifications -name "*.d.ts" | head -20`}, "Run-3's .d.ts enumeration"},
+		{"run_shell", map[string]any{"command": `sed -n '1,40p' node_modules/expo-notifications/build/Notifications.d.ts`}, "sed through a package build tree"},
+		{"run_shell", map[string]any{"command": `cat node_modules/@expo/vector-icons/build/Ionicons.d.ts`}, "cat of a scoped package's internals"},
+		{"run_shell", map[string]any{"command": `ls -d node_modules/expo-time-picker`}, "a directory probe — inspect_package answers existence too"},
+		{"run_shell", map[string]any{"command": `cd apps && grep -rn "PermissionResponse" node_modules/expo-notifications`}, "compound command with the survey off a cd"},
+		{"run_command", map[string]any{"command": `ls node_modules/expo-notifications/build`}, "the run_command alias"},
+	}
+	for _, c := range refused {
+		d := Check(c.tool, args(t, c.in), nil, nil)
+		if d.Allowed {
+			t.Errorf("%s: not refused — %s", c.why, c.tool)
+			continue
+		}
+		if d.Rule != "node-modules-survey" {
+			t.Errorf("%s: rule = %q, want node-modules-survey", c.why, d.Rule)
+		}
+		if !strings.Contains(d.Message, "inspect_package") {
+			t.Errorf("%s: refusal must answer with inspect_package, got %q", c.why, d.Message)
+		}
+	}
+}
+
+// FM-L10c — a refusal that breaks the build is worse than the survey it
+// stops: package-manager and toolchain commands, maintenance over
+// node_modules, FM-L10a's config reads, and ordinary project commands
+// all pass through run_shell untouched.
+func TestNodeModulesShellAllowsBuildAndConfigCommands(t *testing.T) {
+	allowed := []struct {
+		tool string
+		in   map[string]any
+		why  string
+	}{
+		{"run_shell", map[string]any{"command": `rm -rf node_modules && npm ci`}, "reinstall from the lockfile"},
+		{"run_shell", map[string]any{"command": `npm install expo-notifications --save`}, "a package-manager install"},
+		{"run_shell", map[string]any{"command": `node node_modules/typescript/bin/tsc --noEmit`}, "running the local toolchain binary"},
+		{"run_shell", map[string]any{"command": `expo run:android 2>&1 | grep node_modules`}, "build output filtered by grep — the prefix rule (FM-L10c)"},
+		{"run_shell", map[string]any{"command": `cat node_modules/expo-notifications/package.json`}, "a package config (FM-L10a parity)"},
+		{"run_shell", map[string]any{"command": `cat node_modules/.package-lock.json`}, "a node_modules root file (FM-L10a parity)"},
+		{"run_shell", map[string]any{"command": `ls app/components`}, "project files"},
+		{"run_shell", map[string]any{"command": `grep -rn "TODO" app/`}, "grepping project source"},
+		{"run_shell", map[string]any{"command": `git status --short`}, "no node_modules at all"},
+	}
+	for _, c := range allowed {
+		d := Check(c.tool, args(t, c.in), nil, nil)
+		if !d.Allowed {
+			t.Errorf("%s: wrongly refused (%s)", c.why, d.Message)
+		}
+	}
+}

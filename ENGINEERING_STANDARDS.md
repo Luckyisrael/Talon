@@ -179,6 +179,21 @@ Failure modes (written before the code, TEST_RULES §3):
 - **FM-L10a** — a blanket node_modules read ban breaks legitimate reads
   (configs, root files); scope the refusal to survey-style paths under
   `node_modules/` and answer with `inspect_package`, never silence.
+- **FM-L10b** — the guard keys on the file tools; Run-3 proved the
+  survey simply moves to shell the moment the direct path refuses:
+  `run_shell` ran `find node_modules/expo-notifications -name "*.d.ts"`
+  and repeated `grep -rn … node_modules/…` (one composing right into
+  the turn's only 183 s S12 gap) while the direct attempts were
+  correctly refused twice. The refusal must be tool-shape-independent —
+  shell commands that READ dependency internals get the same hint, or
+  L10 is a detour sign, not a wall.
+- **FM-L10c** — shell commands that BUILD or MAINTAIN must never be
+  refused: `npm install/rebuild/ci`, `rm -rf node_modules && npm ci`,
+  `cat node_modules/<pkg>/package.json` (FM-L10a parity). Scope the
+  shell check to read-survey verbs naming a non-exempt node_modules
+  path, and let package-manager-prefixed commands pass untouched — a
+  refusal that breaks the build is a worse bug than the survey it
+  stops.
 - **FM-L11a** — the close-out paragraph orders the model to "check the
   build-plan checklist" but never names `mark_task_done`, the only
   mechanism that moves it: a compliant model answers in prose and every
@@ -223,10 +238,10 @@ Failure modes (written before the code, TEST_RULES §3):
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
-| L3 | **Routes-first contract** — (i) `SystemPromptBuild` gains the ordering rule: scaffold every planned `app/` route as a *compiling* skeleton within the first minutes, before infrastructure; (ii) code-side route ladder in the build loop: no `app/**.tsx` write by +5 min → advisory line in the round card, by +10 min → warning event (L2's pattern — prose failed, code enforces). Route coverage stays the gate it is today | fails-first ladder test; Run-2 S2 = 46m05s, S5 = 2.1/h | ⬤ |
-| L8 | **Build heartbeat (S12)** — the build drain loop gets the same 15 s heartbeat plan mode already has; forward tool-argument deltas as progress if cheap. True Run-2 gap = 191 s (parser correction: scorecard must gap-check **all** events, not only tool events — its current 514 s figure counted tool events only) | S12 row; top-5 true gaps 191/117/81/79/70 s vs the 90 s standard | ⬤ |
-| L9 | **Wire-trim superseded tool_use inputs** — old `write_file`/`edit_file` payloads collapse to a placeholder on the wire copy (FM-L9a rules); expectation: body growth drops well under the observed ~5 KB/round, prefill stops scaling with turn age | test: trimmed / not-trimmed / stored-fidelity; serverlog `body_bytes` slope | ⬤ |
-| L10 | **node_modules survey guardrail** — `read_file`/`grep_codebase`/`find_files` against `node_modules/**` refused with an `inspect_package` hint (contract tier: tool discipline enforced by tools, not prose) | fails-first guard test; Run-2: ~16 min of .d.ts archaeology | ⬤ |
+| L3 | **Routes-first contract** — (i) `SystemPromptBuild` gains the ordering rule: scaffold every planned `app/` route as a *compiling* skeleton within the first minutes, before infrastructure; (ii) code-side route ladder in the build loop: no `app/**.tsx` write by +5 min → advisory line in the round card, by +10 min → warning event (L2's pattern — prose failed, code enforces). Route coverage stays the gate it is today | fails-first ladder test; Run-2 S2 = 46m05s, S5 = 2.1/h → **Run-3 S2 = 13m59s, S5 = 7.5/h ✅ (first pass), S3 = 6/6 routes**; warning fired once at +11 min | ⬤ |
+| L8 | **Build heartbeat (S12)** — the build drain loop gets the same 15 s heartbeat plan mode already has; forward tool-argument deltas as progress if cheap. True Run-2 gap = 191 s (parser correction: scorecard must gap-check **all** events, not only tool events — its current 514 s figure counted tool events only) | S12 row; Run-2 top-5 true gaps 191/117/81/79/70 s → **Run-3: 183/48/43/36/24 — one breach instead of five**; the one is a provider-side generation silence (model composing a shell grep), heartbeat-covered, heartbeats still excluded per FM-L8a | ⬤ |
+| L9 | **Wire-trim superseded tool_use inputs** — old `write_file`/`edit_file` payloads collapse to a placeholder on the wire copy (FM-L9a rules); expectation: body growth drops well under the observed ~5 KB/round, prefill stops scaling with turn age | test: trimmed / not-trimmed / stored-fidelity; Run-2 max body 293,899 B, 24 rebuilds → **Run-3 max body 254,524 B (−13%), 20 rebuilds**; S10 still ✅ | ⬤ |
+| L10 | **node_modules survey guardrail** — `read_file`/`grep_codebase`/`find_files` **and shell read-survey verbs** (`grep`/`find`/`cat`/`sed`/`ls`/…) against `node_modules/**` refused with an `inspect_package` hint (FM-L10b: the survey moved to `run_shell` the moment the file tools refused); package-manager commands and FM-L10a exemptions pass untouched (FM-L10c) | fails-first guard tests (file tools + shell verbs + build commands allowed); Run-2: ~16 min of .d.ts archaeology; Run-3: 2 direct refusals proved the hole shell still had | ⬤ |
 | L11 | **Close-out names the mechanism** — the checklist sentence in `SystemPromptBuild` tells the model to call `mark_task_done` (batch the finished items, named as the checklist lists them) instead of only "check the checklist" in prose | fails-first prompt-contract test; Run-2 S7 = 0/18 with the tool always advertised (`coreToolSet`) | ⬤ |
 | L12 | **Mark at every passing compile** — `executeTools` credits `markScreenTasksFromFiles` + `auditScreenTasks` right after a passing `run_checks`, using a touched-set snapshot taken before dispatch (FM-L12b); the final verify gate stays exactly as it is | fails-first executeTools test (pass marks / fail does not / same-batch write does not); Run-2: cancelled turn credited nothing | ⬤ |
 | L4 | **Plan feasibility gate** — both plan doors (Send + stream) probe the plan's new packages with `npm install --dry-run` in the real workspace (FM-L4b resolution bar): a definitive failure names the package and **fails the plan turn** — unknown (flaky network) passes (FM-L4c), preinstalled packages skip the probe, and the probe never mutates (FM-L4d) | fails-first door tests (infeasible fails / unknown passes / preinstalled skipped); Run-1: 4 of 6 plan packages unshipped, 10 errored probes at build hour 0 | ⬤ |
@@ -307,7 +322,7 @@ build prompt (→ prompt 58, stopped by the harness at **57m06s**, status
 | S9 tool contract | 18 advertised, 8 stripped ✗ | **41 advertised ✅** | fixed; install_package ×3, run_shell ×2, run_command ×3, delete_file ×17 now actually called |
 | S10 input economy | unmeasured ? | **system 10,399→10,399 tok, 24 attributed rebuilds ✅** | traced + bounded + attributed, measured |
 | S11 cost | $0 (L7) | $0 — `no pricing for model "Atria-Dawn-Preview"` logged | still blocked on pricing data |
-| S12 progress | unmeasured ? | max 514 s gap ✗ | now measured — silent-round heartbeat is a P1 |
+| S12 progress | unmeasured ? | max 514 s gap ✗ → **corrected to 191 s** when the scorecard's gap parser was fixed (it counted tool events only — see L8) | now measured — silent-round heartbeat is a P1 |
 
 - Verdict: **FAIL** — 7 required rows. But every row the P0 cycle targeted
   (S9, S10, S8) now passes *measured*, and S1/S4 improved 6.7×/2×. The
@@ -316,3 +331,54 @@ build prompt (→ prompt 58, stopped by the harness at **57m06s**, status
 - Reproduce: `python3 e2e/scorecard.py --db backend/talon.db --project 19
   --prompt 58 --stream /tmp/opencode/run2-build.log --serverlog
   /tmp/opencode/run2-server.log --fresh`.
+
+## Appendix C — Run-3 (project 20 "Momentum", 2026-09-27, after L3/L8/L9/L10)
+
+Same committed prompts (`e2e/prompts/momentum-{plan,build}.txt` — one
+variable: the fixes), fresh project, stack recipe `e2e/run-behavior.sh`.
+Plan → prompt 59 `completed` (6 screens / 17 tasks, 0 questions). Build
+→ prompt 60 **`paused` at the 60-round budget**, 48m03s, 60 rounds, avg
+48 s/round (Run-2: 72 s/round) — `paused` is the resumable
+round-exhaustion state, not a failure; the turn was mid-fix-loop with
+all 6 routes written and the last check dirty. The binary was built
+before L11/L12/L4 landed, so S7/S6 below do **not** carry them.
+
+| Row | Run-2 | Run-3 | Δ |
+|---|---|---|---|
+| S1 first write | 4m18s ✗ | 11m49s ✗ | regressed — round-1's 19-read batch, then a 9.5-min opening think (21:24:59→21:34:24, no tool calls) |
+| S2 first route file | 46m05s ✗ | **13m59s ✗** | 3.3× faster (root `app/_layout.tsx` rewrite; first *plan-screen* route at +28m58s); +10-min warning fired once at 21:36:34, first writes landed the same second |
+| S3 scaffold | 2/6 ✗ | **6/6 plan routes**; last check dirty ✗ | every route exists; a green typecheck never landed before the budget |
+| S4 reads before write | 14 ✗ | 19 ✗ | regressed — one parallel round-1 mega-batch; the L2 warning's batch-level counting fires advisory, not refusal, below 24 |
+| S5 throughput | 2.1/h ✗ | **7.5/h ✅** | first-ever pass (standard ≥4/h) |
+| S6 runnable | ? (stale) | last dirty, 3/11 clean ✗ | paused mid-fix-loop |
+| S7 checklist truth | 0/18 ✗ | 0/17 ✗ | flat — build predates L11/L12 (both committed after this binary was built); Run-4 carries them |
+| S8 verify economy | 3% ✅ | **9% ✅** (11 run_checks ≈ 4m26s) | pass |
+| S9 tool contract | 41 ✅ | 41 ✅ | pass |
+| S10 input economy | 10,399→10,399 tok ✅ | **10,607→11,603 tok, 20 rebuilds ✅** | pass; +996 tok of project-map drift over 60 rounds, bounded |
+| S11 cost | ? (L7) | ? (L7) | gateway `/v1/models` carries no pricing field — still honestly unmeasured |
+| S12 progress | max 191 s, top5 191/117/81/79/70 ✗ | **max 183 s, top5 183/48/43/36/24 ✗** | one breach instead of five; the one is a provider-side generation silence (22:00:18→22:03:21, model composing a shell grep), heartbeat-covered — heartbeats stay excluded per FM-L8a, and stall detection belongs to `stallbody` |
+
+- **L10 fired and exposed its hole**: 2 `node-modules-survey`
+  refusals on the direct path, and the model routed the identical
+  survey through `run_shell` (`find`/`grep`/`sed` over .d.ts — one
+  composing straight into the 183 s gap). FM-L10b/c written and fixed
+  the same day: shell read-survey verbs now refuse with the same hint,
+  package-manager/build commands never do.
+- **L4's failure repeated live, in a binary predating L4**: `ls -d
+  node_modules/@react-native-community/datetimepicker` → *No such
+  file*, `inspect_package` ×2 errored — the plan again promised
+  unshipped packages; the L4 gate (same cycle) fails such plans at the
+  door.
+- Tool mix: read_file 29, write_file 24, run_checks 11, run_shell 10,
+  read_skill 7, edit_file 7, multi_edit 6, grep_codebase 4,
+  install_package 3, inspect_package 2, node-modules-survey 2,
+  context_build 1, explore 1, route_scaffold 1, batch_conflict 1,
+  compact 1.
+- Verdict: **FAIL** — 7 required rows. Every row the fix cycle targeted
+  moved the right way (S2 −32 min, S3 2/6→6/6, S5 → pass, S12 five
+  breaches→one, L10 refusals firing); S1/S4 regressed and need the next
+  cycle's attention.
+- Reproduce: `python3 e2e/scorecard.py --db backend/talon.db --project 20
+  --prompt 60 --stream /tmp/opencode/run3-build.log --serverlog
+  /tmp/opencode/run3-server.log --fresh` (report committed at
+  `e2e/reports/behavior-latest.md`).
