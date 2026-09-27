@@ -192,3 +192,34 @@ its failure modes written before the code (TEST_RULES §3).
 - Verdict: **FAIL** — this appendix is the baseline future runs are scored
   against. Reproduce the table: `python3 e2e/scorecard.py --db
   backend/talon.db --project 18 --prompt 56 --fresh`.
+
+## Appendix B — Run-2 (project 19 "Momentum", 2026-09-27, after the P0 fixes)
+
+Same plan prompt (→ prompt 57, `completed`, 6 screens / 18 tasks) and same
+build prompt (→ prompt 58, stopped by the harness at **57m06s**, status
+`cancelled`, 47 rounds, avg 1m13s/round). Full table:
+`e2e/reports/behavior-latest.md`; Run-1 re-scored alongside it as
+`e2e/reports/behavior-run1.md`.
+
+| Row | Run-1 | Run-2 | Δ |
+|---|---|---|---|
+| S1 first write | 28m34s ✗ | **4m18s ✗** | 6.7× faster — the exploration ladder works; still 78 s over |
+| S2 first route file | 53 min ✗ | 46m05s ✗ | ~flat |
+| S3 scaffold | 2/6 ✗ | 2/6 ✗ | flat |
+| S4 reads before write | 28 ✗ | **14 ✗** | halved; 2 calls over the limit |
+| S5 throughput | 2.0/h ✗ | 2.1/h ✗ | flat — the wall-clock problem is now screen work, not exploration |
+| S6 runnable | ? (stale) | ? (stale) | unchanged — stop lands between write and re-check |
+| S7 checklist truth | 0/18 ✗ | 0/18 ✗ | flat (P1) |
+| S8 verify economy | ~7% ✅ (derived) | **3% ✅ (measured)** | timestamped stream closed the derivation |
+| S9 tool contract | 18 advertised, 8 stripped ✗ | **41 advertised ✅** | fixed; install_package ×3, run_shell ×2, run_command ×3, delete_file ×17 now actually called |
+| S10 input economy | unmeasured ? | **system 10,399→10,399 tok, 24 attributed rebuilds ✅** | traced + bounded + attributed, measured |
+| S11 cost | $0 (L7) | $0 — `no pricing for model "Atria-Dawn-Preview"` logged | still blocked on pricing data |
+| S12 progress | unmeasured ? | max 514 s gap ✗ | now measured — silent-round heartbeat is a P1 |
+
+- Verdict: **FAIL** — 7 required rows. But every row the P0 cycle targeted
+  (S9, S10, S8) now passes *measured*, and S1/S4 improved 6.7×/2×. The
+  remaining wall: first screen at 46 min (infrastructure before routes)
+  and zero checklist marks — both P1.
+- Reproduce: `python3 e2e/scorecard.py --db backend/talon.db --project 19
+  --prompt 58 --stream /tmp/opencode/run2-build.log --serverlog
+  /tmp/opencode/run2-server.log --fresh`.

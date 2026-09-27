@@ -110,7 +110,7 @@ def parse_serverlog(path):
             max_body = max(max_body or 0, body)
         if "system prompt rebuilt in round" in raw:
             rebuilds.append(raw.split("orchestrator: ", 1)[-1])
-    return first_sys, max_sys, first_tools, max_body, rebuilds
+    return first_sys, max_sys, max_tools, max_body, rebuilds
 
 
 def transcript(db, project_id, prompt_id):
@@ -181,9 +181,11 @@ def plan_tasks(db, project_id):
 
 
 def plan_screens(db, project_id):
-    """Screen names from the project's newest settled plan — S3/S5 measure
+    """Screens from the project's newest settled plan — S3/S5 measure
     shipped PLAN routes, not raw writes (Run 1 wrote 6 app files that were 2
-    of 6 planned screens plus system files)."""
+    of 6 planned screens plus system files). Each screen carries the route
+    paths its plan text declares (e.g. "app/(tabs)/index.tsx" for "Home") —
+    name matching alone false-negatives when the file is index.tsx."""
     con = sqlite3.connect(db)
     try:
         rows = con.execute(
@@ -194,6 +196,7 @@ def plan_screens(db, project_id):
     except sqlite3.Error:
         rows = []
     con.close()
+    path_re = re.compile(r"app/[\w./()-]+\.tsx")
     for (resp,) in rows:
         try:
             data = json.loads(resp)
@@ -201,7 +204,13 @@ def plan_screens(db, project_id):
             continue
         plan = data.get("plan") if isinstance(data, dict) else None
         if isinstance(plan, dict) and isinstance(plan.get("screens"), list):
-            return [s.get("name", "") for s in plan["screens"] if isinstance(s, dict) and s.get("name")]
+            out = []
+            for s in plan["screens"]:
+                if not isinstance(s, dict) or not s.get("name"):
+                    continue
+                blob = " ".join(str(s.get(k, "")) for k in ("route", "path", "file", "description"))
+                out.append({"name": s["name"], "paths": path_re.findall(blob)})
+            return out
     return []
 
 
@@ -287,13 +296,20 @@ def main():
     wall = span(start, secs(updated_at))
 
     # Plan-route coverage: a planned screen ships when a written route file
-    # carries its name. Run-1's raw 6 app-file writes were 2 of 6 plan screens.
+    # carries its declared path (or, failing a declared path, its name).
+    # Run-1's raw 6 app-file writes were 2 of 6 plan screens; Run-2's Home
+    # tab is app/(tabs)/index.tsx — name matching alone would miss it.
     # Union of both sources: a cancelled capture loses the stream tail and the
     # transcript loses tool bodies the compaction dropped — take what survived.
     routes = sorted({c["path"] for c in calls
                      if c["tool"] in WRITE_TOOLS and SCREEN_RE.search(c["path"])}
                     | set(tr["route_paths"]))
-    shipped = [s for s in screens if any(s.lower() in r.lower() for r in routes)]
+    shipped = []
+    for s in screens:
+        by_path = any(r.endswith(p) for p in s["paths"] for r in routes)
+        by_name = any(s["name"].lower() in r.lower() for r in routes)
+        if by_path or by_name:
+            shipped.append(s["name"])
 
     # --- SLO rows ----------------------------------------------------------
     rows = []
@@ -428,7 +444,8 @@ def main():
     out.append(f"- status: `{status}` · mode: `{mode}` · wall: {fmt_t(wall) or '?'} · rounds: {tr['rounds']}")
     out.append(f"- stream: {'timestamped' if ts_ok else 'counts only' if events else 'none'}"
                f" · serverlog: {'yes' if srv else 'no'}"
-               f" · plan screens: {', '.join(screens) or 'none found'}\n")
+               f" · plan screens: "
+               f"{', '.join(s['name'] for s in screens) or 'none found'}\n")
     out.append("| Metric | Standard | Measured | Verdict |")
     out.append("|---|---|---|---|")
     fails = 0

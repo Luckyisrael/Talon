@@ -105,8 +105,11 @@ backend/workspaces-e2e/
 backend/scrcpy-server.jar
 e2e/live-run*.log
 e2e/artifacts/
-# W13.5: nightly scorecard publications (local artifacts, not sources)
-e2e/reports/
+# W13.5: nightly scorecard publications (local artifacts, not sources) —
+# but the behavioral run reports are the evidence Appendix A/B cite, so the
+# behavior-* tables stay trackable.
+e2e/reports/*
+!e2e/reports/behavior-*.md
 
 # stale committed build artifacts
 
