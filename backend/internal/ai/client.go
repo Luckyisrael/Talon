@@ -440,6 +440,26 @@ func (c *Client) ua() string {
 	return defaultUserAgent
 }
 
+// messagesURL is the single place the Messages API endpoint is built
+// (FM-URLa). Four call sites used to build it two ways — chatAnthropic
+// and chatWithToolsAnthropic appended /v1/messages while streamAnthropic
+// and the vision call appended /messages — so no one AI_BASE_URL ran a
+// provider end-to-end: plan mode streams while the build loop buffers,
+// and only one of the two is right for whatever base was configured.
+// Both spellings of the root are accepted, because both are in use: the
+// openai side (and every gateway, including agentrouter.org) ships a
+// base carrying /v1, Anthropic's own SDK convention is a bare root.
+// Doubling a /v1 base yields 404 `Invalid URL`; leaving a bare root
+// short yields agentrouter's HTML-and-200 trap, where the plan stream
+// receives an index.html instead of a `data:` frame.
+func (c *Client) messagesURL() string {
+	base := strings.TrimSuffix(c.baseURL, "/")
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/messages"
+	}
+	return base + "/v1/messages"
+}
+
 // newRequest is the only way this package builds a gateway request: all four
 // request paths — streaming, the retry helper, and both chat paths — funnel
 // here. The identity a gateway may authenticate on is attached where requests
@@ -750,7 +770,7 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 			return "", fmt.Errorf("request canceled while pacing: %w", err)
 		}
 
-		url := c.baseURL + "/v1/messages"
+		url := c.messagesURL()
 		req, err := c.newRequest(ctx, url, body)
 		if err != nil {
 			return "", err
@@ -1330,7 +1350,7 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, history []P
 		return
 	}
 
-	respBody, err := c.openStream(ctx, c.baseURL+"/messages", body, func(req *http.Request) {
+	respBody, err := c.openStream(ctx, c.messagesURL(), body, func(req *http.Request) {
 		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 	})

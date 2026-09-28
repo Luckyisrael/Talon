@@ -864,7 +864,7 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 	log.Printf("request-ledger: body=%d system=%d tools=%d payloads=%d results=%d history=%d envelope=%d",
 		led.Body, led.System, led.Tools, led.Payloads, led.Results, led.History, led.Envelope)
 
-	respBody, err := c.doWithEnvelopeRetry(ctx, c.baseURL+"/v1/messages", body, func(req *http.Request) {
+	respBody, err := c.doWithEnvelopeRetry(ctx, c.messagesURL(), body, func(req *http.Request) {
 		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		// User-Agent comes from newRequest (FM-UAa): the identity is

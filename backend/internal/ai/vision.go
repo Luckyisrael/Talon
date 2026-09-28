@@ -74,7 +74,7 @@ func (c *Client) VisionCheck(ctx context.Context, screenshot []byte, intendedScr
 			}},
 		})
 	} else {
-		url = c.baseURL + "/messages"
+		url = c.messagesURL()
 		body, err = json.Marshal(map[string]any{
 			"model":      c.model,
 			"max_tokens": 1024,
