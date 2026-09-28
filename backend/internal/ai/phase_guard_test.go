@@ -10,10 +10,15 @@ import (
 // its guard names it — these are the evals' memory of what shipped and why.
 
 // A: the system prompt is device-aware — it must name the device tools
-// (metro_status, capture_screenshot, tail_logcat, run_e2e), the flows
-// directory, the app id, and the device lifecycle (10m pause / 30m
-// destroy). Cache-stable: the same inputs build the same prompt, so the
-// device section is always present.
+// (metro_status, capture_screenshot, tail_logcat, run_e2e) and the device
+// lifecycle (10m pause / 30m destroy). Cache-stable: the same inputs build
+// the same prompt, so the device section is always present.
+//
+// L21's diet moved the protocol DETAIL (flows dir, app id, verify order,
+// tool usage) behind read_skill: those markers now pin in knowledge's
+// TestDeviceSessionSkillCarriesProtocol, and the prompt keeps the surface
+// law — tools, absence, lifecycle, no-fabricate — so the agent still knows
+// the device surface without paying for the how-to every round.
 func TestPhaseA_DeviceAwarePrompt(t *testing.T) {
 	prompt := SystemPromptBuild
 
@@ -22,8 +27,7 @@ func TestPhaseA_DeviceAwarePrompt(t *testing.T) {
 		"capture_screenshot",
 		"tail_logcat",
 		"run_e2e",
-		".maestro/flows/",
-		"com.talon.app",
+		"device-session",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(prompt, want) {

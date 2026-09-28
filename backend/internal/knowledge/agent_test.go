@@ -45,9 +45,12 @@ func TestLoadEmbeddedContent(t *testing.T) {
 	// inside mobile-craft's Device appendix, and scl folded into
 	// rn-best-practices — deleting any of those homes must fail here.
 	// 2026-09-21: reanimated-v4 folded into mobile-motion (same rule).
+	// 2026-09-28: device-session added (L21's diet) — the device protocol
+	// left SystemPromptBuild and this skill is its only home.
 	want := []string{
 		"app-linking",
 		"dapp-store",
+		"device-session",
 		"expo-router-nav",
 		"expo-ui",
 		"failure-patterns",
@@ -70,6 +73,56 @@ func TestLoadEmbeddedContent(t *testing.T) {
 		if strings.TrimSpace(body) == "" {
 			t.Errorf("skill %q has empty body", name)
 		}
+	}
+}
+
+// FM-B2a (L21) — written before the move (TEST_RULES §3). The device
+// protocol is leaving SystemPromptBuild's always-on prefix; if its skill
+// home does not carry the content, the agent loses it entirely. This is
+// also where Phase A's guard markers relocate: the prompt keeps the
+// surface law (tool names, lifecycle — pinned in ai's
+// TestPhaseA_DeviceAwarePrompt), the skill carries the how-to these
+// markers belong to. Red before L21: no device-session skill exists.
+func TestDeviceSessionSkillCarriesProtocol(t *testing.T) {
+	r := testRegistry(t)
+
+	body, ok := r.SkillBody("device-session")
+	if !ok {
+		t.Fatal("device-session skill not loaded — the device protocol left the prompt with no home (FM-B2a)")
+	}
+	for _, want := range []string{
+		"metro_status",        // the tool the surface law names
+		".maestro/flows/",     // relocated from ai's Phase A guard
+		"com.talon.app",       // relocated from ai's Phase A guard
+		"run_boot",            // per-unit verify order
+		"verified statically", // the honesty phrase, verbatim
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("device-session skill missing %q — protocol content lost in the move", want)
+		}
+	}
+	// Discovery: the manifest is the always-on catalog line that lets the
+	// model reach the skill by description.
+	if m := r.Manifest(); !strings.Contains(m, "device-session") {
+		t.Error("manifest does not list device-session — the model cannot find the protocol")
+	}
+}
+
+// FM-B2a (L21) — the design bar's two facts mobile-craft lacked. The
+// prompt's ## Design bar section is only removable if these are merged
+// first; losing them silently drops the design system reference and the
+// vision-gate standard from both homes. Red before L21: neither phrase
+// exists in the skill.
+func TestMobileCraftCoversDesignBar(t *testing.T) {
+	body, ok := testRegistry(t).SkillBody("mobile-craft")
+	if !ok {
+		t.Fatal("mobile-craft skill not loaded")
+	}
+	if !strings.Contains(body, "@/constants/app-styles") {
+		t.Error("mobile-craft lacks @/constants/app-styles — the design-system reference would exist in neither prompt nor skill")
+	}
+	if !strings.Contains(body, "vision gate") {
+		t.Error("mobile-craft lacks the vision-gate standard — a screen that renders but is not designed must be a failed gate")
 	}
 }
 

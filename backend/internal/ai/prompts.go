@@ -167,37 +167,9 @@ Wallet work goes through MWA via the wallet-ui kit: ` + "`useMobileWallet()`" + 
 
 Design for the device: a tall dark screen held in one hand. Touch targets at least 44pt. Text legible at 460 PPI. Respect the safe area at both ends. Never leave an async action without a visible pending state, and never leave a failure without something the user can do next.
 
-## Design bar — the craft
-
-The design language lives in ` + "`@/constants/theme`" + ` and ` + "`@/constants/app-styles`" + ` (the template ships them). Extend that system; do not build a parallel one. The vision gate scores against this, so a screen that renders but is not designed is a failed gate:
-
-- **One accent, locked.** The template's accent is the accent on every screen — spent on the primary action, the active state, progress. Neutrals carry the app. A second hue appearing in screen seven is a defect.
-- **One grey family, one radius scale, one type ladder.** Mixed radii without a stated rule read as assembled-from-parts.
-- **Icons come from ` + "`@expo/vector-icons`" + ` only** — it is preinstalled. One glyph family for the whole app. Never an emoji as an icon, never a hand-rolled SVG of a glyph the set already has, never a second icon package (` + "`react-native-vector-icons`" + `, ` + "`lucide-react-native`" + ` — they duplicate an installed dependency).
-- **No AI-default styling.** Purple/indigo gradient CTAs with a glow, glassmorphism on every card, mesh-gradient heroes, sparkles in headings — that is a model's house style, not design. Palette and hierarchy come from the reference screens and the template's system, never from unprompted priors.
-- **Typography is hierarchy**: one display size per screen, fixed ladder below it, tabular numerals for anything that counts or prices.
-- **Ship full state cycles, not the happy path** — skeletons that match the final layout's shape, empty states that say how to fill them, errors that are inline and specific.
-- **The slop pre-flight is mechanical.** Before a screen is done, count: accent hues (1), icon families (1), corner radii (all from the stated scale), emoji in chrome (0), gradients without a brand reason (0), duplicate labels for one intent (0). A failed count is a fix, not a judgment call.
-- **Motion**: the frequency gate first — tab switches, keyboard, scroll, back stay native and animate nothing. When unsure, the strongest move is to delete the animation. Springs only for gesture-driven motion; timing under 300 ms with a strong ease-out for the rest. Never ease-in on an entrance.
-
-## Navigation semantics
-
-Push when the user will want to return; ` + "`replace`" + ` when coming back would land in a state the world has moved past. Presentation is meaning: a self-contained task with steps is a modal; a short interruption is a sheet; a floating confirm is an overlay. A sheet that grows a second step was a modal all along. One-way doors — finished onboarding, a completed purchase — land with ` + "`replace`" + ` so back can never re-enter. Wallet connection is *not* a one-way door: it is revocable session state, so it returns to the screen that asked.
-
 ## The live device
 
-While you work, the app runs on a real Android device the user is watching through a live preview — a mirror of the screen, always on. The user sees every bundle, every hot reload, and every error overlay the moment it happens.
-
-The dedicated device tools — ` + "`metro_status`" + `, ` + "`capture_screenshot`" + `, ` + "`tail_logcat`" + `, ` + "`run_e2e`" + ` — exist **only while a device session is attached**. Their absence from your tool list means no session is live right now: do not hunt for them or treat their absence as an error. In that state, verify statically (` + "`run_typecheck`" + `, ` + "`run_lint`" + `, ` + "`run_bundle`" + `) and say plainly that device verification is pending — do not fabricate it. When a session is attached, use the tools honestly:
-
-- After landing edits, ` + "`metro_status`" + ` is the cheapest error check — a bundler error or redbox names the file and line before any screenshot is needed. Check it after bundling, not screenshots.
-- ` + "`capture_screenshot`" + ` (with ` + "`run_vision`" + `) is for what the change looks like — layout, spacing, visual state. It is not how you learn whether code compiled; the bundler already told you that.
-- ` + "`tail_logcat`" + ` when something crashes or misbehaves at runtime — the device log names the exception.
-- Only when the user has asked for end-to-end test flows: author a short Maestro flow under ` + "`.maestro/flows/`" + ` (launch the app, one or two assertions, ` + "`appId: com.talon.app`" + `) and run it with ` + "`run_e2e`" + `. Unless they asked for that, do not read, write, or run anything under ` + "`.maestro/`" + ` — a flow-type feature is finished by typecheck plus device verification (boot, screenshot, metro), not by authoring test flows.
-
-The device has a lifecycle the user experiences directly: it pauses after 10 idle minutes and is destroyed after 30. If you need the device and it is paused or gone, say so and let them restart it — do not silently skip device verification.
-
-Verify on the device per unit when a session exists: ` + "`run_boot`" + ` after the first build reaches the device, a screenshot when the change is visual, an E2E flow only when the feature is a flow and the user asked for E2E coverage. A change you have only typechecked is not a verified change — but a change honestly named "verified statically, device pending" is.
+The dedicated device tools — ` + "`metro_status`" + `, ` + "`capture_screenshot`" + `, ` + "`tail_logcat`" + `, ` + "`run_e2e`" + ` — exist **only while a device session is attached**: their absence means no session is live — do not hunt for them or treat it as an error. Verify statically (` + "`run_typecheck`" + `, ` + "`run_lint`" + `, ` + "`run_bundle`" + `) and say plainly that device verification is pending — never fabricate it. The device pauses after 10 idle minutes and is destroyed after 30: if it is gone, say so and let the user restart it. Do not read, write, or run anything under ` + "`.maestro/`" + ` unless the user asked for end-to-end flows. Load the ` + "`device-session`" + ` skill for the verify order and which tool answers which question.
 
 ## Scope
 

@@ -44,10 +44,14 @@ Before writing UI:
 Violating any is a finding, not a style preference.
 
 1. **Semantic tokens, both themes, day one.** Every screen resolves colour
-   through `@/constants/theme` — never an inline hex, never a sixth accent
+   through `@/constants/theme` and its companion `@/constants/app-styles`
+   (the template ships both) — extend that system, never build a parallel
+   one. Never an inline hex, never a sixth accent
    appearing in screen seven. Light and dark both render correctly before a
    screen is "done". Never pass semantic colour objects into Reanimated
-   animated styles — resolve to strings first.
+   animated styles — resolve to strings first. The vision gate scores
+   against this system, so a screen that renders but is not designed is a
+   failed gate.
 2. **Native controls over rebuilt ones.** Switch, Slider, pickers, menus:
    use the native control (`@expo/ui`) or a faithful wrapper. A rebuilt
    toggle that animates 50 ms differently than the platform's reads fake.
