@@ -1288,6 +1288,9 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	rambleCount := 0
 
 	for round := 1; round <= o.maxRounds; round++ {
+		// FM-TELd: prep is everything from loop top to this round's model
+		// dispatch — steering, enrichment, compaction, trims, card, routing.
+		prepStart := time.Now()
 		if err := ctx.Err(); err != nil {
 			logTurn("cancelled")
 			return outcome, fmt.Errorf("cancelled: %w", err)
@@ -1578,6 +1581,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			}
 		}
 
+		genStart := time.Now()
 		result, err := client.ChatWithTools(ctx, systemPrompt, sendConversation, opts.Tools, sink)
 		if err != nil {
 			// H2: the request-error decision is a listener (harness/loop), not
@@ -1662,6 +1666,16 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 				// Fall through to the error exit below.
 			}
 		}
+
+		// FM-TELd: phase timers cover this round — prep until dispatch, gen
+		// as the model round-trip including retries and their backoff. Logged
+		// before the err exit so a failed round still reports where its wall
+		// time went; rounds that run tools add a round-tools line, so a
+		// missing one means no batch ran, not a missing timer.
+		log.Printf("orchestrator: round-metrics: round=%d prep=%s gen=%s",
+			round, genStart.Sub(prepStart).Round(time.Millisecond),
+			time.Since(genStart).Round(time.Millisecond))
+
 		if err != nil {
 			sess.TransitionTo(PhaseFailed)
 			sess.Emitter.EmitError(err.Error())
@@ -1772,6 +1786,7 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			// try_edit/keep_edit are orchestrator-owned when the patch buffer
 			// lane is on: intercept them here, run the rest normally, and
 			// merge back in call order so downstream indices still align.
+			toolsStart := time.Now()
 			owned := o.applyPatchBuffer(ctx, sess, result.ToolUses, opts)
 			var rest []ai.ToolUseBlock
 			var restIdx []int
@@ -1789,6 +1804,11 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 			for j, i := range restIdx {
 				results[i] = restResults[j]
 			}
+			// FM-TELd: the tool half of the round's phase split. One line per
+			// batch, after the last call returns — paired with this round's
+			// round-metrics line by order in the server log.
+			log.Printf("orchestrator: round-tools: round=%d calls=%d dur=%s",
+				round, len(result.ToolUses), time.Since(toolsStart).Round(time.Millisecond))
 			userTurn := ai.ToolResults(results)
 			conversation = append(conversation, userTurn)
 			outcome.Messages = append(outcome.Messages, userTurn)
@@ -3536,7 +3556,19 @@ func (o *Orchestrator) enrichPromptWithContext(sess *SessionState, systemPrompt 
 		})
 	}
 
-	return reg.Assemble()
+	// L13 (FM-TELa): per-layer prompt telemetry — the section table that
+	// makes the request-ledger's system bucket explainable. Section sizes
+	// are what promptsec.Sizes reports (Assemble's render, empty omitted);
+	// sizes + (n-1) blank-line separators reconcile with total. Logged on
+	// every enrichment: turn start and each rebuild trigger.
+	assembled := reg.Assemble()
+	var secB strings.Builder
+	fmt.Fprintf(&secB, "prompt-sec: total=%d", len(assembled))
+	for _, s := range reg.Sizes() {
+		fmt.Fprintf(&secB, " %s=%d", s.Name, s.Bytes)
+	}
+	log.Print(secB.String())
+	return assembled
 }
 
 // renderADRs formats the bounded architecture-decision list.

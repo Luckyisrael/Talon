@@ -108,13 +108,18 @@ def parse_stream(path):
 
 
 def parse_serverlog(path):
-    """(first_system, max_system, max_tools, max_body, rebuilds) from ChatWithTools.
+    """(first_system, max_system, max_tools, max_body, rebuilds, max_ledger)
+    from ChatWithTools + the L13 request-ledger lines.
 
     max_tools, not first: the plan turn runs first against the read-only
     registry (smaller defs), and S9's contract is about the build registry.
+    max_ledger is the request-ledger line of the largest body — the named
+    layer split of the number S10 reports. Runs predating L13 have none.
     """
     first_sys = max_sys = max_tools = max_body = None
     rebuilds = []
+    max_ledger = None
+    ledger_keys = ("body", "system", "tools", "payloads", "results", "history", "envelope")
     for raw in Path(path).read_text(errors="replace").splitlines():
         m = re.search(r"est_input_tok=(\d+) \(system=(\d+) hist_msgs=\d+ tools=(\d+) body_bytes=(\d+)", raw)
         if m:
@@ -124,9 +129,15 @@ def parse_serverlog(path):
             max_tools = max(max_tools or 0, tools)
             max_sys = max(max_sys or 0, sys_t)
             max_body = max(max_body or 0, body)
+        m2 = re.search(r"request-ledger: body=(\d+) system=(\d+) tools=(\d+) payloads=(\d+) "
+                       r"results=(\d+) history=(\d+) envelope=(\d+)", raw)
+        if m2:
+            led = dict(zip(ledger_keys, (int(g) for g in m2.groups())))
+            if max_ledger is None or led["body"] > max_ledger["body"]:
+                max_ledger = led
         if "system prompt rebuilt in round" in raw:
             rebuilds.append(raw.split("orchestrator: ", 1)[-1])
-    return first_sys, max_sys, max_tools, max_body, rebuilds
+    return first_sys, max_sys, max_tools, max_body, rebuilds, max_ledger
 
 
 def transcript(db, project_id, prompt_id):
@@ -438,6 +449,13 @@ def main():
             "PASS" if srv[1] - srv[0] <= 4096 else "FAIL")
         if srv[4]:
             rows.append(("  S10 rebuild log", "attributed", srv[4][-1].strip(), ""))
+        if len(srv) > 5 and srv[5]:
+            led = srv[5]
+            share = 100.0 * led["payloads"] / led["body"] if led["body"] else 0.0
+            rows.append(("  S10 attribution (max body)", "layers sum to body",
+                         "system={system} tools={tools} payloads={payloads} "
+                         "results={results} history={history} envelope={envelope} "
+                         "(payloads {share:.0f}%)".format(share=share, **led), ""))
     else:
         add("S10 input economy", "prefix stable; tail bounded", "? (needs --serverlog)", "?")
 

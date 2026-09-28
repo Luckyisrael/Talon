@@ -112,8 +112,8 @@ func (r *Registry) Assemble() string {
 
 // Fingerprint is one section's content hash — the cache-decision unit.
 type Fingerprint struct {
-	Name   string
-	Hash   string
+	Name    string
+	Hash    string
 	Present bool
 }
 
@@ -140,6 +140,33 @@ func (r *Registry) Fingerprints() []Fingerprint {
 		}
 		sum := sha256.Sum256([]byte(renders[i]))
 		out[i].Hash = hex.EncodeToString(sum[:8])
+	}
+	return out
+}
+
+// SectionSize is one section's rendered byte contribution — the
+// per-layer attribution the prompt-sec log prints (L13, FM-TELa).
+type SectionSize struct {
+	Name  string
+	Bytes int
+}
+
+// Sizes renders every registered section exactly as Assemble will send it
+// and reports its byte length. Empty renders are omitted the same way
+// Assemble omits them, so sizes plus (n-1) blank-line separators
+// reconcile with the assembled prompt — a section table that cannot be
+// summed is the "? row" of prompt telemetry.
+func (r *Registry) Sizes() []SectionSize {
+	r.mu.RLock()
+	sections := r.ordered()
+	r.mu.RUnlock()
+	out := make([]SectionSize, 0, len(sections))
+	for _, s := range sections {
+		text := strings.TrimSpace(s.Render())
+		if text == "" {
+			continue
+		}
+		out = append(out, SectionSize{Name: s.Name, Bytes: len(text)})
 	}
 	return out
 }

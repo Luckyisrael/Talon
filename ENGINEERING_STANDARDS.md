@@ -235,6 +235,25 @@ Failure modes (written before the code, TEST_RULES §3):
   tool absence (W3, law 6), so the check is `--dry-run` — no
   package.json edit, no node_modules write. A feasibility gate that
   mutates the workspace during plan breaks the contract it enforces.
+- **FM-TELa (L13)** — a ledger that does not add up is worse than no
+  ledger: every logged request must satisfy `system + tools + payloads +
+  results + history + envelope == body_bytes` exactly, with each content
+  bucket measured from the same objects bound for the wire (the post-trim
+  copy, never the stored transcript) and `envelope` a *named* remainder
+  (JSON structure, request fields, cache markers) rather than a silent
+  gap — unattributed bytes are §5's `?` crime in log form.
+- **FM-TELb (L13)** — write payloads are the leak RESEARCH's P0.1 names,
+  so they get their own bucket: `write_file`/`edit_file`/`multi_edit`/
+  `try_edit` inputs land under `payloads`, never folded into `history` —
+  otherwise the instrument built to size the leak cannot see it.
+- **FM-TELc (L13)** — attribution observes, never acts: the ledger reads
+  values already bound for send and must not mutate or re-route them. A
+  measurement that changes the thing measured invalidates every S10
+  number taken so far.
+- **FM-TELd (L13)** — phase timers must cover the round or they lie:
+  `prep` and `gen` timed around the actual model call, every tool batch
+  logging its own duration; a bucket missing while wall time passed is
+  S12's silent-gap crime in metrics form.
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -245,6 +264,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L11 | **Close-out names the mechanism** — the checklist sentence in `SystemPromptBuild` tells the model to call `mark_task_done` (batch the finished items, named as the checklist lists them) instead of only "check the checklist" in prose | fails-first prompt-contract test; Run-2 S7 = 0/18 with the tool always advertised (`coreToolSet`) | ⬤ |
 | L12 | **Mark at every passing compile** — `executeTools` credits `markScreenTasksFromFiles` + `auditScreenTasks` right after a passing `run_checks`, using a touched-set snapshot taken before dispatch (FM-L12b); the final verify gate stays exactly as it is | fails-first executeTools test (pass marks / fail does not / same-batch write does not); Run-2: cancelled turn credited nothing | ⬤ |
 | L4 | **Plan feasibility gate** — both plan doors (Send + stream) probe the plan's new packages with `npm install --dry-run` in the real workspace (FM-L4b resolution bar): a definitive failure names the package and **fails the plan turn** — unknown (flaky network) passes (FM-L4c), preinstalled packages skip the probe, and the probe never mutates (FM-L4d) | fails-first door tests (infeasible fails / unknown passes / preinstalled skipped); Run-1: 4 of 6 plan packages unshipped, 10 errored probes at build hour 0 | ⬤ |
+| L13 | **Request ledger + phase metrics (RESEARCH P0.4)** — every model call logs a `request-ledger` line attributing `body_bytes` to system / tools / payloads / results / history with a *named* envelope that sums exactly (FM-TELa; write-class bodies in their own bucket so RESEARCH P0.1's leak is visible — FM-TELb; sizes read from the wire-bound objects only — FM-TELc); every enrichment logs a `prompt-sec` section table (`Sizes()` reconciles with `Assemble`); every round logs `round-metrics` prep/gen and a `round-tools` duration (FM-TELd) | fails-first `TestRequestLedgerAccountsEveryByte`, `TestRequestLedgerDoesNotMutateWhatIsSent`, `TestSizesReconcileWithAssemble` (red at build → green); E2E artifact = the four serverlog line types per run; unblocks L5's premise and quantifies B-phase | ⬤ |
 
 Still-open P1 rows from the previous list:
 

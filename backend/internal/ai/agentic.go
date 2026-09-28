@@ -374,6 +374,14 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 	// chars/token is coarse but consistent enough for budget decisions.
 	log.Printf("ChatWithTools(OpenAI): model=%s est_input_tok=%d (system=%d hist_msgs=%d tools=%d body_bytes=%d)",
 		c.model, len(body)/4, len(system)/4, len(history), len(oaiTools), len(body))
+	// L13 (FM-TELa): the per-layer split of the number above — what the
+	// body is made of, measured from the objects actually sent (post-trim
+	// conversation). system/tools/payloads/results/history + a named
+	// envelope sum to body exactly; payloads is RESEARCH P0.1's leak
+	// bucket (FM-TELb).
+	led := AttributeRequest(system, history, len(mustMarshalJSON(oaiTools)), len(body))
+	log.Printf("request-ledger: body=%d system=%d tools=%d payloads=%d results=%d history=%d envelope=%d",
+		led.Body, led.System, led.Tools, led.Payloads, led.Results, led.History, led.Envelope)
 
 	// The streaming branch takes its own request path: openStream hands back a
 	// live body to read chunk by chunk, whereas doWithEnvelopeRetry buffers the
@@ -822,6 +830,15 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	// L13 (FM-TELa): same per-layer ledger as the OpenAI path, so both
+	// routes attribute their body the same way.
+	toolsBytes := 0
+	if len(tools) > 0 {
+		toolsBytes = len(mustMarshalJSON(tools))
+	}
+	led := AttributeRequest(system, history, toolsBytes, len(body))
+	log.Printf("request-ledger: body=%d system=%d tools=%d payloads=%d results=%d history=%d envelope=%d",
+		led.Body, led.System, led.Tools, led.Payloads, led.Results, led.History, led.Envelope)
 
 	respBody, err := c.doWithEnvelopeRetry(ctx, c.baseURL+"/v1/messages", body, func(req *http.Request) {
 		req.Header.Set("x-api-key", c.apiKey)
