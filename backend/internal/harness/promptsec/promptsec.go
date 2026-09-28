@@ -44,18 +44,25 @@ func New() *Registry {
 
 // Standard weights: the canonical prompt order. Composition may insert custom
 // sections between them; the weights keep the ordering total.
+//
+// FM-C1c (RESEARCH P1.5): the session-stable sections — persona through
+// skills — must sort BEFORE the volatile block (project map → checklist).
+// A file write refreshes the map and a status flip re-renders the
+// checklist: if the stable sections sat behind those, every such mutation
+// would invalidate the instructions and skills bytes too, which is the
+// whole cache lost for the sake of a tail.
 const (
 	WeightPersona      = 100
 	WeightRules        = 200
 	WeightDeviceFacts  = 300
 	WeightDiscipline   = 400
+	WeightInstructions = 450
+	WeightSkills       = 460
 	WeightProjectMap   = 500
 	WeightMemory       = 600
 	WeightADRs         = 700
 	WeightFailures     = 800
 	WeightPlanCheck    = 900
-	WeightInstructions = 1000
-	WeightSkills       = 1100
 )
 
 // Register adds or replaces a section by name. Replacing keeps the latest

@@ -65,6 +65,11 @@ type Row struct {
 	// audit can hold the feature to the screens' bar. Rows parsed back
 	// from the artifact carry none — the file direction is plan → task.
 	Files []string
+	// Acceptance is the shaped feature's one-line bar (L16): seed copies
+	// it onto the task for the checklist's "done when: …". The artifact
+	// does not render it — plan.md stays a checkbox file (see the
+	// package doc), and the round-trip test pins that format.
+	Acceptance string
 }
 
 var (

@@ -315,6 +315,9 @@ func (o *Orchestrator) seedPlanTasks(sess *SessionState, projectID int64) {
 			_ = o.store.UpsertPlanTask(projectID, store.PlanTask{TaskID: row.ID, Description: row.Description, Status: "pending"})
 		}
 		sess.AddTask(row.ID, row.Description, row.Files...)
+		if row.Acceptance != "" {
+			sess.SetTaskAcceptance(row.ID, row.Acceptance)
+		}
 		if p, ok := persisted[row.ID]; ok && p.Status != "superseded" {
 			// Restore the recorded state without re-emitting (EmitPlanSeed
 			// delivers the full list after seeding completes).
@@ -371,7 +374,12 @@ func PlanTaskRows(plan *ai.AppPlan) []planfile.Row {
 		if len(ft.Files) > 0 {
 			files = append([]string(nil), ft.Files...)
 		}
-		rows = append(rows, planfile.Row{ID: fmt.Sprintf("plan:feature:%d", i), Description: desc, Files: files})
+		rows = append(rows, planfile.Row{
+			ID:          fmt.Sprintf("plan:feature:%d", i),
+			Description: desc,
+			Files:       files,
+			Acceptance:  strings.TrimSpace(ft.Acceptance),
+		})
 	}
 	return rows
 }
@@ -3773,30 +3781,78 @@ func renderKnownFiles(sess *SessionState) string {
 	return b.String()
 }
 
-// renderPlanChecklist formats the seeded plan tasks as a done/remaining checklist
-// for the system prompt. Completed items are checked so the model sees what is left
-// without re-listing the whole plan itself; a failed item is flagged so it is not
-// mistaken for finished.
+// renderPlanChecklist formats the seeded plan tasks for the system prompt
+// (L16 / FM-C1d): completed items collapse into one Done line that keeps
+// every name — the names are what stop re-derivation — while remaining,
+// in-progress, and blocked items stay itemized with their markers, and a
+// declared feature's files and acceptance ride its line so the model can
+// aim at the files and see the bar. Completed descriptions are dropped:
+// they are the bytes the collapse exists to save.
 func renderPlanChecklist(tasks []Task) string {
 	var b strings.Builder
 	b.WriteString("## Build plan — track progress, do not re-derive\n\n")
-	b.WriteString("These screens and features were settled with the user. Work through them; " +
-		"check what is done against this list rather than re-planning. Items marked done are done.\n\n")
+	b.WriteString("These screens and features were settled with the user. Work through the items left; " +
+		"what sits under Done is finished — do not redo it or re-plan it. Feature lines name the files " +
+		"they touch and the bar they must meet before they count.\n\n")
+
+	var done []string
+	var open []Task
 	for _, t := range tasks {
-		mark := "[ ]"
-		suffix := ""
+		if t.Status == "completed" {
+			done = append(done, shortTaskName(t.Description))
+		} else {
+			open = append(open, t)
+		}
+	}
+	if len(done) > 0 {
+		fmt.Fprintf(&b, "Done (%d): %s\n\n", len(done), strings.Join(done, ", "))
+	}
+	for _, t := range open {
+		mark, suffix := "[ ]", ""
 		switch t.Status {
-		case "completed":
-			mark = "[x]"
 		case "in_progress":
 			suffix = " (in progress)"
 		case "failed":
 			mark = "[!]"
 			suffix = " (blocked — needs another pass)"
 		}
-		fmt.Fprintf(&b, "- %s %s%s\n", mark, t.Description, suffix)
+		b.WriteString("- " + mark + " " + t.Description + evidenceSuffix(t) + suffix + "\n")
 	}
 	return b.String()
+}
+
+// shortTaskName is the Done line's form: a screen drops its description
+// tail (PlanTaskRows joins it with " — "), a feature keeps its full text —
+// truncating a feature name would hide which capability finished, the one
+// thing the Done line exists to prevent. Capped so a runaway name cannot
+// own the line.
+func shortTaskName(desc string) string {
+	if strings.HasPrefix(desc, "Screen: ") {
+		if i := strings.Index(desc, " — "); i > 0 {
+			return desc[:i]
+		}
+	}
+	if r := []rune(desc); len(r) > 72 {
+		return string(r[:72]) + "…"
+	}
+	return desc
+}
+
+// evidenceSuffix renders a task's declared files and acceptance — the
+// L15/L16 contract reaching build mode. Undeclared fields render nothing:
+// the checklist invents no files and no bar.
+func evidenceSuffix(t Task) string {
+	if len(t.Files) == 0 && t.Acceptance == "" {
+		return ""
+	}
+	var parts []string
+	if len(t.Files) > 0 {
+		parts = append(parts, "files: "+strings.Join(t.Files, ", "))
+	}
+	if t.Acceptance != "" {
+		parts = append(parts, "done when: "+t.Acceptance)
+	}
+	return " — " + strings.Join(parts, "; ")
 }
 
 func truncateLine(s string, n int) string {

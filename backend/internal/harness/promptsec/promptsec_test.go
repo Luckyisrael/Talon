@@ -92,3 +92,57 @@ func TestTotalOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestStableSectionsBeforeVolatile is FM-C1c, written before the weight
+// change (TEST_RULES §3): the canonical enrich order must place every
+// session-stable section ahead of every volatile one, so a map refresh or a
+// checklist flip — by far the most common mutations — re-sends only the
+// volatile tail and never the stable bytes behind it (RESEARCH P1.5).
+// Red before the fix: instructions (weight 1000) and skills (1100) sort
+// after the entire volatile block, so a single file write invalidates them
+// too.
+func TestStableSectionsBeforeVolatile(t *testing.T) {
+	probes := []struct {
+		name   string
+		marker string
+		weight int
+		stable bool
+	}{
+		{"persona", "MARK-persona", WeightPersona, true},
+		{"rules/core", "MARK-rules", WeightRules, true},
+		{"device", "MARK-device", WeightDeviceFacts, true},
+		{"discipline", "MARK-discipline", WeightDiscipline, true},
+		{"instructions/chain", "MARK-instructions", WeightInstructions, true},
+		{"skills/catalog", "MARK-skills", WeightSkills, true},
+		{"project/map", "MARK-map", WeightProjectMap, false},
+		{"memory", "MARK-memory", WeightMemory, false},
+		{"adrs", "MARK-adrs", WeightADRs, false},
+		{"plan/checklist", "MARK-checklist", WeightPlanCheck, false},
+	}
+	r := New()
+	for _, p := range probes {
+		m := p.marker
+		r.Register(Section{Name: p.name, Weight: p.weight, Render: func() string { return m }})
+	}
+	out := r.Assemble()
+
+	lastStable, firstVolatile := -1, -1
+	for _, p := range probes {
+		idx := strings.Index(out, p.marker)
+		if idx < 0 {
+			t.Fatalf("marker %q missing from the assembly:\n%s", p.marker, out)
+		}
+		if p.stable {
+			if idx > lastStable {
+				lastStable = idx
+			}
+		} else if firstVolatile == -1 || idx < firstVolatile {
+			firstVolatile = idx
+		}
+	}
+	if lastStable > firstVolatile {
+		t.Errorf("a volatile section renders before a stable one — a map refresh or "+
+			"checklist flip would invalidate the stable bytes behind it (FM-C1c): "+
+			"last stable at %d, first volatile at %d\n%s", lastStable, firstVolatile, out)
+	}
+}

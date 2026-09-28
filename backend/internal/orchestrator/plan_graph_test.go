@@ -49,7 +49,7 @@ func TestTaskVersionBumpsOnlyOnRealChange(t *testing.T) {
 
 func TestRenderPlanChecklist(t *testing.T) {
 	tasks := []Task{
-		{ID: "plan:screen:home", Description: "Screen: Home", Status: "completed"},
+		{ID: "plan:screen:home", Description: "Screen: Home — balance overview with quick actions", Status: "completed"},
 		{ID: "plan:screen:send", Description: "Screen: Send", Status: "pending"},
 		{ID: "plan:feature:0", Description: "Feature: view balance", Status: "in_progress"},
 		{ID: "plan:feature:1", Description: "Feature: sign tx", Status: "failed"},
@@ -61,15 +61,64 @@ func TestRenderPlanChecklist(t *testing.T) {
 	if !strings.Contains(got, "do not re-derive") {
 		t.Errorf("checklist missing the anti-re-derivation heading:\n%s", got)
 	}
+	// FM-C1d: completed items collapse into the Done line — no [x] rows,
+	// names retained, done-descriptions dropped.
+	if strings.Contains(got, "[x]") {
+		t.Errorf("completed items must collapse out of the itemized list:\n%s", got)
+	}
+	if !strings.Contains(got, "Done (1): Screen: Home") {
+		t.Errorf("the Done line must keep the completed name:\n%s", got)
+	}
+	if strings.Contains(got, "balance overview") {
+		t.Errorf("the collapse must drop completed descriptions:\n%s", got)
+	}
+	// Everything not done stays itemized, markers and all.
 	for _, want := range []string{
-		"[x] Screen: Home",
-		"[ ] Screen: Send",
+		"- [ ] Screen: Send",
 		"Feature: view balance (in progress)",
 		"[!] Feature: sign tx (blocked",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("checklist missing %q, got:\n%s", want, got)
 		}
+	}
+}
+
+// TestRenderPlanChecklistCarriesEvidence is FM-C1d's second half, written
+// first (TEST_RULES §3): a declared feature's files and acceptance ride its
+// itemized line — the model cannot aim at files it cannot see, and a bar
+// required for marking must be shown where it works — while the Done line
+// keeps every completed name in order so none gets re-derived.
+// Red before implementation: the render has no files/acceptance and no
+// Done line at all.
+func TestRenderPlanChecklistCarriesEvidence(t *testing.T) {
+	tasks := []Task{
+		{ID: "plan:feature:0", Description: "Feature: send SOL", Status: "pending",
+			Files:      []string{"app/send.tsx", "src/wallet.ts"},
+			Acceptance: "confirm sheet shows before broadcast"},
+		{ID: "plan:feature:1", Description: "Feature: legacy capability", Status: "pending"},
+		{ID: "plan:screen:home", Description: "Screen: Home", Status: "completed"},
+		{ID: "plan:screen:settings", Description: "Screen: Settings", Status: "completed"},
+	}
+	got := renderPlanChecklist(tasks)
+
+	if !strings.Contains(got, "files: app/send.tsx, src/wallet.ts") {
+		t.Errorf("declared files must ride the itemized line:\n%s", got)
+	}
+	if !strings.Contains(got, "done when: confirm sheet shows before broadcast") {
+		t.Errorf("acceptance must ride the itemized line:\n%s", got)
+	}
+	// A file-less feature keeps a plain line — no invented files, no
+	// invented bar.
+	if !strings.Contains(got, "- [ ] Feature: legacy capability\n") {
+		t.Errorf("file-less feature must keep a plain line:\n%s", got)
+	}
+	if strings.Contains(got, "Feature: legacy capability — files:") {
+		t.Errorf("nothing may be invented for a feature that declared nothing:\n%s", got)
+	}
+	// Every done name, in task order, on one line.
+	if !strings.Contains(got, "Done (2): Screen: Home, Screen: Settings") {
+		t.Errorf("the Done line must keep every completed name in order:\n%s", got)
 	}
 }
 

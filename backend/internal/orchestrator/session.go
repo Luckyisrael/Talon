@@ -233,6 +233,11 @@ type Task struct {
 	// honest marking bar and the audit's evidence. File-less tasks keep
 	// model-only marking.
 	Files []string `json:"files,omitempty"`
+	// Acceptance is the shaped feature's one-line bar (L16, FM-C1d),
+	// rendered as "done when: …" on the checklist line the model works
+	// from. Empty for legacy rows and screens (a screen's description
+	// already is its bar).
+	Acceptance string `json:"acceptance,omitempty"`
 }
 
 func NewSession(id, projectID int64, workspacePath string, emitter *events.SessionEmitter) *SessionState {
@@ -290,6 +295,24 @@ func (tt *TaskTracker) UpdateTask(id, status, result string) bool {
 		}
 	}
 	return false
+}
+
+// SetTaskAcceptance attaches a shaped feature's acceptance bar to a freshly
+// seeded task (L16 / FM-C1d) so the checklist can render "done when: …" on
+// its line. Seed is the only production caller; no-op for an unknown id.
+func (tt *TaskTracker) SetTaskAcceptance(id, acceptance string) {
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	for i := range tt.Tasks {
+		if tt.Tasks[i].ID == id {
+			if tt.Tasks[i].Acceptance == acceptance {
+				return
+			}
+			tt.Tasks[i].Acceptance = acceptance
+			tt.version++
+			return
+		}
+	}
 }
 
 // Version returns a counter that bumps on every real mutation. The loop's rebuild
@@ -945,6 +968,11 @@ func (s *SessionState) GetTasks() []Task {
 // AddTask seeds one plan task. Used by seedPlanTasks at build start.
 func (s *SessionState) AddTask(id, description string, files ...string) {
 	s.TaskTracker.AddTask(id, description, files...)
+}
+
+// SetTaskAcceptance mirrors the tracker for seed's use.
+func (s *SessionState) SetTaskAcceptance(id, acceptance string) {
+	s.TaskTracker.SetTaskAcceptance(id, acceptance)
 }
 
 // MarkPlanTask updates a seeded plan task and emits to the frontend only when the
