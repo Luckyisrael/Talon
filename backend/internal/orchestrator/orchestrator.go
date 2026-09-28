@@ -1498,6 +1498,17 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 				"warning")
 		}
 
+		// L17 first-artifact clock: the gate's single user-visible warning
+		// at the 6-minute mark with no successful write (S1: first write ≤
+		// 3 min). Same one-shot latch and event shape as the route gate —
+		// the card line above rides every round below this one.
+		if sess.FirstWriteWarnDue(opts.Mode) && sess.MarkFirstWriteWarned() {
+			sess.Emitter.EmitToolCall("", "first_write", "",
+				fmt.Sprintf("no file written after %d min (S1: first write ≤ 3 min)",
+					int(time.Since(sess.StartedAt).Minutes())),
+				"warning")
+		}
+
 		// Collapse stale read_file/list_files bodies that a later call in this turn
 		// re-fetched: they are otherwise replayed in full every round. This trims a
 		// copy for the wire only — `conversation` (and the blocks it shares with

@@ -397,10 +397,11 @@ func appendTurnState(send, full []ai.Message, turnStart, round, maxRounds int, m
 	}
 	scan := scanTurnState(full, turnStart)
 	card := renderTurnState(scan, round, maxRounds, mode, sess.WritesUnverified())
-	// L3 routes-first: the gate line rides the card the loop already sends
-	// every round — wire-only like the card itself, mode-gated inside
-	// (plan turns never write routes).
-	if n := sess.RouteScaffoldNote(mode); n != "" {
+	// L3 routes-first / L17 first-artifact: the gate line rides the card
+	// the loop already sends every round — wire-only like the card itself,
+	// mode-gated inside (plan turns never write). GateNote keeps one voice
+	// (FM-D1b): first-write owns the card until the first write lands.
+	if n := sess.GateNote(mode); n != "" {
 		card += n
 	}
 

@@ -381,9 +381,11 @@ func (cc loopSeam) fsWrite(sess *SessionState, call ai.ToolUseBlock, isError boo
 		return ""
 	}
 	// L3 routes-first: the first successful write under app/**.tsx closes
-	// the route gate for the turn. Errored writes never reach here, and
-	// skeleton-or-full both count — the S2 standard is "first route file"
-	// (FM-L3b).
+	// the route gate for the turn. L17: the first successful write of ANY
+	// path closes the first-artifact gate (FM-D1a). Errored writes never
+	// reach here, and skeleton-or-full both count — the S2 standard is
+	// "first route file" (FM-L3b).
+	sess.MarkFirstWrite()
 	if routePathRe.MatchString(w.Path) {
 		sess.MarkRouteScaffold()
 	}

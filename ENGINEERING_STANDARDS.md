@@ -311,6 +311,24 @@ Failure modes (written before the code, TEST_RULES §3):
   cannot aim at files it cannot see, and a bar required for marking is
   a bar it must be shown. A render that hides a remaining task, a
   blocked flag, or a done name is a lie by omission.
+- **FM-D1a (L17)** — inaction needs a clock the model cannot skim. A
+  build turn with no successful write by +3 min (S1's standard) shows a
+  first-write advisory line on the turn-state card; past +6 min it
+  escalates to one latched warning event. L2/L3's code-side pattern,
+  because prose ("write early, not after exhaustive survey") failed in
+  all three runs — S1: 28m34s, 4m18s, 11m49s against ≤3 min — and
+  Run-3's round-1 9.5-minute silent generation proves a round-count
+  budget is blind to wall time, so the gate reads the clock, never the
+  round number. Build mode only, silent after the first write, at most
+  one warning event: a gate that nags every round teaches the model to
+  ignore gates (FM-L3b's lesson).
+- **FM-D1b (L17)** — one voice on the card. While nothing has been
+  written, the first-write note owns the card: demanding "scaffold
+  routes" before any write at all is downstream noise — the first-write
+  line already names a route skeleton as the artifact to write. The
+  route gate's note resumes the moment the first write lands, and its
+  warning event keeps exactly today's semantics (the L3 ladder test
+  stays pinned and green).
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -325,6 +343,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L14 | **Pre-write mega-batch cap + warning timing (RESEARCH P0.3's real gap)** — before the turn's first write-class batch, a batch carrying > `maxPreWriteReadBatch` (10) reads dispatches the head and refuses the tail with the cap's own message (FM-E1a); cap-refused calls never enter the 12/18/24 streak, the hard stop keeps its semantics, the cap's refusal never says "exhausted", and the advisory note still rides a capped batch (FM-E1b); the warning event now fires on *any* crossing of `exploreBudgetWarning`, including a jump that also crosses the hard stop (FM-E2a — today's ladder checks hard first and skips the only user-visible step) | fails-first `TestMegaBatchCappedBeforeFirstWrite` (red: 30-read batch hit the hard stop, delivered 0), `TestWarningFiresWhenBatchJumpsPastHardStop` (red: 0 events), `TestMegaBatchCapExemptLanes` (exemption guard), ladder test moved to post-cap contract (red → green); pre-write, armed turns only | ⬤ |
 | L15 | **Slice contract + honest feature marking (RESEARCH P0.2/P1.6)** — `features` becomes `{text, files, acceptance}` with one unmarshal path accepting the legacy string shape (FM-C1a); `AppPlan.Validate()` rejects malformed declared files at both plan doors via the `checkPlanFeasibility` choke point — feature named, nothing saved, never envelope-only acceptance; shaped features seed their files onto the task and take the screens' honest bar: heuristic marking only when every declared file is written on the verified-success path, the audit flips completed features back when a declared file is missing (FM-C1b); file-less features keep model-only marking; the plan prompt teaches the shape, and the frontend normalizes wire features to display text at both ingestion points (a raw object child crashes the plan card) | fails-first `TestPlanFeatureAcceptsLegacyAndShaped` + `TestPlanRejectsMalformedFeatureFiles` (red: type undefined), `TestPlanTaskRowsCarryFeatureFiles` / `TestMarkFeatureTasksFromFiles` / `TestAuditFlipsFeatureWithMissingDeclaredFile` (red), `TestPlanSendDoorRejectsMalformedFeatureFiles` (red: 200 + saved) + stream-door twin (red: plan frame emitted) + `TestPlanGatePassesShapedContractPlan` (over-fire guard), frontend `featureText` vitest (red: helper missing, 3 cases); golden `plan-existing-feature` re-recorded via `TALONSTUDIO_UPDATE_GOLDEN=1` — digest-only diff, criteria untouched | ⬤ |
 | L16 | **Prefix-cache order + compact checklist (RESEARCH P1.5)** — stable sections (persona → rules → device → discipline → instructions → skills, weights 450/460) now all sort before the volatile block (map 500 → checklist 900), so a map refresh or checklist flip re-sends only the volatile tail instead of invalidating instructions/skills behind it (FM-C1c); `renderPlanChecklist` collapses completed items into one `Done (N): name, …` line that keeps every name and drops their descriptions, keeps pending/in-progress/failed itemized with markers, and rides declared `files:` + `done when:` on feature lines — `Acceptance` wired plan → row → task for it, nothing invented for undeclared fields (FM-C1d) | fails-first `TestStableSectionsBeforeVolatile` (red: skills assembled after the volatile block), `TestRenderPlanChecklist` moved to compact contract (red: `[x]` present, no Done line), `TestRenderPlanChecklistCarriesEvidence` (red: no files/acceptance plumbing); artifact `.talon/plan.md` render untouched — round-trip test still pins the checkbox format | ⬤ |
+| L17 | **First-artifact clock (RESEARCH P1.8)** — a build turn with no successful write gets a first-write advisory line on the turn-state card from +3 min (S1's standard) escalating at +6 min with one latched `first_write` warning event; build mode only, closed by the first successful write at the fsWrite seam, errored writes never count (FM-D1a); the card speaks with one voice — `GateNote` gives the first-write line ownership while nothing is written and hands the card back to the route gate once the first write lands, the route warning keeps today's semantics (FM-D1b) | fails-first `TestFirstWriteLadder` (red: method undefined — silence-only today; asserts in-window silence, S1-named advisory, escalation, one-shot latch, plan-mode silence, closure on write) + `TestGateNoteOneVoice` (red: `GateNote` undefined — route note must not compete while unwritten, must resume after the first write); L3's `TestRouteScaffoldLadder` stays pinned green; round-based budgets rejected with evidence (Run-3's round-1 9.5-min silent generation is invisible to a round count) | ⬤ |
 
 Still-open P1 rows from the previous list:
 

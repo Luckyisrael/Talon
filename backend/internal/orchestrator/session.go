@@ -145,6 +145,16 @@ type SessionState struct {
 	routeScaffolded bool
 	routeWarned     bool
 
+	// firstWritten/firstWriteWarned are the L17 first-artifact clock
+	// (ENGINEERING_STANDARDS S1): a build turn with no successful write by
+	// firstWriteNoteAt gets an advisory line on the turn card, escalating
+	// to one warning event at firstWriteWarnAt. S1 failed all three runs
+	// behind prose ordering, and a round-count budget cannot see wall time
+	// (Run-3's round-1 9.5-minute silent generation) — so this gate reads
+	// the clock, not the round number (FM-D1a).
+	firstWritten     bool
+	firstWriteWarned bool
+
 	// RuntimePatterns holds failure patterns loaded from project memory on
 	// session start. These are merged with the default index at lookup time.
 	RuntimePatterns []knowledge.FailurePattern
@@ -756,6 +766,14 @@ const (
 	routeScaffoldNoteAt = 5 * time.Minute
 	// routeScaffoldWarnAt is the one-shot warning-event threshold.
 	routeScaffoldWarnAt = 10 * time.Minute
+
+	// L17 first-artifact clock (S1 row): firstWriteNoteAt is the advisory
+	// threshold — S1's standard is a first write within three minutes of
+	// the build turn, so the note fires when that standard is spent.
+	firstWriteNoteAt = 3 * time.Minute
+	// firstWriteWarnAt is the one-shot warning-event threshold (2× the
+	// standard, mirroring L3's 5→10 doubling).
+	firstWriteWarnAt = 6 * time.Minute
 )
 
 // routePathRe matches a route file exactly the way the E2E scorecard's S2
@@ -811,6 +829,80 @@ func (s *SessionState) RouteScaffoldWarnDue(mode string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return !s.routeScaffolded && time.Since(s.StartedAt) >= routeScaffoldWarnAt
+}
+
+// MarkFirstWrite records the turn's first successful write, closing the L17
+// first-artifact gate for the rest of the turn. Called from the same
+// fsWrite seam as the route gate, so errored writes never count (FM-D1a:
+// a write that landed nothing is not an artifact).
+func (s *SessionState) MarkFirstWrite() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.firstWritten = true
+}
+
+// FirstWriteNote is the turn-card line for the L17 gate: empty inside S1's
+// three-minute standard (orientation is legitimate), empty in non-build
+// modes (plan turns never write), empty once any write landed, and
+// escalating past firstWriteWarnAt.
+func (s *SessionState) FirstWriteNote(mode string) string {
+	if mode != "build" {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.firstWritten {
+		return ""
+	}
+	elapsed := time.Since(s.StartedAt)
+	switch {
+	case elapsed < firstWriteNoteAt:
+		return ""
+	case elapsed < firstWriteWarnAt:
+		return fmt.Sprintf("\n\nFIRST WRITE: no file written in %d min (S1: first write ≤ 3 min) — "+
+			"the plan is settled; write the first artifact now — a compiling app/ route skeleton "+
+			"counts as both the first write and the first route.", int(elapsed.Minutes()))
+	default:
+		return fmt.Sprintf("\n\nFIRST WRITE: %d min into the turn and still nothing written — "+
+			"stop surveying. Write the first route skeleton (app/**.tsx) as a compiling screen now; "+
+			"exploration produces nothing a reader can see.", int(elapsed.Minutes()))
+	}
+}
+
+// FirstWriteWarnDue reports whether the L17 warning threshold has passed
+// with no write landed; the caller pairs it with MarkFirstWriteWarned to
+// fire the single warning event.
+func (s *SessionState) FirstWriteWarnDue(mode string) bool {
+	if mode != "build" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.firstWritten && time.Since(s.StartedAt) >= firstWriteWarnAt
+}
+
+// MarkFirstWriteWarned latches the L17 gate's single warning event and
+// reports whether this call claimed it.
+func (s *SessionState) MarkFirstWriteWarned() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.firstWriteWarned {
+		return false
+	}
+	s.firstWriteWarned = true
+	return true
+}
+
+// GateNote is the card's single gate voice (FM-D1b): the first-write note
+// owns the card while nothing has been written — demanding "scaffold
+// routes" before any write at all is downstream noise. The route gate's
+// note takes over the moment the first write lands; its warning event
+// keeps today's semantics.
+func (s *SessionState) GateNote(mode string) string {
+	if n := s.FirstWriteNote(mode); n != "" {
+		return n
+	}
+	return s.RouteScaffoldNote(mode)
 }
 
 // MarkRouteWarned latches the route gate's single warning event and reports
