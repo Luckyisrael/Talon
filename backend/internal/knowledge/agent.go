@@ -275,6 +275,24 @@ func (r *Registry) SkillBody(name string) (string, bool) {
 	return s.Body, true
 }
 
+// Description returns a loaded skill's one-line description ("" when the
+// skill is unknown or carries none). Manifest renders this field and the
+// rendered manifest tells the model to choose a skill *by* it, so every
+// bridge out of this registry must be able to read it — the skills
+// catalog's EmbeddedProvider could not, and shipped all 15 skills as
+// "- **name** — " with nothing after the dash (FM-H6b, Run-5:
+// skills/catalog=1281 where ~5.9 KB was expected, 0 model-initiated
+// read_skill). Read-only, like the rest of the registry.
+func (r *Registry) Description(name string) string {
+	if r == nil {
+		return ""
+	}
+	if s, ok := r.skillByName[strings.TrimSpace(name)]; ok {
+		return s.Description
+	}
+	return ""
+}
+
 // SkillNames returns the loaded skill names, sorted.
 func (r *Registry) SkillNames() []string {
 	if r == nil {

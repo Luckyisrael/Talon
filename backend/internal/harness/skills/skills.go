@@ -55,7 +55,15 @@ func (p EmbeddedProvider) Load() ([]knowledge.Skill, error) {
 		if !ok {
 			continue
 		}
-		out = append(out, knowledge.Skill{Name: n, Body: body})
+		// Description crosses with the body: Manifest renders it and the
+		// manifest instructs the model to match a skill *by* it, so a
+		// name-only row is a discovery dead end (FM-H6b — this bridge
+		// shipped all 15 skills with nothing after the dash).
+		out = append(out, knowledge.Skill{
+			Name:        n,
+			Description: p.Registry.Description(n),
+			Body:        body,
+		})
 	}
 	return out, nil
 }

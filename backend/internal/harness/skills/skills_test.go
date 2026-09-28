@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
@@ -118,4 +119,70 @@ func TestNewCatalogLoadsAtConstruction(t *testing.T) {
 	if body, _, ok := cat.Body("mobile-craft"); !ok || body != "the body" {
 		t.Errorf("Body(mobile-craft) = %q, ok=%v — read_skill would answer none", body, ok)
 	}
+}
+
+// FM-H6b (L20's completion) — written first (TEST_RULES §3). The
+// failure: EmbeddedProvider.Load bridges knowledge.Registry →
+// knowledge.Skill with {Name, Body} only, so Description — the one
+// field Manifest() exists to render — never crosses. The previous test
+// above proves nothing about it: its sliceProvider already carries a
+// Description, so the assertion passed while production dropped the
+// field. Measured symptom (Run-5): skills/catalog=1281 = 617 B of
+// "- **name** — " rows with nothing after the dash + 662 B of
+// unchanged plugins guidance, where L20 predicted ~5.5 KB; the
+// manifest's own "match the description" instruction was therefore
+// unsatisfiable and model-initiated read_skill stayed at 0 for a
+// second run. The law: a bridge must carry every field its consumer
+// renders — listing a skill with no description is the same discovery
+// failure as not listing it, because the model still cannot choose.
+func TestEmbeddedProviderCarriesDescriptionsIntoManifest(t *testing.T) {
+	reg, err := knowledge.Load("")
+	if err != nil {
+		t.Fatalf("knowledge.Load: %v", err)
+	}
+	// The knowledge registry's own manifest is the reference: it renders
+	// descriptions correctly (agent.go Manifest), so any divergence in
+	// the catalog is the bridge's doing.
+	want := manifestDescriptions(reg.Manifest())
+	if len(want) == 0 {
+		t.Fatal("registry manifest listed no skills — fixture is empty")
+	}
+
+	cat := NewCatalog(EmbeddedProvider{Registry: reg})
+	got := manifestDescriptions(cat.Manifest())
+
+	for name, desc := range want {
+		if desc == "" {
+			t.Errorf("registry rendered %q with no description — fixture problem", name)
+		}
+		if got[name] != desc {
+			t.Errorf("skill %q: catalog description = %q, want %q — FM-H6b: the embedded bridge drops Description",
+				name, got[name], desc)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("catalog listed %d skills, registry has %d — the bridge lost skills", len(got), len(want))
+	}
+}
+
+// manifestDescriptions parses "- **name** — description" bullet lines
+// out of either renderer's manifest. The separator is matched without a
+// trailing space: a skill rendered with an EMPTY description is the
+// last line, so TrimSpace has already eaten the space (FM-H6b's exact
+// symptom — the parser must see an empty description as empty, not miss
+// the skill entirely).
+func manifestDescriptions(manifest string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(manifest, "\n") {
+		if !strings.HasPrefix(line, "- **") {
+			continue
+		}
+		rest := line[len("- **"):]
+		i := strings.Index(rest, "** —")
+		if i < 0 {
+			continue
+		}
+		out[rest[:i]] = strings.TrimSpace(rest[i+len("** —"):])
+	}
+	return out
 }

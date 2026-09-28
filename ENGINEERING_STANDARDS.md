@@ -385,13 +385,18 @@ Failure modes (written before the code, TEST_RULES §3):
   so `Description` — the one field `Manifest()` exists to render, and
   the one the manifest tells the model to match against — never
   crosses. Run-5 measured the exact symptom: `skills/catalog=1281` =
-  617 B of name-only rows + 662 B of unchanged plugins guidance, where
+  619 B of name-only manifest (254 B preamble + 365 B of `- **name** — `
+  rows rendering with nothing after the dash) + 662 B of unchanged
+  plugins guidance, where
   L20 predicted ~5.5 KB, and **0 model-initiated `read_skill` for the
   second run running** (4/4 calls were auto-attach synthetics). The
   chain reads *listed but unnamed* — a discovery surface the model can
   see and cannot choose from, which fails H6's law in the same
-  direction as having no catalog at all. The fix is one field copied
-  at the bridge, but it is contract-tier: without it L20's own
+  direction as having no catalog at all. The field was not merely
+  uncopied — the registry exposed no read path for it at all
+  (`SkillBody`/`SkillNames` only) — so the fix is a `Description`
+  accessor plus one field carried at the bridge, still contract-tier:
+  without it L20's own
   acceptance evidence never arrives, and any "is discovery working?"
   run stays unanswerable. Guard: a test that asserts the *rendered
   manifest* carries a description body for an embedded skill — not
@@ -452,6 +457,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L19 | **Ledger truth on the wire (L13 completion)** — `AttributeRequestBody(body)` replaces transcript-based `AttributeRequest`: buckets are disjoint `json.RawMessage` spans of the actual marshaled request (Anthropic's top-level `system` field or OpenAI's system message → system; `tools` array → tools; role-`tool` content / `tool_result` blocks → results; write-class `function.arguments` / `input` → payloads; all other text, blocks, images → history), envelope = remainder ≥ 0 **by construction** — `thinking`/`plan` blocks the serializers drop can no longer be counted because only the body is read (FM-TELe); both provider paths log the identical line format (scorecard contract unchanged) | fails-first `TestRequestLedgerAccountsEveryByte` rewritten to a hand-built body pinning exact bucket spans (red: function undefined), `TestRequestLedgerIgnoresBlocksTheSerializerDrops` (red: builds a real `toOpenAI` body with 10 KB thinking + 4 KB plan blocks — envelope must not go negative and History must exclude them; this is Run-4's `envelope=-26156` as a test), `TestRequestLedgerDoesNotMutateWhatIsSent` adapted to body bytes | ⬤ |
 | L20 | **H6 catalog loads at construction (skill discovery + `read_skill` both dead in production)** — `skills.NewCatalog` performs the initial provider load itself (construction is composition start), so the merged map can never be the empty shell `Reload()`'s doc promised at a call site that does not exist; `Reload` stays the refresh seam; the prompt's skills/catalog section and `read_skill`'s library both resolve through the now-populated catalog (FM-H6a) | fails-first `TestNewCatalogLoadsAtConstruction` (red: `Names()` empty and `Manifest()` renders `""` over a provider that loads — Run-4's `skills/catalog=662` failure as a test); live evidence: zero `Reload()` callers repo-wide, `agent knowledge ready (14 skills)` beside a 662-byte catalog; Run-5 `prompt-sec` measured **1,281 B carrying all 15 names** (Run-4: 662 B, zero skills) — but the byte math is name-only (617 + 662 plugins guidance), so the ~5.5 KB this row predicted did **not** materialize: `EmbeddedProvider.Load` discards `Description` upstream of `Manifest()` → FM-H6b, closed separately as a contract-tier one-liner | ⬤ |
 | L21 | **System-prompt diet (L5 ≤ 4500 tok, FM-B2a)** — `SystemPromptBuild` sheds the three duplicated/detailed sections: `## Design bar` and `## Navigation semantics` go entirely (mobile-craft / expo-router-nav already carry them; the two unique facts — `@/constants/app-styles`, the vision-gate sentence — merge into mobile-craft first), `## The live device` shrinks to a compact always-on surface law (tool-absence rule, no-fabricate verification honesty, 10/30 lifecycle, `.maestro` scope, `device-session` pointer) with the full protocol moving verbatim into the new `device-session` skill; budget enforced as persona ≤ 4500 tok *including* digest + allowlist (Run-4: persona 22168 − compiled const 15469 = 6699 B for digest+allowlist → base ≤ 11301 B, measured on the compiled string) | fails-first `TestSystemPromptBuildDietBudget` (red: 15469 B > 11301 B), `TestMobileCraftCoversDesignBar` (red: no `app-styles` / vision-gate), knowledge `TestDeviceSessionSkillCarriesProtocol` (red: skill absent — flows dir, `com.talon.app`, lifecycle, tool list); Phase A guard `TestPhaseA_DeviceAwarePrompt` keeps its tool-name + lifecycle assertions in the prompt and relocates `.maestro/flows/` + `com.talon.app` to the skill test with a comment naming the move; S9 scan unaffected (regex ignores hyphens/slashes; `read_skill` is in `coreToolSet`) | ⬤ |
+| L20b | **Embedded descriptions cross the bridge (FM-H6b, L20's completion)** — `Registry.Description(name)` exposes the one-line description the bridge had no read path to (`SkillBody`/`SkillNames` only), and `EmbeddedProvider.Load` carries it beside `Name`/`Body`, so `Manifest()` renders `- **name** — <description>` instead of a dash with nothing after it; names, bodies, precedence and the source annotation untouched | fails-first `TestEmbeddedProviderCarriesDescriptionsIntoManifest` (red: **all 15** skills rendered with empty descriptions — compared against `knowledge.Registry.Manifest()`'s own rendering, so the assertion cannot pass through the bridge; L20's `TestNewCatalogLoadsAtConstruction` missed it because its `sliceProvider` already carried a Description); measured: catalog manifest **619 B name-only → 5,456 B** (+4,837 B), so `skills/catalog` 1,281 → ≈**6,118 B**; **no golden re-record** — golden fixtures don't pin this section and `prompt_regression_flips_red` stays green; Run-6 to confirm the section size and the first model-initiated `read_skill` | ⬤ |
 
 Still-open P1 rows from the previous list:
 
@@ -724,10 +730,11 @@ tick-window finding (candidate L22) stays untested.
   seam is observable in the ledger.
 - **L20 catalog loads — partial.** `skills/catalog=1281` on every
   `prompt-sec` line, carrying **all 15 skill names** (Run-4: 662 with
-  zero skills). Byte math says the value is **name-only**: 617 B of
-  `- **name** — ` rows + 662 B of unchanged plugins guidance = 1,281.
-  With descriptions it would be ~5.9 KB, which is what L20's row
-  predicted (~5.5 KB) — **so L20's stated evidence did not
+  zero skills). Byte math says the value is **name-only**: 619 B of
+  manifest (254 B preamble + 365 B of rows rendering as `- **name** — `
+  with nothing after the dash) + 662 B of unchanged plugins guidance =
+  1,281. With descriptions the manifest is **5,456 B**, which is what
+  L20's row predicted (~5.5 KB) — **so L20's stated evidence did not
   materialize**; the descriptions are being dropped upstream of the
   manifest. That gap is FM-H6b below, and it is why discovery still
   reads 0.
