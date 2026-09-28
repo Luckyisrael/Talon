@@ -94,9 +94,14 @@ func (c *Client) ChatWithTools(ctx context.Context, system string, history []Mes
 func (c *Client) doWithRetry(ctx context.Context, url string, body []byte, setHeaders func(*http.Request), label string) ([]byte, error) {
 	const maxRetries = 4
 	var lastErr error
+	// rateLimitWaited marks a round that already waited out a rate window
+	// below, so the loop-top ladder does not stack its own seconds on top of
+	// a minute (FM-429a). Reset every round: a plain transient still ladders
+	// exactly as before.
+	rateLimitWaited := false
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
+		if attempt > 0 && !rateLimitWaited {
 			delay := time.Duration(1<<uint(attempt-1)) * 2 * time.Second
 			// Jitter keeps concurrent builds from retrying in lockstep.
 			delay += time.Duration(rand.Int63n(int64(time.Second)))
@@ -107,6 +112,7 @@ func (c *Client) doWithRetry(ctx context.Context, url string, body []byte, setHe
 			case <-time.After(delay):
 			}
 		}
+		rateLimitWaited = false
 
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
@@ -144,6 +150,25 @@ func (c *Client) doWithRetry(ctx context.Context, url string, body []byte, setHe
 				return nil, err
 			}
 			lastErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncate(string(respBody), 500))
+			if resp.StatusCode == 429 {
+				// FM-429a(iv): a 429 waits the gateway's own Retry-After,
+				// else the rate window — never the exponential ladder, whose
+				// 2s/4s/8s futility-spends itself ~46s before a per-minute
+				// window resets. Reported as well: a window-long wait with no
+				// report is exactly the silent stall the hook exists to kill.
+				delay := c.rateLimitDelay(resp.Header.Get("Retry-After"))
+				log.Printf("%s: rate limited (attempt %d), waiting %v", label, attempt+1, delay)
+				c.reportRetry(attempt+1, maxRetries, "rate limited (HTTP 429)", delay)
+				if err := waitBackoff(ctx, delay); err != nil {
+					return nil, err
+				}
+				rateLimitWaited = true
+				continue
+			}
+			// 5xx keeps today's behaviour untouched: its Retry-After is the
+			// provider's guess at its own recovery, and FM-429a is about the
+			// rate window only — a window-sized backoff would stall a 502
+			// recovery, which is the one thing the law forbids here.
 			if ra := resp.Header.Get("Retry-After"); ra != "" {
 				if secs, convErr := strconv.Atoi(ra); convErr == nil && secs > 0 && secs <= 60 {
 					select {

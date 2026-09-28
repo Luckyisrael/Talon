@@ -55,6 +55,14 @@ type Client struct {
 	// (0 = single attempt, today's behavior).
 	streamRestarts int
 
+	// rateLimitWindow is how long a gateway's requests-per-minute window
+	// takes to reset when it sends no Retry-After header. A 429 waits this
+	// out instead of taking the flaky-502 ladder: 3s/6s exhausts the retry
+	// budget ~45s before a per-minute window clears, which killed Run-5's
+	// build turn at round 8 (FM-429a). 0 selects defaultRateLimitWindow —
+	// tests shrink it so a real wait stays test-sized.
+	rateLimitWindow time.Duration
+
 	// lastErr records the most recent provider failure for health checks.
 	// A healthy provider never writes here; readyz degrades only on fresh
 	// failures, never on ancient history.
@@ -288,21 +296,22 @@ func (c *Client) clone() Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return Client{
-		protocol:       c.protocol,
-		baseURL:        c.baseURL,
-		apiKey:         c.apiKey,
-		model:          c.model,
-		providerName:   c.providerName,
-		httpClient:     c.httpClient,
-		streamClient:   c.streamClient,
-		streamStall:    c.streamStall,
-		streamRestarts: c.streamRestarts,
-		workspaceDir:   c.workspaceDir,
-		lastErr:        c.lastErr,
-		lastErrAt:      c.lastErrAt,
-		pacer:          c.pacer,
-		retryHook:      c.retryHook,
-		toolArgs:       c.toolArgs,
+		protocol:        c.protocol,
+		baseURL:         c.baseURL,
+		apiKey:          c.apiKey,
+		model:           c.model,
+		providerName:    c.providerName,
+		httpClient:      c.httpClient,
+		streamClient:    c.streamClient,
+		streamStall:     c.streamStall,
+		streamRestarts:  c.streamRestarts,
+		rateLimitWindow: c.rateLimitWindow,
+		workspaceDir:    c.workspaceDir,
+		lastErr:         c.lastErr,
+		lastErrAt:       c.lastErrAt,
+		pacer:           c.pacer,
+		retryHook:       c.retryHook,
+		toolArgs:        c.toolArgs,
 	}
 }
 
@@ -343,6 +352,65 @@ func (c *Client) WithToolArgs(fn func(tool, fragment string)) *Client {
 func (c *Client) reportRetry(attempt, maxRetries int, reason string, after time.Duration) {
 	if c.retryHook != nil {
 		c.retryHook(attempt, maxRetries, reason, after)
+	}
+}
+
+// defaultRateLimitWindow is how long to wait on a 429 the gateway did not
+// time for us: one minute, the shape of every requests-per-minute budget seen
+// in production (Run-5's "Cluster RPM rate limit exceeded" reset inside it).
+const defaultRateLimitWindow = time.Minute
+
+// rateLimitDelay is how long to wait after an HTTP 429: the gateway's own
+// Retry-After when it sends one — it knows when its budget refills — else the
+// rate window (FM-429a). Deliberately not the flaky-502 ladder: that budget
+// is measured in seconds and a rate window is measured in minutes, so 3s/6s
+// spends itself before the window that would have cleared the request even
+// resets (Run-5 lost a healthy turn at round 8 this way).
+func (c *Client) rateLimitDelay(retryAfter string) time.Duration {
+	if d := parseRetryAfter(retryAfter); d > 0 {
+		return d
+	}
+	if c.rateLimitWindow > 0 {
+		return c.rateLimitWindow
+	}
+	return defaultRateLimitWindow
+}
+
+// parseRetryAfter reads the Retry-After header (delta-seconds or an HTTP
+// date). Anything unparseable returns 0 — "the gateway did not say" — so the
+// caller falls back to its own window instead of guessing in the gateway's
+// name.
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t) + time.Second; d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// waitBackoff sleeps for d and reports cancellation. The rate-window wait is
+// long enough that an unstoppable sleep would turn a user stopping the turn
+// into a full-window hang (FM-429a), so every backoff this change lengthens
+// waits on the context too. A nil result means the wait completed.
+func waitBackoff(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
@@ -620,12 +688,18 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 	}
 
 	const maxRetries = 3
+	// waitApplied marks a round that already waited out a rate window in the
+	// status branch below, so the loop-top ladder does not stack its own
+	// 3s/6s on top of a minute (FM-429a). Reset every round: a later plain
+	// retry still ladders exactly as before.
+	waitApplied := false
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
+		if attempt > 0 && !waitApplied {
 			log.Printf("chatAnthropic: retry attempt %d/%d", attempt+1, maxRetries)
 			c.reportRetry(attempt+1, maxRetries, "transient error", time.Duration(attempt*3)*time.Second)
 			time.Sleep(time.Duration(attempt*3) * time.Second)
 		}
+		waitApplied = false
 
 		// Gateway pacing: reserve the slot before the request leaves. On a
 		// rate-limited gateway the slot was paid for either way; the pacer
@@ -667,27 +741,29 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 					return "", err
 				}
 			}
-			// Retry-After is the gateway's own word on when the budget
-			// refills; when it is sent, sleep exactly that long instead of
-			// guessing. Without it the fixed 3s/6s backoff applies.
-			after := 0
-			if resp.StatusCode == 429 {
-				if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs > 0 {
-					after = secs
-				} else if d, err := http.ParseTime(resp.Header.Get("Retry-After")); err == nil {
-					after = int(time.Until(d).Seconds()) + 1
-				}
-			}
+			// A 429's wait is owned right here — the gateway's Retry-After
+			// when it sends one, else the rate window (FM-429a) — and this
+			// round's loop-top ladder is suppressed so the window is not
+			// followed by a second, redundant wait. Every other status keeps
+			// that ladder untouched: wait and report both stay where they
+			// were, because a window-sized backoff would stall a 502 recovery.
 			resp.Body.Close()
-			if attempt < maxRetries-1 {
-				if after > 0 {
-					log.Printf("chatAnthropic: HTTP %d (attempt %d), honoring Retry-After %ds", resp.StatusCode, attempt+1, after)
-					c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("rate limited (HTTP %d)", resp.StatusCode), time.Duration(after)*time.Second)
-					time.Sleep(time.Duration(after) * time.Second)
-				} else {
-					log.Printf("chatAnthropic: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
-					c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("server error (HTTP %d)", resp.StatusCode), time.Duration(attempt*3)*time.Second)
+			if resp.StatusCode == 429 {
+				if attempt < maxRetries-1 {
+					delay := c.rateLimitDelay(resp.Header.Get("Retry-After"))
+					log.Printf("chatAnthropic: HTTP 429 (attempt %d), waiting %v", attempt+1, delay)
+					c.reportRetry(attempt+1, maxRetries, "rate limited (HTTP 429)", delay)
+					if err := waitBackoff(ctx, delay); err != nil {
+						return "", fmt.Errorf("cancelled while waiting to retry: %w", err)
+					}
+					waitApplied = true
+					continue
 				}
+				return "", fmt.Errorf("Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again.")
+			}
+			if attempt < maxRetries-1 {
+				log.Printf("chatAnthropic: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("server error (HTTP %d)", resp.StatusCode), time.Duration(attempt*3)*time.Second)
 				continue
 			}
 			switch resp.StatusCode {
@@ -774,12 +850,18 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 	}
 
 	const maxRetries = 3
+	// waitApplied marks a round that already waited out a rate window in the
+	// status branch below, so the loop-top ladder does not stack its own
+	// 3s/6s on top of a minute (FM-429a). Reset every round: a later plain
+	// retry still ladders exactly as before.
+	waitApplied := false
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
+		if attempt > 0 && !waitApplied {
 			log.Printf("chatOpenAI: retry attempt %d/%d", attempt+1, maxRetries)
 			c.reportRetry(attempt+1, maxRetries, "transient error", time.Duration(attempt*3)*time.Second)
 			time.Sleep(time.Duration(attempt*3) * time.Second)
 		}
+		waitApplied = false
 
 		// Gateway pacing: same law as the anthropic path — every gateway
 		// call, from any code path, reserves its slot first.
@@ -808,24 +890,43 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 		}
 
 		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
-			after := 0
+			// Quota exhaustion is not throttling: read the body first and
+			// fail fast when the budget is spent — the guard chatAnthropic
+			// already carries, required now that a 429 waits a whole window
+			// (FM-429a(iii): retrying a spent daily budget is a wait that
+			// can never end in success).
 			if resp.StatusCode == 429 {
-				if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs > 0 {
-					after = secs
-				} else if d, err := http.ParseTime(resp.Header.Get("Retry-After")); err == nil {
-					after = int(time.Until(d).Seconds()) + 1
+				peek, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+				resp.Body.Close()
+				if isQuotaExhausted(string(peek)) {
+					err := quotaError(resp.Header.Get("X-RateLimit-Reset"))
+					c.noteFailure(err)
+					return "", err
 				}
 			}
+			// A 429's wait is owned right here — the gateway's Retry-After
+			// when it sends one, else the rate window (FM-429a) — and this
+			// round's loop-top ladder is suppressed so the window is not
+			// followed by a second, redundant wait. Every other status keeps
+			// that ladder untouched: wait and report both stay where they
+			// were, because a window-sized backoff would stall a 502 recovery.
 			resp.Body.Close()
-			if attempt < maxRetries-1 {
-				if after > 0 {
-					log.Printf("chatOpenAI: HTTP %d (attempt %d), honoring Retry-After %ds", resp.StatusCode, attempt+1, after)
-					c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("rate limited (HTTP %d)", resp.StatusCode), time.Duration(after)*time.Second)
-					time.Sleep(time.Duration(after) * time.Second)
-				} else {
-					log.Printf("chatOpenAI: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
-					c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("server error (HTTP %d)", resp.StatusCode), time.Duration(attempt*3)*time.Second)
+			if resp.StatusCode == 429 {
+				if attempt < maxRetries-1 {
+					delay := c.rateLimitDelay(resp.Header.Get("Retry-After"))
+					log.Printf("chatOpenAI: HTTP 429 (attempt %d), waiting %v", attempt+1, delay)
+					c.reportRetry(attempt+1, maxRetries, "rate limited (HTTP 429)", delay)
+					if err := waitBackoff(ctx, delay); err != nil {
+						return "", fmt.Errorf("cancelled while waiting to retry: %w", err)
+					}
+					waitApplied = true
+					continue
 				}
+				return "", fmt.Errorf("Rate limit exceeded. The AI service is receiving too many requests. Please wait a moment and try again.")
+			}
+			if attempt < maxRetries-1 {
+				log.Printf("chatOpenAI: HTTP %d (attempt %d), retrying...", resp.StatusCode, attempt+1)
+				c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("server error (HTTP %d)", resp.StatusCode), time.Duration(attempt*3)*time.Second)
 				continue
 			}
 			switch resp.StatusCode {
@@ -943,15 +1044,25 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 	// hiccup costs one retry instead of the turn.
 	const maxRetries = 3
 	var lastErr error
+	var lastRateLimited bool
+	var lastRetryAfter string
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			log.Printf("openStream: retry attempt %d/%d after %v", attempt+1, maxRetries, lastErr)
+			// A 429 waits the rate window (or the gateway's Retry-After);
+			// everything else keeps the flaky-502 ladder (FM-429a).
+			delay := time.Duration(attempt*3) * time.Second
+			if lastRateLimited {
+				delay = c.rateLimitDelay(lastRetryAfter)
+			}
+			log.Printf("openStream: retry attempt %d/%d after %v (waiting %v)", attempt+1, maxRetries, lastErr, delay)
 			reason := "transient stream error"
 			if lastErr != nil {
 				reason = lastErr.Error()
 			}
-			c.reportRetry(attempt+1, maxRetries, reason, time.Duration(attempt*3)*time.Second)
-			time.Sleep(time.Duration(attempt*3) * time.Second)
+			c.reportRetry(attempt+1, maxRetries, reason, delay)
+			if err := waitBackoff(ctx, delay); err != nil {
+				return nil, fmt.Errorf("cancelled while waiting to retry: %w", err)
+			}
 		}
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
@@ -973,6 +1084,8 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 		if err != nil {
 			// A dead connection is transient on every gateway.
 			lastErr = fmt.Errorf("could not reach the AI service: %w", err)
+			lastRateLimited = false
+			lastRetryAfter = ""
 			c.noteFailure(lastErr)
 			continue
 		}
@@ -990,6 +1103,9 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 		switch resp.StatusCode {
 		case 429, 502, 503, 504:
 			lastErr = fmt.Errorf("AI service returned HTTP %d: %s", resp.StatusCode, truncate(string(detail), 500))
+			// Only a 429 is a rate window; 502/503/504 keep the ladder.
+			lastRateLimited = resp.StatusCode == http.StatusTooManyRequests
+			lastRetryAfter = resp.Header.Get("Retry-After")
 			c.noteFailure(lastErr)
 			continue
 		default:

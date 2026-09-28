@@ -402,16 +402,42 @@ Failure modes (written before the code, TEST_RULES §3):
   manifest* carries a description body for an embedded skill — not
   merely that the provider loaded, which is exactly the assertion
   that passed while the field was missing.
-- **FM-429a (candidate L23)** — a retry budget measured in attempts
+- **FM-429a (L23)** — a retry budget measured in attempts
   cannot outlast a rate window measured in minutes: `openStream`
   backs off `attempt*3s` (3s, 6s = 9 s total) because that ladder was
   written for flaky 502s, so Run-5's `Cluster RPM rate limit exceeded`
   bursts burned the whole budget in ~15 s and killed a healthy turn at
   round 8 while the 60 s window that would have cleared it was still
-  open. Symmetric failure on the other side too: a backoff long
-  enough for a minute-window would stall a 502 recovery, so 429 needs
-  its own policy (honor the window/reset hint, cap the budget in
-  *seconds*, keep the 502 ladder unchanged).
+  open. Four sub-defects under one law:
+  (i) the streaming path — the only one plan and build turns take —
+  never reads `Retry-After` at all, though `chatAnthropic` and
+  `chatOpenAI` parse it, so the gateway's own word on when the budget
+  refills is thrown away exactly where it matters;
+  (ii) on those two paths the *no*-`Retry-After` case falls through to
+  the loop-top 3s/6s ladder — the same futility as (i) — and one real
+  stall reports twice (the status branch's `server error (HTTP 429)`,
+  then the loop top's `transient error`), so a single wait has to be
+  owned in exactly one place: sleeping in the status branch as well
+  would stack window + 3s on every 429 and double every 502's ladder;
+  (iii) lengthening that wait creates the mirror failure: `chatOpenAI`
+  has no `isQuotaExhausted` guard where `chatAnthropic` has one, so a
+  spent daily budget — not throttling, never clearing on any window —
+  would start burning two full windows before failing instead of
+  failing at once. The guard ships with the fix or the fix is a
+  regression;
+  (iv) the fourth gateway call site, `doWithRetry` (the buffered
+  agentic path and every vision call), already honours `Retry-After`
+  and already quota-fails-fast, but with no header its own ladder is
+  2 s/4 s/8 s ≈ 14 s — the same futility a third time — and it sleeps
+  `Retry-After` inline *and* the loop-top ladder on the round after,
+  so the one wait it does take is longer than the one it announced.
+  The law: a 429 waits the gateway's `Retry-After` when sent, else the
+  rate window; quota exhaustion is never a wait; every other transient
+  keeps its own ladder exactly — 3 s/6 s on the chat paths, 2 s/4 s/8 s
+  in `doWithRetry` (a window-sized backoff would stall a 502
+  recovery); and a wait long enough to matter must be
+  cancellable, because an unstoppable 60 s sleep turns "stop this
+  turn" into a 60 s hang.
 - **FM-B2a (L21)** — the always-on prompt replays what `read_skill`
   exists to defer. Run-4 measured `persona=22168 B` (≈ 5542 tok
   against L5's 4500 budget), and two of the diet's three sections are
@@ -458,6 +484,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L20 | **H6 catalog loads at construction (skill discovery + `read_skill` both dead in production)** — `skills.NewCatalog` performs the initial provider load itself (construction is composition start), so the merged map can never be the empty shell `Reload()`'s doc promised at a call site that does not exist; `Reload` stays the refresh seam; the prompt's skills/catalog section and `read_skill`'s library both resolve through the now-populated catalog (FM-H6a) | fails-first `TestNewCatalogLoadsAtConstruction` (red: `Names()` empty and `Manifest()` renders `""` over a provider that loads — Run-4's `skills/catalog=662` failure as a test); live evidence: zero `Reload()` callers repo-wide, `agent knowledge ready (14 skills)` beside a 662-byte catalog; Run-5 `prompt-sec` measured **1,281 B carrying all 15 names** (Run-4: 662 B, zero skills) — but the byte math is name-only (617 + 662 plugins guidance), so the ~5.5 KB this row predicted did **not** materialize: `EmbeddedProvider.Load` discards `Description` upstream of `Manifest()` → FM-H6b, closed separately as a contract-tier one-liner | ⬤ |
 | L21 | **System-prompt diet (L5 ≤ 4500 tok, FM-B2a)** — `SystemPromptBuild` sheds the three duplicated/detailed sections: `## Design bar` and `## Navigation semantics` go entirely (mobile-craft / expo-router-nav already carry them; the two unique facts — `@/constants/app-styles`, the vision-gate sentence — merge into mobile-craft first), `## The live device` shrinks to a compact always-on surface law (tool-absence rule, no-fabricate verification honesty, 10/30 lifecycle, `.maestro` scope, `device-session` pointer) with the full protocol moving verbatim into the new `device-session` skill; budget enforced as persona ≤ 4500 tok *including* digest + allowlist (Run-4: persona 22168 − compiled const 15469 = 6699 B for digest+allowlist → base ≤ 11301 B, measured on the compiled string) | fails-first `TestSystemPromptBuildDietBudget` (red: 15469 B > 11301 B), `TestMobileCraftCoversDesignBar` (red: no `app-styles` / vision-gate), knowledge `TestDeviceSessionSkillCarriesProtocol` (red: skill absent — flows dir, `com.talon.app`, lifecycle, tool list); Phase A guard `TestPhaseA_DeviceAwarePrompt` keeps its tool-name + lifecycle assertions in the prompt and relocates `.maestro/flows/` + `com.talon.app` to the skill test with a comment naming the move; S9 scan unaffected (regex ignores hyphens/slashes; `read_skill` is in `coreToolSet`) | ⬤ |
 | L20b | **Embedded descriptions cross the bridge (FM-H6b, L20's completion)** — `Registry.Description(name)` exposes the one-line description the bridge had no read path to (`SkillBody`/`SkillNames` only), and `EmbeddedProvider.Load` carries it beside `Name`/`Body`, so `Manifest()` renders `- **name** — <description>` instead of a dash with nothing after it; names, bodies, precedence and the source annotation untouched | fails-first `TestEmbeddedProviderCarriesDescriptionsIntoManifest` (red: **all 15** skills rendered with empty descriptions — compared against `knowledge.Registry.Manifest()`'s own rendering, so the assertion cannot pass through the bridge; L20's `TestNewCatalogLoadsAtConstruction` missed it because its `sliceProvider` already carried a Description); measured: catalog manifest **619 B name-only → 5,456 B** (+4,837 B), so `skills/catalog` 1,281 → ≈**6,118 B**; **no golden re-record** — golden fixtures don't pin this section and `prompt_regression_flips_red` stays green; Run-6 to confirm the section size and the first model-initiated `read_skill` | ⬤ |
+| L23 | **429 waits the rate window; 502 keeps its ladder (FM-429a)** — four gateway call sites, one law: a 429 waits the gateway's `Retry-After` when sent, else `rateLimitWindow` (60 s default, test-shrunk), quota exhaustion is never a wait, every other transient keeps its own ladder exactly (3 s/6 s chat paths, 2 s/4 s/8 s `doWithRetry`), and every lengthened wait is ctx-cancellable. `openStream` (the path plan/build turns actually take) tracks `lastRateLimited`/`lastRetryAfter` per round so a 429 waits the window while 502/503/504 wait `attempt*3s`; `chatAnthropic`/`chatOpenAI` own the 429 wait in the status branch and suppress that round's loop-top ladder with `waitApplied` (the loop top was already where the generic sleep lived — stacking both would have made a 429 window+3 s and a 502 6 s instead of 3 s); `chatOpenAI` gains the `isQuotaExhausted` guard `chatAnthropic` already carried, shipped with the fix because lengthening the wait would otherwise turn an instant quota failure into two full windows; `doWithRetry` (every vision call + the buffered agentic path) swaps its no-header 2 s/4 s/8 s ladder for the window, reports the wait so a minute-long stall is never silent, and drops its `secs<=60` clamp that ignored longer header values and fell back to the futile ladder | fails-first, red states first: `TestOpenStream429WaitsOutRateWindow` (red: `c.rateLimitWindow undefined` — compile failure, the 60 s knob did not exist), `TestOpenStreamHonorsRetryAfterHeader`, `TestChatOpenAI429ReportsTheWaitItTakes` (red: retry hook fired **2×** for one stall — status branch and loop top both reported), `TestChatOpenAIQuotaExhaustionFailsFast` (red: 3 calls, generic "Rate limit exceeded" instead of `quotaError`), `TestDoWithRetry429WaitsRateWindow` (red: **2.68 s** wall on a 25 ms window + zero waits reported); keep-tests `TestStreamKeepsFastLadderFor502` + `TestChatOpenAI502KeepsLoopLadderNotWindow` (a 502 must never report the window: 3 s ladder, one wait); Run-5 evidence: `Cluster RPM rate limit exceeded` bursts died in ~15 s (3 s+6 s) against a per-minute window — Run-6 to show the turn surviving one; `chatWithToolsOpenAI` log format and the scorecard-parsed `request-ledger` lines untouched (`openStream` retry line amended, safe); `Retry-After` is honoured as sent — the chat paths already slept it uncapped, so no new hang class, and the wait is cancellable | ⬤ |
 
 Still-open P1 rows from the previous list:
 
