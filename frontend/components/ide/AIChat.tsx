@@ -35,6 +35,7 @@ import { ComposerAttachments, MessageAttachments } from "./Attachments";
 import { useIDEStore } from "@/lib/store";
 import { uuid } from "@/lib/uuid";
 import type { ChatMessage, PlanData, PlanTask, StreamMessage, TraceRow } from "@/lib/types";
+import { featureText } from "@/lib/types";
 import AgentTrace, { getToolLabel, PlanProgress, progressHint } from "./AgentTrace";
 import LoadingState from "@/components/ui/LoadingState";
 
@@ -309,7 +310,7 @@ function turnsToEntries(
         const p = block.plan ?? {};
         restoredPlan = {
           screens: p.screens ?? [],
-          features: p.features ?? [],
+          features: (p.features ?? []).map(featureText),
           navigation: p.navigation ?? "",
           packages: p.packages ?? [],
         };
@@ -1179,7 +1180,13 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               break;
 
             case "plan": {
-              const plan = (d.plan ?? null) as PlanData | null;
+              const raw = (d.plan ?? null) as PlanData | null;
+              // L15 slice contract: wire features may be shaped objects —
+              // reduce them to display text at the ingestion boundary so
+              // the card and PlanViewer only ever see strings (FM-C1a).
+              const plan = raw
+                ? { ...raw, features: (raw.features ?? []).map(featureText) }
+                : null;
               const msg = d.message || "Plan ready.";
               patch((prev) => ({
                 ...prev,

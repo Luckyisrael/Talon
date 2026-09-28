@@ -60,6 +60,11 @@ func Enabled() bool {
 type Row struct {
 	ID          string
 	Description string
+	// Files is the shaped feature's declared workspace files (L15): the
+	// seed copies them onto the task so the marking heuristic and the
+	// audit can hold the feature to the screens' bar. Rows parsed back
+	// from the artifact carry none — the file direction is plan → task.
+	Files []string
 }
 
 var (

@@ -84,6 +84,23 @@ export interface PlanData {
   structure?: PlanStructure;
 }
 
+/**
+ * Wire shape of one plan feature: legacy plans send a bare string; the L15
+ * slice contract (ENGINEERING_STANDARDS FM-C1a) sends
+ * {text, files, acceptance}. PlanData carries display strings only — every
+ * ingestion point must run wire features through featureText first, because
+ * React errors on object children (a shaped feature rendered raw is a
+ * crashed plan card, not a cosmetic bug).
+ */
+export type PlanFeatureWire =
+  | string
+  | { text?: string; files?: string[]; acceptance?: string };
+
+/** featureText is the only safe way to display a wire feature. */
+export function featureText(f: PlanFeatureWire): string {
+  return typeof f === "string" ? f : (f?.text ?? "");
+}
+
 export interface PlanState {
   message: string;
   plan: PlanData;

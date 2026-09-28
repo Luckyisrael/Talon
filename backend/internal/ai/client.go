@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -364,10 +365,83 @@ type PlanStructure struct {
 
 type AppPlan struct {
 	Screens    []Screen       `json:"screens"`
-	Features   []string       `json:"features"`
+	Features   []PlanFeature  `json:"features"`
 	Navigation string         `json:"navigation"`
 	Packages   []string       `json:"packages"`
 	Structure  *PlanStructure `json:"structure,omitempty"`
+}
+
+// PlanFeature is one capability in the build plan — L15's slice contract.
+// Legacy plans stored features as plain strings; one unmarshal path accepts
+// both shapes (FM-C1a), so every plan written before this contract still
+// loads. Files is the build's honest verification bar for the feature
+// (FM-C1b): the checklist seeds them onto the task, the heuristic marks the
+// feature only when every declared file is written and the project
+// compiles, and the audit flips it back when one is missing. Acceptance is
+// prose the checklist renders — never parsed, never enforced.
+type PlanFeature struct {
+	Text       string   `json:"text"`
+	Files      []string `json:"files,omitempty"`
+	Acceptance string   `json:"acceptance,omitempty"`
+}
+
+// UnmarshalJSON accepts the legacy plain-string feature and the shaped
+// object through the same path (FM-C1a).
+func (f *PlanFeature) UnmarshalJSON(b []byte) error {
+	var legacy string
+	if err := json.Unmarshal(b, &legacy); err == nil {
+		f.Text = legacy
+		return nil
+	}
+	type shaped PlanFeature
+	var s shaped
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	*f = PlanFeature(s)
+	return nil
+}
+
+// Validate checks the shaped plan at the plan doors (FM-C1a): every feature
+// carries text, and every declared file is an exact workspace-relative path
+// — no absolute paths, no traversal, no node_modules, no globs, no "./"
+// prefix or backslashes (a declared path the workspace can never produce
+// would make the FM-C1b audit flip the feature forever). Errors name the
+// offending feature, so a rejection tells the plan model what to fix instead
+// of failing as envelope theatre. A feature without files stays legal:
+// model-only marking is the honest legacy path.
+func (p *AppPlan) Validate() error {
+	if p == nil {
+		return nil
+	}
+	for i, f := range p.Features {
+		label := strings.TrimSpace(f.Text)
+		if label == "" {
+			return fmt.Errorf("feature %d: empty text — every feature is one capability line", i+1)
+		}
+		if len(label) > 70 {
+			label = label[:70] + "…"
+		}
+		for _, declared := range f.Files {
+			file := strings.TrimSpace(declared)
+			switch {
+			case file == "":
+				return fmt.Errorf("feature %q: empty file entry", label)
+			case file == "." || strings.HasPrefix(file, "./"):
+				return fmt.Errorf("feature %q: file %q — write paths as app/… with no ./ prefix", label, declared)
+			case filepath.IsAbs(file) || strings.Contains(file, "\\"):
+				return fmt.Errorf("feature %q: file %q must be a workspace-relative path with forward slashes", label, declared)
+			case file == ".." || strings.HasPrefix(file, "../") ||
+				strings.HasSuffix(file, "/..") || strings.Contains(file, "/../"):
+				return fmt.Errorf("feature %q: file %q escapes the workspace", label, declared)
+			case file == "node_modules" || strings.HasPrefix(file, "node_modules/"):
+				return fmt.Errorf("feature %q: file %q is a dependency, not source", label, declared)
+			case strings.ContainsAny(file, "*?["):
+				return fmt.Errorf("feature %q: file %q must be an exact path — no globs", label, declared)
+			}
+		}
+	}
+	return nil
 }
 
 type Screen struct {

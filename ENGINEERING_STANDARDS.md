@@ -276,6 +276,23 @@ Failure modes (written before the code, TEST_RULES §3):
   (17 → 25) refuses everything and never emits the only user-visible
   step between advisory and refusal — with mega-batches legal, jumps
   are the common case, not the rare one.
+- **FM-C1a (L15)** — the richer plan contract must not lie to old data
+  or seed unverifiable tasks: legacy plans whose `"features"` are plain
+  strings load exactly as before (the shaped form is additive, one
+  unmarshal path accepts both); a feature's declared `files` are
+  validated at the plan door — relative in-tree paths only, no `..`,
+  no `node_modules`, no globs — and a malformed plan is *rejected with
+  the offending feature named* rather than accepted envelope-only
+  (RESEARCH P0.2's crime) or silently repaired; `acceptance` is prose
+  the checklist renders and never parses.
+- **FM-C1b (L15)** — features with declared files get the screens'
+  honest bar, and only those: marked complete only on the
+  verified-success path with every declared file written this run, and
+  the audit flips a completed feature back to pending when a declared
+  file does not exist (closing RESEARCH P1.6's model-asserted-only lie
+  channel). A feature *without* files keeps today's model-only marking —
+  a heuristic guessing at loose mappings is what "under-claims before it
+  lies" forbids, per the screen heuristic's own rule.
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -288,6 +305,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L4 | **Plan feasibility gate** — both plan doors (Send + stream) probe the plan's new packages with `npm install --dry-run` in the real workspace (FM-L4b resolution bar): a definitive failure names the package and **fails the plan turn** — unknown (flaky network) passes (FM-L4c), preinstalled packages skip the probe, and the probe never mutates (FM-L4d) | fails-first door tests (infeasible fails / unknown passes / preinstalled skipped); Run-1: 4 of 6 plan packages unshipped, 10 errored probes at build hour 0 | ⬤ |
 | L13 | **Request ledger + phase metrics (RESEARCH P0.4)** — every model call logs a `request-ledger` line attributing `body_bytes` to system / tools / payloads / results / history with a *named* envelope that sums exactly (FM-TELa; write-class bodies in their own bucket so RESEARCH P0.1's leak is visible — FM-TELb; sizes read from the wire-bound objects only — FM-TELc); every enrichment logs a `prompt-sec` section table (`Sizes()` reconciles with `Assemble`); every round logs `round-metrics` prep/gen and a `round-tools` duration (FM-TELd) | fails-first `TestRequestLedgerAccountsEveryByte`, `TestRequestLedgerDoesNotMutateWhatIsSent`, `TestSizesReconcileWithAssemble` (red at build → green); E2E artifact = the four serverlog line types per run; unblocks L5's premise and quantifies B-phase | ⬤ |
 | L14 | **Pre-write mega-batch cap + warning timing (RESEARCH P0.3's real gap)** — before the turn's first write-class batch, a batch carrying > `maxPreWriteReadBatch` (10) reads dispatches the head and refuses the tail with the cap's own message (FM-E1a); cap-refused calls never enter the 12/18/24 streak, the hard stop keeps its semantics, the cap's refusal never says "exhausted", and the advisory note still rides a capped batch (FM-E1b); the warning event now fires on *any* crossing of `exploreBudgetWarning`, including a jump that also crosses the hard stop (FM-E2a — today's ladder checks hard first and skips the only user-visible step) | fails-first `TestMegaBatchCappedBeforeFirstWrite` (red: 30-read batch hit the hard stop, delivered 0), `TestWarningFiresWhenBatchJumpsPastHardStop` (red: 0 events), `TestMegaBatchCapExemptLanes` (exemption guard), ladder test moved to post-cap contract (red → green); pre-write, armed turns only | ⬤ |
+| L15 | **Slice contract + honest feature marking (RESEARCH P0.2/P1.6)** — `features` becomes `{text, files, acceptance}` with one unmarshal path accepting the legacy string shape (FM-C1a); `AppPlan.Validate()` rejects malformed declared files at both plan doors via the `checkPlanFeasibility` choke point — feature named, nothing saved, never envelope-only acceptance; shaped features seed their files onto the task and take the screens' honest bar: heuristic marking only when every declared file is written on the verified-success path, the audit flips completed features back when a declared file is missing (FM-C1b); file-less features keep model-only marking; the plan prompt teaches the shape, and the frontend normalizes wire features to display text at both ingestion points (a raw object child crashes the plan card) | fails-first `TestPlanFeatureAcceptsLegacyAndShaped` + `TestPlanRejectsMalformedFeatureFiles` (red: type undefined), `TestPlanTaskRowsCarryFeatureFiles` / `TestMarkFeatureTasksFromFiles` / `TestAuditFlipsFeatureWithMissingDeclaredFile` (red), `TestPlanSendDoorRejectsMalformedFeatureFiles` (red: 200 + saved) + stream-door twin (red: plan frame emitted) + `TestPlanGatePassesShapedContractPlan` (over-fire guard), frontend `featureText` vitest (red: helper missing, 3 cases); golden `plan-existing-feature` re-recorded via `TALONSTUDIO_UPDATE_GOLDEN=1` — digest-only diff, criteria untouched | ⬤ |
 
 Still-open P1 rows from the previous list:
 

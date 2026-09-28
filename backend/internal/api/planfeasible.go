@@ -54,12 +54,25 @@ type planPackageProbe func(ctx context.Context, workspacePath string, packages [
 // definitive batch failure, where npm answers in seconds.
 const npmProbeTimeout = 45 * time.Second
 
-// checkPlanFeasibility is the L4 gate. It returns the user-facing
+// checkPlanFeasibility is the plan gate. It returns the user-facing
 // rejection message and whether to reject. Skips that answer "pass": no
 // plan, no packages, no probe wired, no workspace to resolve against, or
 // an unknown answer (FM-L4c).
+//
+// L15 / FM-C1a: the shaped-plan contract rides this same choke point —
+// after the envelope parses, before savePlan, on both doors — so a
+// feature whose declared files are malformed rejects with the feature
+// named instead of being accepted envelope-only or silently repaired.
+// Validation runs before the packages skip: a plan with no packages can
+// still be contract-invalid.
 func (h *PromptHandler) checkPlanFeasibility(ctx context.Context, projectID int64, plan *ai.AppPlan) (string, bool) {
-	if plan == nil || len(plan.Packages) == 0 || h.packageProbe == nil {
+	if plan == nil {
+		return "", false
+	}
+	if err := plan.Validate(); err != nil {
+		return err.Error(), true
+	}
+	if len(plan.Packages) == 0 || h.packageProbe == nil {
 		return "", false
 	}
 	ws, err := h.workspacePath(projectID)

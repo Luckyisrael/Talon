@@ -34,7 +34,10 @@ func TestSeedPlanTasksFromPlanJSON(t *testing.T) {
 			{Name: "Home", Description: "balance overview"},
 			{Name: "Send SOL", Description: "transfer form"},
 		},
-		Features:   []string{"connect wallet via MWA", "view recent transactions"},
+		Features: []ai.PlanFeature{
+			{Text: "connect wallet via MWA"},
+			{Text: "view recent transactions"},
+		},
 		Navigation: "tab bar",
 		Packages:   []string{"expo-router"},
 	}

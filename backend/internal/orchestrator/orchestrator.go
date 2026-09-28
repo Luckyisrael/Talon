@@ -314,7 +314,7 @@ func (o *Orchestrator) seedPlanTasks(sess *SessionState, projectID int64) {
 		if o.store != nil {
 			_ = o.store.UpsertPlanTask(projectID, store.PlanTask{TaskID: row.ID, Description: row.Description, Status: "pending"})
 		}
-		sess.AddTask(row.ID, row.Description)
+		sess.AddTask(row.ID, row.Description, row.Files...)
 		if p, ok := persisted[row.ID]; ok && p.Status != "superseded" {
 			// Restore the recorded state without re-emitting (EmitPlanSeed
 			// delivers the full list after seeding completes).
@@ -358,11 +358,20 @@ func PlanTaskRows(plan *ai.AppPlan) []planfile.Row {
 		rows = append(rows, planfile.Row{ID: "plan:screen:" + planSlug(screenBaseName(name)), Description: desc})
 	}
 	for i, ft := range plan.Features {
-		ft = strings.TrimSpace(ft)
-		if ft == "" {
+		text := strings.TrimSpace(ft.Text)
+		if text == "" {
 			continue
 		}
-		rows = append(rows, planfile.Row{ID: fmt.Sprintf("plan:feature:%d", i), Description: "Feature: " + ft})
+		desc := "Feature: " + text
+		// Shaped features (L15) carry their declared files onto the row so
+		// the seed can hold them to the screens' honest bar; legacy
+		// string-shaped features arrive with none and keep model-only
+		// marking (FM-C1b).
+		var files []string
+		if len(ft.Files) > 0 {
+			files = append([]string(nil), ft.Files...)
+		}
+		rows = append(rows, planfile.Row{ID: fmt.Sprintf("plan:feature:%d", i), Description: desc, Files: files})
 	}
 	return rows
 }
@@ -630,6 +639,25 @@ func (o *Orchestrator) auditScreenTasks(sess *SessionState, opts RunOptions) {
 		if t.Status != "completed" {
 			continue
 		}
+		// L15 / FM-C1b: a completed feature with declared files is held to
+		// them — one missing file flips it back, naming the file. This
+		// closes RESEARCH P1.6's model-asserted-only lie channel with the
+		// same under-claim rule the screen audit runs on. Features without
+		// declarations have nothing to verify and stay untouched.
+		if len(t.Files) > 0 {
+			missing := ""
+			for _, f := range t.Files {
+				if !opts.Exists(f) {
+					missing = f
+					break
+				}
+			}
+			if missing != "" {
+				sess.MarkPlanTask(t.ID, t.Description, "pending",
+					"declared file missing ("+missing+") — checked off without being built")
+			}
+			continue
+		}
 		slug := strings.TrimPrefix(t.ID, "plan:screen:")
 		if slug == t.ID || slug == "" || slug == "home" || slug == "index" {
 			continue // not a screen task, or unmappable — leave it alone
@@ -666,8 +694,10 @@ func (o *Orchestrator) markScreenTasksFromFiles(sess *SessionState, touched []st
 	if len(touched) == 0 {
 		return
 	}
+	written := make(map[string]bool, len(touched))
 	writtenSlugs := make(map[string]bool)
 	for _, p := range touched {
+		written[p] = true
 		for _, seg := range strings.Split(strings.ToLower(p), "/") {
 			seg = strings.TrimSuffix(seg, filepath.Ext(seg))
 			if s := planSlug(seg); s != "" {
@@ -680,11 +710,29 @@ func (o *Orchestrator) markScreenTasksFromFiles(sess *SessionState, touched []st
 			continue
 		}
 		slug := strings.TrimPrefix(t.ID, "plan:screen:")
-		if slug == t.ID {
-			continue // not a screen task
+		if slug != t.ID {
+			if writtenSlugs[slug] {
+				sess.MarkPlanTask(t.ID, t.Description, "completed", "route file written and project compiles")
+			}
+			continue
 		}
-		if writtenSlugs[slug] {
-			sess.MarkPlanTask(t.ID, t.Description, "completed", "route file written and project compiles")
+		// L15 / FM-C1b: shaped features take the screens' bar — every
+		// declared file written this run, on the same verified-success
+		// path. Features without declarations keep model-only marking; a
+		// heuristic guessing at loose mappings is what "under-claims
+		// before it lies" forbids.
+		if len(t.Files) == 0 {
+			continue
+		}
+		all := true
+		for _, f := range t.Files {
+			if !written[f] {
+				all = false
+				break
+			}
+		}
+		if all {
+			sess.MarkPlanTask(t.ID, t.Description, "completed", "declared files written and project compiles")
 		}
 	}
 }

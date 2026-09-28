@@ -13,7 +13,7 @@ import (
 func fixture() (*ai.AppPlan, []Row, map[string]string) {
 	plan := &ai.AppPlan{
 		Screens:    []ai.Screen{{Name: "Home", Description: "Landing"}},
-		Features:   []string{"Wire src/app.ts as entry point"},
+		Features:   []ai.PlanFeature{{Text: "Wire src/app.ts as entry point"}},
 		Navigation: "stack",
 		Packages:   []string{"expo-router"},
 	}

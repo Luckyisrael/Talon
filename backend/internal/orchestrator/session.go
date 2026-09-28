@@ -228,6 +228,11 @@ type Task struct {
 	Description string `json:"description"`
 	Status      string `json:"status"` // "pending", "in_progress", "completed", "failed"
 	Result      string `json:"result,omitempty"`
+	// Files are the plan's declared workspace files for this task (L15,
+	// FM-C1b). Non-empty only for shaped plan features: they carry the
+	// honest marking bar and the audit's evidence. File-less tasks keep
+	// model-only marking.
+	Files []string `json:"files,omitempty"`
 }
 
 func NewSession(id, projectID int64, workspacePath string, emitter *events.SessionEmitter) *SessionState {
@@ -254,13 +259,14 @@ func NewTaskTracker() *TaskTracker {
 	}
 }
 
-func (tt *TaskTracker) AddTask(id, description string) {
+func (tt *TaskTracker) AddTask(id, description string, files ...string) {
 	tt.mu.Lock()
 	defer tt.mu.Unlock()
 	tt.Tasks = append(tt.Tasks, Task{
 		ID:          id,
 		Description: description,
 		Status:      "pending",
+		Files:       files,
 	})
 	tt.version++
 }
@@ -937,8 +943,8 @@ func (s *SessionState) GetTasks() []Task {
 }
 
 // AddTask seeds one plan task. Used by seedPlanTasks at build start.
-func (s *SessionState) AddTask(id, description string) {
-	s.TaskTracker.AddTask(id, description)
+func (s *SessionState) AddTask(id, description string, files ...string) {
+	s.TaskTracker.AddTask(id, description, files...)
 }
 
 // MarkPlanTask updates a seeded plan task and emits to the frontend only when the
