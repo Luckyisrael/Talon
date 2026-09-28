@@ -114,11 +114,10 @@ func (c *Client) doWithRetry(ctx context.Context, url string, body []byte, setHe
 		}
 		rateLimitWaited = false
 
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		req, err := c.newRequest(ctx, url, body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
+			return nil, err
 		}
-		req.Header.Set("Content-Type", "application/json")
 		setHeaders(req)
 
 		resp, err := c.httpClient.Do(req)
@@ -868,7 +867,8 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 	respBody, err := c.doWithEnvelopeRetry(ctx, c.baseURL+"/v1/messages", body, func(req *http.Request) {
 		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Set("User-Agent", "Talon/1.0")
+		// User-Agent comes from newRequest (FM-UAa): the identity is
+		// attached in one place, never per call site.
 	}, "ChatWithTools(Anthropic)")
 	if err != nil {
 		return nil, err

@@ -63,6 +63,13 @@ type Client struct {
 	// tests shrink it so a real wait stays test-sized.
 	rateLimitWindow time.Duration
 
+	// userAgent is the transport identity sent on every request
+	// (AI_USER_AGENT). Some gateways authenticate on it before they read
+	// the key, so it is configuration, not decoration — and it is attached
+	// by newRequest, the one place requests are built, because a path that
+	// skips it is silently 401'd (FM-UAa). Empty means defaultUserAgent.
+	userAgent string
+
 	// lastErr records the most recent provider failure for health checks.
 	// A healthy provider never writes here; readyz degrades only on fresh
 	// failures, never on ancient history.
@@ -246,6 +253,9 @@ func New() (*Client, error) {
 		baseURL:  strings.TrimSuffix(cfg.BaseURL, "/"),
 		apiKey:   cfg.APIKey,
 		model:    cfg.Model,
+		// Transport identity: optional, but a gateway that authenticates on
+		// it cannot be reached without the override (FM-UAa).
+		userAgent: strings.TrimSpace(os.Getenv("AI_USER_AGENT")),
 		// The env-built client is the primary provider (W7 naming).
 		providerName: DefaultProviderName,
 		// Generous: an agentic turn asks for up to 16k output tokens and a
@@ -306,6 +316,7 @@ func (c *Client) clone() Client {
 		streamStall:     c.streamStall,
 		streamRestarts:  c.streamRestarts,
 		rateLimitWindow: c.rateLimitWindow,
+		userAgent:       c.userAgent,
 		workspaceDir:    c.workspaceDir,
 		lastErr:         c.lastErr,
 		lastErrAt:       c.lastErrAt,
@@ -412,6 +423,37 @@ func waitBackoff(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// defaultUserAgent is what goes out when AI_USER_AGENT says nothing: today's
+// value, so gateways that do not inspect the header see no change.
+const defaultUserAgent = "Talon/1.0"
+
+// ua is the User-Agent this client sends. Configured when a gateway keys on
+// the header, the compiled default otherwise — never blank, since a missing
+// header would fall back to Go's own `Go-http-client/1.1` and read as a
+// foreign client (FM-UAa).
+func (c *Client) ua() string {
+	if c != nil && c.userAgent != "" {
+		return c.userAgent
+	}
+	return defaultUserAgent
+}
+
+// newRequest is the only way this package builds a gateway request: all four
+// request paths — streaming, the retry helper, and both chat paths — funnel
+// here. The identity a gateway may authenticate on is attached where requests
+// are *built*, not where they are visible, because the paths that set it
+// themselves were the ones that forgot: the streaming path sent Go's default
+// and was 401'd before its key was ever read (FM-UAa(ii)).
+func (c *Client) newRequest(ctx context.Context, url string, body []byte) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", c.ua())
+	return req, nil
 }
 
 type PlanResponse struct {
@@ -709,15 +751,13 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 		}
 
 		url := c.baseURL + "/v1/messages"
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		req, err := c.newRequest(ctx, url, body)
 		if err != nil {
-			return "", fmt.Errorf("failed to create request: %w", err)
+			return "", err
 		}
 
-		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Set("User-Agent", "Talon/1.0")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -870,12 +910,11 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 		}
 
 		url := c.baseURL + "/chat/completions"
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		req, err := c.newRequest(ctx, url, body)
 		if err != nil {
-			return "", fmt.Errorf("failed to create request: %w", err)
+			return "", err
 		}
 
-		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		req.Header.Set("HTTP-Referer", "https://talon.app")
 		req.Header.Set("X-Title", "Talon")
@@ -1064,11 +1103,10 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 				return nil, fmt.Errorf("cancelled while waiting to retry: %w", err)
 			}
 		}
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		req, err := c.newRequest(ctx, url, body)
 		if err != nil {
-			return nil, fmt.Errorf("could not build request: %w", err)
+			return nil, err
 		}
-		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "text/event-stream")
 		setHeaders(req)
 
