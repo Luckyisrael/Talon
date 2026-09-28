@@ -761,26 +761,57 @@ const (
 	minTrimmableInputDelta = 256
 )
 
-// supersededInputPlaceholder stands in for a payload a later write replaced.
-// The bytes are stale by definition; the current version arrives from the
-// newer write further down the conversation or from read_file.
-const supersededInputPlaceholder = "[superseded: a later write replaced this version — read_file for the current contents]"
+// writeCollapse is what a collapsed write input looks like on the wire:
+// the per-field placeholder and the provenance note the model reads. Two
+// cases exist (FM-B1a): superseded (a later write replaced the bytes) and
+// on-disk (this write is the path's latest and the workspace holds it).
+type writeCollapse struct {
+	placeholder string
+	noteKey     string
+	noteValue   string
+}
+
+var (
+	// supersededCollapse: the bytes are stale by definition; the current
+	// version arrives from the newer write further down the conversation
+	// or from read_file. Strings unchanged from FM-L9a — the superseded
+	// path stays byte-identical.
+	supersededCollapse = writeCollapse{
+		placeholder: "[superseded: a later write replaced this version — read_file for the current contents]",
+		noteKey:     "superseded_note",
+		noteValue:   "collapsed on the wire: a later write superseded this call",
+	}
+	// diskCollapse: the write succeeded and nothing later replaced it, so
+	// the workspace holds exactly what this input carried — read_file
+	// recovers it byte for byte (FM-B1a).
+	diskCollapse = writeCollapse{
+		placeholder: "[on disk — this write succeeded; read_file for its contents]",
+		noteKey:     "collapse_note",
+		noteValue:   "collapsed on the wire: the workspace holds this write",
+	}
+)
 
 // TrimSupersededToolInputs returns a view of msgs in which an old write
-// payload that a later write to the same path superseded is collapsed on
-// the wire copy — the request body otherwise replays every write_file and
-// edit_file input of the turn in full, every round, forever (Run 2: body
-// 67 → 294 KB, the P1 behind the S2/S5 wall).
+// payload collapses on the wire copy — the request body otherwise replays
+// every write_file and edit_file input of the turn in full, every round,
+// forever (Run 2: body 67 → 294 KB; Run-3 wrote 24 distinct paths, every
+// one of them lone, every one replayed until FM-B1a).
 //
-// FM-L9a's three rules, all enforced here: only *superseded* inputs (a
-// later write to the same path exists), only older than
-// minTrimmableInputAge assistant rounds (recent writes stay in working
-// memory), and only on this returned copy — the caller's stored,
-// full-fidelity transcript is never mutated. The tool_use keeps its ID,
-// position and tool_result pairing; only Input changes, on a fresh Block,
-// so no provider ever sees an orphaned call.
+// The rules (FM-L9a, extended by FM-B1a): only a write whose tool_result
+// was a success may collapse — those bytes are on disk and read_file
+// recovers them; a write that failed never reached the workspace, so its
+// payload is the conversation's only record and is never collapsed (a
+// missing result counts as failed — the conservative side); only older
+// than minTrimmableInputAge assistant rounds (recent writes stay in
+// working memory); only on this returned copy — the caller's stored,
+// full-fidelity transcript is never mutated. A superseded input collapses
+// exactly as before; a lone one — the path's latest write — collapses
+// with the disk pointer instead. The tool_use keeps its ID, position and
+// tool_result pairing; only Input changes, on a fresh Block, so no
+// provider ever sees an orphaned call.
 func TrimSupersededToolInputs(msgs []Message) []Message {
-	// Last write per path, and whether anything is a payload write at all.
+	// Last write per path (which collapse case applies), and whether
+	// anything is a payload write at all.
 	lastWrite := make(map[string]int)
 	for mi, m := range msgs {
 		for _, b := range m.Blocks {
@@ -806,12 +837,27 @@ func TrimSupersededToolInputs(msgs []Message) []Message {
 		}
 	}
 
+	// FM-B1a: only a write whose result was a success may collapse — those
+	// bytes are on disk. A failed write never reached the workspace, so
+	// its payload is the conversation's only record; a write with no
+	// result yet is treated the same way (the conservative side).
+	succeeded := make(map[string]bool)
+	for _, m := range msgs {
+		for _, b := range m.Blocks {
+			if b.Type == "tool_result" {
+				succeeded[b.ToolUseID] = !b.IsError
+			}
+		}
+	}
+
 	trimmable := func(mi int, b Block) bool {
 		if b.Type != "tool_use" || !payloadWriteTools[b.Name] {
 			return false
 		}
-		p := toolPath(b.Input)
-		return p != "" && lastWrite[p] > mi && assistantAfter[mi] >= minTrimmableInputAge
+		if !succeeded[b.ID] {
+			return false
+		}
+		return toolPath(b.Input) != "" && assistantAfter[mi] >= minTrimmableInputAge
 	}
 
 	out := make([]Message, len(msgs))
@@ -822,7 +868,13 @@ func TrimSupersededToolInputs(msgs []Message) []Message {
 			if !trimmable(mi, b) {
 				continue
 			}
-			collapsed, ok := collapseWriteInput(b.Input)
+			// FM-B1a: a later write to the path means superseded; the
+			// path's latest write means the disk pointer instead.
+			collapse := diskCollapse
+			if lastWrite[toolPath(b.Input)] > mi {
+				collapse = supersededCollapse
+			}
+			collapsed, ok := collapseWriteInput(b.Input, collapse)
 			if !ok {
 				continue
 			}
@@ -842,7 +894,7 @@ func TrimSupersededToolInputs(msgs []Message) []Message {
 // collapseWriteInput rebuilds one write input without its oversized payload
 // fields, and reports whether the result is actually smaller — a trim that
 // saves less than minTrimmableInputDelta bytes leaves the input alone.
-func collapseWriteInput(input json.RawMessage) (json.RawMessage, bool) {
+func collapseWriteInput(input json.RawMessage, c writeCollapse) (json.RawMessage, bool) {
 	var raw map[string]json.RawMessage
 	if len(input) == 0 || json.Unmarshal(input, &raw) != nil || len(raw) == 0 {
 		return input, false
@@ -853,7 +905,7 @@ func collapseWriteInput(input json.RawMessage) (json.RawMessage, bool) {
 			continue
 		}
 		if payloadInputFields[k] {
-			ph, err := json.Marshal(supersededInputPlaceholder)
+			ph, err := json.Marshal(c.placeholder)
 			if err != nil || len(ph) >= len(v) {
 				continue
 			}
@@ -866,7 +918,7 @@ func collapseWriteInput(input json.RawMessage) (json.RawMessage, bool) {
 	if !changed {
 		return input, false
 	}
-	raw["superseded_note"], _ = json.Marshal("collapsed on the wire: a later write superseded this call")
+	raw[c.noteKey], _ = json.Marshal(c.noteValue)
 	out, err := json.Marshal(raw)
 	if err != nil || len(input)-len(out) < minTrimmableInputDelta {
 		return input, false

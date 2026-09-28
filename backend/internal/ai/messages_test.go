@@ -695,20 +695,26 @@ func TestTrimSupersededToolInputsCollapsesOldWrite(t *testing.T) {
 	}
 }
 
-func TestTrimSupersededToolInputsLeavesRecentAndLoneWrites(t *testing.T) {
+// TestTrimSupersededToolInputsLeavesRecentWrites pins the working-memory
+// window (FM-L9a): inside minTrimmableInputAge rounds an input keeps its
+// body whether or not a later write exists. The lone-OLD case moved out —
+// FM-B1a (L18) collapses it, covered by
+// TestTrimSupersededToolInputsCollapsesLoneOldWrite below.
+func TestTrimSupersededToolInputsLeavesRecentWrites(t *testing.T) {
 	body := strings.Repeat("Y", 4000)
 
-	// Lone write, however old: keep. It is the conversation's only record
-	// of those bytes — collapsing it destroys content nothing else holds.
+	// Lone but recent: keep. Recent writes are the model's working memory
+	// regardless of a later write — collapsing them sends it to read_file
+	// its own minutes-old work.
 	lone := []Message{
 		msg("user", text("go")),
 		msg("assistant", writeCall("w1", "app/a.tsx", body)),
 		msg("user", toolResult("w1")),
 	}
-	lone = append(lone, roundsAfter(minTrimmableInputAge)...)
+	lone = append(lone, roundsAfter(minTrimmableInputAge-2)...)
 	loneOut := TrimSupersededToolInputs(lone)
 	if string(findInput(t, loneOut, "w1")) != string(findInput(t, lone, "w1")) {
-		t.Error("a write with no later write to the same path must keep its input")
+		t.Error("a recent write must keep its input — recent bytes are working memory")
 	}
 
 	// Superseded but recent (inside the age window): keep. Recent writes are
@@ -724,5 +730,68 @@ func TestTrimSupersededToolInputsLeavesRecentAndLoneWrites(t *testing.T) {
 	recentOut := TrimSupersededToolInputs(recent)
 	if string(findInput(t, recentOut, "w1")) != string(findInput(t, recent, "w1")) {
 		t.Error("a write inside the age window must keep its input — recent bytes are working memory")
+	}
+}
+
+// FM-B1a (L18), written before the code (TEST_RULES §3): L9's trim only
+// collapsed *superseded* writes, and Run-3 wrote 24 distinct paths — every
+// one lone, every one replayed in full every round for the life of the
+// turn (RESEARCH P0.1: body 67 → 294 KB). The disk holds the bytes: a
+// successful write past the working-memory window collapses to a pointer
+// exactly where a superseded one does.
+// Red before the fix: a lone write is kept at any age.
+func TestTrimSupersededToolInputsCollapsesLoneOldWrite(t *testing.T) {
+	body := strings.Repeat("Z", 4000)
+	history := []Message{
+		msg("user", text("go")),
+		msg("assistant", writeCall("w1", "app/only.tsx", body)),
+		msg("user", toolResult("w1")),
+	}
+	history = append(history, roundsAfter(minTrimmableInputAge)...)
+
+	original := findInput(t, history, "w1")
+	out := TrimSupersededToolInputs(history)
+	got := findInput(t, out, "w1")
+	if len(got) >= len(original) {
+		t.Fatalf("a lone write past the working-memory window must collapse (FM-B1a): "+
+			"%d bytes kept vs %d original", len(got), len(original))
+	}
+	if !strings.Contains(string(got), "app/only.tsx") {
+		t.Errorf("the collapsed input must keep the path, got: %s", got)
+	}
+	if strings.Contains(string(got), "ZZZZ") {
+		t.Errorf("the old payload survived the trim: %.120s", got)
+	}
+	// Stored fidelity: history is what persists and what the UI shows.
+	if now := findInput(t, history, "w1"); string(now) != string(original) {
+		t.Error("TrimSupersededToolInputs mutated the caller's history")
+	}
+}
+
+// FM-B1a's other half, written before the code: a write whose tool_result
+// errored never reached disk — its payload is the conversation's only
+// record of those bytes, at any age, superseded or not. L9's trim did not
+// check the result, so a failed-then-rewritten payload was silently
+// destroyed.
+// Red before the fix: the failed superseded write collapses.
+func TestTrimSupersededToolInputsNeverCollapsesFailedWrite(t *testing.T) {
+	body := strings.Repeat("F", 4000)
+
+	// Failed, old, and superseded: still kept — nothing else holds it.
+	failed := []Message{
+		msg("user", text("go")),
+		msg("assistant", writeCall("w1", "app/fail.tsx", body)),
+		msg("user", Block{Type: "tool_result", ToolUseID: "w1", Content: "permission denied", IsError: true}),
+	}
+	failed = append(failed, roundsAfter(minTrimmableInputAge+2)...)
+	failed = append(failed,
+		msg("assistant", writeCall("w2", "app/fail.tsx", "v2 content")),
+		msg("user", toolResult("w2")))
+	out := TrimSupersededToolInputs(failed)
+	if got := findInput(t, out, "w1"); !strings.Contains(string(got), "FFFF") {
+		t.Errorf("a failed write never reached disk — its payload must never collapse, got: %.120s", got)
+	}
+	if latest := findInput(t, out, "w2"); !strings.Contains(string(latest), "v2 content") {
+		t.Errorf("the successful write keeps its payload, got: %.80s", latest)
 	}
 }
