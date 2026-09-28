@@ -488,7 +488,7 @@ Failure modes (written before the code, TEST_RULES §3):
   at, so a base that ends in `/v1` is never doubled and a bare root is
   never left short. This is L24's lesson one line down: L24 unified
   where the *headers* are set, L25 unifies where the *body* goes.
-- **FM-ANTa (candidate L26)** — the anthropic protocol drops the
+- **FM-ANTa (candidate L28)** — the anthropic protocol drops the
   `StreamSink` at the dispatch boundary, so every agentic round on an
   anthropic provider is silently buffered. `ChatWithTools` forwards the
   sink to `chatWithToolsOpenAI` but calls
@@ -940,3 +940,131 @@ tick-window finding (candidate L22) stays untested.
   --prompt 64 --stream /tmp/opencode/run5-build.log --serverlog
   /tmp/opencode/run5-server.log --fresh` (report committed at
   `e2e/reports/behavior-run5.md`, copied to `behavior-latest.md`).
+
+## Appendix F — provider comparison: Atria vs agentrouter (2026-09-29)
+
+**Question.** Run the same behavioral test against the current provider
+(Atria, openai protocol, `Atria-Dawn-Preview`) and the new one
+(agentrouter.org, anthropic protocol, `deepseek-v4-flash`), score both,
+say which one the product should prioritise. Same prompts
+(`e2e/prompts/momentum-*.txt`), same recipe (`e2e/run-behavior.sh`), same
+60-round budget; the only `.env` difference is the provider block plus
+`AI_USER_AGENT` (that gateway authenticates on it — FM-UAa).
+
+**Verdict.** agentrouter / `deepseek-v4-flash` wins **6 rows, loses 2,
+ties 4** — and one of its two losses is an infrastructure artefact, not a
+model difference (see S12 below). It reaches first write in 2m42s vs
+8m35s, ships 5/6 planned routes vs 4/6, marks **15/15** checklist items
+honestly vs 4/13, and finishes the turn in 18m23s at 58 rounds where
+Atria needed the full 60-round budget over 42m32s — 2.9× the throughput
+(16.3 vs 5.6 screens/h) in 57% less wall time. Its one behavioural
+weakness is verification
+economy: 13 `run_checks` ≈ 6m37s = 36% of wall vs Atria's 8%.
+
+### The three runs
+
+| | Run-6 | Run-7 | Run-8 |
+|---|---|---|---|
+| provider / model | Atria · `Atria-Dawn-Preview` | agentrouter · `deepseek-v4-flash` | agentrouter · `deepseek-v4-flash` |
+| protocol / transport | openai, streamed tool_calls | anthropic, SSE | anthropic, SSE |
+| binary | `7fdf542` (L23/L24) | `1507594` (L25) | `dd4a0c5` (L26/L27) |
+| outcome | completed · 42m32s · 60/60 rounds | paused at budget · 14m37s · 60/60 | completed · 18m23s · 58/60 rounds |
+| usable as a measurement? | yes | **no** — two scorecard-voiding defects, fixed as L26/L27 | yes |
+
+Run-7 is recorded, not discarded: it is the measurement that proved both
+defects exist (plan stored nothing while reporting success; zero
+`est_input_tok=` lines ⇒ S9/S10 `?` ⇒ §5 blocks the run), and both fixes
+are fails-first tested against its exact state. Its numbers are excluded
+from the comparison because S3/S5/S7 had no plan to score against.
+
+### Rows — Run-6 (Atria) vs Run-8 (agentrouter)
+
+| Row | Standard | Run-6 · Atria | Run-8 · agentrouter | Winner |
+|---|---|---|---|---|
+| S1 first write | ≤ 3 min | 8m35s ❌ | 2m42s ✅ | agentrouter |
+| S2 first route file | ≤ 5 min | 14m54s ❌ | 4m17s ✅ | agentrouter |
+| S3 scaffold | all 6 plan routes | 4/6 ❌ | 5/6 ❌ | agentrouter (closer; both fail) |
+| S4 reads before first write | ≤ 12 | 28 ❌ | 17 ❌ | agentrouter (closer; both fail) |
+| S5 throughput | ≥ 4 screens/h | 5.6/h ✅ | 16.3/h ✅ | agentrouter (2.9×) |
+| S6 runnable while building | last check green | ✅ | ✅ | tie |
+| S7 checklist truth | all shipped marked | 4/13 ❌ | **15/15 ✅** | agentrouter |
+| S8 verify economy | ≤ 15% of wall | 8% ✅ | 36% ❌ | Atria |
+| S9 tool contract | ≥ 26 advertised, 0 missing | 41/call ✅ | 41/call ✅ | tie |
+| S10 input economy | prefix stable; tail bounded | 10987→11900 tok, 29 rebuilds, body 252,751 B ✅ | 12070→12641 tok, 28 rebuilds, body 234,748 B ✅ | tie |
+| S11 cost accounting | every run priced | ? (L7 open) ❓ | ? (L7 open) ❓ | tie — blocks a full PASS on both |
+| S12 progress visibility | gap ≤ 90 s | 31s ✅ | **133s ❌** | Atria — **but infrastructure, not the model** |
+| required-row failures | 0 to pass | 5 | 4 | — |
+
+**S12's 133s is FM-ANTa, measured.** The gap is `phase 00:05:08 → usage
+00:07:21` = build round 3, a single buffered round of 2m12.9s that wrote
+nothing to the wire because `ChatWithTools` drops the `StreamSink` on the
+anthropic path; the same round on openai would have streamed its text and
+reasoning deltas throughout. The other four largest gaps (36–40s) are
+`tool_call → command_output` runs, all under the bar. Scoring this row as
+"a model visibility difference" would be wrong; scoring it as "fine"
+would also be wrong — the transport really did go dark for 133 seconds,
+which is exactly what L8 was built to prevent. Fix is FM-ANTa (candidate
+L28), not a provider setting.
+
+**Same round, second finding:** round 3 also hit `stop=max_tokens` with
+`out=32768` — the *raised* ceiling — while returning6 usable tool calls
+(the loop executed them and continued). One round in 57 exhausted a
+32,768-token budget on thinking alone; a thinking model's budget has to
+be sized for reasoning + payload, not payload.
+
+### Tool-call shape (behaviour, not transport)
+
+| | Run-6 · Atria | Run-8 · agentrouter |
+|---|---|---|
+| write / edit / delete | write 29 · edit 14 · delete 13 | write 37 · multi_edit 10 · edit 4 · delete 18 |
+| reads | read_file 24 | read_file 29 |
+| verification | run_checks 10 | run_checks 13 (+ prettier1) |
+| skills | read_skill 8 | read_skill 7 |
+| VCS | — | git_commit 8, git_status 1 |
+| distinct tools | 14 | 18 |
+
+Run-8 commits as it goes (8 commits vs none) and leans on `multi_edit`
+instead of single `edit_file`; both stayed inside the tool contract
+(S9: 41 advertised, 0 promised-missing).
+
+### Telemetry (both runs measured, L27 verified in production)
+
+| | Run-6 | Run-8 |
+|---|---|---|
+| `est_input_tok=` / `request-ledger` lines | 59 / 59 | **57 / 57** (Run-7: 0 / 60 — the defect) |
+| stop mix | 58 tool_use, 1 end_turn | 55 tool_use, 1 end_turn, 1 max_tokens |
+| system prompt rebuilt | 29× | 28× |
+| max-body attribution | system=42007 tools=20539 payloads=24229 results=26135 history=31968 envelope=3617 | system=47479 **tools=22216** payloads=20608 results=89165 history=36909 envelope=18371 |
+
+The `tools` layer — 20,539–22,216 B ≈ **5,100–5,550 tokens on every
+single request** — is unchanged between providers and is the largest
+attributable layer in both runs: P2 #11 (tool-def diet) remains the
+biggest input lever either model is paying for.
+
+### Confounds, stated plainly
+
+1. **Protocol differs by necessity** — agentrouter speaks anthropic only,
+   Atria openai only. S1–S11 measure what was produced and are
+   unaffected; S12 measures the wire, and the anthropic wire is buffered
+   (FM-ANTa). Comparable as "over/under the 90s bar", not as equal
+   figures.
+2. **Output ceiling moved** — Run-6 ran at `max_tokens` 16384, Run-8 at
+   32768 (the fix for Run-7's truncation, FM-PLANa). A ceiling is a limit
+   not a target: no request is shaped by it unless the model would
+   otherwise be cut, which is precisely the case it was raised for.
+3. **S11 unmeasured on both** (no published pricing — L7 open), so
+   neither run can be a full PASS under §5; the comparison is row-by-row.
+4. **Run-5 excluded** — killed by an external 429 at round 8; Run-6 is
+   the Atria measurement.
+5. **Blocked follow-up** — `claude-opus-5` on agentrouter returns HTTP
+   402 `Budget pool quota has been exhausted`; the three-way comparison
+   (Atria / deepseek / opus) needs an administrator quota increase, then
+   is a straight Run-9 on this same recipe.
+
+### Reproduce
+
+- Run-6: `e2e/run-behavior.sh run6 …` → `e2e/reports/behavior-run6.md`
+- Run-8: `e2e/run-behavior.sh run8 …` → `e2e/reports/behavior-run8.md`
+  (`e2e/reports/behavior-latest.md` always holds the newest; re-score any
+  run with `e2e/scorecard.py --db backend/talon.db --project <id>
+  --prompt <id> --stream … --serverlog … --fresh`)
