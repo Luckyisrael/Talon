@@ -2311,6 +2311,7 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 	budgetNotes := map[int]string{}
 	budgetRefuse := false
 	budgetTotal := 0
+	budgetMega := map[int]string{}
 	if opts.ExplorationBudget {
 		readInBatch, writeInBatch := 0, 0
 		firstRead := -1
@@ -2332,16 +2333,49 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 			// what it learned, not surveying.
 			sess.NoteExplorationWrite()
 		case readInBatch > 0:
-			total := sess.NoteExplorationReads(readInBatch)
+			// L14 pre-write mega-batch cap (FM-E1a): before the turn's first
+			// write, a batch carrying more than maxPreWriteReadBatch reads
+			// dispatches only that many — the flood delivers its useful head
+			// and the tail refuses with the cap's own message. Cap-refused
+			// calls deliver nothing, so they never enter the streak: only
+			// dispatched reads count (FM-E1b). The hard stop keeps its
+			// existing semantics — crossing batch counted, then refused.
+			mega := readInBatch > maxPreWriteReadBatch && !sess.HasWrittenThisTurn()
+			countable := readInBatch
+			if mega {
+				countable = maxPreWriteReadBatch
+			}
+			total := sess.NoteExplorationReads(countable)
+
+			// FM-E2a: the warning event fires whenever the streak crosses
+			// exploreBudgetWarning — even when this same batch also jumps
+			// past the hard stop. Checked before the ladder so no branch can
+			// shadow it; the latch keeps it to one event per streak.
+			if total >= exploreBudgetWarning && sess.MarkExplorationWarned() {
+				sess.Emitter.EmitToolCall("", "exploration_budget", "",
+					fmt.Sprintf("%d read-class calls without a write", total), "warning")
+			}
 			switch {
 			case total >= exploreBudgetHard:
 				budgetRefuse = true
 				budgetTotal = total
-			case total >= exploreBudgetWarning:
-				budgetNotes[firstRead] = explorationReminder(total)
-				if sess.MarkExplorationWarned() {
-					sess.Emitter.EmitToolCall("", "exploration_budget", "",
-						fmt.Sprintf("%d read-class calls without a write", total), "warning")
+			case mega:
+				// The hard stop wins when both apply (it refuses everything
+				// above); alone, the cap refuses only its own tail, and the
+				// advisory note still rides — one rule's message may not
+				// silence another's (FM-E1b).
+				allowed := 0
+				for i, c := range calls {
+					if !readTools[c.Name] {
+						continue
+					}
+					if allowed >= maxPreWriteReadBatch {
+						budgetMega[i] = explorationBatchRefusal(readInBatch, maxPreWriteReadBatch)
+					}
+					allowed++
+				}
+				if total >= exploreBudgetReminder {
+					budgetNotes[firstRead] = explorationReminder(total)
 				}
 			case total >= exploreBudgetReminder:
 				budgetNotes[firstRead] = explorationReminder(total)
@@ -2415,6 +2449,19 @@ func (o *Orchestrator) executeTools(ctx context.Context, sess *SessionState, cal
 				Type:      "tool_result",
 				ToolUseID: call.ID,
 				Content:   explorationRefusal(budgetTotal),
+				IsError:   true,
+			}
+		}
+
+		// L14 batch cap (FM-E1a): the pre-first-write mega-batch's tail —
+		// refused with the cap's own message so the model knows which rule
+		// it hit (FM-E1b). Mutually exclusive with the hard stop above: the
+		// map only builds when the hard stop did not fire.
+		if content, ok := budgetMega[i]; ok {
+			return ai.Block{
+				Type:      "tool_result",
+				ToolUseID: call.ID,
+				Content:   content,
 				IsError:   true,
 			}
 		}

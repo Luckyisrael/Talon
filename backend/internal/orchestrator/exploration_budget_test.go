@@ -19,8 +19,10 @@ import (
 //     one, and the executor sees every call.
 //  3. Crossing the reminder (12) — the batch's FIRST read result carries the
 //     advisory note and the executor still runs: advisory, not a gate. The
-//     streak counts CALLS (a 12-call batch crosses in one step); only the
-//     carrier decision is per batch.
+//     streak counts dispatched CALLS (a 12-call batch crosses in one step —
+//     and, post-L14, is itself over the pre-write cap, so 10 dispatch and
+//     the tail refuses; see exploration_batch_test.go for the cap's own
+//     failure modes). Only the carrier decision is per batch.
 //  4. Crossing the warning (18) — exactly one exploration_budget event per
 //     streak, not one per subsequent batch.
 //  5. Crossing the hard stop (24) — read-class calls refuse WITHOUT reaching
@@ -85,8 +87,9 @@ func TestExplorationBudgetLadder(t *testing.T) {
 		t.Fatal("the budget must stay silent under the reminder threshold")
 	}
 
-	// A single 12-call batch crosses the reminder — the streak counts calls
-	// (2 + 12 = 14).
+	// A single 12-call batch crosses the reminder — and is over the L14
+	// pre-write cap, so the first 10 dispatch, the tail refuses (FM-E1a),
+	// and the streak counts dispatched calls only (2 + 10 = 12, FM-E1b).
 	before := executed
 	if got := run("grep_codebase", 12); len(got) != 12 {
 		t.Fatalf("reminder batch: want 12 results, got %d", len(got))
@@ -97,15 +100,19 @@ func TestExplorationBudgetLadder(t *testing.T) {
 		if got[1].Content != "ok" {
 			t.Errorf("only the carrier carries the note, got %q", got[1].Content)
 		}
+		if !got[10].IsError || !strings.Contains(got[10].Content, "Batch capped") {
+			t.Errorf("the cap must refuse the mega-batch's tail, got (err=%v, %q)",
+				got[10].IsError, got[10].Content)
+		}
 	}
-	if executed-before != 12 {
-		t.Fatalf("the reminder is advisory: all 12 calls must run, %d did", executed-before)
+	if executed-before != 10 {
+		t.Fatalf("the reminder batch is capped: 10 dispatched reads, %d ran", executed-before)
 	}
 	if countWarnings() != 0 {
 		t.Fatal("the reminder threshold must not emit the warning event")
 	}
 
-	// Crossing the warning (14 + 6 = 20): one event, and the note still rides.
+	// Crossing the warning (12 + 6 = 18): one event, and the note still rides.
 	if got := run("find_files", 6); len(got) != 6 {
 		t.Fatalf("warning batch: want 6 results, got %d", len(got))
 	} else if !strings.Contains(got[0].Content, "Exploration budget is 12") {
@@ -115,7 +122,7 @@ func TestExplorationBudgetLadder(t *testing.T) {
 		t.Fatalf("crossing 18 must emit exactly one warning event, got %d", countWarnings())
 	}
 
-	// Still over the reminder, still latched at one warning (20 + 3 = 23).
+	// Still over the reminder, still latched at one warning (18 + 3 = 21).
 	if got := run("search_files", 3); len(got) != 3 {
 		t.Fatalf("post-warning batch: want 3 results, got %d", len(got))
 	} else if !strings.Contains(got[0].Content, "Exploration budget is 12") {
@@ -125,7 +132,7 @@ func TestExplorationBudgetLadder(t *testing.T) {
 		t.Fatalf("the warning must fire once per streak, got %d more", countWarnings())
 	}
 
-	// The hard stop (23 + 5 = 28): reads refuse without reaching the executor.
+	// The hard stop (21 + 5 = 26): reads refuse without reaching the executor.
 	before = executed
 	refused := run("inspect_package", 5)
 	if executed != before {

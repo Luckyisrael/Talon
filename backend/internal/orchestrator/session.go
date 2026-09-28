@@ -129,8 +129,11 @@ type SessionState struct {
 	// explorationReads/explorationWarned are the L2 exploration-budget streak
 	// (ENGINEERING_STANDARDS S4): read-class calls since the last write-class
 	// batch, and whether this streak has already fired its one warning event.
+	// explorationWrote (L14) latches the turn's first write-class batch: the
+	// pre-write mega-batch cap lifts the moment the model acts.
 	explorationReads  int
 	explorationWarned bool
+	explorationWrote  bool
 
 	// routeScaffolded/routeWarned are the L3 routes-first gate
 	// (ENGINEERING_STANDARDS S2): a build turn that has not written any
@@ -657,6 +660,12 @@ const (
 	exploreBudgetReminder = 12
 	exploreBudgetWarning  = 18
 	exploreBudgetHard     = 24
+	// maxPreWriteReadBatch (L14, FM-E1a) caps the read-class calls a single
+	// batch may dispatch before the turn's first write: RESEARCH's
+	// mega-batch delivered a flood of results the ladder only saw after the
+	// fact. The head runs (enough to scaffold), the tail refuses with the
+	// cap's own message; cap-refused calls never enter the streak (FM-E1b).
+	maxPreWriteReadBatch = 10
 )
 
 // NoteExplorationReads adds n read-class calls to the streak and returns the
@@ -676,6 +685,7 @@ func (s *SessionState) NoteExplorationWrite() {
 	defer s.mu.Unlock()
 	s.explorationReads = 0
 	s.explorationWarned = false
+	s.explorationWrote = true
 }
 
 // MarkExplorationWarned latches the streak's single warning event and reports
@@ -690,12 +700,22 @@ func (s *SessionState) MarkExplorationWarned() bool {
 	return true
 }
 
+// HasWrittenThisTurn reports whether a write-class batch has landed this
+// turn — the mega-batch cap's exemption switch (FM-E1a): once the model
+// has acted, later batches survey targets, not the whole tree.
+func (s *SessionState) HasWrittenThisTurn() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.explorationWrote
+}
+
 // ResetExploration clears the streak at turn start.
 func (s *SessionState) ResetExploration() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.explorationReads = 0
 	s.explorationWarned = false
+	s.explorationWrote = false
 }
 
 // L3 routes-first gate (ENGINEERING_STANDARDS §6 table, L3; S2 row): the
@@ -790,6 +810,16 @@ func explorationRefusal(total int) string {
 	return fmt.Sprintf("Exploration budget exhausted: %d read-class calls without writing anything. "+
 		"Reading more will not advance the build — write_file, edit_file, and multi_edit are the only calls that proceed right now. "+
 		"Start with the smallest real file (a screen stub, the store slice, a theme token) and the budget resets.", total)
+}
+
+// explorationBatchRefusal is the L14 pre-write mega-batch cap's refusal
+// (FM-E1b): it names the cap — never the exhausted budget — carries both
+// counts and the corrective action, and says the cap lifts at the turn's
+// first write.
+func explorationBatchRefusal(batchReads, allowed int) string {
+	return fmt.Sprintf("Batch capped: %d read calls before this turn's first write exceed the pre-write batch limit of %d — only the first %d ran, %d were refused. "+
+		"Write what you already know (the smallest real file) and the cap does not apply to later batches; alternatively split the remaining survey across rounds.",
+		batchReads, allowed, allowed, batchReads-allowed)
 }
 
 // MarkSkillSeen records that a skill's body has been delivered this session and

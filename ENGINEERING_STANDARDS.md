@@ -254,6 +254,28 @@ Failure modes (written before the code, TEST_RULES §3):
   `prep` and `gen` timed around the actual model call, every tool batch
   logging its own duration; a bucket missing while wall time passed is
   S12's silent-gap crime in metrics form.
+- **FM-E1a (L14)** — the pre-write mega-batch cap must stop the flood,
+  not the work: before the turn's first write-class batch, a batch
+  carrying more than `maxPreWriteReadBatch` (10) read-class calls
+  dispatches only the first 10 and refuses the rest with the count and
+  the corrective action; batches containing a write, batches after the
+  first write, and disarmed (plan/child) turns run untouched — a cap
+  that fires in those lanes blocks the targeted survey the doctrine
+  explicitly allows after writing.
+- **FM-E1b (L14)** — the cap and the 12/18/24 ladder must not
+  double-count or shadow each other: cap-refused calls deliver nothing,
+  so only dispatched reads add to the streak; the hard stop keeps its
+  existing semantics (crossing batch counted then refused, write tools
+  never refused); the cap's refusal names the *batch cap* — never
+  "exploration budget exhausted" — so the model knows which rule it hit;
+  and a capped batch that also passes the reminder still carries the
+  advisory note (one rule's message may not silence another's).
+- **FM-E2a (L14)** — the warning event must fire whenever the streak
+  crosses `exploreBudgetWarning`, even when the same batch also jumps
+  past the hard stop: the current ladder checks hard first, so a jump
+  (17 → 25) refuses everything and never emits the only user-visible
+  step between advisory and refusal — with mega-batches legal, jumps
+  are the common case, not the rare one.
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -265,6 +287,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L12 | **Mark at every passing compile** — `executeTools` credits `markScreenTasksFromFiles` + `auditScreenTasks` right after a passing `run_checks`, using a touched-set snapshot taken before dispatch (FM-L12b); the final verify gate stays exactly as it is | fails-first executeTools test (pass marks / fail does not / same-batch write does not); Run-2: cancelled turn credited nothing | ⬤ |
 | L4 | **Plan feasibility gate** — both plan doors (Send + stream) probe the plan's new packages with `npm install --dry-run` in the real workspace (FM-L4b resolution bar): a definitive failure names the package and **fails the plan turn** — unknown (flaky network) passes (FM-L4c), preinstalled packages skip the probe, and the probe never mutates (FM-L4d) | fails-first door tests (infeasible fails / unknown passes / preinstalled skipped); Run-1: 4 of 6 plan packages unshipped, 10 errored probes at build hour 0 | ⬤ |
 | L13 | **Request ledger + phase metrics (RESEARCH P0.4)** — every model call logs a `request-ledger` line attributing `body_bytes` to system / tools / payloads / results / history with a *named* envelope that sums exactly (FM-TELa; write-class bodies in their own bucket so RESEARCH P0.1's leak is visible — FM-TELb; sizes read from the wire-bound objects only — FM-TELc); every enrichment logs a `prompt-sec` section table (`Sizes()` reconciles with `Assemble`); every round logs `round-metrics` prep/gen and a `round-tools` duration (FM-TELd) | fails-first `TestRequestLedgerAccountsEveryByte`, `TestRequestLedgerDoesNotMutateWhatIsSent`, `TestSizesReconcileWithAssemble` (red at build → green); E2E artifact = the four serverlog line types per run; unblocks L5's premise and quantifies B-phase | ⬤ |
+| L14 | **Pre-write mega-batch cap + warning timing (RESEARCH P0.3's real gap)** — before the turn's first write-class batch, a batch carrying > `maxPreWriteReadBatch` (10) reads dispatches the head and refuses the tail with the cap's own message (FM-E1a); cap-refused calls never enter the 12/18/24 streak, the hard stop keeps its semantics, the cap's refusal never says "exhausted", and the advisory note still rides a capped batch (FM-E1b); the warning event now fires on *any* crossing of `exploreBudgetWarning`, including a jump that also crosses the hard stop (FM-E2a — today's ladder checks hard first and skips the only user-visible step) | fails-first `TestMegaBatchCappedBeforeFirstWrite` (red: 30-read batch hit the hard stop, delivered 0), `TestWarningFiresWhenBatchJumpsPastHardStop` (red: 0 events), `TestMegaBatchCapExemptLanes` (exemption guard), ladder test moved to post-cap contract (red → green); pre-write, armed turns only | ⬤ |
 
 Still-open P1 rows from the previous list:
 
