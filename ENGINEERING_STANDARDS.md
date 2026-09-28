@@ -379,6 +379,34 @@ Failure modes (written before the code, TEST_RULES §3):
   composition cannot forget it — and `Reload` stays the refresh seam
   (touch-reconciliation refresh remains unwired; no run has shown a
   need, so it is out of scope here).
+- **FM-H6b (L20's completion)** — loading the catalog is not the same
+  as populating it: `EmbeddedProvider.Load` bridges
+  `knowledge.Registry` → `knowledge.Skill` with `{Name, Body}` only,
+  so `Description` — the one field `Manifest()` exists to render, and
+  the one the manifest tells the model to match against — never
+  crosses. Run-5 measured the exact symptom: `skills/catalog=1281` =
+  617 B of name-only rows + 662 B of unchanged plugins guidance, where
+  L20 predicted ~5.5 KB, and **0 model-initiated `read_skill` for the
+  second run running** (4/4 calls were auto-attach synthetics). The
+  chain reads *listed but unnamed* — a discovery surface the model can
+  see and cannot choose from, which fails H6's law in the same
+  direction as having no catalog at all. The fix is one field copied
+  at the bridge, but it is contract-tier: without it L20's own
+  acceptance evidence never arrives, and any "is discovery working?"
+  run stays unanswerable. Guard: a test that asserts the *rendered
+  manifest* carries a description body for an embedded skill — not
+  merely that the provider loaded, which is exactly the assertion
+  that passed while the field was missing.
+- **FM-429a (candidate L23)** — a retry budget measured in attempts
+  cannot outlast a rate window measured in minutes: `openStream`
+  backs off `attempt*3s` (3s, 6s = 9 s total) because that ladder was
+  written for flaky 502s, so Run-5's `Cluster RPM rate limit exceeded`
+  bursts burned the whole budget in ~15 s and killed a healthy turn at
+  round 8 while the 60 s window that would have cleared it was still
+  open. Symmetric failure on the other side too: a backoff long
+  enough for a minute-window would stall a 502 recovery, so 429 needs
+  its own policy (honor the window/reset hint, cap the budget in
+  *seconds*, keep the 502 ladder unchanged).
 - **FM-B2a (L21)** — the always-on prompt replays what `read_skill`
   exists to defer. Run-4 measured `persona=22168 B` (≈ 5542 tok
   against L5's 4500 budget), and two of the diet's three sections are
@@ -422,7 +450,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L17 | **First-artifact clock (RESEARCH P1.8)** — a build turn with no successful write gets a first-write advisory line on the turn-state card from +3 min (S1's standard) escalating at +6 min with one latched `first_write` warning event; build mode only, closed by the first successful write at the fsWrite seam, errored writes never count (FM-D1a); the card speaks with one voice — `GateNote` gives the first-write line ownership while nothing is written and hands the card back to the route gate once the first write lands, the route warning keeps today's semantics (FM-D1b) | fails-first `TestFirstWriteLadder` (red: method undefined — silence-only today; asserts in-window silence, S1-named advisory, escalation, one-shot latch, plan-mode silence, closure on write) + `TestGateNoteOneVoice` (red: `GateNote` undefined — route note must not compete while unwritten, must resume after the first write); L3's `TestRouteScaffoldLadder` stays pinned green; round-based budgets rejected with evidence (Run-3's round-1 9.5-min silent generation is invisible to a round count) | ⬤ |
 | L18 | **Lone-write payload collapse (RESEARCH P0.1)** — L9's trim only collapsed *superseded* write inputs, so Run-3's 24 distinct paths — every one lone — replayed their full bodies every round for the life of the turn (Run-2: body 67 → 294 KB). Now any payload write past the same 4-round working-memory window collapses on the wire copy: a superseded input keeps its byte-identical FM-L9a placeholder, the path's latest write collapses to a disk pointer (`collapse_note`), and a write whose `tool_result` failed or is missing never collapses — that payload is the conversation's only record (FM-B1a); stored transcript stays full-fidelity, IDs/positions/pairings untouched | fails-first `TestTrimSupersededToolInputsCollapsesLoneOldWrite` (red: 4036 bytes kept) + `TestTrimSupersededToolInputsNeverCollapsesFailedWrite` (red: failed payload destroyed behind a superseded placeholder); pinned `TestTrimSupersededToolInputsCollapsesOldWrite` stays byte-identical green, the recent-window guard renamed and kept; Run-4's `request-ledger` `payloads=` bucket is the before-number | ⬤ |
 | L19 | **Ledger truth on the wire (L13 completion)** — `AttributeRequestBody(body)` replaces transcript-based `AttributeRequest`: buckets are disjoint `json.RawMessage` spans of the actual marshaled request (Anthropic's top-level `system` field or OpenAI's system message → system; `tools` array → tools; role-`tool` content / `tool_result` blocks → results; write-class `function.arguments` / `input` → payloads; all other text, blocks, images → history), envelope = remainder ≥ 0 **by construction** — `thinking`/`plan` blocks the serializers drop can no longer be counted because only the body is read (FM-TELe); both provider paths log the identical line format (scorecard contract unchanged) | fails-first `TestRequestLedgerAccountsEveryByte` rewritten to a hand-built body pinning exact bucket spans (red: function undefined), `TestRequestLedgerIgnoresBlocksTheSerializerDrops` (red: builds a real `toOpenAI` body with 10 KB thinking + 4 KB plan blocks — envelope must not go negative and History must exclude them; this is Run-4's `envelope=-26156` as a test), `TestRequestLedgerDoesNotMutateWhatIsSent` adapted to body bytes | ⬤ |
-| L20 | **H6 catalog loads at construction (skill discovery + `read_skill` both dead in production)** — `skills.NewCatalog` performs the initial provider load itself (construction is composition start), so the merged map can never be the empty shell `Reload()`'s doc promised at a call site that does not exist; `Reload` stays the refresh seam; the prompt's skills/catalog section and `read_skill`'s library both resolve through the now-populated catalog (FM-H6a) | fails-first `TestNewCatalogLoadsAtConstruction` (red: `Names()` empty and `Manifest()` renders `""` over a provider that loads — Run-4's `skills/catalog=662` failure as a test); live evidence: zero `Reload()` callers repo-wide, `agent knowledge ready (14 skills)` beside a 662-byte catalog; Run-5 `prompt-sec` should show the catalog at its real size (~5.5 KB with plugins guidance) | ⬤ |
+| L20 | **H6 catalog loads at construction (skill discovery + `read_skill` both dead in production)** — `skills.NewCatalog` performs the initial provider load itself (construction is composition start), so the merged map can never be the empty shell `Reload()`'s doc promised at a call site that does not exist; `Reload` stays the refresh seam; the prompt's skills/catalog section and `read_skill`'s library both resolve through the now-populated catalog (FM-H6a) | fails-first `TestNewCatalogLoadsAtConstruction` (red: `Names()` empty and `Manifest()` renders `""` over a provider that loads — Run-4's `skills/catalog=662` failure as a test); live evidence: zero `Reload()` callers repo-wide, `agent knowledge ready (14 skills)` beside a 662-byte catalog; Run-5 `prompt-sec` measured **1,281 B carrying all 15 names** (Run-4: 662 B, zero skills) — but the byte math is name-only (617 + 662 plugins guidance), so the ~5.5 KB this row predicted did **not** materialize: `EmbeddedProvider.Load` discards `Description` upstream of `Manifest()` → FM-H6b, closed separately as a contract-tier one-liner | ⬤ |
 | L21 | **System-prompt diet (L5 ≤ 4500 tok, FM-B2a)** — `SystemPromptBuild` sheds the three duplicated/detailed sections: `## Design bar` and `## Navigation semantics` go entirely (mobile-craft / expo-router-nav already carry them; the two unique facts — `@/constants/app-styles`, the vision-gate sentence — merge into mobile-craft first), `## The live device` shrinks to a compact always-on surface law (tool-absence rule, no-fabricate verification honesty, 10/30 lifecycle, `.maestro` scope, `device-session` pointer) with the full protocol moving verbatim into the new `device-session` skill; budget enforced as persona ≤ 4500 tok *including* digest + allowlist (Run-4: persona 22168 − compiled const 15469 = 6699 B for digest+allowlist → base ≤ 11301 B, measured on the compiled string) | fails-first `TestSystemPromptBuildDietBudget` (red: 15469 B > 11301 B), `TestMobileCraftCoversDesignBar` (red: no `app-styles` / vision-gate), knowledge `TestDeviceSessionSkillCarriesProtocol` (red: skill absent — flows dir, `com.talon.app`, lifecycle, tool list); Phase A guard `TestPhaseA_DeviceAwarePrompt` keeps its tool-name + lifecycle assertions in the prompt and relocates `.maestro/flows/` + `com.talon.app` to the skill test with a comment naming the move; S9 scan unaffected (regex ignores hyphens/slashes; `read_skill` is in `coreToolSet`) | ⬤ |
 
 Still-open P1 rows from the previous list:
@@ -634,3 +662,113 @@ four landed.
   --prompt 62 --stream /tmp/opencode/run4-build.log --serverlog
   /tmp/opencode/run4-server.log --fresh` (report committed at
   `e2e/reports/behavior-latest.md`).
+
+## Appendix E — Run-5 (project 22 "Momentum", 2026-09-28, after L18–L21)
+
+Same committed prompts (`e2e/prompts/momentum-{plan,build}.txt`), fresh
+project, stack recipe `e2e/run-behavior.sh`. Plan → prompt 63 `success`
+(6 screens / 14 tasks). Build → prompt 64 **`failed`** at round 8 after
+**10m28s** (avg 1m19s/round), killed by an **external** HTTP 429 —
+`Cluster RPM rate limit exceeded` from the Atria gateway, not a Talon
+defect. Burst one at 19:42:40 recovered (attempt 3/3 succeeded and the
+turn ran on); burst two at 19:45:35 exhausted the stream path's
+3-retry budget and died at 19:45:47 → `FAILED_NEEDS_USER`. First run
+carrying L18–L21, so it is the after-evidence for them.
+
+**Truncated-run caveat — read before comparing any row.** 10m28s
+against Run-4's 65m53s. Rows split three ways:
+
+- **Complete and comparable** — S1 (5m40s, the write landed), S2
+  (7m20s, the route landed), S4 (13 reads before that write), S9,
+  S10, and every telemetry row below (per-call, run-length-independent).
+- **Truncated, not comparable** — S3 `1/6` (only 8 rounds to
+  scaffold in), S5 `5.7/h` (a rate over one screen), S7 `0/14` (the
+  turn never reached close-out). These are lower bounds, not results.
+- **Unmeasured, honestly `?`** — S6 (no check after the last write),
+  S8 (0 `run_checks` in 8 rounds), S11 (L7 pricing still open).
+
+The report's headline *5 required failures* is therefore a statement
+about a 10-minute turn, **not** a verdict on L18–L21. Neither L17's nor
+L3's escalation could be re-tested either: both ladders' warnings come
+due at +6 min / +10 min, and the artifacts landed at +5m40s / +7m20s —
+so 0 warning events this run is correct by timing, and Appendix D's
+tick-window finding (candidate L22) stays untested.
+
+| Row | Run-4 | Run-5 | note |
+|---|---|---|---|
+| S1 first write | 8m21s ✗ | **5m40s ✗** | complete; 2m41s faster, still 2m40s over |
+| S2 first route file | 18m08s ✗ | **7m20s ✗** | complete; 10m48s faster, still 2m20s over |
+| S3 scaffold | 2/6 ✗ | 1/6 ✗ | **truncated** — lower bound |
+| S4 reads before write | 17 ✗ | **13 ✗** | complete; still 1 over the ≤12 bar |
+| S5 throughput | 1.8/h ✗ | 5.7/h ✅ | truncated rate (1 screen) |
+| S6 runnable | ? ✗ | ? | no check after the last write |
+| S7 checklist truth | 0/16 ✗ | 0/14 ✗ | truncated — turn never reached close-out |
+| S8 verify economy | 7% ✅ | ? | 0 `run_checks` in 8 rounds |
+| S9 tool contract | 41 ✅ | **41 ✅** | pass |
+| S10 input economy | 10,803→11,773 tok, 31 rebuilds ✅ | **10,057→10,389 tok, 5 rebuilds ✅** | pass; `rebuild round 8: project-map Δ146 bytes (41412 → 41558)` — attribution live |
+| S11 cost | ? (L7) | ? (L7) | still blocked on pricing data |
+| S12 progress | max 136 s ✗ | **max 21 s ✅** (top5 21/9/7/5/5) | pass, but weak: 10 minutes with no compaction to hide one |
+
+### L18–L21 after-numbers (vs Appendix D's before)
+
+- **L19 envelope — fixed by construction.** `envelope` is positive on
+  **all 8** `request-ledger` lines, min **+221** → max +4,022
+  (Run-4: −1,894 → **−98,961**). The exact-sum line also closes on the
+  wire: `system=42007 tools=20539 payloads=24229 results=26135
+  history=31968 envelope=3617` = body **148,495** ✓.
+- **L18 payload collapse — working, window visible.** `payloads`
+  0 → 0 → 0 → 10,380 → 17,709 → 19,293 → **24,229** → **19,552**:
+  growth through round 7, then round 8 *drops* it as writes age past
+  the 4-round working-memory window (Run-4: monotonic to **70,355**
+  over 60 rounds, no eviction ever). First run where the collapse
+  seam is observable in the ledger.
+- **L20 catalog loads — partial.** `skills/catalog=1281` on every
+  `prompt-sec` line, carrying **all 15 skill names** (Run-4: 662 with
+  zero skills). Byte math says the value is **name-only**: 617 B of
+  `- **name** — ` rows + 662 B of unchanged plugins guidance = 1,281.
+  With descriptions it would be ~5.9 KB, which is what L20's row
+  predicted (~5.5 KB) — **so L20's stated evidence did not
+  materialize**; the descriptions are being dropped upstream of the
+  manifest. That gap is FM-H6b below, and it is why discovery still
+  reads 0.
+- **L21 diet — met.** `persona=17922` **constant** across all rounds
+  (Run-4: 22,168 → −4,246 B ≈ −1,060 tok) = **4,480 tok against L5's
+  4,500 budget**; system prompt 10,057 → 10,389 tok (Run-4:
+  10,803 → 11,773 — Run-4 *grew* past the budget, Run-5 does not).
+
+### Findings this run added
+
+- **FM-H6b (L20's missing half) — the bridge drops `Description`.**
+  `EmbeddedProvider.Load` (skills.go:58) builds
+  `knowledge.Skill{Name, Body}` from `Registry.SkillBody`, discarding
+  `Description` that `knowledge.Registry` loaded correctly — so the
+  catalog's merged map holds descriptions that `Manifest()` (line 217)
+  then renders as `- **name** — ` with nothing after the dash.
+  Verified with a throwaway diagnostic (since deleted): the registry
+  reports the descriptions, the manifest emits empty ones. Two
+  consequences: (i) the manifest's own "match the description"
+  instruction is unsatisfiable — nothing to match against; (ii) Run-5
+  repeats Run-4's **0 model-initiated `read_skill`** — all 4 calls
+  (`mobile-craft`, `expo-router-nav`, `mobile-defaults`,
+  `mobile-motion`) are auto-attach synthetics with `id:""`. The
+  discovery chain is now *listed but unnamed* instead of *unlisted*;
+  one field short of working. Contract-tier: it completes L20.
+- **429 backoff is sized for 502s, not for a rate window.**
+  `openStream` sleeps `attempt*3s` (client.go:954) → **3s then 6s =
+  9 s of sleep**, ~15 s wall (19:45:32 → 19:45:47) against a
+  **per-minute** RPM window. Both bursts therefore died in ~10–15 s
+  instead of waiting out the 60 s that would have let the turn
+  continue; the retry budget was spent before the window reset. A
+  429 needs its own backoff (honor the window, not the 502 ladder).
+
+- Tool mix (8 rounds): read_file 10, write_file 9, read_skill 4
+  (all synthetic), context_build 1 — **0 `run_checks`**, 0 git
+  commits, 0 checklist marks.
+- Verdict: **FAIL — 5 required rows**, with the truncation caveat
+  above. The run's durable value is the telemetry: L19 proven exact,
+  L18's eviction window seen for the first time, L21 inside budget,
+  L20 confirmed partially loaded with its remaining defect named.
+- Reproduce: `python3 e2e/scorecard.py --db backend/talon.db --project 22
+  --prompt 64 --stream /tmp/opencode/run5-build.log --serverlog
+  /tmp/opencode/run5-server.log --fresh` (report committed at
+  `e2e/reports/behavior-run5.md`, copied to `behavior-latest.md`).
