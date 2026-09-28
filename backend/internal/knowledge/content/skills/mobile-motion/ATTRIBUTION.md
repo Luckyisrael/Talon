@@ -28,7 +28,7 @@ Rebuilt from Emil Kowalski's **animate-expo** skill plus Appllama's
   (`run_boot`, screenshot, `run_interact` in place of simulator video),
   the Reanimated 4 `scheduleOnRN` note pinned to the installed
   `react-native-worklets` 0.7.4 / `react-native-reanimated` 4.2.1, and the
-  `react-native-keyboard-controller` preference (still not preinstalled).
+  `react-native-keyboard-controller` (now preinstalled in the template).
 - **Kept from Emil, new to this skill.** Tool picker (cheapest that
   works), thread-law specifics (no `setState` in gestures, no shared
   read/write during render, `.get()`/`.set()`, `'worklet'` first line),

@@ -40,7 +40,7 @@ explanation, delight. Can't name it? Don't build it.
 | Mounting/unmounting element, list reflow | Layout animations (`entering` / `exiting`), never on recycled list rows |
 | Anything a finger touches, or derived from scroll | `useSharedValue` + `Gesture` + `useAnimatedStyle` |
 | Screen to screen | Native stack options in Expo Router. Never hand-roll this. |
-| UI tracking the keyboard | `react-native-keyboard-controller` (preference, not preinstalled — install via `install_package`, never a listener plus a guessed duration) |
+| UI tracking the keyboard | `react-native-keyboard-controller` (preinstalled — never a listener plus a guessed duration) |
 
 A press scale is a CSS transition; a drag is a shared value. Using a worklet
 for a two-state toggle is the mobile equivalent of installing a motion
