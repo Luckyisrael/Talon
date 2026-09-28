@@ -156,9 +156,11 @@ func main() {
 
 	// H6: the multi-source skill catalog — embedded knowledge is
 	// authoritative, and each workspace's .talon/skills merge in (winner per
-	// name: embedded). The catalog reloads lazily; workspace skills are listed
-	// to the model but their bodies load only through read_skill, same trust
-	// boundary as today.
+	// name: embedded). The catalog loads at construction (FM-H6a — an
+	// unloaded catalog rendered a skills section with zero skills and made
+	// read_skill answer "none"); Reload is the refresh seam. Workspace
+	// skills are listed to the model but their bodies load only through
+	// read_skill, same trust boundary as today.
 	skillCatalog := skills.NewCatalog(
 		skills.EmbeddedProvider{Registry: knowledge},
 		skills.RegistryProvider{

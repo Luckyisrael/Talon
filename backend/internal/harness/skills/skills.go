@@ -140,14 +140,26 @@ type Catalog struct {
 }
 
 // NewCatalog builds a catalog over providers, in priority order (index 0
-// wins name clashes).
+// wins name clashes) and loads it immediately: construction IS composition
+// start (FM-H6a). The original laziness shipped an empty catalog to every
+// reader — the prompt's manifest listed no skills and read_skill answered
+// "none" for all of them (Run-4: skills/catalog=662) — because the doc
+// promised a Reload call at composition start that had no caller. A
+// catalog that exists is loaded; Reload remains the refresh seam for
+// touch-reconciliation.
 func NewCatalog(providers ...Provider) *Catalog {
-	return &Catalog{providers: providers, merged: map[string]knowledge.Skill{}, sources: map[string]string{}}
+	c := &Catalog{providers: providers, merged: map[string]knowledge.Skill{}, sources: map[string]string{}}
+	// Reload degrades per provider (a refusing source contributes nothing,
+	// logged by the load itself), so there is nothing to report here.
+	_ = c.Reload()
+	return c
 }
 
-// Reload re-reads every provider and rebuilds the winner map. Called at
-// composition start and on workspace-touch reconciliation (the same
-// discipline as the instructions chain: no watcher, refresh on touch).
+// Reload re-reads every provider and rebuilds the winner map. The initial
+// load happens in NewCatalog — construction is composition start, so a
+// composition cannot skip it (FM-H6a); this method is the refresh seam for
+// workspace-touch reconciliation (the same discipline as the instructions
+// chain: no watcher, refresh on touch).
 func (c *Catalog) Reload() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

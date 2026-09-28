@@ -92,3 +92,30 @@ func (p sliceProvider) Load() ([]knowledge.Skill, error) {
 	copy(out, p.Skills)
 	return out, nil
 }
+
+// FM-H6a (L20) — written first (TEST_RULES §3). The failure: NewCatalog
+// shipped an empty merged map while Reload's own doc claimed it was
+// "called at composition start" — and no caller existed (Run-4:
+// skills/catalog=662 = the plugins guidance over a zero-skill base, so
+// the prompt listed none of the 14 embedded skills and read_skill
+// answered "none"; H6's "listed in the manifest, bodies only through
+// read_skill" failed in both directions). The law: construction IS
+// composition start — a catalog is populated the moment it exists, or
+// every reader downstream silently serves nothing.
+func TestNewCatalogLoadsAtConstruction(t *testing.T) {
+	emb := sliceProvider{PName_: "embedded", Skills: []knowledge.Skill{
+		{Name: "mobile-craft", Body: "the body", Description: "the design bar"},
+	}}
+
+	cat := NewCatalog(emb) // no Reload call: construction must load
+
+	if got := cat.Names(); len(got) != 1 || got[0] != "mobile-craft" {
+		t.Errorf("Names() = %v, want [mobile-craft] — the catalog was not loaded at construction", got)
+	}
+	if m := cat.Manifest(); !contains(m, "mobile-craft") || !contains(m, "the design bar") {
+		t.Errorf("Manifest() = %q, want the skill listed with its description — the prompt would show no skills", m)
+	}
+	if body, _, ok := cat.Body("mobile-craft"); !ok || body != "the body" {
+		t.Errorf("Body(mobile-craft) = %q, ok=%v — read_skill would answer none", body, ok)
+	}
+}
