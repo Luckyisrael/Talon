@@ -968,6 +968,22 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 		h.store.UpdatePromptResponse(promptID, string(payload))
 		h.persistPlanExchange(projectID, promptID, userTurn, planResp.Message, planJSON(planResp.Plan))
 		writeSSE(w, "plan", planResp)
+	} else if raw != "" && strings.HasPrefix(strings.TrimSpace(raw), "{") {
+		// FM-PLANa: output that OPENS as JSON is an envelope attempt, not a
+		// message. An envelope that does not parse is a lost plan — usually
+		// a stream the gateway cut (Run-7's plan ended mid-array at 17,081
+		// chars) — and storing it as prose used to leave this turn green
+		// with plan_json = null: drive.py read success, the scorecard read
+		// "plan screens: none found", and the build ran planless with S3,
+		// S5 and S7 measuring nothing. A lost plan is a failed turn.
+		const lostPlan = "The plan came back incomplete, so nothing was saved. Send the plan again."
+		log.Printf("plan turn %d: envelope did not parse (%d bytes) — failing the turn", promptID, len(raw))
+		h.store.UpdatePromptResponse(promptID, "Error: "+lostPlan)
+		h.store.UpdatePromptStatus(promptID, "failed", 0)
+		writeSSE(w, "error", map[string]string{"message": lostPlan})
+		writeSSE(w, "done", map[string]string{"status": "error"})
+		flusher.Flush()
+		return
 	} else if raw != "" {
 		h.store.UpdatePromptResponse(promptID, raw)
 		// The model did not return a parseable plan. Surface its reply verbatim

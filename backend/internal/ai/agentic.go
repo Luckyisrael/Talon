@@ -68,8 +68,11 @@ type AgenticChatResult struct {
 }
 
 // maxOutputTokens caps a single response. Large enough for several complete
-// component files in one turn.
-const maxOutputTokens = 16384
+// component files in one turn — and for a thinking model's reasoning plus the
+// plan envelope it is reasoning about: Run-7's plan was cut mid-array at
+// 17,081 chars under the old 16384 ceiling, and one build round alone emitted
+// out=10628. The ceiling is a limit, not a target (FM-PLANa).
+const maxOutputTokens = 32768
 
 // StreamSink receives the model's words as they are produced, mid-call. When
 // an orchestrator passes one, the round's text and reasoning reach the client
@@ -77,6 +80,19 @@ const maxOutputTokens = 16384
 // long model call shows the user nothing but a spinner, because the provider
 // has the answer and the wire is silent.
 type StreamSink func(text string, thinking bool)
+
+// logEstInput emits the per-call input estimate every agentic path logs —
+// request bodies that exceed a provider's per-minute input budget are
+// rejected outright, so the estimate is the diagnostic that says what to
+// trim. ~4 chars/token is coarse but consistent. The format is a contract
+// with e2e/scorecard.py (which parses it for S9/S10), so the label is a
+// parameter but the line's shape is not: one emitter, both protocols
+// (FM-TELf), because a diagnostic that exists only on the openai path
+// voids the scorecard's rows for every other provider.
+func logEstInput(label, model string, body []byte, system string, histMsgs, toolDefs int) {
+	log.Printf("%s model=%s est_input_tok=%d (system=%d hist_msgs=%d tools=%d body_bytes=%d)",
+		label, model, len(body)/4, len(system)/4, histMsgs, toolDefs, len(body))
+}
 
 // ChatWithTools performs one agentic round: send the conversation plus tool
 // definitions, get back text and/or tool calls. It does not execute tools —
@@ -392,12 +408,9 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	// Estimated input size, logged on every call: request bodies that exceed
-	// a provider's per-minute input budget are rejected outright (Groq 413),
-	// so the estimate is the diagnostic that tells us what to trim. ~4
-	// chars/token is coarse but consistent enough for budget decisions.
-	log.Printf("ChatWithTools(OpenAI): model=%s est_input_tok=%d (system=%d hist_msgs=%d tools=%d body_bytes=%d)",
-		c.model, len(body)/4, len(system)/4, len(history), len(oaiTools), len(body))
+	// Estimated input size, logged on every call — the reasoning lives with
+	// the emitter (logEstInput); this call's only job is the label.
+	logEstInput("ChatWithTools(OpenAI):", c.model, body, system, len(history), len(oaiTools))
 	// L13 (FM-TELa), corrected by FM-TELe: the per-layer split of the
 	// number above — measured from the marshaled body itself, the only
 	// object that is the wire truth. system/tools/payloads/results/history
@@ -863,6 +876,11 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 	led := AttributeRequestBody(body)
 	log.Printf("request-ledger: body=%d system=%d tools=%d payloads=%d results=%d history=%d envelope=%d",
 		led.Body, led.System, led.Tools, led.Payloads, led.Results, led.History, led.Envelope)
+	// FM-TELf: the same estimate line the OpenAI path has always logged,
+	// emitted here too — this is the path Run-7's scorecard found missing
+	// (60 ledger lines, zero est_input_tok), which read as `?` on S9/S10
+	// and blocked the run under §5.
+	logEstInput("ChatWithTools(Anthropic):", c.model, body, system, len(history), len(tools))
 
 	respBody, err := c.doWithEnvelopeRetry(ctx, c.messagesURL(), body, func(req *http.Request) {
 		req.Header.Set("x-api-key", c.apiKey)

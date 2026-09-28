@@ -1468,6 +1468,21 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, history []P
 			emitStreamError(ctx, events, "%s", msg)
 			return
 
+		case "message_delta":
+			// FM-PLANa: this is the gateway's own word on how the turn
+			// ended, and it used to be thrown away — a max_tokens stop and
+			// a clean end_turn were indistinguishable after the fact, so a
+			// plan cut mid-envelope still read as a complete answer.
+			var payload struct {
+				Delta struct {
+					StopReason string `json:"stop_reason"`
+				} `json:"delta"`
+			}
+			if json.Unmarshal(event.Data, &payload) == nil && payload.Delta.StopReason == "max_tokens" {
+				emitStreamError(ctx, events, "the response was cut at the output token limit (stop_reason=max_tokens)")
+				return
+			}
+
 		case "message_stop":
 			emit(ctx, events, StreamEvent{Type: "done"})
 			return

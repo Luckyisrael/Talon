@@ -488,6 +488,86 @@ Failure modes (written before the code, TEST_RULES §3):
   at, so a base that ends in `/v1` is never doubled and a bare root is
   never left short. This is L24's lesson one line down: L24 unified
   where the *headers* are set, L25 unifies where the *body* goes.
+- **FM-ANTa (candidate L26)** — the anthropic protocol drops the
+  `StreamSink` at the dispatch boundary, so every agentic round on an
+  anthropic provider is silently buffered. `ChatWithTools` forwards the
+  sink to `chatWithToolsOpenAI` but calls
+  `chatWithToolsAnthropic(ctx, system, history, tools)` with no sink
+  argument at all — the parameter simply does not exist on that
+  function — which means the build loop's one streaming capability
+  (text and reasoning reaching the wire as the model produces them)
+  exists on openai and not on anthropic. The caller cannot see which
+  wire it got: the orchestrator passes a sink on both protocols and
+  gets live deltas on one and nothing on the other. On anthropic the
+  client sees heartbeats and then the finished round, so a model that
+  thinks for two minutes reads as a dead connection — exactly the
+  failure L8 was written to kill ("no sign the turn was alive"),
+  reintroduced by protocol rather than by omission. Run-7's scorecard
+  grades S12 (max gap ≤ 90 s between real events, heartbeats
+  excluded) against a wire this path never writes to, so the gap it
+  measures is the round's duration, not the product's visibility.
+  Two failure modes under one law:
+  (i) a capability present on one protocol only is a fork, not a
+  feature — nothing downstream (progress, S12, cancel-visibility) can
+  rely on it, because it cannot know which protocol it is on;
+  (ii) dropping the argument at the dispatch site is FM-H6b's shape
+  one level up: L22/H6b found a *field* lost at a copy boundary, this
+  loses a *parameter* at a call boundary, and both fail silently —
+  the call compiles, the round succeeds, the wire stays dark.
+  The law: every protocol path receives the sink, and a non-nil sink
+  means the round streams — anthropic's SSE is already parsed by
+  `streamAnthropic` (`input_json_delta` included), the agentic round
+  needs the same reader accumulating tool_use blocks as the deltas
+  arrive. A nil sink keeps today's buffered shape: buffering on
+  request is correct, buffering *unconditionally* is the defect.
+- **FM-PLANa (L26)** — a plan turn that lost its plan reports success.
+  Run-7's plan stream ended mid-array (`… "app/onboarding.tsx",`) with
+  17,081 chars stored, and the turn was still marked `completed` with
+  `done {status: success}` on the wire: `json.Unmarshal` failed, the
+  handler fell into its `else if raw != ""` branch (written for a model
+  that answers in prose), `planAsksQuestion` said no, and the success
+  arm ran. Project 24 was left with `plan_json = null` while every
+  layer above — drive.py, the scorecard, the UI — read a green turn, so
+  the build ran planless: `plan screens: none found`, S3 fell back to
+  counting route files, S5 unmeasurable, S7 scored 0/0. Three failure
+  modes under one law:
+  (i) the reader never learns the stream was cut — `streamAnthropic`
+  does not read `stop_reason` at all, so a `max_tokens` end and a clean
+  `end_turn` are indistinguishable after the fact;
+  (ii) the prose fallback swallows broken JSON — output that *opens*
+  with `{` is an envelope attempt, not a message, and reporting it as
+  success hides the one fact anyone needs (the plan is gone);
+  (iii) the ceiling was below what a thinking model emits: `max_tokens`
+  is 16384 while one Run-7 build round alone produced `out=10628`, and
+  the truncated plan's JSON was ≈4,300 tokens before it was even
+  finished — a replay of the same prompt shape completed at 5,447
+  output tokens, so a plan plus its thinking sits over the line.
+  The law: the stream surfaces its stop reason and ends as an error
+  when the gateway says `max_tokens`; plan output that opens as JSON
+  and fails to parse is a **failed plan turn** (terminal `failed` +
+  an error frame), never `completed`; prose that does not open with
+  `{` keeps the message path exactly as it is; and the output ceiling
+  leaves room for thinking plus the envelope.
+- **FM-TELf (L27)** — the telemetry line the scorecard parses is
+  emitted by protocol, not by call. Run-7's server log carries 60
+  `request-ledger` lines but **zero** `est_input_tok=` lines (Run-6:
+  59), because that log lives inside `chatWithToolsOpenAI` only —
+  `chatWithToolsAnthropic` logs its `stop=` line and nothing else.
+  The scorecard therefore returned `? (needs --serverlog)` for S9
+  (tools advertised) and S10 (prefix stability), and under §5 an
+  unmeasured required row **blocks the run**: the gap did not degrade
+  Run-7, it voided two rows outright and made the run unusable as a
+  comparison point. Two failure modes under one law:
+  (i) an estimate that exists to answer "what do we trim?" must be
+  produced by every path that can be trimmed — a diagnostic the
+  operator only gets on one protocol is a diagnostic for one provider;
+  (ii) the scorecard's contract is a *format*, so the fix is not a new
+  line but the same line from a shared emitter — adding an
+  anthropic-flavoured variant would fork the parser instead of the
+  telemetry.
+  The law: one helper emits the estimate for every agentic path, in
+  the exact format the scorecard parses, called where the openai path
+  calls it today (after marshal, before send).
 - **FM-B2a (L21)** — the always-on prompt replays what `read_skill`
   exists to defer. Run-4 measured `persona=22168 B` (≈ 5542 tok
   against L5's 4500 budget), and two of the diet's three sections are
@@ -537,6 +617,8 @@ Failure modes (written before the code, TEST_RULES §3):
 | L23 | **429 waits the rate window; 502 keeps its ladder (FM-429a)** — four gateway call sites, one law: a 429 waits the gateway's `Retry-After` when sent, else `rateLimitWindow` (60 s default, test-shrunk), quota exhaustion is never a wait, every other transient keeps its own ladder exactly (3 s/6 s chat paths, 2 s/4 s/8 s `doWithRetry`), and every lengthened wait is ctx-cancellable. `openStream` (the path plan/build turns actually take) tracks `lastRateLimited`/`lastRetryAfter` per round so a 429 waits the window while 502/503/504 wait `attempt*3s`; `chatAnthropic`/`chatOpenAI` own the 429 wait in the status branch and suppress that round's loop-top ladder with `waitApplied` (the loop top was already where the generic sleep lived — stacking both would have made a 429 window+3 s and a 502 6 s instead of 3 s); `chatOpenAI` gains the `isQuotaExhausted` guard `chatAnthropic` already carried, shipped with the fix because lengthening the wait would otherwise turn an instant quota failure into two full windows; `doWithRetry` (every vision call + the buffered agentic path) swaps its no-header 2 s/4 s/8 s ladder for the window, reports the wait so a minute-long stall is never silent, and drops its `secs<=60` clamp that ignored longer header values and fell back to the futile ladder | fails-first, red states first: `TestOpenStream429WaitsOutRateWindow` (red: `c.rateLimitWindow undefined` — compile failure, the 60 s knob did not exist), `TestOpenStreamHonorsRetryAfterHeader`, `TestChatOpenAI429ReportsTheWaitItTakes` (red: retry hook fired **2×** for one stall — status branch and loop top both reported), `TestChatOpenAIQuotaExhaustionFailsFast` (red: 3 calls, generic "Rate limit exceeded" instead of `quotaError`), `TestDoWithRetry429WaitsRateWindow` (red: **2.68 s** wall on a 25 ms window + zero waits reported); keep-tests `TestStreamKeepsFastLadderFor502` + `TestChatOpenAI502KeepsLoopLadderNotWindow` (a 502 must never report the window: 3 s ladder, one wait); Run-5 evidence: `Cluster RPM rate limit exceeded` bursts died in ~15 s (3 s+6 s) against a per-minute window — Run-6 to show the turn surviving one; `chatWithToolsOpenAI` log format and the scorecard-parsed `request-ledger` lines untouched (`openStream` retry line amended, safe); `Retry-After` is honoured as sent — the chat paths already slept it uncapped, so no new hang class, and the wait is cancellable | ⬤ |
 | L24 | **Transport identity is configuration, and it is attached where requests are built (FM-UAa)** — `newRequest(ctx, url, body)` becomes the only way this package builds a gateway request: all four request paths (openStream, doWithRetry, chatAnthropic, chatOpenAI) funnel through it, and it sets `User-Agent` from the new `userAgent` field (empty ⇒ `defaultUserAgent` `Talon/1.0`). `AI_USER_AGENT` populates the field in `New()`; `clone()` carries it so `ClientForProvider` clients keep it. The hardcoded `Talon/1.0` in `chatWithToolsAnthropic`'s `setHeaders` is deleted rather than left to overwrite the constructor's value — one place sets the header, not four | fails-first `TestUserAgentEnvKnobConfiguresTheClient` + `TestEveryRequestPathSendsTheConfiguredUserAgent` (red: **compile failure** — `c.ua undefined`, `unknown field userAgent`, the same shape L17/L23 shipped their red as; each of the four paths then asserted green individually, so a partial answer — the streaming path left on Go's `Go-http-client/1.1` — cannot pass); keep-test `TestUserAgentDefaultsToTalon` (no knob ⇒ the same `Talon/1.0` gateways see today); external evidence: header sweep on agentrouter.org — only `claude-cli/2.0.0 (external, cli)` returns 200, `Talon/1.0`, the curl default, `claude-cli/1.0.0`, `claude-code/2.0.0` and `anthropic-sdk` all 401 `unauthorized client detected`; `tools/research.go`'s UA is the search engine, a different contract, untouched | ⬤ |
 | L25 | **One endpoint builder for the Messages API (FM-URLa)** — `c.messagesURL()` is the single place the anthropic endpoint is built, called by all four sites that previously disagreed: `chatAnthropic`, `chatWithToolsAnthropic` (were `/v1/messages`), `streamAnthropic`, and the vision call (were `/messages`). It trims a trailing `/` and appends `/messages` when the base already ends in `/v1`, else `/v1/messages`, so both spellings of the root resolve to the mounted API — the openai side's `/chat/completions` sites are untouched, keeping the diff inside `protocol == anthropic` code paths | fails-first `TestAnthropicMessagePathsAgree` (red: **each base spelling fails half the paths** — with a base ending `/v1`, `Chat` and `ChatWithTools` request `/v1/v1/messages`; with a bare root, `ChatStream` and `VisionCheck` request `/messages`; the test drives all four real call sites against one recording server and asserts every path, so fixing two sites and leaving two cannot pass); keep evidence: agentrouter.org probe — `/v1/messages` 200 JSON, `/v1/v1/messages` 404 `Invalid URL`, `/messages` 200 **HTML** (the silent-failure shape FM-URLa names) | ⬤ |
+| L26 | **A truncated plan is a failed plan, never a success (FM-PLANa)** — three changes on the plan stream's truth path: (1) `streamAnthropic` reads `message_delta`'s `stop_reason` and a `max_tokens` end emits an error event (the existing `sawError` arm then marks the turn `failed`); (2) the plan handler's prose fallback refuses envelopes — output that opens with `{` and does not unmarshal is a terminal `failed` + error frame, while prose that does not open with `{` keeps today's message path unchanged; (3) `maxOutputTokens` 16384 → 32768, the ceiling below which Run-7's plan (≈4,300 tok of JSON plus a model that emitted `out=10628` on a single build round) was cut mid-array | fails-first `TestPlanStreamTruncatedByMaxTokensIsAFailure` (red: SSE fixture ends `stop_reason: max_tokens` mid-JSON → turn reports `done success`, prompt `completed`, plan_json null — Run-7's exact state, project 24) + `TestBrokenPlanEnvelopeIsNotReportedAsSuccess` (red: handler's prose arm swallows it) + keep-test `TestPlanStreamProseAnswerStillSucceeds` (a question-only reply must keep returning success/waiting — the new rule must not eat the message path) | ⬤ |
+| L27 | **The estimate line is emitted by call, not by protocol (FM-TELf)** — one `logEstInput` helper, in the exact `est_input_tok=%d (system=%d hist_msgs=%d tools=%d body_bytes=%d)` format the scorecard parses, called by `chatWithToolsOpenAI` (moved, unchanged output) and by `chatWithToolsAnthropic` (new) right after the body is marshalled — so S9/S10 are measurable on every provider | fails-first `TestAnthropicPathEmitsTheEstimateLineTheScorecardParses` (red: run the anthropic round against a stub and capture `log` output — zero `est_input_tok=` lines, the Run-7 state) + keep-test `TestOpenAIEstimateLineFormatUnchanged` (red: format drift would break the scorecard parser silently) | ⬤ |
 
 Still-open P1 rows from the previous list:
 
