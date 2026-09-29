@@ -45,8 +45,27 @@ export default function TestOnPhone({ projectId, epoch }: TestOnPhoneProps) {
 
   // The APK link needs the browser's own origin for the token-authed
   // download; the API client knows the base. Derived, not effect-stored —
-  // the url is a pure function of the verdict.
-  const apkUrl = info?.available && info.dev_client_url ? info.dev_client_url : null;
+  // the url is a pure function of the verdict. FM-DEVa: no `available` gate —
+  // a first-time phone installs BEFORE there is a session to pair with, and
+  // after the server-side fix an absent url means exactly "not built here".
+  const apkUrl = info?.dev_client_url ?? null;
+
+  // The download block is shared by both states: the pane's job for a
+  // first-time phone does not start when a session does.
+  const apkBlock = apkUrl ? (
+    <a
+      href={apkUrl}
+      className="btn btn-go h-10 w-full justify-center text-sm"
+      title="The Talon dev client for Android — install once, opens any project's QR"
+    >
+      Install the dev client (APK)
+    </a>
+  ) : (
+    <p className="text-center text-[11px] text-ash">
+      Dev client APK not built on this server — the QR needs the installed
+      app.
+    </p>
+  );
 
   const copy = async () => {
     if (!info?.deep_link) return;
@@ -70,6 +89,7 @@ export default function TestOnPhone({ projectId, epoch }: TestOnPhoneProps) {
           <span className="lamp" data-state="fault" aria-hidden />
           <p className="text-sm text-mist">No phone link yet</p>
           <p className="text-xs leading-relaxed text-fog">{info.reason}</p>
+          {apkBlock}
           <p className="text-xs leading-relaxed text-ash">
             Start a device and the QR appears — it carries the token the relay
             needs to reach this build.
@@ -121,21 +141,8 @@ export default function TestOnPhone({ projectId, epoch }: TestOnPhoneProps) {
             ))}
           </div>
 
-          {/* First-time phones: the dev client itself. */}
-          {apkUrl ? (
-            <a
-              href={apkUrl}
-              className="btn btn-go h-10 w-full justify-center text-sm"
-              title="The Talon dev client for Android — install once, opens any project's QR"
-            >
-              Install the dev client (APK)
-            </a>
-          ) : (
-            <p className="text-center text-[11px] text-ash">
-              Dev client APK not built on this server — the QR needs the
-              installed app.
-            </p>
-          )}
+          {/* First-time phones: the dev client itself (shared block). */}
+          {apkBlock}
 
           <p className="text-center text-[11px] leading-relaxed text-ash">
             On your own device the agent can&rsquo;t see the screen or logs —

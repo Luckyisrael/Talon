@@ -56,4 +56,22 @@ describe("Get-the-app pane", () => {
     );
     expect(screen.queryByText(/Install the dev client/i)).toBeNull();
   });
+
+  // FM-DEVa(ii): a first-time phone installs the client BEFORE there is a
+  // session to pair with. The URL is on the wire (session or not) — the pane
+  // must render it outside the available branch too, or the download stays
+  // unreachable exactly when it is needed.
+  it("offers the APK to a first-time phone even with no session", async () => {
+    vi.mocked(testInfo.get).mockResolvedValue({
+      available: false,
+      reason: "no device session running — start the device first",
+      dev_client_url: "http://localhost:8080/v1/projects/1/dev-client.apk",
+    });
+    render(<TestOnPhone projectId={1} />);
+    await waitFor(() =>
+      expect(screen.getByText(/no device session running/)).toBeTruthy(),
+    );
+    expect(screen.queryByRole("img")).toBeNull(); // still no dead QR
+    expect(screen.getByText(/Install the dev client/i)).toBeTruthy();
+  });
 });

@@ -48,11 +48,19 @@ func (h *TestInfoHandler) Info(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FM-DEVa: the APK door does not depend on a session. A first-time
+	// phone downloads the client before there is anything to pair with,
+	// so the URL is derived once, up front, and attached to EVERY answer.
+	// Its presence means exactly "built on disk" — that is the contract
+	// both clients key their fallback copy on.
+	devURL := h.devClientURL(r, project.ID)
+
 	session, err := h.store.LatestLiveSession(project.ID)
 	if err != nil || session == nil {
 		writeJSON(w, http.StatusOK, testInfo{
-			Available: false,
-			Reason:    "no device session running — start the device first",
+			Available:    false,
+			Reason:       "no device session running — start the device first",
+			DevClientURL: devURL,
 		})
 		return
 	}
@@ -61,8 +69,9 @@ func (h *TestInfoHandler) Info(w http.ResponseWriter, r *http.Request) {
 	rl := relay.GetSession(session.ID)
 	if rl == nil {
 		writeJSON(w, http.StatusOK, testInfo{
-			Available: false,
-			Reason:    "the phone relay is not running for this session (the bundler may have failed to start)",
+			Available:    false,
+			Reason:       "the phone relay is not running for this session (the bundler may have failed to start)",
+			DevClientURL: devURL,
 		})
 		return
 	}
@@ -77,20 +86,30 @@ func (h *TestInfoHandler) Info(w http.ResponseWriter, r *http.Request) {
 		deepLink += "?token=" + tok
 	}
 	info := testInfo{
-		Available: true,
-		DeepLink:  deepLink,
-		MetroURL:  "http://" + host + ":" + strconv.Itoa(rl.Port()),
-	}
-	// The APK link is only offered when the build actually exists on this
-	// server — a link that 404s on the phone is worse than none.
-	if h.devClient != nil {
-		if apk := h.devClient.DevClientAPKPath(); apk != "" {
-			if _, err := os.Stat(apk); err == nil {
-				info.DevClientURL = publicAPIBase(r) + "/v1/projects/" + strconv.FormatInt(project.ID, 10) + "/dev-client.apk"
-			}
-		}
+		Available:    true,
+		DeepLink:     deepLink,
+		MetroURL:     "http://" + host + ":" + strconv.Itoa(rl.Port()),
+		DevClientURL: devURL,
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// devClientURL is the authenticated APK download, advertised whenever the
+// build exists on disk — devClient configured AND the file present. Session
+// state never enters the answer (FM-DEVa): an absent URL means exactly
+// "not built here", which is the only honest reading for the clients.
+func (h *TestInfoHandler) devClientURL(r *http.Request, projectID int64) string {
+	if h.devClient == nil {
+		return ""
+	}
+	apk := h.devClient.DevClientAPKPath()
+	if apk == "" {
+		return ""
+	}
+	if _, err := os.Stat(apk); err != nil {
+		return ""
+	}
+	return publicAPIBase(r) + "/v1/projects/" + strconv.FormatInt(projectID, 10) + "/dev-client.apk"
 }
 
 // DevClientAPK serves the prebuilt dev-client APK (the free tier's test

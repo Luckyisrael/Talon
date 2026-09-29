@@ -770,6 +770,51 @@ Failure modes (written before the code, TEST_RULES §3):
   constraints are out of scope by operator decree — no threshold,
   budget, or section in this row considers the 6500-era sizing
   (L30 recorded the same decree against the tools layer).
+- **FM-DEVa (candidate L32)** — the APK download is gated behind a
+  session that a first-time phone does not have yet. The "Get the
+  app" pane exists for the phone that has never seen Talon: install
+  the dev client, *then* pair. Two failure modes: (i) *server.*
+  `TestInfoHandler.Info` early-returns on "no live session" and on
+  "no relay" before `DevClientURL` is ever set, so the only pointer
+  to `GET .../dev-client.apk` exists while a session runs — while
+  the download itself needs no session (owner-scoped static file).
+  The wire hides a door that is actually open. (ii) *web.*
+  `TestOnPhone` gates `apkUrl` on `info.available` and renders the
+  link only inside the `available` branch, so even a server that
+  advertised the URL would not show it; the unavailable branch
+  offers only "start a device". The law: `dev_client_url` is
+  advertised whenever the APK exists on disk — session or not — and
+  both clients render it whenever it is present; with the URL
+  honest, an absent URL means exactly "not built", so the fallback
+  copy stays true.
+- **FM-DEVb (candidate L32)** — the mobile cache outlives the
+  session it describes. The Device tab's own law is "every value
+  comes from the backend", but `useCreateSession`/`useDestroySession`
+  invalidate only `session` keys — never `['test-info']`. Failure
+  modes: (i) start a session → the tab keeps `available:false` /
+  "Not available yet" with no QR, deep link, or APK until a
+  remount; (ii) destroy it → the tab keeps serving a dead deep link
+  and a QR pointing at a relay that no longer exists — the exact
+  "link that 404s on the phone" the backend refuses to emit,
+  reproduced client-side; (iii) `useCreateSession` writes a
+  `['session', project_id, 'id']` cache entry no code ever reads —
+  a phantom second source of session identity beside the documented
+  chain (server live-session → local state → SecureStore). The law:
+  session mutations invalidate the queries derived from session
+  state, the phantom write is gone, and test-info polls on the same
+  5 s rhythm as the session queries so a session started from
+  another client converges too.
+- **FM-DEVc (candidate L32)** — the Device tab hand-rolls the metro
+  SSE subscription that `useMetro` already implements safely.
+  `device.tsx` does `openMetroStream(...).then(c => (close = c))`
+  with cleanup `close?.()`: unmount (or a project switch) between
+  mount and promise resolution finds `close === undefined` and
+  closes nothing — a socket stays open to a screen that no longer
+  exists, and everything it delivers duplicates the next mount's
+  events. The leak-free pattern (`alive` flag; close on resolve if
+  already dead) sits in the same file's hook barrel, unused. The
+  law: one subscription implementation, the leak-free one; the
+  screen slices it, never opens it.
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -800,6 +845,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L22 | **Gates ride wall time, not round ticks (FM-D1c)** — `fireGateWarnings(sess, mode)` becomes the single implementation of both due-checks (L3 route + L17 first-write: due → latch → one warning event, text byte-identical to today's), called from the round-loop sites *and* from a turn-scoped ticker goroutine started before the round loop and stopped when it returns. The ticker is `gateTickInterval` — 15 s, the build heartbeat's cadence, a var so tests compress it (the heartbeat's own pattern). The round-loop call stays: at a boundary it claims the event with zero delay; the ticker covers every window the round loop cannot see (a generation spanning the threshold — Run-4's 7m56s — long tool runs, verification, compaction). Mode-gating and latches untouched: plan turns stay silent, one event per gate ever, FM-D1b's one-voice card unchanged | fails-first `TestFirstWriteWarnFiresDuringASpanningGeneration` + `TestRouteWarnFiresDuringASpanningGeneration` (red: compile — `undefined: gateTickInterval`, the same shape L17/L23/L24 shipped theirs as; the behavior it locks in once it compiles: threshold set to cross ~2 s into a single model call that blocks until the event lands or a 5 s cap — today the round loop is inside `ChatWithTools` the whole time, no tick exists, and the turn then answers `end_turn` with no round 2, so the event never fires at all; a fixture guard fatals if the warning landed *before* the generation started, so a round-1 claim cannot pass as a spanning one) + keep-tests `TestFirstWriteLadder`/`TestRouteScaffoldLadder`/`TestGateNoteOneVoice` pinned green (session semantics untouched); Run-4 evidence: 7m56s generation, ticks +11s/+16s/+25s → +8m22s, `first_write` events 0 while S1 failed | ⬤ |
 | L30 | **One tools-layer law, both wires (FM-L30a; closes P2 #11)** — (a) descriptions travel whole: the OpenAI path's unconditional 160-char sentence compression (P1 `7b2f5a4`'s uncured half — sized for a Groq context limit the same file declares dead) is deleted, so `run_shell`'s approval flow and `ask_user`'s secret rule reach the model on every protocol; (b) the 100K size valve (`toolStripInputTokens` → `filterToCoreTools`, contract-guarded by `coreToolSet` + the existing `TestPromptPromisedToolsSurviveCoreFilter`) applies on the anthropic wire too — today it exists only in `chatWithToolsOpenAI`, so the wire the scorecard runs has no pathological-body valve at all; both halves share one threshold, one core set, one <8-element keep-original guard. The reduce direction itself is dispositioned in FM-L30a (i)–(iii): availability gating measured complete, relevance-hiding = Run-1 amputation, prose-thinning unverifiable — no other cut is lawful | fails-first `TestOpenAIToolDescriptionsTravelWhole` (red observed: contract cut to 285 of 375 bytes — P1's ≥160-sentence compression live on every openai request; green: byte-identical to `ToolDefinition.Description`) + `TestAnthropicStripValveFiresOnOversizedBodies` (red observed: est>100K with 14 tools sends all 14 — no valve exists on this wire; green: core-only, non-core stripped) + pins `TestAnthropicToolsUnchangedOnHonestBodies` (est far below 100K → tools wire byte-identical to today: the recipe cannot move) and `TestAnthropicValveKeepsAllWhenCoreWouldGoUnder8` (the shared <8 keep-original guard mirrored); Run-8: tools=22,216 B/round = 4th-largest layer, 14 of 41 called; Run-1: 8 promised tools stripped at 6500 (S9's origin); golden suite re-recorded via `TALONSTUDIO_UPDATE_GOLDEN=1` — digest-only diff, 0 non-sha256 lines changed | ⬤ |
 | L31 | **The checkpoint speaks the guide shape; the ceiling matches the window (FM-CMPb)** — (a) `compactionInstruction`'s section list becomes `Objective / Requirements / Decisions Taken / Current Work State (Completed, Active, Blocked, Next Move) / Relevant Files / Important Context` — ten lines, markdown headings, empty sections "(none)", Requirements pinned verbatim, Decisions carrying fixes tried-and-abandoned so they are not retried, the "consolidate any prior checkpoint" rule extended to older-format ones; (b) `looksLikeCheckpoint` accepts the guide shape *and* the legacy anchor (a legacy checkpoint from kept history beats the static fallback; the gate rejects ramblers, not fashion); (c) `MaxContextTokens` 120_000 → **200_000** — conversation ceiling sized against the verified 1M windows of both run models (claude-opus-5, deepseek-v4-flash), Atria-Dawn-Preview's unpublished window recorded as the watch item in the const's own comment | fails-first `TestCheckpointCarriesTheGuideShape` (red: the instruction lists the legacy eight sections — `Objective` absent from the section list — and `looksLikeCheckpoint` rejects a guide-shaped reply) + `TestMaxContextTokensIs200K` (red: **120_000**) + `TestConversationUnderTheCeilingDoesNotCompact` (red: a ≈167K-token conversation — above the old 120K, below the new ceiling — emits the `compact` frame and reaches the summarizer today); keep-fixture `TestCompactionCheckpointIsOnTheWireBeforeTheModelCall` re-derived const-tracking (`MaxContextTokens*3 + 60_000` chars ≈ 220K tokens) with `checkpointReply` moved to the guide shape, its "never compacted cannot pass" guard intact; `TestLooksLikeCheckpoint`'s legacy `good` untouched — the acceptance it pins must survive; docs `DESIGN_AGENT_CONTEXT.md` / `PLAN_HARNESS.md` 120k numbers move with the const; no golden touch (fixtures never approach the ceiling) | ⬤ |
+| L32 | **The phone surface is reachable before the phone is paired; the Device tab's truth stays on the server (FM-DEVa/b/c)** — (a) `TestInfoHandler.Info` derives `DevClientURL` through one helper (devClient configured + `DevClientAPKPath` on disk) *before* any early return, so the no-session and no-relay answers carry it too; (b) web `TestOnPhone` drops the `available` gate from `apkUrl` and renders the shared APK block in the unavailable branch as well — with (a) landed, an absent URL means exactly "not built" and the fallback copy stays true; (c) mobile `useCreateSession` invalidates `['test-info', project_id]` + `['live-session', project_id]` and no longer writes the phantom `['session', project_id, 'id']` key, `useDestroySession` invalidates the `['test-info']`/`['live-session']` prefixes (its vars are a session id — prefix is the only honest scope), and `useTestInfo` polls at the session queries' 5 s rhythm so sessions started from another client converge; (d) `device.tsx` replaces its hand-rolled SSE effect with `useMetro` — one subscription implementation, the race-free one | fails-first `TestTestInfoAdvertisesTheAPKBuiltOnDiskWithoutSession` (red: `DevClientURL == ""` with no session — Info's early return predates the field) + coverage pins `TestTestInfoOmitsTheAPKWhenNotBuilt`, `TestDevClientAPKServesTheBuild`, `TestDevClientAPKNotBuiltIs404`, `TestDevClientAPKRequiresOwnership`, `TestDevClientAPKRealBuildRangeProbe` (skip-if-absent; real 148 MB build served over Range, `PK` magic), `TestMetroSSEReportsNoSessionHonestly`, `TestMetroSSERejectsNonOwner`, `TestMetroSSESaysSoWhenTheBundlerNeverStarted` + vitest `TestOnPhone` first-time-phone case (red: available:false + dev_client_url → link absent today) + jest `device.test.tsx` (red: no test-info refetch after start/destroy; red: unmount-before-resolve leaves the metro socket open) | ⬤ |
 
 Still-open P1 rows from the previous list:
 
