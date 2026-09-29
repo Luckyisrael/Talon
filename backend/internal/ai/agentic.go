@@ -287,22 +287,15 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
-func indexSentenceEnd(s string, min int) int {
-	for i := min; i < len(s); i++ {
-		if s[i] == '.' && (i+1 == len(s) || s[i+1] == ' ' || s[i+1] == '\n') {
-			return i + 1
-		}
-	}
-	return 0
-}
-
 func mustMarshalJSON(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
 }
 
 // toolStripInputTokens is the est-input size above which non-core tools are
-// dropped to shrink the payload (see the call site in chatWithToolsOpenAI).
+// dropped to shrink the payload. Both wire paths apply it (FM-L30a): the
+// valve used to live in chatWithToolsOpenAI alone, so the anthropic route
+// every behavior run uses had no pathological-body safety at all.
 // Zero-context: 6500 was a Groq-scoped P1 constant applied to every route, and
 // it fired on every request because the system prompt alone is ~8.5K tokens —
 // the filter meant as a size valve became a permanent capability amputation.
@@ -350,6 +343,24 @@ func filterToCoreTools(tools []map[string]any) []map[string]any {
 	return out
 }
 
+// filterToCoreToolDefs is filterToCoreTools on the anthropic wire's
+// native shape — same threshold, same core set, same <8 keep-original
+// guard (one tools-layer law, both wires — FM-L30a). The valve bites
+// only bodies past toolStripInputTokens, so an honest request never
+// reaches this function.
+func filterToCoreToolDefs(tools []ToolDefinition) []ToolDefinition {
+	var out []ToolDefinition
+	for _, t := range tools {
+		if coreToolSet[t.Name] {
+			out = append(out, t)
+		}
+	}
+	if len(out) < 8 {
+		return tools
+	}
+	return out
+}
+
 // ── OpenAI-compatible path ────────────────────────────
 
 func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history []Message, tools []ToolDefinition, sink StreamSink) (*AgenticChatResult, error) {
@@ -357,19 +368,19 @@ func (c *Client) chatWithToolsOpenAI(ctx context.Context, system string, history
 
 	oaiTools := make([]map[string]any, 0, len(tools))
 	for _, t := range tools {
-		desc := t.Description
-		if len(desc) > 160 {
-			if idx := indexSentenceEnd(desc, 160); idx > 0 {
-				desc = desc[:idx]
-			} else {
-				desc = desc[:157] + "..."
-			}
-		}
+		// FM-L30a: the description travels whole — a description is a
+		// contract with the model. P1 compressed it to its first
+		// ≥160-char sentence for a Groq context limit (`7b2f5a4`);
+		// the threshold half of that fix was later cured with the
+		// valve below, this half was an unconditional capability
+		// amputation: run_shell lost its approval flow and ask_user
+		// its never-ask-for-secrets rule before the model saw them.
+		// One tools-layer law, both wires.
 		oaiTools = append(oaiTools, map[string]any{
 			"type": "function",
 			"function": map[string]any{
 				"name":        t.Name,
-				"description": desc,
+				"description": t.Description,
 				"parameters":  t.InputSchema,
 			},
 		})
@@ -864,8 +875,22 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 		}},
 		"messages": toAnthropic(history, breakpoint),
 	}
-	if len(tools) > 0 {
-		reqBody["tools"] = tools
+	// FM-L30a: one tools-layer law, both wires — the same size valve the
+	// openai path has always applied, same threshold, same core set,
+	// same guards. Before this, the wire every behavior run uses sent
+	// every tool on any body: a pathological one (RESEARCH measured
+	// 294KB) had no safety here at all. The est mirrors the openai
+	// formula exactly — system + marshaled messages + marshaled tools,
+	// /4 — so both wires trip at the same body.
+	wireTools := tools
+	if len(wireTools) > 12 {
+		est := (len(system) + len(mustMarshalJSON(reqBody["messages"])) + len(mustMarshalJSON(wireTools))) / 4
+		if est > toolStripInputTokens {
+			wireTools = filterToCoreToolDefs(wireTools)
+		}
+	}
+	if len(wireTools) > 0 {
+		reqBody["tools"] = wireTools
 	}
 	if sink != nil {
 		// FM-ANTa: a sink means the caller is watching the wire, so the
@@ -891,7 +916,7 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 	// emitted here too — this is the path Run-7's scorecard found missing
 	// (60 ledger lines, zero est_input_tok), which read as `?` on S9/S10
 	// and blocked the run under §5.
-	logEstInput("ChatWithTools(Anthropic):", c.model, body, system, len(history), len(tools))
+	logEstInput("ChatWithTools(Anthropic):", c.model, body, system, len(history), len(wireTools))
 
 	setHeaders := func(req *http.Request) {
 		req.Header.Set("x-api-key", c.apiKey)

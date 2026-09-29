@@ -363,6 +363,69 @@ Failure modes (written before the code, TEST_RULES §3):
   the card — it renders per round by design, FM-D1b's one voice — and
   only the warning event, the evidence channel, leaves the round
   clock.
+- **FM-L30a (L30)** — the tools layer gets one law or it gets a hole,
+  and this deployment's two wires had three different laws. The layer
+  is the input side's quiet giant: 38 tools = 20,125 B of production
+  defs (Run-8: 41 tools, 22,216 B ≈ 5,100–5,550 tok) resent every
+  round, of which Run-8's model called 14 — and that count is exactly
+  why a diet sounds obvious and is mostly not lawful here. Four
+  measured facts, four consequences:
+  (i) *The availability half of a diet is already complete.* Every
+  tool with a hard precondition is registered behind it — device
+  tools on `adbTarget`, read_skill on a library, lsp on a resolver,
+  codebase_search on an index, delegation on its service, plugins on
+  pins — the registry's own law, "offering a tool that can only fail
+  wastes rounds." Everything ungated degrades honestly instead of
+  failing: git answers "not a git repository — no baseline," the
+  install/build pair nil-checks its allowlist. There is no honest
+  predicate left to gate, so the byte win from gating is ~0 and a
+  gate invented past the evidence would be a fiction.
+  (ii) *Relevance-hiding is the amputation this codebase already
+  paid for.* The P1-era valve at 6500 tokens fired on every request
+  (the system prompt alone is ~8.5K), stripped 8 prompt-promised
+  tools, and Run-1 answered "I have no shell" — S9 was born to catch
+  it, and coreToolSet now carries every name the prompt promises.
+  A one-run unused-set is noise on top of that: Run-8 called
+  delete_file 18× and git_commit 8×, tools other runs skip. Hiding
+  what the model might want is not a diet; it is the model planning
+  around a menu it was never shown — and L20's measured law says it
+  will not ask for what it cannot see.
+  (iii) *Prose-thinning is the silent degradation this item itself
+  warns about.* The descriptions are contracts: run_shell's carries
+  the tier-2 approval flow, ask_user's carries the never-ask-for-
+  secrets rule (measured by dumping the production defs). No
+  behavioral harness measures tool-choice quality, so a trim cannot
+  be verified — it can only be discovered in a run.
+  (iv) *And yet the OpenAI wire thins them anyway — the uncured half
+  of P1.* Commit `7b2f5a4` ("compress tool descriptions and filter
+  to core tools when over Groq limit") shipped two halves together.
+  The threshold half was cured: 6500 → a 100K valve with a
+  contract-guarded core set. The description half never was:
+  `chatWithToolsOpenAI` still cuts **every** description to its
+  first ≥160-char sentence on **every** request, sized for a context
+  limit that the same file's comments declare dead ("a size valve
+  became a permanent capability amputation") — run_shell loses its
+  approval flow, ask_user loses its safety rule, on the wire, with
+  no test and no scorecard row (the runs are anthropic). The
+  anthropic wire, meanwhile, carries neither half: descriptions
+  whole (correct) but no valve at all — a pathological body (RESEARCH
+  measured 294KB; Run-8's max was 234KB) has no safety valve where
+  the scorecard actually runs.
+  The law (L30), in the shape FM-TELf and FM-ANTa already set — one
+  emitter/parser/contract, both protocols: **(a)** descriptions
+  travel whole on every wire; the tool description is a contract with
+  the model, so the truncation that thins it does not exist (P1's
+  context-limit compression applied unconditionally is the same
+  disease the threshold cure named, one floor down); **(b)** the size
+  valve applies on both wires at the same threshold with the same
+  contract-guarded core set — a valve for pathological bodies only,
+  100K sitting above every honest body this deployment produces
+  (Run-8's largest est ≈ 58K), its failure direction documented by
+  Run-1: when the valve bites an honest request the fix is a
+  threshold, never a smaller contract. #11's reduce direction is
+  thus closed by measurement — (i) shows the lawful gating is
+  spent, (ii)+(iii) show what remains is refused with evidence —
+  and this row delivers the half of it that was actually broken.
 - **FM-B1a (L18)** — a payload write with no later write to the same
   path replays its full body every round for the life of the turn: L9's
   trim collapses *superseded* inputs only, and Run-3 wrote 24 distinct
@@ -689,6 +752,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L28 | **The agentic round streams on every protocol (FM-ANTa)** — `ChatWithTools` passes the `StreamSink` to `chatWithToolsAnthropic` instead of dropping it at the dispatch boundary, and a non-nil sink switches that round to `openStream` + one shared `readAnthropicStream` reader: text deltas forward as `sink(d, false)`, thinking as `sink(d, true)` (the openai branch's exact contract), while the reader accumulates the same fields the buffered path returns — text/thinking/tool blocks, `input_json_delta` concatenated into `ToolUseBlock.Input`, stop_reason, usage (input+cache from `message_start`, output from `message_delta`; agentrouter confirmed to send both). `streamAnthropic` is refactored onto the same reader with an events adapter, so the parse exists once; its observable behaviour is preserved (error event → error frame, `max_tokens` → error frame, close-without-`message_stop` → clean `done`). The agentic side is stricter where it must be: a stream that ends with no stop_reason is an error (the orchestrator's client ladder retries) rather than a silently toolless round, and `max_tokens` still lands in `StopReason` so Run-8's round-3 pattern — cut at the ceiling, 6 usable tool calls executed — is unchanged. Nil sink (planloop's five callers) keeps the buffered path byte-identical, and both branches in the function share one header closure | fails-first `TestAnthropicRoundStreamsToTheSinkWhileTheRoundRuns` (red on two independent places: the request body carries no `"stream":true` — the Run-6/7/8 state; the sink is called **zero** times, Run-8's dark wire — plus per-delta count and first-call-before-stream-end assertions that keep a one-shot end-of-round call from ever passing as streaming) + contract keep-test asserting the streamed and buffered results are deep-equal from the same server (latency may change, the result contract may not) + `TestAnthropicMessagePathsAgree` extended to a 5th, sunk call so both base spellings cover the new branch; the contract change also reached 16 scripted fake providers across api/composer/orchestrator that ignored the stream flag — a JSON answer parses as an *empty* stream, turning a scripted tool_use round into a scriptless one that failed with the client's no-stop_reason error — so `internal/aitest` now reframes each scripted response as the SSE carrying it, when and only when the request asked to stream (a fake that answers a stream request with JSON hides the failure inside the client, exactly the shape FM-URLa names); scope line: openai's M2 restart loop is deliberately out of scope — a dropped anthropic stream surfaces as an error to the existing ladder, not a new retry machine | ⬤ |
 | L29 | **Compaction announces itself before it waits (FM-CMPa)** — the round loop logs the compaction (round, turns, token estimate vs budget) and emits `compact` **`running`** before `CompactWithSummary`/`Compact` runs; the existing `completed` frame at exit pairs with it, so the scorecard still counts exactly one `compact` call in the tool mix while S12's gap clock resets at wait *start*. The emit sits above the `o.ai` branch, so the static-fallback path announces too — both are waits from the wire's point of view only in length, and neither may start silently | fails-first `TestCompactionCheckpointIsOnTheWireBeforeTheModelCall` (red: the fake model's *summarizer* handler waits for a `compact` `running` frame the moment its request arrives — today the first compact frame is emitted only after the call returns, so the wait times out with the 133k-token model call already invisible; a fixture guard asserts compaction was actually reached, so "never compacted" cannot pass as "compacted visibly"); evidence: Run-4 round 57 `prep=2m15.649s` with no log line until it finished (Appendix D, found-live) | ⬤ |
 | L22 | **Gates ride wall time, not round ticks (FM-D1c)** — `fireGateWarnings(sess, mode)` becomes the single implementation of both due-checks (L3 route + L17 first-write: due → latch → one warning event, text byte-identical to today's), called from the round-loop sites *and* from a turn-scoped ticker goroutine started before the round loop and stopped when it returns. The ticker is `gateTickInterval` — 15 s, the build heartbeat's cadence, a var so tests compress it (the heartbeat's own pattern). The round-loop call stays: at a boundary it claims the event with zero delay; the ticker covers every window the round loop cannot see (a generation spanning the threshold — Run-4's 7m56s — long tool runs, verification, compaction). Mode-gating and latches untouched: plan turns stay silent, one event per gate ever, FM-D1b's one-voice card unchanged | fails-first `TestFirstWriteWarnFiresDuringASpanningGeneration` + `TestRouteWarnFiresDuringASpanningGeneration` (red: compile — `undefined: gateTickInterval`, the same shape L17/L23/L24 shipped theirs as; the behavior it locks in once it compiles: threshold set to cross ~2 s into a single model call that blocks until the event lands or a 5 s cap — today the round loop is inside `ChatWithTools` the whole time, no tick exists, and the turn then answers `end_turn` with no round 2, so the event never fires at all; a fixture guard fatals if the warning landed *before* the generation started, so a round-1 claim cannot pass as a spanning one) + keep-tests `TestFirstWriteLadder`/`TestRouteScaffoldLadder`/`TestGateNoteOneVoice` pinned green (session semantics untouched); Run-4 evidence: 7m56s generation, ticks +11s/+16s/+25s → +8m22s, `first_write` events 0 while S1 failed | ⬤ |
+| L30 | **One tools-layer law, both wires (FM-L30a; closes P2 #11)** — (a) descriptions travel whole: the OpenAI path's unconditional 160-char sentence compression (P1 `7b2f5a4`'s uncured half — sized for a Groq context limit the same file declares dead) is deleted, so `run_shell`'s approval flow and `ask_user`'s secret rule reach the model on every protocol; (b) the 100K size valve (`toolStripInputTokens` → `filterToCoreTools`, contract-guarded by `coreToolSet` + the existing `TestPromptPromisedToolsSurviveCoreFilter`) applies on the anthropic wire too — today it exists only in `chatWithToolsOpenAI`, so the wire the scorecard runs has no pathological-body valve at all; both halves share one threshold, one core set, one <8-element keep-original guard. The reduce direction itself is dispositioned in FM-L30a (i)–(iii): availability gating measured complete, relevance-hiding = Run-1 amputation, prose-thinning unverifiable — no other cut is lawful | fails-first `TestOpenAIToolDescriptionsTravelWhole` (red observed: contract cut to 285 of 375 bytes — P1's ≥160-sentence compression live on every openai request; green: byte-identical to `ToolDefinition.Description`) + `TestAnthropicStripValveFiresOnOversizedBodies` (red observed: est>100K with 14 tools sends all 14 — no valve exists on this wire; green: core-only, non-core stripped) + pins `TestAnthropicToolsUnchangedOnHonestBodies` (est far below 100K → tools wire byte-identical to today: the recipe cannot move) and `TestAnthropicValveKeepsAllWhenCoreWouldGoUnder8` (the shared <8 keep-original guard mirrored); Run-8: tools=22,216 B/round = 4th-largest layer, 14 of 41 called; Run-1: 8 promised tools stripped at 6500 (S9's origin); golden suite re-recorded via `TALONSTUDIO_UPDATE_GOLDEN=1` — digest-only diff, 0 non-sha256 lines changed | ⬤ |
 
 Still-open P1 rows from the previous list:
 
