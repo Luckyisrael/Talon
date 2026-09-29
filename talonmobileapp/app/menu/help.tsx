@@ -23,6 +23,10 @@ const FAQ: { q: string; a: string }[] = [
     a: 'Photos and markdown files. Photos let the agent see a design or a bug. Markdown inlines into the prompt. Large photos shrink before upload.',
   },
   {
+    q: 'How do I test on this phone?',
+    a: 'Open the Device tab and tap Open on this phone. It hands the running project to the dev client over your network — there is no QR to scan when the screen in your hand is the only screen.',
+  },
+  {
     q: 'How do I test on a second phone?',
     a: 'Open the Device tab and scan the pairing QR with that phone camera. It needs the dev client installed once.',
   },

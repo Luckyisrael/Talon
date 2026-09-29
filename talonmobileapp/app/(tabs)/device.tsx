@@ -157,7 +157,10 @@ export default function DeviceScreen() {
             ) : null}
             <View style={styles.actions}>
               {testInfo?.deep_link ? (
-                <LimeButton title="Open on this phone" onPress={() => void Linking.openURL(testInfo.deep_link!)} />
+                <LimeButton
+                  title="Open on this phone"
+                  onPress={() => void Linking.openURL(testInfo.dev_launcher_link || testInfo.deep_link!)}
+                />
               ) : null}
               {testInfo?.dev_client_url ? (
                 <Pressable onPress={() => void Linking.openURL(testInfo.dev_client_url!)}>

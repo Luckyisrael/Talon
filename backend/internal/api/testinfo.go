@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -33,6 +34,16 @@ type testInfo struct {
 	Reason string `json:"reason,omitempty"`
 	// DeepLink is the exp:// URL the installed dev client opens directly.
 	DeepLink string `json:"deep_link,omitempty"`
+	// DevLauncherLink wraps DeepLink in the shape expo-dev-launcher reads as
+	// an instruction to load — `<scheme>://expo-development-client/?url=…`.
+	// The raw exp:// form above is right for the QR and the dev client's
+	// own scanner, which parse the string themselves, and wrong for an
+	// ACTION_VIEW: no intent-filter in the shipped APK declares `exp`, so
+	// Linking.openURL rejects it, the `void` discards the rejection, and
+	// the tap does nothing — with nothing on the phone that could report
+	// why. On one phone there is no second screen to scan, which makes that
+	// dead button the entire pairing path (FM-DEVf(i)/(ii)).
+	DevLauncherLink string `json:"dev_launcher_link,omitempty"`
 	// MetroURL is the same bundler over http:// — the dev client's fallback
 	// entry, and what a browser can probe.
 	MetroURL string `json:"metro_url,omitempty"`
@@ -86,12 +97,28 @@ func (h *TestInfoHandler) Info(w http.ResponseWriter, r *http.Request) {
 		deepLink += "?token=" + tok
 	}
 	info := testInfo{
-		Available:    true,
-		DeepLink:     deepLink,
-		MetroURL:     "http://" + host + ":" + strconv.Itoa(rl.Port()),
-		DevClientURL: devURL,
+		Available:       true,
+		DeepLink:        deepLink,
+		DevLauncherLink: devLauncherLink(deepLink),
+		MetroURL:        "http://" + host + ":" + strconv.Itoa(rl.Port()),
+		DevClientURL:    devURL,
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// devLauncherLink wraps a raw exp:// deep link in the shape
+// expo-dev-launcher accepts as an ACTION_VIEW: the client's own scheme, host
+// `expo-development-client`, the whole link percent-encoded in ?url= so its
+// own `?token=` stays data instead of splitting into the outer query.
+// DevLauncherURLHelper.kt checks the host (:7) and the url param (:9-11),
+// DevLauncherController.kt:245 bails without them, and only then does :24
+// rewrite the inner exp:// to http:// for the fetch. The scheme is
+// devclient.DevClientScheme — backend/template/app.json's expo.scheme — so
+// the identity of the dev client keeps one authority beside
+// DevClientPackage (FM-DEVf).
+func devLauncherLink(deepLink string) string {
+	return devclient.DevClientScheme + "://expo-development-client/?url=" +
+		url.QueryEscape(deepLink)
 }
 
 // devClientURL is the authenticated APK download, advertised whenever the

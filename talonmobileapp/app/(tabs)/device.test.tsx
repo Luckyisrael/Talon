@@ -1,4 +1,5 @@
 import React from 'react'
+import { Linking } from 'react-native'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import DeviceScreen from './device'
@@ -171,4 +172,33 @@ it('closes the metro stream even when the screen unmounts before it resolves (FM
   await new Promise((resolve) => setImmediate(resolve))
 
   expect(closeSpy).toHaveBeenCalled()
+})
+
+// FM-DEVf — one phone, no second screen to scan, so THIS button is the whole
+// pairing path. It must open the shape expo-dev-launcher accepts
+// (`<scheme>://expo-development-client/?url=…`): the shipped dev client
+// declares `talonapp`, `exp+talon-app` and `expo-dev-launcher`, never `exp`,
+// so an ACTION_VIEW carrying bare `exp://` matches nothing, Linking.openURL
+// rejects, and the `void` swallows it — a tap that does nothing at all.
+//
+// Red before L34 (observed): the button still passes deep_link verbatim.
+it('hands the project to the dev client through the launcher link (FM-DEVf)', async () => {
+  const qc = freshQueryClient()
+  const DEEP = 'exp://192.168.1.6:17997?token=abc'
+  const LAUNCHER =
+    'talonapp://expo-development-client/?url=exp%3A%2F%2F192.168.1.6%3A17997%3Ftoken%3Dabc'
+  mockTestInfo.mockResolvedValue({
+    available: true,
+    deep_link: DEEP,
+    dev_launcher_link: LAUNCHER,
+    metro_url: 'http://192.168.1.6:17997',
+    dev_client_url: '',
+  })
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true)
+
+  await render(wrap(qc, <DeviceScreen />))
+  await fireEvent.press(await screen.findByText('Open on this phone'))
+
+  expect(openURL).toHaveBeenCalledWith(LAUNCHER)
+  expect(openURL).not.toHaveBeenCalledWith(DEEP)
 })

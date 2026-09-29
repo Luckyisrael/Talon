@@ -137,6 +137,18 @@ func (m *Manager) InstallDevClient(ctx context.Context, adbTarget string) error 
 // to the file; never edit one without the other.
 const DevClientPackage = "com.talon.devclient"
 
+// DevClientScheme is the Android deep-link scheme the template dev client
+// registers on MainActivity — backend/template/app.json's expo.scheme, the
+// value `expo prebuild` bakes into the intent-filter. It is exported because
+// it is the scheme an ACTION_VIEW must carry for the pairing handoff to land
+// at all: the shipped manifest declares `talonapp`, `exp+talon-app` and
+// `expo-dev-launcher`, never `exp`, so a bare exp:// link — right for the QR
+// and the in-app scanner, which parse the string themselves — opens nothing
+// when it arrives as an intent (FM-DEVf(i)). testinfo's dev_launcherLink
+// wraps the deep link in it. TestDevLauncherLinkWrapsTheDeepLinkForTheLauncher
+// pins it to the file; never edit one without the other.
+const DevClientScheme = "talonapp"
+
 // IsInstalledOnDevice checks if the dev-client is already installed on the device.
 func (m *Manager) IsInstalledOnDevice(adbTarget string) bool {
 	cmd := exec.Command("adb", "-s", adbTarget, "shell",

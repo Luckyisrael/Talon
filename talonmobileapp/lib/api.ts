@@ -488,6 +488,11 @@ export const testInfoApi = {
       available: boolean
       reason?: string
       deep_link?: string
+      // L34 / FM-DEVf — the raw exp:// link above is for the QR and the dev
+      // client's own scanner; this is the same link wrapped for an
+      // ACTION_VIEW (`<scheme>://expo-development-client/?url=…`), which is
+      // the only shape an installed dev client will load from a tap.
+      dev_launcher_link?: string
       metro_url?: string
       dev_client_url?: string
     }>(`/v1/projects/${projectId}/test-info`)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -88,6 +89,176 @@ func fetchTestInfo(t *testing.T, st *store.Store, u *store.User, projectID int64
 		t.Fatalf("decode: %v", err)
 	}
 	return info
+}
+
+// ── L34 / FM-DEVf: one phone hands itself the project ───────────────
+
+// livePhone brings up a store with a live session AND a running relay — the
+// only state in which any deep link exists at all. Port 17997 keeps it clear
+// of TestTestInfoHonesty's 17999.
+func livePhone(t *testing.T) (*store.Store, *store.User, *store.Project) {
+	t.Helper()
+
+	st, err := store.New(t.TempDir() + "/fmdevf.db")
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	u, err := st.CreateUser("fmdevf@test", "x")
+	if err != nil {
+		t.Fatalf("user: %v", err)
+	}
+	proj, err := st.CreateProject(u.ID, "p", "v", "fmdevf-slug", "a.b", "c.d", "e")
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	sess, err := st.CreateSession(proj.ID)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	if _, err := relay.StartForSession(sess.ID, 17997, "127.0.0.1:8081"); err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+	t.Cleanup(func() { relay.StopSession(sess.ID) })
+	return st, u, proj
+}
+
+// fetchTestInfoWire answers GET test-info and hands back the RAW JSON — the
+// wire, not the struct. FM-DEVf's reds have to be behavioral: reaching for a
+// struct field that does not exist yet is a compile error, and a compile
+// error says nothing about the link a phone actually receives.
+func fetchTestInfoWire(t *testing.T, st *store.Store, u *store.User, projectID int64) map[string]any {
+	t.Helper()
+	t.Setenv("PUBLIC_HOST", "localhost")
+
+	h := NewTestInfoHandler(NewPromptHandler(st, nil, t.TempDir(), "", nil, nil, nil, nil), nil)
+	req := authedRequest(u.ID, "")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("projectID", strconv.FormatInt(projectID, 10))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h.Info(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var wire map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &wire); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return wire
+}
+
+// FM-DEVf(ii) — written before the fix (TEST_RULES §3). expo-dev-launcher
+// reads only `<scheme>://expo-development-client/?url=…`: the host test is
+// DevLauncherURLHelper.kt:7, the url parameter :9-11, and
+// DevLauncherController.kt:245 bails to handleExternalIntent before loadApp
+// ever runs otherwise. The scheme must be the one the template builds — read
+// from backend/template/app.json, not a second literal — and the wrapped link
+// must come back whole, its `?token=` still data rather than a second query.
+//
+// Red before L34 (observed): the wire carries no `dev_launcher_link` key at
+// all, so a single phone's only ACTION_VIEW is a bare exp:// no intent-filter
+// in the shipped APK declares.
+func TestDevLauncherLinkWrapsTheDeepLinkForTheLauncher(t *testing.T) {
+	st, usr, proj := livePhone(t)
+	wire := fetchTestInfoWire(t, st, usr, proj.ID)
+
+	raw, _ := wire["dev_launcher_link"].(string)
+	if raw == "" {
+		t.Fatalf("FM-DEVf(ii): no dev_launcher_link on the wire (deep_link=%v) — the single phone has no ACTION_VIEW the installed client can resolve", wire["deep_link"])
+	}
+	deep, _ := wire["deep_link"].(string)
+	if deep == "" {
+		t.Fatal("fault: the wire carries no deep_link either")
+	}
+
+	launcher, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse launcher link %q: %v", raw, err)
+	}
+	if launcher.Host != "expo-development-client" {
+		t.Errorf("FM-DEVf(ii): launcher link host %q, want \"expo-development-client\" — DevLauncherURLHelper.kt:7 rejects any other host before loadApp runs", launcher.Host)
+	}
+	if got := launcher.Query().Get("url"); got != deep {
+		t.Errorf("FM-DEVf(ii): launcher link wraps %q, want the deep link whole (%q) — the relay token rides inside it", got, deep)
+	}
+
+	// The scheme is the template's own, read from the file: one authority for
+	// the dev client's identity, the way DevClientPackage is pinned.
+	rawApp, err := os.ReadFile(filepath.Join("..", "..", "template", "app.json"))
+	if err != nil {
+		t.Fatalf("read template app.json: %v", err)
+	}
+	var cfg struct {
+		Expo struct {
+			Scheme string `json:"scheme"`
+		} `json:"expo"`
+	}
+	if err := json.Unmarshal(rawApp, &cfg); err != nil {
+		t.Fatalf("parse template app.json: %v", err)
+	}
+	if cfg.Expo.Scheme == "" {
+		t.Fatal("template app.json declares no expo.scheme")
+	}
+	if launcher.Scheme != cfg.Expo.Scheme {
+		t.Errorf("FM-DEVf(ii): launcher link scheme %q, want the template's %q (backend/template/app.json expo.scheme) — a second literal is how these two drift apart", launcher.Scheme, cfg.Expo.Scheme)
+	}
+}
+
+// FM-DEVf(i) — written before the fix (TEST_RULES §3). On one phone there is
+// nothing to scan, so pairing collapses to a single ACTION_VIEW the installed
+// client must be able to resolve. The authority for "can it resolve" is the
+// artifact we actually ship, not a source file — the same lesson L33's
+// package test taught: source and artifact had already drifted once. The
+// shipped dev client declares `talonapp`, `exp+talon-app` and
+// `expo-dev-launcher`; `exp`, which deep_link carries, is not among them.
+//
+// Red before L34: compile failure — `devclient.ManifestDeclares undefined`,
+// the shape L17/L23/L24 and L33's `DevClientPackage` shipped theirs as (the
+// artifact reader does not exist yet).
+func TestInfoHandsThePhoneALinkTheShippedClientCanResolve(t *testing.T) {
+	st, usr, proj := livePhone(t)
+	wire := fetchTestInfoWire(t, st, usr, proj.ID)
+
+	// Every *_link value on the wire is a candidate handoff for the phone.
+	links := map[string]string{}
+	for key, val := range wire {
+		if !strings.HasSuffix(key, "_link") {
+			continue
+		}
+		s, _ := val.(string)
+		if s != "" {
+			links[key] = s
+		}
+	}
+	if len(links) == 0 {
+		t.Fatal("fault: the wire advertises no link at all")
+	}
+
+	tmpl := filepath.Join("..", "..", "template")
+	rawVersion, err := os.ReadFile(filepath.Join(tmpl, ".template-version"))
+	if err != nil {
+		t.Skipf("no template version at %s: %v", tmpl, err)
+	}
+	apk := devclient.DevClientAPKPath(tmpl, strings.TrimSpace(string(rawVersion)))
+
+	for key, raw := range links {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			t.Errorf("parse %s %q: %v", key, raw, err)
+			continue
+		}
+		declared, err := devclient.ManifestDeclares(apk, parsed.Scheme)
+		if err != nil {
+			t.Skipf("dev-client APK unreadable (%s): %v", apk, err)
+		}
+		if declared {
+			return
+		}
+		t.Logf("%s = %s → the shipped APK declares no %q scheme", key, raw, parsed.Scheme)
+	}
+
+	t.Fatalf("FM-DEVf(i): every link the wire advertises is unresolvable by the shipped dev client — %v; its manifest declares talonapp / exp+talon-app / expo-dev-launcher, never exp, so Linking.openURL rejects and the tap does nothing", links)
 }
 
 // ── L32 / FM-DEVa: the APK door, tested at every layer ──────────────

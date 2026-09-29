@@ -1,16 +1,12 @@
 package devclient
 
 import (
-	"archive/zip"
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"unicode/utf16"
 )
 
 const (
@@ -109,49 +105,4 @@ func TestShippedDevClientAPKDeclaresItsOwnPackage(t *testing.T) {
 	t.Fatalf("FM-DEVd(ii): the shipped dev-client APK does not declare %q (%d matches in AndroidManifest.xml); the studio mobile app's %q is in it %d times — the artifact still carries the conflicting package, so re-run build-dev-client.sh",
 		DevClientPackage, bytes.Count(manifest, want),
 		mobile, bytes.Count(manifest, utf16le(mobile)))
-}
-
-// apkManifest returns AndroidManifest.xml straight out of the APK zip.
-func apkManifest(apk string) ([]byte, error) {
-	zr, err := zip.OpenReader(apk)
-	if err != nil {
-		return nil, err
-	}
-	defer zr.Close()
-
-	for _, f := range zr.File {
-		if f.Name != "AndroidManifest.xml" {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return nil, err
-		}
-		defer rc.Close()
-
-		raw, err := io.ReadAll(rc)
-		if err != nil {
-			return nil, err
-		}
-		if len(raw) < 8 {
-			return nil, fmt.Errorf("AndroidManifest.xml in %s is only %d bytes", apk, len(raw))
-		}
-		if raw[0] != 0x03 || raw[1] != 0x00 {
-			return nil, fmt.Errorf("AndroidManifest.xml in %s is not binary AXML (head %x)", apk, raw[:8])
-		}
-		return raw, nil
-	}
-	return nil, fmt.Errorf("no AndroidManifest.xml inside %s", apk)
-}
-
-// utf16le encodes s the way the AXML string pool stores it: UTF-16, little
-// endian, no BOM. A UTF-8 match finds nothing — measured against the shipped
-// build (0 hits for `com.talon.app`, 8 for its UTF-16LE form).
-func utf16le(s string) []byte {
-	encoded := utf16.Encode([]rune(s))
-	out := make([]byte, 0, len(encoded)*2)
-	for _, u := range encoded {
-		out = append(out, byte(u), byte(u>>8))
-	}
-	return out
 }
