@@ -565,8 +565,15 @@ export function useCreateSession() {
   return useMutation({
     mutationFn: (projectId: number) => sessionsApi.create(projectId),
     onSuccess: (s: Session) => {
-      qc.setQueryData(['session', s.project_id, 'id'], s.id);
       qc.setQueryData(['session', s.id], s);
+      // FM-DEVb: the Device tab's verdict is derived from session state, so
+      // the cache must follow the server the moment it changes — test-info
+      // flips from "no session" to the deep link/QR/APK, and live-session
+      // must not keep reporting idle for another 5s poll. (The old
+      // ['session', project_id, 'id'] write is gone: nothing ever read it —
+      // a cache entry nothing reads is a second, phantom source of truth.)
+      qc.invalidateQueries({ queryKey: ['test-info', s.project_id] });
+      qc.invalidateQueries({ queryKey: ['live-session', s.project_id] });
     },
   });
 }
@@ -575,7 +582,15 @@ export function useDestroySession() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => sessionsApi.destroy(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['session'] }),
+    onSuccess: () => {
+      // The vars are a session id, not a project id — prefix scope is the
+      // only honest one here: every project's test-info/live-session
+      // describe sessions, and a destroyed one must not keep serving the
+      // dead deep link + QR the backend itself refuses to emit (FM-DEVb).
+      qc.invalidateQueries({ queryKey: ['session'] });
+      qc.invalidateQueries({ queryKey: ['test-info'] });
+      qc.invalidateQueries({ queryKey: ['live-session'] });
+    },
   });
 }
 
@@ -609,6 +624,10 @@ export function useTestInfo(projectId: number | null) {
   return useQuery({
     queryKey: ['test-info', projectId],
     enabled: projectId != null,
+    // FM-DEVb: the same 5s rhythm as the session queries — the verdict IS
+    // session state, so a session started or destroyed from another client
+    // (the web IDE) converges here too, never serving a dead deep link.
+    refetchInterval: 5000,
     queryFn: () => testInfoApi.get(projectId!),
   });
 }

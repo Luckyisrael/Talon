@@ -4,9 +4,9 @@ import Clipboard from '@react-native-clipboard/clipboard'
 import QRCodeStyled from 'react-native-qrcode-styled'
 import { Badge, LimeButton, Screen, UIText } from '@/components/ui'
 import { Colors, Spacing } from '@/constants/theme'
-import { useActiveProject, useCreateSession, useDestroySession, useDeviceSession, useLiveSession, useTestInfo } from '@/hooks'
+import { useActiveProject, useCreateSession, useDestroySession, useDeviceSession, useLiveSession, useMetro, useTestInfo } from '@/hooks'
 import { getSessionId, setSessionId } from '@/lib/session'
-import { openMetroStream, type MetroEvent } from '@/lib/api'
+import { type MetroEvent } from '@/lib/api'
 
 // Device tab: Metro-first connection details for the phone in your hand.
 // This phone runs the installed dev client and reloads from Metro, so there
@@ -73,18 +73,12 @@ export default function DeviceScreen() {
   const { data: session } = useDeviceSession(sessionId)
   const { data: testInfo } = useTestInfo(projectId)
 
-  // Metro events: the bundler's voice, kept as a short recent list.
-  const [metroEvents, setMetroEvents] = React.useState<MetroEvent[]>([])
-  React.useEffect(() => {
-    if (projectId == null) return
-    let close: (() => void) | undefined
-    void openMetroStream(
-      projectId,
-      (ev) => setMetroEvents((prev) => [...prev.slice(-7), ev]),
-      () => {},
-    ).then((c) => (close = c))
-    return () => close?.()
-  }, [projectId])
+  // Metro events: the bundler's voice, kept as a short recent list. One
+  // subscription implementation — useMetro's, the leak-free one — so this
+  // screen only ever slices the feed and never opens a socket itself
+  // (FM-DEVc: the hand-rolled effect here leaked its stream when the screen
+  // unmounted before the open resolved).
+  const metroEvents = useMetro(projectId)
   const metro = metroEvents.length > 0 ? metroEvents[metroEvents.length - 1] : null
   const metroError = metro?.kind === 'error' ? metro : null
 
