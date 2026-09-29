@@ -110,6 +110,10 @@ e2e/artifacts/
 # behavior-* tables stay trackable.
 e2e/reports/*
 !e2e/reports/behavior-*.md
+# The OpenRouter model-candidate probe is the pre-filter evidence for
+# which free models earn a harness run — same class as the behavior
+# tables: a measurement other work will cite.
+!e2e/reports/openrouter-probe.md
 
 # stale committed build artifacts
 
