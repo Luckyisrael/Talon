@@ -488,7 +488,7 @@ Failure modes (written before the code, TEST_RULES §3):
   at, so a base that ends in `/v1` is never doubled and a bare root is
   never left short. This is L24's lesson one line down: L24 unified
   where the *headers* are set, L25 unifies where the *body* goes.
-- **FM-ANTa (candidate L28)** — the anthropic protocol drops the
+- **FM-ANTa (L28)** — the anthropic protocol drops the
   `StreamSink` at the dispatch boundary, so every agentic round on an
   anthropic provider is silently buffered. `ChatWithTools` forwards the
   sink to `chatWithToolsOpenAI` but calls
@@ -600,6 +600,33 @@ Failure modes (written before the code, TEST_RULES §3):
   18000 B / 4500-tok persona budget — measured on the compiled
   string; source length counts backtick-concatenation scaffolding and
   overstates the const by ~800 B).
+- **FM-CMPa (candidate L29)** — the prep-time context compaction is a
+  model call nobody announces. When `EstimateTokens(conversation)`
+  crosses `MaxContextTokens` the round loop calls `CompactWithSummary`
+  straight: no log line, no frame — the first signal is the
+  `compact … completed` tool call emitted *after* it returns. The
+  summarizer is one `chat` round over the whole to-be-dropped span
+  (found live: round 57's `prep=2m15.649s`, 18:05:22 → 18:07:37), so
+  for two minutes the wire carries only heartbeats — which FM-L8a
+  already ruled cannot count as progress — and the turn that is
+  *working* (writing a checkpoint of its own context) is
+  indistinguishable from a dead server. S12 grades the silence: the
+  gap lands as a required-row breach. The operator sees nothing
+  either: no serverlog line says compaction began, so the
+  dashboard's own background sweep is the only motion at +2 m.
+  Two failure modes under one law:
+  (i) an unannounced long-running call is indistinguishable from a
+  hung one — the scorecard cannot tell "compacting" from "dead", and
+  it must guess; S12's row counts the guess as a breach;
+  (ii) a wait with no log line leaves no after-the-fact evidence —
+  "why was round 57 slow" is unanswerable from the log.
+  The law: every wait longer than one frame is labeled *before* it
+  starts — a `running` frame and a log line at compaction entry,
+  paired with the `completed` frame already emitted at exit. The
+  frame is not decoration: S12's gap clock resets on any real frame,
+  and running/completed is the emitter's own pairing contract, so
+  the tool mix still counts exactly one `compact` call — the wait
+  becomes measurable instead of invisible.
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -626,6 +653,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L26 | **A truncated plan is a failed plan, never a success (FM-PLANa)** — three changes on the plan stream's truth path: (1) `streamAnthropic` reads `message_delta`'s `stop_reason` and a `max_tokens` end emits an error event (the existing `sawError` arm then marks the turn `failed`); (2) the plan handler's prose fallback refuses envelopes — output that opens with `{` and does not unmarshal is a terminal `failed` + error frame, while prose that does not open with `{` keeps today's message path unchanged; (3) `maxOutputTokens` 16384 → 32768, the ceiling below which Run-7's plan (≈4,300 tok of JSON plus a model that emitted `out=10628` on a single build round) was cut mid-array | fails-first `TestPlanStreamTruncatedByMaxTokensIsAFailure` (red: SSE fixture ends `stop_reason: max_tokens` mid-JSON → turn reports `done success`, prompt `completed`, plan_json null — Run-7's exact state, project 24) + `TestBrokenPlanEnvelopeIsNotReportedAsSuccess` (red: handler's prose arm swallows it) + keep-test `TestPlanStreamProseAnswerStillSucceeds` (a question-only reply must keep returning success/waiting — the new rule must not eat the message path) | ⬤ |
 | L27 | **The estimate line is emitted by call, not by protocol (FM-TELf)** — one `logEstInput` helper, in the exact `est_input_tok=%d (system=%d hist_msgs=%d tools=%d body_bytes=%d)` format the scorecard parses, called by `chatWithToolsOpenAI` (moved, unchanged output) and by `chatWithToolsAnthropic` (new) right after the body is marshalled — so S9/S10 are measurable on every provider | fails-first `TestAnthropicPathEmitsTheEstimateLineTheScorecardParses` (red: run the anthropic round against a stub and capture `log` output — zero `est_input_tok=` lines, the Run-7 state) + keep-test `TestOpenAIEstimateLineFormatUnchanged` (red: format drift would break the scorecard parser silently) | ⬤ |
 | L28 | **The agentic round streams on every protocol (FM-ANTa)** — `ChatWithTools` passes the `StreamSink` to `chatWithToolsAnthropic` instead of dropping it at the dispatch boundary, and a non-nil sink switches that round to `openStream` + one shared `readAnthropicStream` reader: text deltas forward as `sink(d, false)`, thinking as `sink(d, true)` (the openai branch's exact contract), while the reader accumulates the same fields the buffered path returns — text/thinking/tool blocks, `input_json_delta` concatenated into `ToolUseBlock.Input`, stop_reason, usage (input+cache from `message_start`, output from `message_delta`; agentrouter confirmed to send both). `streamAnthropic` is refactored onto the same reader with an events adapter, so the parse exists once; its observable behaviour is preserved (error event → error frame, `max_tokens` → error frame, close-without-`message_stop` → clean `done`). The agentic side is stricter where it must be: a stream that ends with no stop_reason is an error (the orchestrator's client ladder retries) rather than a silently toolless round, and `max_tokens` still lands in `StopReason` so Run-8's round-3 pattern — cut at the ceiling, 6 usable tool calls executed — is unchanged. Nil sink (planloop's five callers) keeps the buffered path byte-identical, and both branches in the function share one header closure | fails-first `TestAnthropicRoundStreamsToTheSinkWhileTheRoundRuns` (red on two independent places: the request body carries no `"stream":true` — the Run-6/7/8 state; the sink is called **zero** times, Run-8's dark wire — plus per-delta count and first-call-before-stream-end assertions that keep a one-shot end-of-round call from ever passing as streaming) + contract keep-test asserting the streamed and buffered results are deep-equal from the same server (latency may change, the result contract may not) + `TestAnthropicMessagePathsAgree` extended to a 5th, sunk call so both base spellings cover the new branch; the contract change also reached 16 scripted fake providers across api/composer/orchestrator that ignored the stream flag — a JSON answer parses as an *empty* stream, turning a scripted tool_use round into a scriptless one that failed with the client's no-stop_reason error — so `internal/aitest` now reframes each scripted response as the SSE carrying it, when and only when the request asked to stream (a fake that answers a stream request with JSON hides the failure inside the client, exactly the shape FM-URLa names); scope line: openai's M2 restart loop is deliberately out of scope — a dropped anthropic stream surfaces as an error to the existing ladder, not a new retry machine | ⬤ |
+| L29 | **Compaction announces itself before it waits (FM-CMPa)** — the round loop logs the compaction (round, turns, token estimate vs budget) and emits `compact` **`running`** before `CompactWithSummary`/`Compact` runs; the existing `completed` frame at exit pairs with it, so the scorecard still counts exactly one `compact` call in the tool mix while S12's gap clock resets at wait *start*. The emit sits above the `o.ai` branch, so the static-fallback path announces too — both are waits from the wire's point of view only in length, and neither may start silently | fails-first `TestCompactionCheckpointIsOnTheWireBeforeTheModelCall` (red: the fake model's *summarizer* handler waits for a `compact` `running` frame the moment its request arrives — today the first compact frame is emitted only after the call returns, so the wait times out with the 133k-token model call already invisible; a fixture guard asserts compaction was actually reached, so "never compacted" cannot pass as "compacted visibly"); evidence: Run-4 round 57 `prep=2m15.649s` with no log line until it finished (Appendix D, found-live) | ⬤ |
 
 Still-open P1 rows from the previous list:
 

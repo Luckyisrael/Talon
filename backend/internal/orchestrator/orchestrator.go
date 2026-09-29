@@ -1457,8 +1457,19 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 				round, strings.Join(triggers, ","), len(systemPrompt)-before, before, len(systemPrompt))
 		}
 
-		if ai.EstimateTokens(conversation) > MaxContextTokens {
+		if tokens := ai.EstimateTokens(conversation); tokens > MaxContextTokens {
 			before := len(conversation)
+			// FM-CMPa: label the wait before it starts. The summarizer is
+			// a model round over the dropped span (found live at 2m15s)
+			// with no frame and no log line until it returned — a working
+			// turn read as a dead server, and S12 graded the silence over
+			// real frames as a breach. `running` pairs with the
+			// `completed` emitted below, so the tool mix still counts one
+			// compact call; only the gap clock moves (it resets here).
+			log.Printf("orchestrator: compacting context in round %d: %d turns ≈%d tokens > %d — model checkpoint in flight",
+				round, before, tokens, MaxContextTokens)
+			sess.Emitter.EmitToolCall("", "compact", "",
+				fmt.Sprintf("Checkpointing context (%d turns)", before), "running")
 			// Ask the model to write the checkpoint over the span being dropped
 			// instead of replacing it with a static line: the summary carries
 			// the intent, the errors, and the open decisions the oldest turns
