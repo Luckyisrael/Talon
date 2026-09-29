@@ -144,7 +144,7 @@ the cache.
 ### 3.2 Per-round wire shaping (transcript economy)
 
 - **Compaction**: when the conversation estimate exceeds
-  `MaxContextTokens = 120_000` (`orchestrator.go:46`), it compacts to ¾
+  `MaxContextTokens = 200_000` (`orchestrator.go:46`), it compacts to ¾
   budget — `CompactWithSummary` asks the model to write the checkpoint over
   the dropped span (summary carries intent, errors, decisions), degrading
   to static trim with no client. The session log is shadowed to the same
@@ -270,11 +270,11 @@ no-mutation of the shared slice, flag-off, assistant-tail fallback.
 | "State goal and next action before acting" | ✅ added | card's Goal + NEXT lines, mechanically |
 | Anti-circle: stop re-reading, write early | ✅ added (structural) | card NEXT + existing reread/repeat/verify notes |
 | Update memory continuously as work happens | ✅ partial | system-maintained card (no model cooperation needed) + `write_memory`/`write_adr` tools; see roadmap for automatic durable-memory proposals |
-| Rolling summary of older turns, last N verbatim | ⚠️ partial | compaction-with-summary exists but is threshold-gated (120k), not proactive; window = last 60 rows — Phase 2 |
+| Rolling summary of older turns, last N verbatim | ⚠️ partial | compaction-with-summary exists but is threshold-gated (200k), not proactive; window = last 60 rows — Phase 2 |
 | Pin user constraints per turn | ⚠️ partial | prompt + plan checklist + steer lane; no explicit constraint list — Phase 2 |
 | Memory loaded when relevant, not blindly | ⚠️ partial | bounded (20 rows × 240 chars) but unranked — Phase 2 |
 | Tool outputs as summary, not raw forever | ⚠️ partial | superseded-read trim + spill/prune + compaction; no age-based decay of old tool results — Phase 2 |
-| Per-component token budget breakdown | ❌ not built | one global 120k knob — Phase 2/3 |
+| Per-component token budget breakdown | ❌ not built | one global 200k knob — Phase 2/3 |
 | Retrieval beyond recency (semantic/symbol) | ❌ not built | `project_map` symbols + grep exist; no semantic index — Phase 3 |
 | Agent-maintained scratchpad (`.agent/task-state.md`) | 🚫 **rejected** | see §6 — the system maintains state instead |
 | Multi-agent | 🚫 deferred | docs agree: not now |
@@ -319,7 +319,7 @@ unchanged).
 - *Age-based tool-result decay*: results older than the last K messages
   shrink to head+tail on the wire (generalizes the superseded-read trim).
 - *Proactive rolling summaries*: summarize turns older than N (not only
-  when 120k is hit), keeping the last 5-20 verbatim with exact details
+  when the 200k ceiling is hit), keeping the last 5-20 verbatim with exact details
   preserved (paths, errors, commands).
 - *Memory relevance ranking*: score `project_memory` rows against the
   current goal instead of a flat 20-row window.
@@ -331,7 +331,7 @@ unchanged).
 
 **Phase 3 — retrieval:**
 semantic/symbol search over the workspace, version-specific domain docs
-retrieval, a real token budget per component (docs' 120k breakdown),
+retrieval, a real token budget per component (docs' 200k breakdown),
 optional derive-read migration (`TALONSTUDIO_SESSIONLOG=derive`) promoted
 to default once soak is clean.
 

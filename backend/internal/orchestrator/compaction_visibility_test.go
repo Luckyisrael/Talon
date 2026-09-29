@@ -34,13 +34,22 @@ import (
 // scorecard's tool mix still counts exactly one `compact` call; only
 // the gap clock moves.
 
-// checkpointReply is a minimal shape-valid checkpoint
-// (looksLikeCheckpoint only requires the first section in the head).
-const checkpointReply = `Primary Request and Intent
+// checkpointReply is a minimal shape-valid checkpoint in the guide
+// shape (looksLikeCheckpoint only requires the opening section in the
+// head, but the fixture must exercise the acceptance path the new
+// instruction actually asks for — FM-CMPb).
+const checkpointReply = `## Objective
 - build the dashboard
 
-Current Work
-- compaction test fixture`
+## Current Work State
+### Completed
+- (none)
+### Active
+- compaction test fixture
+### Blocked
+- (none)
+### Next Move
+- (none)`
 
 // TestCompactionCheckpointIsOnTheWireBeforeTheModelCall has the fake
 // summarizer wait for the compact `running` frame at the exact moment
@@ -114,9 +123,11 @@ func TestCompactionCheckpointIsOnTheWireBeforeTheModelCall(t *testing.T) {
 	// (≥ minDroppedToSummarize = 4); five turns after the giant — the
 	// first of them a plain user message, the clean boundary the backward
 	// walk snaps to — leave something to keep. The giant alone puts
-	// EstimateTokens over MaxContextTokens (120k), which is what triggers
-	// the compaction branch at all.
-	giant := strings.Repeat("x", 400_000) // ≈133k tokens at len/3
+	// EstimateTokens over MaxContextTokens — sized const-tracking
+	// (chars = const×3 + margin ⇒ tokens > const, since approx is len/3)
+	// so a ceiling change cannot silently disarm this fixture, which is
+	// what the guard below exists to catch.
+	giant := strings.Repeat("x", MaxContextTokens*3+60_000) // ≈220k tokens at len/3
 	history := []ai.Message{
 		ai.UserText("make the dashboard"),
 		ai.AssistantText("ok"),

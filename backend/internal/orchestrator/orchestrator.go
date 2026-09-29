@@ -39,11 +39,19 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/tools"
 )
 
-// MaxContextTokens is when the conversation gets compacted. Sized to leave room
-// for the system prompt, tool definitions and a full response. Exported so the
-// token meter reads the same window the compaction decision uses — an occupancy
-// bar and the compactor must agree on what "full" means.
-const MaxContextTokens = 120_000
+// MaxContextTokens is when the conversation gets compacted: the conversation
+// side of the budget, checked at the top of every round before the model
+// call. Sized so the whole request (conversation + system prompt + tool
+// definitions + envelope) plus a full response stays inside the serving
+// window — the models this deployment runs (claude-opus-5, deepseek-v4-flash)
+// publish 1M-token windows, so the ceiling is 200K conversation and the peak
+// request runs ≈229K input, far short of it (FM-CMPb). Watch:
+// Atria-Dawn-Preview publishes no window spec — on a window < 260K the first
+// conversation past ~171K 400s before this branch can fire; the signal is a
+// provider "prompt too long", the fix is a lower const, never a retry.
+// Exported so the token meter reads the same window the compaction decision
+// uses — an occupancy bar and the compactor must agree on what "full" means.
+const MaxContextTokens = 200_000
 
 // gateTickInterval is how often the turn's wall-clock gates are sampled
 // independently of round ticks (L22/FM-D1c). A generation owns the loop:

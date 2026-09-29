@@ -86,7 +86,7 @@ as first-class listeners in the new architecture.
 | 11 | Skills: multi-source merged registry, winner-per-name, load-on-demand | `go:embed` single source, hand-rolled front-matter | no project-local skills; no per-project knowledge growth | **H6** |
 | 12 | Instructions chain (AGENTS.md) w/ byte budget, most-specific wins | none (knowledge is baked into the binary) | projects cannot teach the agent their own conventions | **H6** |
 | 13 | System prompt = registry of ordered sections; per-preset persona; catalog stable across modes for request-cache | `SystemPromptBuild` assembles monolithically (already cache-aware via fingerprints) | section assembly hard-coded; tier discipline not a section | **H7** |
-| 14 | Compaction: backend contract; shadow-not-delete; tool-result pruner tier (8k/4k/1k) below conversation compaction; `/compact` | `Compact` at 120k; `TrimSupersededToolOutput`; `clipOutput` head/tail | destructive trims; no pruner tier; no on-demand compact | **H8** |
+| 14 | Compaction: backend contract; shadow-not-delete; tool-result pruner tier (8k/4k/1k) below conversation compaction; `/compact` | `Compact` at 200k; `TrimSupersededToolOutput`; `clipOutput` head/tail | destructive trims; no pruner tier; no on-demand compact | **H8** |
 | 15 | Spill store: oversized tool text → disk locator + retrieval guidance; nothing lost | `clipOutput` truncates 32KB (head 3/4 + tail 1/4) | long gradle/logcat output is silently lost to the model | **H8** |
 | 16 | Subagents: one-shot + continuable children; scoped tools; lineage; discovery; fork joins parent composition (same tools) | none | biggest capability gap: no delegation | **H9** |
 | 17 | Workflow: scripted fan-out with `agent()`/`parallel()`/`pipeline()`, schema-validated results, phases | none | parallel verification / multi-screen checks impossible | **H10** |
@@ -467,7 +467,7 @@ of truncating.
    ("read with read_spill(locator) or the logcat tool filtered"). Failure-index
    patterns then survive long builds (today a 32KB clip can lose the middle of the
    error that mattered).
-3. Full compaction backend contract + basic backend (today's 120k Compact) refit to
+3. Full compaction backend contract + basic backend (today's 200k Compact) refit to
    *shadow* on the H1 log rather than rewrite history. `/compact`-equivalent: a
    "Condense context" affordance in the chat rail (one useful reduction below
    threshold) — honest UI: shows what was condensed and remains expandable.

@@ -29,28 +29,40 @@ import (
 // compactionInstruction is the prompt for the auxiliary summarization call. It
 // is deliberately prescriptive: the summary is the model's only memory of the
 // dropped span, so the instruction pins what must survive and what must not.
+//
+// The section list is the guide shape (FM-CMPb): durable state first
+// (Objective, Requirements, Decisions Taken), then the work state (Completed,
+// Active, Blocked, Next Move), then what to open and what must not be missed
+// (Relevant Files, Important Context). A resume reads headers, not prose —
+// Requirements exists so a stated constraint is never re-litigated, Blocked
+// so a stuck item carries who must unblock it, and Decisions keeps the old
+// Errors-and-Fixes rule (fixes tried and abandoned, with their reason) so
+// nothing is retried.
 const compactionInstruction = `This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.
 
 Summarize the conversation above as a checkpoint with exactly these sections, in this order, each as a markdown heading:
 
-Primary Request and Intent
-Key Technical Concepts
-Files and Code
-Errors and Fixes
-Pending Jobs
-Current Work
-Next Step
-Critical Context
+Objective
+Requirements
+Decisions Taken
+Current Work State
+Completed
+Active
+Blocked
+Next Move
+Relevant Files
+Important Context
 
 Rules:
 - Terse bullets. Never drop a section; a section with nothing to say writes "(none)".
-- Preserve exact paths, command strings, error strings, identifiers, and numerics. A paraphrased path is a wrong path.
-- Name the files that were written or changed and what each one does in one line.
-- Errors and Fixes names each failure and the fix that resolved it — including fixes that failed and were abandoned, so they are not retried.
-- Pending Jobs and Current Work are what the next request must be able to pick up cold.
-- Critical Context holds anything the next request would otherwise get wrong: a decision already made, a constraint the user stated, a tool that does not work here.
+- Objective is what was asked for and why — the original intent in the requester's terms.
+- Requirements carries every constraint stated by the user verbatim: acceptance criteria, thresholds, exact paths, forbidden changes. A paraphrased requirement is a lost requirement.
+- Decisions Taken records each decision already made and each fix tried and abandoned, with the reason it failed, so neither is re-litigated or retried.
+- Current Work State splits into four sub-sections: Completed (landed work — files written, results measured, commits made), Active (work in flight), Blocked (what is stuck and what or who must unblock it), Next Move (the literal next action).
+- Relevant Files names each file written, changed, or under discussion with a one-line role. Preserve exact paths, command strings, error strings, identifiers, and numerics. A paraphrased path is a wrong path.
+- Important Context holds anything the next request would otherwise get wrong: contracts, invariants, provider quirks, where evidence lives.
 - Do not mention this summarization request. Output only the checkpoint text.
-- If a prior checkpoint is present in the conversation, consolidate it into this one — do not copy it forward verbatim.`
+- If a prior checkpoint is present in the conversation — including one written in an older section format — consolidate it into this one; do not copy it forward verbatim.`
 
 // minDroppedToSummarize is the floor below which summarizing is not worth a
 // model call — a two-turn drop is cheaper to keep or lose than to summarize.
@@ -144,15 +156,19 @@ func flatPromptMessages(msgs []Message) (out []PromptMessage, ok bool) {
 	return out, len(out) > 0
 }
 
-// looksLikeCheckpoint checks the shape, not the content: the first required
-// section must appear near the top. A summary that lost the shape is not a
+// looksLikeCheckpoint checks the shape, not the content: the opening section
+// must appear near the top. A summary that lost the shape is not a
 // checkpoint the next request can read, and the fallback is used instead.
+// Both the guide shape (FM-CMPb) and the legacy anchor count — a legacy
+// checkpoint echoing from kept history still beats the static fallback
+// line, so the gate rejects ramblers, not fashion.
 func looksLikeCheckpoint(s string) bool {
 	head := s
 	if len(head) > 400 {
 		head = head[:400]
 	}
-	return strings.Contains(head, "Primary Request and Intent")
+	return strings.Contains(head, "Objective") ||
+		strings.Contains(head, "Primary Request and Intent")
 }
 
 // CompactWithSummary is the model-written compaction. It plans the cut,

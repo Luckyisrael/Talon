@@ -724,6 +724,52 @@ Failure modes (written before the code, TEST_RULES §3):
   and running/completed is the emitter's own pairing contract, so
   the tool mix still counts exactly one `compact` call — the wait
   becomes measurable instead of invisible.
+- **FM-CMPb (candidate L31)** — the checkpoint that survives
+  compaction is written in a shape that buries the two things a cold
+  reader needs most, and the ceiling it enforces was sized for a
+  context window this deployment no longer runs. Two failure modes:
+  (i) *Shape.* The instruction's eight sections — Primary Request and
+  Intent / Key Technical Concepts / Files and Code / Errors and Fixes /
+  Pending Jobs / Current Work / Next Step / Critical Context — mix
+  durable state with volatile state in one flat list, and have no
+  home at all for two recovery-critical facts: a stated requirement
+  that must not be re-litigated, and a blocker with who must act.
+  A resume needs a fixed header: what was asked (**Objective**), what
+  constrains it (**Requirements**, verbatim — a paraphrased
+  requirement is a lost requirement), what was decided
+  (**Decisions Taken**, carrying each fix tried and abandoned with
+  its reason so it is never retried — today's "Errors and Fixes"
+  rule preserved), where work stands (**Completed / Active /
+  Blocked / Next Move**), what to open (**Relevant Files**), and what
+  must not be missed (**Important Context**). The evidence for the
+  shape is this document's own session-checkpoint protocol: a
+  session resumed from exactly these sections picks up cold without
+  re-asking.
+  (ii) *Ceiling.* `MaxContextTokens = 120_000` was sized — the
+  comment says it: "leave room for the system prompt, tool
+  definitions and a full response" — for a 200K window (120K conv +
+  ~29K overhead + response ≈ 181K). The models this deployment now
+  serves publish 1M windows: claude-opus-5 is 1M context / 128K
+  output per Anthropic's context-window docs and two independent
+  catalogs; deepseek-v4-flash is 1M per DeepSeek's release notes and
+  the V4 paper. The compactor therefore fires at ~6% of the window,
+  pays a full summarizer model round for the privilege (FM-CMPa's
+  2m15s), and cuts memory long before the window pressures.
+  The law: the checkpoint is written in the guide shape — the ten
+  section lines in fixed order, empty sections "(none)", never
+  dropped — and the ceiling is `MaxContextTokens = 200_000`
+  conversation tokens, sized against measured 1M serving windows
+  (peak request ≈ 200K + ~29K overhead + ≤128K output ≪ 1M). Watch:
+  Atria-Dawn-Preview publishes no window spec; on a window < 260K the
+  first conversation past ~171K 400s *before* the compactor can fire —
+  the signal is a provider "prompt too long", the fix is a lower
+  const, never a retry. The shape gate accepts the new sections and
+  the legacy anchor alike: a legacy checkpoint echoing from kept
+  history still beats the static fallback line, and the gate exists
+  to reject ramblers, not to enforce fashion. Groq-shaped
+  constraints are out of scope by operator decree — no threshold,
+  budget, or section in this row considers the 6500-era sizing
+  (L30 recorded the same decree against the tools layer).
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -753,6 +799,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L29 | **Compaction announces itself before it waits (FM-CMPa)** — the round loop logs the compaction (round, turns, token estimate vs budget) and emits `compact` **`running`** before `CompactWithSummary`/`Compact` runs; the existing `completed` frame at exit pairs with it, so the scorecard still counts exactly one `compact` call in the tool mix while S12's gap clock resets at wait *start*. The emit sits above the `o.ai` branch, so the static-fallback path announces too — both are waits from the wire's point of view only in length, and neither may start silently | fails-first `TestCompactionCheckpointIsOnTheWireBeforeTheModelCall` (red: the fake model's *summarizer* handler waits for a `compact` `running` frame the moment its request arrives — today the first compact frame is emitted only after the call returns, so the wait times out with the 133k-token model call already invisible; a fixture guard asserts compaction was actually reached, so "never compacted" cannot pass as "compacted visibly"); evidence: Run-4 round 57 `prep=2m15.649s` with no log line until it finished (Appendix D, found-live) | ⬤ |
 | L22 | **Gates ride wall time, not round ticks (FM-D1c)** — `fireGateWarnings(sess, mode)` becomes the single implementation of both due-checks (L3 route + L17 first-write: due → latch → one warning event, text byte-identical to today's), called from the round-loop sites *and* from a turn-scoped ticker goroutine started before the round loop and stopped when it returns. The ticker is `gateTickInterval` — 15 s, the build heartbeat's cadence, a var so tests compress it (the heartbeat's own pattern). The round-loop call stays: at a boundary it claims the event with zero delay; the ticker covers every window the round loop cannot see (a generation spanning the threshold — Run-4's 7m56s — long tool runs, verification, compaction). Mode-gating and latches untouched: plan turns stay silent, one event per gate ever, FM-D1b's one-voice card unchanged | fails-first `TestFirstWriteWarnFiresDuringASpanningGeneration` + `TestRouteWarnFiresDuringASpanningGeneration` (red: compile — `undefined: gateTickInterval`, the same shape L17/L23/L24 shipped theirs as; the behavior it locks in once it compiles: threshold set to cross ~2 s into a single model call that blocks until the event lands or a 5 s cap — today the round loop is inside `ChatWithTools` the whole time, no tick exists, and the turn then answers `end_turn` with no round 2, so the event never fires at all; a fixture guard fatals if the warning landed *before* the generation started, so a round-1 claim cannot pass as a spanning one) + keep-tests `TestFirstWriteLadder`/`TestRouteScaffoldLadder`/`TestGateNoteOneVoice` pinned green (session semantics untouched); Run-4 evidence: 7m56s generation, ticks +11s/+16s/+25s → +8m22s, `first_write` events 0 while S1 failed | ⬤ |
 | L30 | **One tools-layer law, both wires (FM-L30a; closes P2 #11)** — (a) descriptions travel whole: the OpenAI path's unconditional 160-char sentence compression (P1 `7b2f5a4`'s uncured half — sized for a Groq context limit the same file declares dead) is deleted, so `run_shell`'s approval flow and `ask_user`'s secret rule reach the model on every protocol; (b) the 100K size valve (`toolStripInputTokens` → `filterToCoreTools`, contract-guarded by `coreToolSet` + the existing `TestPromptPromisedToolsSurviveCoreFilter`) applies on the anthropic wire too — today it exists only in `chatWithToolsOpenAI`, so the wire the scorecard runs has no pathological-body valve at all; both halves share one threshold, one core set, one <8-element keep-original guard. The reduce direction itself is dispositioned in FM-L30a (i)–(iii): availability gating measured complete, relevance-hiding = Run-1 amputation, prose-thinning unverifiable — no other cut is lawful | fails-first `TestOpenAIToolDescriptionsTravelWhole` (red observed: contract cut to 285 of 375 bytes — P1's ≥160-sentence compression live on every openai request; green: byte-identical to `ToolDefinition.Description`) + `TestAnthropicStripValveFiresOnOversizedBodies` (red observed: est>100K with 14 tools sends all 14 — no valve exists on this wire; green: core-only, non-core stripped) + pins `TestAnthropicToolsUnchangedOnHonestBodies` (est far below 100K → tools wire byte-identical to today: the recipe cannot move) and `TestAnthropicValveKeepsAllWhenCoreWouldGoUnder8` (the shared <8 keep-original guard mirrored); Run-8: tools=22,216 B/round = 4th-largest layer, 14 of 41 called; Run-1: 8 promised tools stripped at 6500 (S9's origin); golden suite re-recorded via `TALONSTUDIO_UPDATE_GOLDEN=1` — digest-only diff, 0 non-sha256 lines changed | ⬤ |
+| L31 | **The checkpoint speaks the guide shape; the ceiling matches the window (FM-CMPb)** — (a) `compactionInstruction`'s section list becomes `Objective / Requirements / Decisions Taken / Current Work State (Completed, Active, Blocked, Next Move) / Relevant Files / Important Context` — ten lines, markdown headings, empty sections "(none)", Requirements pinned verbatim, Decisions carrying fixes tried-and-abandoned so they are not retried, the "consolidate any prior checkpoint" rule extended to older-format ones; (b) `looksLikeCheckpoint` accepts the guide shape *and* the legacy anchor (a legacy checkpoint from kept history beats the static fallback; the gate rejects ramblers, not fashion); (c) `MaxContextTokens` 120_000 → **200_000** — conversation ceiling sized against the verified 1M windows of both run models (claude-opus-5, deepseek-v4-flash), Atria-Dawn-Preview's unpublished window recorded as the watch item in the const's own comment | fails-first `TestCheckpointCarriesTheGuideShape` (red: the instruction lists the legacy eight sections — `Objective` absent from the section list — and `looksLikeCheckpoint` rejects a guide-shaped reply) + `TestMaxContextTokensIs200K` (red: **120_000**) + `TestConversationUnderTheCeilingDoesNotCompact` (red: a ≈167K-token conversation — above the old 120K, below the new ceiling — emits the `compact` frame and reaches the summarizer today); keep-fixture `TestCompactionCheckpointIsOnTheWireBeforeTheModelCall` re-derived const-tracking (`MaxContextTokens*3 + 60_000` chars ≈ 220K tokens) with `checkpointReply` moved to the guide shape, its "never compacted cannot pass" guard intact; `TestLooksLikeCheckpoint`'s legacy `good` untouched — the acceptance it pins must survive; docs `DESIGN_AGENT_CONTEXT.md` / `PLAN_HARNESS.md` 120k numbers move with the const; no golden touch (fixtures never approach the ceiling) | ⬤ |
 
 Still-open P1 rows from the previous list:
 
