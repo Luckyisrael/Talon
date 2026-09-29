@@ -29,10 +29,12 @@ session when one IS attached:
   device log names the exception.
 - Only when the user has asked for end-to-end test flows: author a short
   Maestro flow under `.maestro/flows/` (launch the app, one or two
-  assertions, `appId: com.talon.app`) and run it with `run_e2e`. Unless
-  they asked for that, do not read, write, or run anything under
-  `.maestro/` — a flow-type feature is finished by typecheck plus device
-  verification (boot, screenshot, metro), not by authoring test flows.
+  assertions, `appId` = this project's own `expo.android.package` from
+  `app.json` — the package `run_boot` installs — never a hard-coded
+  studio name) and run it with `run_e2e`. Unless they asked for that, do
+  not read, write, or run anything under `.maestro/` — a flow-type
+  feature is finished by typecheck plus device verification (boot,
+  screenshot, metro), not by authoring test flows.
 
 The device has a lifecycle the user experiences directly: it pauses after
 10 idle minutes and is destroyed after 30. If you need the device and it

@@ -104,7 +104,8 @@ export default function TestOnPhone({ projectId, epoch }: TestOnPhoneProps) {
               <QRCode text={info.deep_link ?? ""} size={192} />
             </div>
             <p className="text-center text-xs leading-relaxed text-fog">
-              Scan with your phone camera, or open in the Talon dev client.
+              Open the Talon dev client and tap Scan QR Code — the QR is an
+              exp:// link, which only the dev client itself can open.
             </p>
           </div>
 

@@ -47,10 +47,18 @@ func renderAppJSON(upperDir string, id ProjectIdentity, templateDir string) erro
 	expo["slug"] = id.Slug
 	expo["scheme"] = id.Scheme
 
-	// Set android package
-	if android, ok := expo["android"].(map[string]interface{}); ok {
-		android["package"] = id.AndroidPackage
+	// Set the android package — creating the block when the template has no
+	// android object to write into. Skipping here meant a template without
+	// one rendered an app.json carrying no package of its own, which `expo
+	// prebuild` would resolve from a default (FM-DEVd(iv): after L33 that
+	// default is the dev client's identity, so a project would install over
+	// the app the QR opens).
+	android, ok := expo["android"].(map[string]interface{})
+	if !ok {
+		android = map[string]interface{}{}
+		expo["android"] = android
 	}
+	android["package"] = id.AndroidPackage
 
 	// Write rendered app.json to upper layer
 	out, err := json.MarshalIndent(config, "", "  ")

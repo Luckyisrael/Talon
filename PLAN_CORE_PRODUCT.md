@@ -59,9 +59,11 @@ What I verified before writing this (not assumed):
   buttons, dummy handlers) — the mobile side aligns naturally.
 - gitremote has a complete GitHub OAuth pattern to follow: env-gated
   config, state tokens, public callback route.
-- The template app's Android id is `com.talon.app`; the dev-client
-  APK (271MB, built) is the same package with expo-dev-client — the
-  Maestro flow's `appId` target.
+- The Talon mobile app's Android id is `com.talon.app`; the dev-client
+  APK (271MB, built) is a **separate** package, `com.talon.devclient`,
+  so both install on one phone (Android allows one holder per package
+  name — L33). The Maestro flow's `appId` is the generated project's
+  own `expo.android.package`, never either of those two.
 - Mobile app state: tanstack/react-query 5.90 is installed with a
   QueryClientProvider mounted, but **zero `useQuery` usage** — every tab
   renders mock data (SEED_SCREENS, LOG_LINES, `echoes`, FauxQr). `tsc` is

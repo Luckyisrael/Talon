@@ -74,4 +74,23 @@ describe("Get-the-app pane", () => {
     expect(screen.queryByRole("img")).toBeNull(); // still no dead QR
     expect(screen.getByText(/Install the dev client/i)).toBeTruthy();
   });
+
+  // FM-DEVe(ii): the shipped dev client's merged manifest registers
+  // `talonapp`, `exp+talon-app` and `expo-dev-launcher` — never `exp` — so a
+  // phone camera's VIEW intent for the `exp://` QR has nothing to resolve
+  // against. The instruction has to name the entry the installed client
+  // actually serves (its launcher's own "Scan QR Code"), or the tap
+  // dead-ends — or opens Expo Go, which lacks this project's native modules.
+  it("tells the user to open the QR with the dev client's own scanner", async () => {
+    vi.mocked(testInfo.get).mockResolvedValue({
+      available: true,
+      deep_link: "exp://talon.example.com:17812",
+      dev_client_url: "http://localhost:8080/v1/projects/1/dev-client.apk",
+    });
+    render(<TestOnPhone projectId={1} />);
+    await waitFor(() =>
+      expect(screen.getByText(/Scan QR Code/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/phone camera/i)).toBeNull();
+  });
 });

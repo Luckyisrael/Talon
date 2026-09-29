@@ -91,11 +91,11 @@ func TestDeviceSessionSkillCarriesProtocol(t *testing.T) {
 		t.Fatal("device-session skill not loaded — the device protocol left the prompt with no home (FM-B2a)")
 	}
 	for _, want := range []string{
-		"metro_status",        // the tool the surface law names
-		".maestro/flows/",     // relocated from ai's Phase A guard
-		"com.talon.app",       // relocated from ai's Phase A guard
-		"run_boot",            // per-unit verify order
-		"verified statically", // the honesty phrase, verbatim
+		"metro_status",         // the tool the surface law names
+		".maestro/flows/",      // relocated from ai's Phase A guard
+		"expo.android.package", // FM-DEVe(i): the project's own package — L21's `com.talon.app` literal named a package no generated project installs
+		"run_boot",             // per-unit verify order
+		"verified statically",  // the honesty phrase, verbatim
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("device-session skill missing %q — protocol content lost in the move", want)

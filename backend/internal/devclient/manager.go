@@ -124,10 +124,23 @@ func (m *Manager) InstallDevClient(ctx context.Context, adbTarget string) error 
 	return fmt.Errorf("dev-client install failed after 5 attempts: package service not ready")
 }
 
+// DevClientPackage is the Android package the template dev client builds —
+// backend/template/app.json's expo.android.package, the applicationId `expo
+// prebuild` bakes into the APK this manager serves and installs. It is
+// exported because it is the one name every installed-device question asks
+// about: IsInstalledOnDevice probes it with `pm list packages`, whose filter
+// is a substring match, so a name that disagrees with the build answers
+// empty for a client that IS installed — and InstallDevClient then
+// re-installs the whole APK behind Metro's start on every session
+// (FM-DEVd(ii): the literal once read com.talon.devclient while the build
+// produced com.talon.app). TestInstalledCheckProbesTheTemplateBuild pins it
+// to the file; never edit one without the other.
+const DevClientPackage = "com.talon.devclient"
+
 // IsInstalledOnDevice checks if the dev-client is already installed on the device.
 func (m *Manager) IsInstalledOnDevice(adbTarget string) bool {
 	cmd := exec.Command("adb", "-s", adbTarget, "shell",
-		"pm", "list", "packages", "com.talon.devclient")
+		"pm", "list", "packages", DevClientPackage)
 	output, err := cmd.CombinedOutput()
 	return err == nil && len(output) > 0
 }

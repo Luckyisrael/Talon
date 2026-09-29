@@ -101,6 +101,29 @@ func generateScheme(slug string) string {
 	return s
 }
 
+// Reserved identity: the two apps the studio ships itself — the Talon
+// mobile app the user builds from (talonmobileapp/app.json) and the
+// prebuilt dev client the QR opens (backend/template/app.json). A generated
+// project may never be handed either name: Android gives a package exactly
+// one installed holder, and `run_boot` installs a project's APK with
+// `adb install -r`, which evicts whoever currently holds that name; a
+// claimed scheme redirects the studio app's own deep links to a project.
+//
+// These are compile-time strings because this is a library with no file
+// access of its own; TestProjectIdentityRefusesStudioIdentity derives the
+// expected set from both app.json files, so the two can never drift apart
+// (FM-DEVd(iii): nothing checked before L33, so a project named "App" was
+// handed com.talon.app and one named "Talon" the talon:// scheme).
+var reservedPackages = map[string]bool{
+	"com.talon.app":       true, // talonmobileapp
+	"com.talon.devclient": true, // the dev client
+}
+
+var reservedSchemes = map[string]bool{
+	"talon":    true, // talonmobileapp
+	"talonapp": true, // the dev client
+}
+
 // ValidatePackage checks if a string is a valid Android Java package name.
 // Rules: lowercase segments separated by dots, no leading digits, no hyphens.
 var validPackage = regexp.MustCompile(`^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)*$`)
@@ -114,11 +137,15 @@ func ValidatePackage(pkg string) error {
 
 // EnsureUnique appends a numeric suffix to slug/package/scheme until all are unique.
 // Takes a checker function that returns true if a value already exists.
+// A generated identity is also refused when it would claim a studio app's
+// package or scheme, so "unique among projects" cannot hand a project a
+// name that no project could take either (FM-DEVd(iii)).
 func EnsureUnique(id ProjectIdentity, slugExists, packageExists func(string) bool) ProjectIdentity {
 	result := id
 	suffix := 1
 
-	for slugExists(result.Slug) || packageExists(result.AndroidPackage) {
+	for slugExists(result.Slug) || packageExists(result.AndroidPackage) ||
+		reservedPackages[result.AndroidPackage] || reservedSchemes[result.Scheme] {
 		suffix++
 		suffixStr := fmt.Sprintf("-%d", suffix)
 		result.Slug = id.Slug + suffixStr

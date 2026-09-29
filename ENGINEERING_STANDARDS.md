@@ -815,6 +815,50 @@ Failure modes (written before the code, TEST_RULES §3):
   already dead) sits in the same file's hook barrel, unused. The
   law: one subscription implementation, the leak-free one; the
   screen slices it, never opens it.
+- **FM-DEVd (candidate L33)** — two shipped apps claim one Android
+  package, and the installed-check probes a package nothing builds.
+  (i) *Conflict.* `backend/template/app.json` (the prebuilt dev client)
+  and `talonmobileapp/app.json` (the studio's own app — the surface the
+  user builds from) both declare `com.talon.app`. Android allows exactly
+  one installed holder of a package name: installing the second evicts
+  the first or fails `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, so a phone
+  cannot carry the studio app *and* the dev client — and it must carry
+  both, because the dev client is what the QR opens. (ii) *Drift.*
+  `devclient.IsInstalledOnDevice` probes the literal `com.talon.devclient`,
+  which no build has ever produced; `pm list packages <filter>` is a
+  substring match, so an installed client answers empty, the check
+  returns false, and `InstallDevClient` re-installs the whole APK on
+  every session start while `sessions.go`'s `wg.Wait()` — and therefore
+  Metro — sits behind that goroutine. The literal was right and the file
+  was wrong, and nothing in the tree said so. (iii) *Re-claim.*
+  `identity.Generate` derives `com.talon.<slug>` and a scheme from the
+  slug with no reserved set: a project named "App" is handed
+  `com.talon.app`, one named "Talon" the studio's `talon://` scheme, and
+  `run_boot`'s `adb install -r` then evicts whichever studio app held
+  them. (iv) *Inheritance.* `renderAppJSON` writes the project's package
+  only when the template already has an `expo.android` object to write
+  it into — when it has none, the generated app.json silently keeps
+  whatever package the template declared, which after the fix would be
+  the dev client's own. The law: the dev client owns
+  `com.talon.devclient`, that exact name is what the installed-check
+  probes and what the shipped APK must declare, generated identity may
+  never be assigned either studio app's package or scheme, and a
+  rendered project always carries its own package.
+- **FM-DEVe (candidate L33)** — both surfaces that *name* a package name
+  the wrong one. (i) *Skill.* `device-session` tells the agent to author
+  Maestro flows with `appId: com.talon.app`, which is not the package
+  any generated project installs — `buildsession.go` boots
+  `proj.AndroidPackage` from the workspace's own APK — so for every
+  project whose slug is not literally "app" the flow targets a package
+  that is not on the device and `run_e2e` fails at launch. (ii) *Panel.*
+  `TestOnPhone` says "Scan with your phone camera, or open in the Talon
+  dev client", but the shipped APK's merged manifest registers only
+  `talonapp`, `exp+talon-app` and `expo-dev-launcher` — never `exp` — so
+  a camera tap on the `exp://` QR fires a VIEW intent nothing handles,
+  or, if Expo Go happens to be installed, opens a client that lacks this
+  project's native modules. The law: the skill names the project's own
+  `expo.android.package`, and the panel names an entry path the
+  installed APK actually serves.
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -846,6 +890,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L30 | **One tools-layer law, both wires (FM-L30a; closes P2 #11)** — (a) descriptions travel whole: the OpenAI path's unconditional 160-char sentence compression (P1 `7b2f5a4`'s uncured half — sized for a Groq context limit the same file declares dead) is deleted, so `run_shell`'s approval flow and `ask_user`'s secret rule reach the model on every protocol; (b) the 100K size valve (`toolStripInputTokens` → `filterToCoreTools`, contract-guarded by `coreToolSet` + the existing `TestPromptPromisedToolsSurviveCoreFilter`) applies on the anthropic wire too — today it exists only in `chatWithToolsOpenAI`, so the wire the scorecard runs has no pathological-body valve at all; both halves share one threshold, one core set, one <8-element keep-original guard. The reduce direction itself is dispositioned in FM-L30a (i)–(iii): availability gating measured complete, relevance-hiding = Run-1 amputation, prose-thinning unverifiable — no other cut is lawful | fails-first `TestOpenAIToolDescriptionsTravelWhole` (red observed: contract cut to 285 of 375 bytes — P1's ≥160-sentence compression live on every openai request; green: byte-identical to `ToolDefinition.Description`) + `TestAnthropicStripValveFiresOnOversizedBodies` (red observed: est>100K with 14 tools sends all 14 — no valve exists on this wire; green: core-only, non-core stripped) + pins `TestAnthropicToolsUnchangedOnHonestBodies` (est far below 100K → tools wire byte-identical to today: the recipe cannot move) and `TestAnthropicValveKeepsAllWhenCoreWouldGoUnder8` (the shared <8 keep-original guard mirrored); Run-8: tools=22,216 B/round = 4th-largest layer, 14 of 41 called; Run-1: 8 promised tools stripped at 6500 (S9's origin); golden suite re-recorded via `TALONSTUDIO_UPDATE_GOLDEN=1` — digest-only diff, 0 non-sha256 lines changed | ⬤ |
 | L31 | **The checkpoint speaks the guide shape; the ceiling matches the window (FM-CMPb)** — (a) `compactionInstruction`'s section list becomes `Objective / Requirements / Decisions Taken / Current Work State (Completed, Active, Blocked, Next Move) / Relevant Files / Important Context` — ten lines, markdown headings, empty sections "(none)", Requirements pinned verbatim, Decisions carrying fixes tried-and-abandoned so they are not retried, the "consolidate any prior checkpoint" rule extended to older-format ones; (b) `looksLikeCheckpoint` accepts the guide shape *and* the legacy anchor (a legacy checkpoint from kept history beats the static fallback; the gate rejects ramblers, not fashion); (c) `MaxContextTokens` 120_000 → **200_000** — conversation ceiling sized against the verified 1M windows of both run models (claude-opus-5, deepseek-v4-flash), Atria-Dawn-Preview's unpublished window recorded as the watch item in the const's own comment | fails-first `TestCheckpointCarriesTheGuideShape` (red: the instruction lists the legacy eight sections — `Objective` absent from the section list — and `looksLikeCheckpoint` rejects a guide-shaped reply) + `TestMaxContextTokensIs200K` (red: **120_000**) + `TestConversationUnderTheCeilingDoesNotCompact` (red: a ≈167K-token conversation — above the old 120K, below the new ceiling — emits the `compact` frame and reaches the summarizer today); keep-fixture `TestCompactionCheckpointIsOnTheWireBeforeTheModelCall` re-derived const-tracking (`MaxContextTokens*3 + 60_000` chars ≈ 220K tokens) with `checkpointReply` moved to the guide shape, its "never compacted cannot pass" guard intact; `TestLooksLikeCheckpoint`'s legacy `good` untouched — the acceptance it pins must survive; docs `DESIGN_AGENT_CONTEXT.md` / `PLAN_HARNESS.md` 120k numbers move with the const; no golden touch (fixtures never approach the ceiling) | ⬤ |
 | L32 | **The phone surface is reachable before the phone is paired; the Device tab's truth stays on the server (FM-DEVa/b/c)** — (a) `TestInfoHandler.Info` derives `DevClientURL` through one helper (devClient configured + `DevClientAPKPath` on disk) *before* any early return, so the no-session and no-relay answers carry it too; (b) web `TestOnPhone` drops the `available` gate from `apkUrl` and renders the shared APK block in the unavailable branch as well — with (a) landed, an absent URL means exactly "not built" and the fallback copy stays true; (c) mobile `useCreateSession` invalidates `['test-info', project_id]` + `['live-session', project_id]` and no longer writes the phantom `['session', project_id, 'id']` key, `useDestroySession` invalidates the `['test-info']`/`['live-session']` prefixes (its vars are a session id — prefix is the only honest scope), and `useTestInfo` polls at the session queries' 5 s rhythm so sessions started from another client converge; (d) `device.tsx` replaces its hand-rolled SSE effect with `useMetro` — one subscription implementation, the race-free one | fails-first `TestTestInfoAdvertisesTheAPKBuiltOnDiskWithoutSession` (red: `DevClientURL == ""` with no session — Info's early return predates the field) + coverage pins `TestTestInfoOmitsTheAPKWhenNotBuilt`, `TestDevClientAPKServesTheBuild`, `TestDevClientAPKNotBuiltIs404`, `TestDevClientAPKRequiresOwnership`, `TestDevClientAPKRealBuildRangeProbe` (skip-if-absent; real 148 MB build served over Range, `PK` magic), `TestMetroSSEReportsNoSessionHonestly`, `TestMetroSSERejectsNonOwner`, `TestMetroSSESaysSoWhenTheBundlerNeverStarted` + vitest `TestOnPhone` first-time-phone case (red: available:false + dev_client_url → link absent today) + jest `device.test.tsx` (red: no test-info refetch after start/destroy; red: unmount-before-resolve leaves the metro socket open) | ⬤ |
+| L33 | **One package per app — and every surface that names one names the package it actually gets (FM-DEVd/e)** — (a) the prebuilt dev client claims `com.talon.devclient` (`backend/template/app.json`) instead of the studio app's `com.talon.app`, so one phone can hold both; (b) `devclient.DevClientPackage` is the named, exported single source `IsInstalledOnDevice` probes — pinned to the template's `expo.android.package` by test instead of living as a second, unchecked literal; (c) `identity.EnsureUnique` refuses reserved packages (`com.talon.app`, `com.talon.devclient`) and reserved schemes (`talon`, `talonapp`) before it ever reaches the store's own checkers, and `renderAppJSON` always writes the project's package — creating the `android` block when the template has none — so a rendered project can never inherit a studio package; (d) the `device-session` skill's Maestro `appId` becomes the project's own `expo.android.package` (L21's `com.talon.app` marker retargeted with it); (e) `TestOnPhone`'s pairing instruction names the dev client's own Scan QR Code entry instead of a camera tap no registered scheme can serve | fails-first `TestDevClientPackageIsItsOwnNotTheStudioApps` (red: `backend/template/app.json` and `talonmobileapp/app.json` both read `com.talon.app`) + `TestInstalledCheckProbesTheTemplateBuild` (red: `DevClientPackage` = `com.talon.devclient`, template = `com.talon.app` — the drift that made every session start reinstall) + `TestShippedDevClientAPKDeclaresItsOwnPackage` (red: the real APK's AXML manifest carries `com.talon.app` 8× as UTF-16LE and `com.talon.devclient` 0×; self-validating — a broken extractor would show 0 for both; skip-if-absent. **Stays red until `build-dev-client.sh` is re-run**, which is the point: the artifact, not just the source, must declare the new package) + `TestProjectIdentityRefusesStudioIdentity` (red: `Generate("App")` → `com.talon.app`, `Generate("Talon")` → scheme `talon` — neither is refused today) + `TestRenderedAppJSONCarriesTheProjectPackageNotTheTemplates` (red: a template with no `expo.android` block leaves the project's package unwritten) + knowledge `TestDeviceSessionSkillCarriesProtocol` retargeted (red: skill carries no `expo.android.package`) + vitest `TestOnPhone` pairing-instruction case (red: copy promises a phone-camera tap) | ⬤ |
 
 Still-open P1 rows from the previous list:
 
