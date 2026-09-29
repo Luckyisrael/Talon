@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1360,11 +1361,112 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, history []P
 	}
 	defer respBody.Close()
 
-	// blockKinds maps a content-block index to the event family it belongs to,
-	// so content_block_stop can close the stream it actually opened.
-	blockKinds := make(map[int]string, 4)
+	// FM-ANTa: the parse itself is one function (readAnthropicStream) shared
+	// with the agentic round — the events below are this path's adapter to
+	// it, not a second copy of the parser.
+	hooks := &anthropicStreamHooks{
+		onStart: func(kind, name string) bool {
+			switch kind {
+			case "thinking":
+				return emit(ctx, events, StreamEvent{Type: "thinking.start"})
+			case "tool":
+				return emit(ctx, events, StreamEvent{
+					Type: "tool.start",
+					Data: StreamToolStart{Name: name},
+				})
+			default:
+				return emit(ctx, events, StreamEvent{Type: "text.start"})
+			}
+		},
+		onDelta: func(kind, delta string) bool {
+			if kind == "thinking" {
+				return emit(ctx, events, StreamEvent{
+					Type: "thinking.delta",
+					Data: StreamTextDelta{Text: delta},
+				})
+			}
+			return emit(ctx, events, StreamEvent{
+				Type: "text.delta",
+				Data: StreamTextDelta{Text: delta},
+			})
+		},
+		onStop: func(kind string) bool {
+			switch kind {
+			case "thinking":
+				return emit(ctx, events, StreamEvent{Type: "thinking.end"})
+			case "tool":
+				// Tool results come from the executor, not the stream.
+				return true
+			default:
+				return emit(ctx, events, StreamEvent{Type: "text.end"})
+			}
+		},
+	}
 
-	scanner := newSSEScanner(respBody)
+	result, err := readAnthropicStream(respBody, hooks)
+	if err != nil {
+		if errors.Is(err, errAnthropicStreamStopped) {
+			return // the consumer's context ended; it already knows
+		}
+		emitStreamError(ctx, events, "%v", err)
+		return
+	}
+	// FM-PLANa: the gateway's own word on how the turn ended. It used to be
+	// thrown away at message_delta — a max_tokens stop and a clean end_turn
+	// were indistinguishable after the fact, so a plan cut mid-envelope still
+	// read as a complete answer.
+	if result.StopReason == "max_tokens" {
+		emitStreamError(ctx, events, "the response was cut at the output token limit (stop_reason=max_tokens)")
+		return
+	}
+
+	emit(ctx, events, StreamEvent{Type: "done"})
+}
+
+// ── shared anthropic SSE reader ───────────────────────
+
+// anthropicStreamHooks is what readAnthropicStream reports as the stream
+// arrives. kind is one of "text", "thinking", "tool". The plan turn adapts
+// these to StreamEvents; the agentic round adapts them to a StreamSink
+// (FM-ANTa). A hook returning false stops the read — reported as
+// errAnthropicStreamStopped, not a failure.
+type anthropicStreamHooks struct {
+	onStart func(kind, name string) bool
+	onDelta func(kind, delta string) bool
+	onStop  func(kind string) bool
+}
+
+// errAnthropicStreamStopped: a hook refused further events (its consumer
+// went away). Not a failure — that consumer already stopped.
+var errAnthropicStreamStopped = errors.New("anthropic stream read stopped by the consumer")
+
+// readAnthropicStream is THE parse of anthropic's event stream — one
+// implementation for both consumers, because two parsers for one protocol's
+// stream is the fork FM-ANTa exists to prevent. It accumulates exactly what
+// the buffered response would have carried (text and thinking blocks,
+// tool_use with its input assembled from input_json_delta partials,
+// stop_reason, usage) while reporting each delta through hooks as it
+// arrives, so a round that streamed and a round that buffered return the
+// same *AgenticChatResult — only their latency differs.
+//
+// Policy belongs to the callers: this reader records stop_reason without
+// interpreting it (the plan turn turns max_tokens into an error frame, the
+// agentic round keeps its tool calls), and a stream that closes without
+// message_stop returns whatever arrived rather than an error.
+func readAnthropicStream(r io.Reader, hooks *anthropicStreamHooks) (*AgenticChatResult, error) {
+	result := &AgenticChatResult{}
+
+	// Per-block assembly state, keyed by content-block index.
+	blockKind := make(map[int]string, 4) // normalized kind reported to hooks
+	blockType := make(map[int]string, 4) // original content type for the result
+	textBuf := make(map[int]string, 4)
+	thinkingBuf := make(map[int]string, 4)
+	toolPartial := make(map[int][]byte, 2)
+	toolSeed := make(map[int]json.RawMessage, 2) // input sent at block start
+	toolID := make(map[int]string, 2)
+	toolName := make(map[int]string, 2)
+
+	scanner := newSSEScanner(r)
 	for scanner.Next() {
 		event := scanner.Event()
 		if len(event.Data) == 0 {
@@ -1372,45 +1474,71 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, history []P
 		}
 
 		switch event.Type {
+		case "message_start":
+			var payload struct {
+				Message struct {
+					Usage struct {
+						InputTokens         int `json:"input_tokens"`
+						CacheReadTokens     int `json:"cache_read_input_tokens"`
+						CacheCreationTokens int `json:"cache_creation_input_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			if json.Unmarshal(event.Data, &payload) == nil {
+				// Non-zero writes only: where each half of the usage lands
+				// differs by gateway (anthropic splits start/delta,
+				// agentrouter repeats both on message_delta) — verified on
+				// the wire, so the reader accepts either.
+				if payload.Message.Usage.InputTokens > 0 {
+					result.Usage.InputTokens = payload.Message.Usage.InputTokens
+				}
+				if payload.Message.Usage.CacheReadTokens > 0 {
+					result.Usage.CacheReadTokens = payload.Message.Usage.CacheReadTokens
+				}
+				if payload.Message.Usage.CacheCreationTokens > 0 {
+					result.Usage.CacheWriteTokens = payload.Message.Usage.CacheCreationTokens
+				}
+			}
+
 		case "content_block_start":
 			var payload struct {
 				Index        int `json:"index"`
 				ContentBlock struct {
-					Type string `json:"type"`
-					Name string `json:"name"`
+					Type  string          `json:"type"`
+					ID    string          `json:"id"`
+					Name  string          `json:"name"`
+					Input json.RawMessage `json:"input"`
 				} `json:"content_block"`
 			}
 			if json.Unmarshal(event.Data, &payload) != nil {
 				continue
 			}
+			kind := "text" // unknown types read as text to the events adapter
 			switch payload.ContentBlock.Type {
 			case "thinking", "redacted_thinking":
-				blockKinds[payload.Index] = "thinking"
-				if !emit(ctx, events, StreamEvent{Type: "thinking.start"}) {
-					return
-				}
+				kind = "thinking"
 			case "tool_use":
-				blockKinds[payload.Index] = "tool"
-				if !emit(ctx, events, StreamEvent{
-					Type: "tool.start",
-					Data: StreamToolStart{Name: payload.ContentBlock.Name},
-				}) {
-					return
+				kind = "tool"
+				toolID[payload.Index] = payload.ContentBlock.ID
+				toolName[payload.Index] = payload.ContentBlock.Name
+				if len(payload.ContentBlock.Input) > 0 {
+					toolSeed[payload.Index] = payload.ContentBlock.Input
 				}
-			default:
-				blockKinds[payload.Index] = "text"
-				if !emit(ctx, events, StreamEvent{Type: "text.start"}) {
-					return
-				}
+			}
+			blockKind[payload.Index] = kind
+			blockType[payload.Index] = payload.ContentBlock.Type
+			if hooks != nil && hooks.onStart != nil && !hooks.onStart(kind, payload.ContentBlock.Name) {
+				return nil, errAnthropicStreamStopped
 			}
 
 		case "content_block_delta":
 			var payload struct {
 				Index int `json:"index"`
 				Delta struct {
-					Type     string `json:"type"`
-					Text     string `json:"text"`
-					Thinking string `json:"thinking"`
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					Thinking    string `json:"thinking"`
+					PartialJSON string `json:"partial_json"`
 				} `json:"delta"`
 			}
 			if json.Unmarshal(event.Data, &payload) != nil {
@@ -1418,19 +1546,19 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, history []P
 			}
 			switch payload.Delta.Type {
 			case "thinking_delta":
-				if !emit(ctx, events, StreamEvent{
-					Type: "thinking.delta",
-					Data: StreamTextDelta{Text: payload.Delta.Thinking},
-				}) {
-					return
+				thinkingBuf[payload.Index] += payload.Delta.Thinking
+				if hooks != nil && hooks.onDelta != nil && !hooks.onDelta("thinking", payload.Delta.Thinking) {
+					return nil, errAnthropicStreamStopped
 				}
 			case "text_delta":
-				if !emit(ctx, events, StreamEvent{
-					Type: "text.delta",
-					Data: StreamTextDelta{Text: payload.Delta.Text},
-				}) {
-					return
+				textBuf[payload.Index] += payload.Delta.Text
+				if hooks != nil && hooks.onDelta != nil && !hooks.onDelta("text", payload.Delta.Text) {
+					return nil, errAnthropicStreamStopped
 				}
+			case "input_json_delta":
+				// The tool argument arrives byte by byte; the round cannot
+				// run until content_block_stop assembles it.
+				toolPartial[payload.Index] = append(toolPartial[payload.Index], payload.Delta.PartialJSON...)
 			}
 
 		case "content_block_stop":
@@ -1440,19 +1568,50 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, history []P
 			if json.Unmarshal(event.Data, &payload) != nil {
 				continue
 			}
-			kind := blockKinds[payload.Index]
-			delete(blockKinds, payload.Index)
-			switch kind {
+			kind := blockKind[payload.Index]
+			delete(blockKind, payload.Index)
+			contentType := blockType[payload.Index]
+			delete(blockType, payload.Index)
+
+			// Result assembly mirrors the buffered parse: only the content
+			// types it keeps, in arrival order, same fields.
+			switch contentType {
+			case "text":
+				text := textBuf[payload.Index]
+				delete(textBuf, payload.Index)
+				result.Text += text
+				result.Blocks = append(result.Blocks, Block{Type: "text", Text: text})
 			case "thinking":
-				if !emit(ctx, events, StreamEvent{Type: "thinking.end"}) {
-					return
+				thinking := thinkingBuf[payload.Index]
+				delete(thinkingBuf, payload.Index)
+				result.Blocks = append(result.Blocks, Block{Type: "thinking", Text: thinking})
+			case "tool_use":
+				input := toolPartial[payload.Index]
+				delete(toolPartial, payload.Index)
+				if len(input) == 0 {
+					input = toolSeed[payload.Index]
 				}
-			case "tool":
-				// Tool results come from the executor, not the stream.
-			default:
-				if !emit(ctx, events, StreamEvent{Type: "text.end"}) {
-					return
+				delete(toolSeed, payload.Index)
+				name := toolName[payload.Index]
+				delete(toolName, payload.Index)
+				id := toolID[payload.Index]
+				delete(toolID, payload.Index)
+				if !json.Valid(input) {
+					// Half an argument would fail to unmarshal at a point
+					// that hides why; drop it loudly instead — the text
+					// before it stands and the model can re-issue.
+					log.Printf("readAnthropicStream: dropping tool_use %q: input JSON incomplete (%d bytes)", name, len(input))
+				} else {
+					result.ToolUses = append(result.ToolUses, ToolUseBlock{
+						Type: "tool_use", ID: id, Name: name, Input: input,
+					})
+					result.Blocks = append(result.Blocks, Block{
+						Type: "tool_use", ID: id, Name: name, Input: input,
+					})
 				}
+			}
+			if hooks != nil && hooks.onStop != nil && !hooks.onStop(kind) {
+				return nil, errAnthropicStreamStopped
 			}
 
 		case "error":
@@ -1465,38 +1624,56 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, history []P
 			if json.Unmarshal(event.Data, &payload) == nil && payload.Error.Message != "" {
 				msg = payload.Error.Message
 			}
-			emitStreamError(ctx, events, "%s", msg)
-			return
+			return nil, errors.New(msg)
 
 		case "message_delta":
-			// FM-PLANa: this is the gateway's own word on how the turn
-			// ended, and it used to be thrown away — a max_tokens stop and
-			// a clean end_turn were indistinguishable after the fact, so a
-			// plan cut mid-envelope still read as a complete answer.
+			// The gateway's own word on how the turn ended — recorded,
+			// never interpreted here (FM-PLANa at the plan adapter; the
+			// agentic round keeps stop=max_tokens's tool calls, as Run-8's
+			// round 3 did).
 			var payload struct {
 				Delta struct {
 					StopReason string `json:"stop_reason"`
 				} `json:"delta"`
+				Usage struct {
+					InputTokens         int `json:"input_tokens"`
+					OutputTokens        int `json:"output_tokens"`
+					CacheReadTokens     int `json:"cache_read_input_tokens"`
+					CacheCreationTokens int `json:"cache_creation_input_tokens"`
+				} `json:"usage"`
 			}
-			if json.Unmarshal(event.Data, &payload) == nil && payload.Delta.StopReason == "max_tokens" {
-				emitStreamError(ctx, events, "the response was cut at the output token limit (stop_reason=max_tokens)")
-				return
+			if json.Unmarshal(event.Data, &payload) != nil {
+				continue
+			}
+			if payload.Delta.StopReason != "" {
+				result.StopReason = payload.Delta.StopReason
+			}
+			if payload.Usage.InputTokens > 0 {
+				result.Usage.InputTokens = payload.Usage.InputTokens
+			}
+			if payload.Usage.OutputTokens > 0 {
+				result.Usage.OutputTokens = payload.Usage.OutputTokens
+			}
+			if payload.Usage.CacheReadTokens > 0 {
+				result.Usage.CacheReadTokens = payload.Usage.CacheReadTokens
+			}
+			if payload.Usage.CacheCreationTokens > 0 {
+				result.Usage.CacheWriteTokens = payload.Usage.CacheCreationTokens
 			}
 
 		case "message_stop":
-			emit(ctx, events, StreamEvent{Type: "done"})
-			return
+			return result, nil
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		emitStreamError(ctx, events, "the AI stream ended early: %v", err)
-		return
+		return nil, fmt.Errorf("the AI stream ended early: %w", err)
 	}
 
-	// The stream closed without message_stop. Still finish cleanly so the client
-	// stops waiting.
-	emit(ctx, events, StreamEvent{Type: "done"})
+	// Closed without message_stop. Return what arrived; each consumer
+	// decides what that means (the plan turn finishes cleanly, the agentic
+	// round rejects a result with no stop_reason).
+	return result, nil
 }
 
 // ── SSE scanner ───────────────────────────────────────

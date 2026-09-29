@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/aitest"
 	"github.com/luckyisrael/talon/backend/internal/events"
 	harnessagent "github.com/luckyisrael/talon/backend/internal/harness/agent"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
@@ -37,21 +39,15 @@ func TestSteerLandsInNextRequest(t *testing.T) {
 		n := modelCalls
 		mu.Unlock()
 
-		var reqBody []byte
-		if r.Body != nil {
-			// Best-effort read; a read error fails the assertion below, not
-			// the server.
-			buf := make([]byte, 1<<20)
-			read, _ := r.Body.Read(buf)
-			reqBody = buf[:read]
-		}
+		// Full read (not best-effort): aitest.ServeRaw needs the whole body
+		// to see the stream flag, and a partial read could miss it.
+		reqBody, _ := io.ReadAll(r.Body)
 		if n == 2 {
 			mu.Lock()
 			round2Body = reqBody
 			mu.Unlock()
 		}
 
-		w.Header().Set("Content-Type", "application/json")
 		if n == 1 {
 			// Hold round 1 open until the steer has landed in the session
 			// lane — the loop is blocked on this response, which is exactly
@@ -60,7 +56,7 @@ func TestSteerLandsInNextRequest(t *testing.T) {
 			<-steerReady
 			// Round 1: a tool call, which keeps the turn running — the window
 			// in which the steer is delivered below.
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			aitest.ServeRaw(w, reqBody, map[string]any{
 				"content": []map[string]any{{
 					"type":  "tool_use",
 					"id":    "call-1",
@@ -73,7 +69,7 @@ func TestSteerLandsInNextRequest(t *testing.T) {
 			return
 		}
 		// Round 2+: finish the turn.
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		aitest.ServeRaw(w, reqBody, map[string]any{
 			"content":     []map[string]any{{"type": "text", "text": "done"}},
 			"stop_reason": "end_turn",
 			"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},
@@ -161,16 +157,16 @@ func TestUnsteeredTurnCarriesNoSteerMarker(t *testing.T) {
 		modelCalls++
 		n := modelCalls
 		mu.Unlock()
+		// Full read: the round-2 assertion needs the whole body, and
+		// aitest needs the stream flag a partial read could miss.
+		reqBody, _ := io.ReadAll(r.Body)
 		if n == 2 {
-			buf := make([]byte, 1<<20)
-			read, _ := r.Body.Read(buf)
 			mu.Lock()
-			round2Body = buf[:read]
+			round2Body = reqBody
 			mu.Unlock()
 		}
-		w.Header().Set("Content-Type", "application/json")
 		if n == 1 {
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			aitest.ServeRaw(w, reqBody, map[string]any{
 				"content": []map[string]any{{
 					"type":  "tool_use",
 					"id":    "call-1",
@@ -182,7 +178,7 @@ func TestUnsteeredTurnCarriesNoSteerMarker(t *testing.T) {
 			})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		aitest.ServeRaw(w, reqBody, map[string]any{
 			"content":     []map[string]any{{"type": "text", "text": "done"}},
 			"stop_reason": "end_turn",
 			"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},

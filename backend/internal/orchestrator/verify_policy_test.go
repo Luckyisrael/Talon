@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/aitest"
 	"github.com/luckyisrael/talon/backend/internal/events"
 	"github.com/luckyisrael/talon/backend/internal/store"
 )
@@ -239,14 +239,13 @@ func policyHarness(t *testing.T) (*Orchestrator, *SessionState, *store.Store, in
 	t.Helper()
 	var mu sync.Mutex
 	calls := 0
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		calls++
 		first := calls == 1
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
 		if first {
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			aitest.Serve(w, r, map[string]any{
 				"content": []map[string]any{{
 					"type":  "tool_use",
 					"id":    "call-1",
@@ -258,7 +257,7 @@ func policyHarness(t *testing.T) (*Orchestrator, *SessionState, *store.Store, in
 			})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		aitest.Serve(w, r, map[string]any{
 			"content":     []map[string]any{{"type": "text", "text": "done"}},
 			"stop_reason": "end_turn",
 			"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/aitest"
 )
 
 // W14.1 eval gate, clause one: legacy vs driver produce identical
@@ -321,21 +322,20 @@ func loopScriptServer(t *testing.T, first []map[string]any) *httptest.Server {
 	t.Helper()
 	var mu sync.Mutex
 	calls := 0
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		calls++
 		n := calls
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
 		if n == 1 {
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			aitest.Serve(w, r, map[string]any{
 				"content":     first,
 				"stop_reason": "tool_use",
 				"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},
 			})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		aitest.Serve(w, r, map[string]any{
 			"content":     []map[string]any{{"type": "text", "text": "done"}},
 			"stop_reason": "end_turn",
 			"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},

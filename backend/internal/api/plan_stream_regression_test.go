@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/aitest"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/store"
 )
@@ -157,10 +158,9 @@ func TestPlanChecklistSeedIsFreshTurnsOnly(t *testing.T) {
 	var calls atomic.Int32
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := calls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
 		if n == 1 {
 			// First turn: the agent asks a clarifying question and pauses.
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			aitest.Serve(w, r, map[string]any{
 				"content": []map[string]any{
 					{"type": "text", "text": "One thing before I build."},
 					{"type": "tool_use", "id": "ask_1", "name": "ask_user",
@@ -175,7 +175,7 @@ func TestPlanChecklistSeedIsFreshTurnsOnly(t *testing.T) {
 			return
 		}
 		// After the answer: the agent has what it needs and finishes.
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		aitest.Serve(w, r, map[string]any{
 			"content":     []map[string]any{{"type": "text", "text": "Wired up MWA auth."}},
 			"stop_reason": "end_turn",
 			"usage":       map[string]any{"input_tokens": 12, "output_tokens": 8},

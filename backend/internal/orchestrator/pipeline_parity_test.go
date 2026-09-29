@@ -3,12 +3,14 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 
 	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/aitest"
 )
 
 // The H3 migration gate: with the same scripted provider, legacy dispatch and
@@ -21,17 +23,15 @@ func TestPipelineTranscriptParity(t *testing.T) {
 		var requests []([]byte)
 		calls := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			buf := make([]byte, 1<<20)
-			n, _ := r.Body.Read(buf)
+			reqBody, _ := io.ReadAll(r.Body)
 			mu.Lock()
-			requests = append(requests, buf[:n])
+			requests = append(requests, reqBody)
 			calls++
 			c := calls
 			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
 			if c == 1 {
 				// A read-only batch: three reads the pipeline may overlap.
-				_ = json.NewEncoder(w).Encode(map[string]any{
+				aitest.ServeRaw(w, reqBody, map[string]any{
 					"content": []map[string]any{
 						{"type": "tool_use", "id": "a", "name": "list_files", "input": map[string]any{"path": ""}},
 						{"type": "tool_use", "id": "b", "name": "list_files", "input": map[string]any{"path": "app"}},
@@ -42,7 +42,7 @@ func TestPipelineTranscriptParity(t *testing.T) {
 				})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			aitest.ServeRaw(w, reqBody, map[string]any{
 				"content":     []map[string]any{{"type": "text", "text": "done"}},
 				"stop_reason": "end_turn",
 				"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},

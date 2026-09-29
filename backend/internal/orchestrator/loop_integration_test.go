@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/aitest"
 )
 
 // The full generate → verify → heal → verify loop against a scripted fake
@@ -21,14 +22,13 @@ import (
 func TestAgentLoopGenerateVerifyHeal(t *testing.T) {
 	var mu sync.Mutex
 	modelCalls := 0
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		modelCalls++
 		n := modelCalls
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
 		if n == 1 {
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			aitest.Serve(w, r, map[string]any{
 				"content": []map[string]any{{
 					"type":  "tool_use",
 					"id":    "call-1",
@@ -40,7 +40,7 @@ func TestAgentLoopGenerateVerifyHeal(t *testing.T) {
 			})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		aitest.Serve(w, r, map[string]any{
 			"content":     []map[string]any{{"type": "text", "text": "fixed it"}},
 			"stop_reason": "end_turn",
 			"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},
@@ -131,12 +131,11 @@ func TestAgentLoopGenerateVerifyHeal(t *testing.T) {
 func TestAgentLoopRambleBreaker(t *testing.T) {
 	var mu sync.Mutex
 	modelCalls := 0
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		modelCalls++
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		aitest.Serve(w, r, map[string]any{
 			"content":     []map[string]any{{"type": "text", "text": "prose dump with no tool calls"}},
 			"stop_reason": "max_tokens",
 			"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},
@@ -195,14 +194,13 @@ func TestAgentLoopRambleBreaker(t *testing.T) {
 func TestAgentLoopRambleCounterResets(t *testing.T) {
 	var mu sync.Mutex
 	modelCalls := 0
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		modelCalls++
 		n := modelCalls
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
 		if n == 1 || n == 4 {
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			aitest.Serve(w, r, map[string]any{
 				"content": []map[string]any{{
 					"type":  "tool_use",
 					"id":    "call-1",
@@ -214,7 +212,7 @@ func TestAgentLoopRambleCounterResets(t *testing.T) {
 			})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		aitest.Serve(w, r, map[string]any{
 			"content":     []map[string]any{{"type": "text", "text": "prose"}},
 			"stop_reason": "max_tokens",
 			"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},
@@ -274,9 +272,8 @@ func TestAgentLoopTurnStateCardOnWire(t *testing.T) {
 		requests = append(requests, string(body))
 		n := len(requests)
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
 		call := func(id, name string, input map[string]any) {
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			aitest.ServeRaw(w, body, map[string]any{
 				"content": []map[string]any{{
 					"type":  "tool_use",
 					"id":    id,
@@ -295,7 +292,7 @@ func TestAgentLoopTurnStateCardOnWire(t *testing.T) {
 			call("write-1", "write_file",
 				map[string]any{"path": "app/index.tsx", "content": "x"})
 		default:
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			aitest.ServeRaw(w, body, map[string]any{
 				"content":     []map[string]any{{"type": "text", "text": "done"}},
 				"stop_reason": "end_turn",
 				"usage":       map[string]any{"input_tokens": 5, "output_tokens": 5},

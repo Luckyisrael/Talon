@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/luckyisrael/talon/backend/internal/ai"
+	"github.com/luckyisrael/talon/backend/internal/aitest"
 )
 
 // A build that reaches its round budget while still working is a graceful,
@@ -19,9 +20,8 @@ import (
 // straight to exhaustion.
 func TestRunAgentLoopExhaustsGracefully(t *testing.T) {
 	// Always answer with a tool_use so the model never signals completion.
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		aitest.Serve(w, r, map[string]any{
 			"content": []map[string]any{{
 				"type":  "tool_use",
 				"id":    "call-1",

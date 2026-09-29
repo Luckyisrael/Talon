@@ -102,7 +102,10 @@ func (c *Client) ChatWithTools(ctx context.Context, system string, history []Mes
 	if c.protocol == ProtocolOpenAI {
 		return c.chatWithToolsOpenAI(ctx, system, history, tools, sink)
 	}
-	return c.chatWithToolsAnthropic(ctx, system, history, tools)
+	// FM-ANTa: the sink crosses this boundary too. Dropping it here meant
+	// every anthropic build round was buffered while the openai one
+	// streamed, and the caller could not tell which wire it got.
+	return c.chatWithToolsAnthropic(ctx, system, history, tools, sink)
 }
 
 // doWithRetry issues the request, retrying transient failures with exponential
@@ -843,7 +846,7 @@ func (c *Client) parseBufferedOpenAITools(_ context.Context, respBody []byte) (*
 
 // ── Anthropic path ────────────────────────────────────
 
-func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, history []Message, tools []ToolDefinition) (*AgenticChatResult, error) {
+func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, history []Message, tools []ToolDefinition, sink StreamSink) (*AgenticChatResult, error) {
 	// Cache the system prompt and tool definitions (both stable across a
 	// build) plus the conversation prefix up to the last complete turn.
 	breakpoint := len(history) - 2
@@ -864,6 +867,14 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 	if len(tools) > 0 {
 		reqBody["tools"] = tools
 	}
+	if sink != nil {
+		// FM-ANTa: a sink means the caller is watching the wire, so the
+		// round streams and each delta is forwarded as it arrives. A nil
+		// sink keeps today's buffered shape — buffering on request is
+		// correct; buffering unconditionally was the defect (Run-8's
+		// S12 measured it as a 133s hole in the wire).
+		reqBody["stream"] = true
+	}
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -882,45 +893,80 @@ func (c *Client) chatWithToolsAnthropic(ctx context.Context, system string, hist
 	// and blocked the run under §5.
 	logEstInput("ChatWithTools(Anthropic):", c.model, body, system, len(history), len(tools))
 
-	respBody, err := c.doWithEnvelopeRetry(ctx, c.messagesURL(), body, func(req *http.Request) {
+	setHeaders := func(req *http.Request) {
 		req.Header.Set("x-api-key", c.apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 		// User-Agent comes from newRequest (FM-UAa): the identity is
 		// attached in one place, never per call site.
-	}, "ChatWithTools(Anthropic)")
-	if err != nil {
-		return nil, err
 	}
 
-	var agenticResp AgenticResponse
-	if err := json.Unmarshal(respBody, &agenticResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w (body: %s)", err, truncate(string(respBody), 300))
-	}
+	var result *AgenticChatResult
+	if sink == nil {
+		respBody, err := c.doWithEnvelopeRetry(ctx, c.messagesURL(), body, setHeaders, "ChatWithTools(Anthropic)")
+		if err != nil {
+			return nil, err
+		}
 
-	result := &AgenticChatResult{
-		StopReason: agenticResp.StopReason,
-		Usage: Usage{
-			InputTokens:      agenticResp.Usage.InputTokens,
-			OutputTokens:     agenticResp.Usage.OutputTokens,
-			CacheReadTokens:  agenticResp.Usage.CacheReadInputTokens,
-			CacheWriteTokens: agenticResp.Usage.CacheCreationInputTokens,
-		},
-	}
+		var agenticResp AgenticResponse
+		if err := json.Unmarshal(respBody, &agenticResp); err != nil {
+			return nil, fmt.Errorf("failed to parse response: %w (body: %s)", err, truncate(string(respBody), 300))
+		}
 
-	for _, block := range agenticResp.Content {
-		switch block.Type {
-		case "text":
-			result.Text += block.Text
-			result.Blocks = append(result.Blocks, Block{Type: "text", Text: block.Text})
-		case "thinking":
-			result.Blocks = append(result.Blocks, Block{Type: "thinking", Text: block.Thinking})
-		case "tool_use":
-			result.ToolUses = append(result.ToolUses, ToolUseBlock{
-				Type: "tool_use", ID: block.ID, Name: block.Name, Input: block.Input,
-			})
-			result.Blocks = append(result.Blocks, Block{
-				Type: "tool_use", ID: block.ID, Name: block.Name, Input: block.Input,
-			})
+		result = &AgenticChatResult{
+			StopReason: agenticResp.StopReason,
+			Usage: Usage{
+				InputTokens:      agenticResp.Usage.InputTokens,
+				OutputTokens:     agenticResp.Usage.OutputTokens,
+				CacheReadTokens:  agenticResp.Usage.CacheReadInputTokens,
+				CacheWriteTokens: agenticResp.Usage.CacheCreationInputTokens,
+			},
+		}
+
+		for _, block := range agenticResp.Content {
+			switch block.Type {
+			case "text":
+				result.Text += block.Text
+				result.Blocks = append(result.Blocks, Block{Type: "text", Text: block.Text})
+			case "thinking":
+				result.Blocks = append(result.Blocks, Block{Type: "thinking", Text: block.Thinking})
+			case "tool_use":
+				result.ToolUses = append(result.ToolUses, ToolUseBlock{
+					Type: "tool_use", ID: block.ID, Name: block.Name, Input: block.Input,
+				})
+				result.Blocks = append(result.Blocks, Block{
+					Type: "tool_use", ID: block.ID, Name: block.Name, Input: block.Input,
+				})
+			}
+		}
+	} else {
+		respBody, err := c.openStream(ctx, c.messagesURL(), body, setHeaders)
+		if err != nil {
+			return nil, err
+		}
+		defer respBody.Close()
+
+		// FM-ANTa: one reader parses anthropic's stream for both its
+		// consumers. This adapter forwards each delta to the sink as it
+		// arrives — thinking marked exactly as the openai branch marks
+		// it — while the reader assembles the same result the buffered
+		// path above returns, so streaming changes latency, not contract.
+		result, err = readAnthropicStream(respBody, &anthropicStreamHooks{
+			onStart: func(string, string) bool { return true },
+			onDelta: func(kind, delta string) bool {
+				sink(delta, kind == "thinking")
+				return true
+			},
+			onStop: func(string) bool { return true },
+		})
+		if err != nil {
+			return nil, err
+		}
+		if result.StopReason == "" {
+			// The stream closed without the gateway's word on how the
+			// round ended. Accepting it would be a silently toolless
+			// round — upstream's retry ladder gets a failed round it can
+			// actually retry instead.
+			return nil, fmt.Errorf("the AI stream ended before the model finished (no stop_reason)")
 		}
 	}
 

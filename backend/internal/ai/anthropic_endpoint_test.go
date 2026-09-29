@@ -20,9 +20,11 @@ import (
 // SPA's index.html, so the mismatch surfaces as a parse failure or a
 // blank plan rather than as "wrong URL".
 //
-// The law: one endpoint builder, called by all four sites, accepting
-// both spellings of the root (`https://host` and `https://host/v1` —
-// the convention the openai side and every gateway use).
+// The law: one endpoint builder, called by every site that builds the
+// endpoint (five request shapes since FM-ANTa gave the agentic round a
+// streaming branch), accepting both spellings of the root
+// (`https://host` and `https://host/v1` — the convention the openai side
+// and every gateway use).
 //
 // Red today, and each base spelling fails a different half of the
 // matrix, so fixing two sites and leaving two cannot pass:
@@ -31,7 +33,7 @@ import (
 //	bare root base:    ChatStream, Vision    → /messages       (HTML)
 const anthropicEndpointWant = "/v1/messages"
 
-// anthropicEndpointRecorder serves every path the four anthropic call
+// anthropicEndpointRecorder serves every path the anthropic call
 // sites can build, records what each one asked for, and answers in the
 // shape that caller expects: SSE for a `"stream":true` request, JSON
 // otherwise. It never rejects a path — the point of the test is which
@@ -78,11 +80,11 @@ func (r *anthropicEndpointRecorder) handler() http.Handler {
 	})
 }
 
-// TestAnthropicMessagePathsAgree drives the four real call sites — the
-// buffered chat, the agentic loop (the build turn's path), the stream
-// (the plan turn's path), and vision — against one recording server and
-// demands that every one of them chose the same endpoint, for both
-// spellings of the base.
+// TestAnthropicMessagePathsAgree drives the real call sites — the
+// buffered chat, the agentic loop buffered and sunk (the build turn's
+// two shapes, FM-ANTa), the stream (the plan turn's path), and vision —
+// against one recording server and demands that every one of them chose
+// the same endpoint, for both spellings of the base.
 func TestAnthropicMessagePathsAgree(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -131,9 +133,14 @@ func TestAnthropicMessagePathsAgree(t *testing.T) {
 			// 4. vision.
 			_, _ = c.VisionCheck(ctx, []byte("fake-png-bytes"), "the home screen")
 
+			// 5. agentic round with a sink — the streaming branch that
+			//    FM-ANTa added. A second request shape means a second URL
+			//    it could have gotten wrong; both spellings cover it.
+			_, _ = c.ChatWithTools(ctx, "system", nil, nil, func(string, bool) {})
+
 			paths := rec.served()
-			if len(paths) != 4 {
-				t.Fatalf("expected all four anthropic call sites to make a request, got %d: %v", len(paths), paths)
+			if len(paths) != 5 {
+				t.Fatalf("expected all five anthropic call shapes to make a request, got %d: %v", len(paths), paths)
 			}
 			for i, p := range paths {
 				if p != anthropicEndpointWant {
