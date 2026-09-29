@@ -45,6 +45,16 @@ import (
 // bar and the compactor must agree on what "full" means.
 const MaxContextTokens = 120_000
 
+// gateTickInterval is how often the turn's wall-clock gates are sampled
+// independently of round ticks (L22/FM-D1c). A generation owns the loop:
+// Run-4's round 4 thought for 7m56s straight, so the +6 min first-write
+// threshold passed inside a window with no round boundary in it and the
+// warning event — S1's evidence channel — never fired while S1 failed.
+// The cadence matches the build heartbeat's (15 s): a bound on how late
+// a wall-clock warning can be, regardless of what the turn is doing. A
+// var, not a const, so tests compress it (the heartbeat's own pattern).
+var gateTickInterval = 15 * time.Second
+
 type Orchestrator struct {
 	ai *ai.Client
 
@@ -1343,6 +1353,38 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 	// repeatedly, trips the breaker.
 	rambleCount := 0
 
+	// L22/FM-D1c: the gate due-checks ride wall time, not round
+	// boundaries. The round loop cannot tick while a generation (or a
+	// long tool run, verification, or compaction) owns it — Run-4's
+	// 7m56s round spanned the +6 min threshold with no tick inside, so
+	// the first_write warning never fired while S1 failed. This ticker
+	// samples both gates for the life of the turn at gateTickInterval;
+	// the round-loop call stays so a boundary still claims a due event
+	// with zero delay. The latches serialize the two callers — one
+	// event per gate, ever. Stopped (and waited on) on any return.
+	gateStop := make(chan struct{})
+	var gateWG sync.WaitGroup
+	gateWG.Add(1)
+	go func() {
+		defer gateWG.Done()
+		ticker := time.NewTicker(gateTickInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-gateStop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fireGateWarnings(sess, opts.Mode)
+			}
+		}
+	}()
+	defer func() {
+		close(gateStop)
+		gateWG.Wait()
+	}()
+
 	for round := 1; round <= o.maxRounds; round++ {
 		// FM-TELd: prep is everything from loop top to this round's model
 		// dispatch — steering, enrichment, compaction, trims, card, routing.
@@ -1499,26 +1541,13 @@ func (o *Orchestrator) RunAgentLoop(ctx context.Context, sess *SessionState, opt
 
 		sess.Emitter.EmitPhase(events.Phase(sess.GetPhase()), fmt.Sprintf("round %d", round))
 
-		// L3 routes-first: the gate's single user-visible warning at the
-		// 10-minute mark. The card line rides every round below; this event
-		// fires once — every-round warnings would spam the stream (S12).
-		if sess.RouteScaffoldWarnDue(opts.Mode) && sess.MarkRouteWarned() {
-			sess.Emitter.EmitToolCall("", "route_scaffold", "",
-				fmt.Sprintf("no app/ route file written after %d min",
-					int(time.Since(sess.StartedAt).Minutes())),
-				"warning")
-		}
-
-		// L17 first-artifact clock: the gate's single user-visible warning
-		// at the 6-minute mark with no successful write (S1: first write ≤
-		// 3 min). Same one-shot latch and event shape as the route gate —
-		// the card line above rides every round below this one.
-		if sess.FirstWriteWarnDue(opts.Mode) && sess.MarkFirstWriteWarned() {
-			sess.Emitter.EmitToolCall("", "first_write", "",
-				fmt.Sprintf("no file written after %d min (S1: first write ≤ 3 min)",
-					int(time.Since(sess.StartedAt).Minutes())),
-				"warning")
-		}
+		// The two wall-clock gates (L3 route ladder at +10 min, L17
+		// first-artifact at +6 min): at a round boundary this claims a
+		// due warning with zero delay. The same due-checks also run on
+		// the L22 ticker goroutine, so a generation that spans a
+		// threshold no longer skips it (FM-D1c: sampling, not the
+		// clock, decides whether the evidence event exists).
+		fireGateWarnings(sess, opts.Mode)
 
 		// Collapse stale read_file/list_files bodies that a later call in this turn
 		// re-fetched: they are otherwise replayed in full every round. This trims a

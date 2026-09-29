@@ -917,6 +917,31 @@ func (s *SessionState) MarkRouteWarned() bool {
 	return true
 }
 
+// fireGateWarnings runs both wall-clock gate due-checks — L3's route
+// ladder and L17's first-artifact clock — and emits each gate's single
+// warning event the moment its threshold passes. Every caller may run
+// it: round ticks (zero delay at a boundary) and the L22 wall-clock
+// ticker (the windows a round tick cannot see — a generation spanning
+// the threshold, long tool runs, verification, compaction). The latches
+// make it one-shot per gate, so whichever caller observes the threshold
+// first claims the event and the other finds the latch closed
+// (FM-D1c). Event text is byte-identical to the round-loop code it
+// replaced — the scorecard's tool mix reads these names.
+func fireGateWarnings(sess *SessionState, mode string) {
+	if sess.RouteScaffoldWarnDue(mode) && sess.MarkRouteWarned() {
+		sess.Emitter.EmitToolCall("", "route_scaffold", "",
+			fmt.Sprintf("no app/ route file written after %d min",
+				int(time.Since(sess.StartedAt).Minutes())),
+			"warning")
+	}
+	if sess.FirstWriteWarnDue(mode) && sess.MarkFirstWriteWarned() {
+		sess.Emitter.EmitToolCall("", "first_write", "",
+			fmt.Sprintf("no file written after %d min (S1: first write ≤ 3 min)",
+				int(time.Since(sess.StartedAt).Minutes())),
+			"warning")
+	}
+}
+
 // explorationReminder rides the batch's first read result once the streak
 // crosses exploreBudgetReminder: one line, the number, the corrective action.
 func explorationReminder(total int) string {

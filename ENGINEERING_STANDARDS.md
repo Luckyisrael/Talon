@@ -329,6 +329,40 @@ Failure modes (written before the code, TEST_RULES §3):
   route gate's note resumes the moment the first write lands, and its
   warning event keeps exactly today's semantics (the L3 ladder test
   stays pinned and green).
+- **FM-D1c (L22)** — a wall-clock gate sampled only at round ticks is
+  not a wall-clock gate. L17's first-write warning and L3's route
+  warning both read `time.Since(sess.StartedAt)` correctly and both
+  fire only when the round loop ticks (orchestrator.go:1510/1516) —
+  so the *sampling*, not the clock, decides whether the event exists.
+  Run-4 measured the miss: round 4 generated for 7m56s straight (ticks
+  at +11 s, +16 s, +25 s, next at +8m22 s — after the write had
+  already landed), so the +6 min threshold passed inside a window with
+  no tick in it, `FirstWriteWarnDue` was never even asked, and the
+  run's `first_write` evidence reads 0 while S1 fails at 11m49s. The
+  gate cannot make the next round arrive sooner — a generation owns
+  the loop — so any check that waits for a round boundary is checking
+  *rounds*, not minutes, and the scorecard (which grades minutes)
+  grades an event that could not exist. L3's route warning shares the
+  pattern and only fired in Run-4 because a tick happened to land
+  after +10 min. Two failure modes under one law:
+  (i) the evidence channel is silent exactly while the violation is
+  active — the loudest moment of the failure produces the least
+  signal, and the after-the-fact reading ("why did S1 fail?") has no
+  event to read;
+  (ii) the one-shot latch makes the miss permanent for the turn — the
+  warning that never fired inside the window cannot fire after it
+  either (the write lands, the gate closes, the latch is never
+  claimed).
+  The law: the due-check runs on its own wall-clock ticker for the
+  life of the turn — the build heartbeat's 15 s cadence, not the round
+  boundary — same due functions, same one-shot latches, same event
+  shape and text. Whichever caller (round tick or ticker) observes the
+  threshold first claims the event: a turn that ticks inside the
+  window behaves exactly as today, a spanning generation gets its
+  event within one tick of the threshold. The advisory *note* stays on
+  the card — it renders per round by design, FM-D1b's one voice — and
+  only the warning event, the evidence channel, leaves the round
+  clock.
 - **FM-B1a (L18)** — a payload write with no later write to the same
   path replays its full body every round for the life of the turn: L9's
   trim collapses *superseded* inputs only, and Run-3 wrote 24 distinct
@@ -654,6 +688,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L27 | **The estimate line is emitted by call, not by protocol (FM-TELf)** — one `logEstInput` helper, in the exact `est_input_tok=%d (system=%d hist_msgs=%d tools=%d body_bytes=%d)` format the scorecard parses, called by `chatWithToolsOpenAI` (moved, unchanged output) and by `chatWithToolsAnthropic` (new) right after the body is marshalled — so S9/S10 are measurable on every provider | fails-first `TestAnthropicPathEmitsTheEstimateLineTheScorecardParses` (red: run the anthropic round against a stub and capture `log` output — zero `est_input_tok=` lines, the Run-7 state) + keep-test `TestOpenAIEstimateLineFormatUnchanged` (red: format drift would break the scorecard parser silently) | ⬤ |
 | L28 | **The agentic round streams on every protocol (FM-ANTa)** — `ChatWithTools` passes the `StreamSink` to `chatWithToolsAnthropic` instead of dropping it at the dispatch boundary, and a non-nil sink switches that round to `openStream` + one shared `readAnthropicStream` reader: text deltas forward as `sink(d, false)`, thinking as `sink(d, true)` (the openai branch's exact contract), while the reader accumulates the same fields the buffered path returns — text/thinking/tool blocks, `input_json_delta` concatenated into `ToolUseBlock.Input`, stop_reason, usage (input+cache from `message_start`, output from `message_delta`; agentrouter confirmed to send both). `streamAnthropic` is refactored onto the same reader with an events adapter, so the parse exists once; its observable behaviour is preserved (error event → error frame, `max_tokens` → error frame, close-without-`message_stop` → clean `done`). The agentic side is stricter where it must be: a stream that ends with no stop_reason is an error (the orchestrator's client ladder retries) rather than a silently toolless round, and `max_tokens` still lands in `StopReason` so Run-8's round-3 pattern — cut at the ceiling, 6 usable tool calls executed — is unchanged. Nil sink (planloop's five callers) keeps the buffered path byte-identical, and both branches in the function share one header closure | fails-first `TestAnthropicRoundStreamsToTheSinkWhileTheRoundRuns` (red on two independent places: the request body carries no `"stream":true` — the Run-6/7/8 state; the sink is called **zero** times, Run-8's dark wire — plus per-delta count and first-call-before-stream-end assertions that keep a one-shot end-of-round call from ever passing as streaming) + contract keep-test asserting the streamed and buffered results are deep-equal from the same server (latency may change, the result contract may not) + `TestAnthropicMessagePathsAgree` extended to a 5th, sunk call so both base spellings cover the new branch; the contract change also reached 16 scripted fake providers across api/composer/orchestrator that ignored the stream flag — a JSON answer parses as an *empty* stream, turning a scripted tool_use round into a scriptless one that failed with the client's no-stop_reason error — so `internal/aitest` now reframes each scripted response as the SSE carrying it, when and only when the request asked to stream (a fake that answers a stream request with JSON hides the failure inside the client, exactly the shape FM-URLa names); scope line: openai's M2 restart loop is deliberately out of scope — a dropped anthropic stream surfaces as an error to the existing ladder, not a new retry machine | ⬤ |
 | L29 | **Compaction announces itself before it waits (FM-CMPa)** — the round loop logs the compaction (round, turns, token estimate vs budget) and emits `compact` **`running`** before `CompactWithSummary`/`Compact` runs; the existing `completed` frame at exit pairs with it, so the scorecard still counts exactly one `compact` call in the tool mix while S12's gap clock resets at wait *start*. The emit sits above the `o.ai` branch, so the static-fallback path announces too — both are waits from the wire's point of view only in length, and neither may start silently | fails-first `TestCompactionCheckpointIsOnTheWireBeforeTheModelCall` (red: the fake model's *summarizer* handler waits for a `compact` `running` frame the moment its request arrives — today the first compact frame is emitted only after the call returns, so the wait times out with the 133k-token model call already invisible; a fixture guard asserts compaction was actually reached, so "never compacted" cannot pass as "compacted visibly"); evidence: Run-4 round 57 `prep=2m15.649s` with no log line until it finished (Appendix D, found-live) | ⬤ |
+| L22 | **Gates ride wall time, not round ticks (FM-D1c)** — `fireGateWarnings(sess, mode)` becomes the single implementation of both due-checks (L3 route + L17 first-write: due → latch → one warning event, text byte-identical to today's), called from the round-loop sites *and* from a turn-scoped ticker goroutine started before the round loop and stopped when it returns. The ticker is `gateTickInterval` — 15 s, the build heartbeat's cadence, a var so tests compress it (the heartbeat's own pattern). The round-loop call stays: at a boundary it claims the event with zero delay; the ticker covers every window the round loop cannot see (a generation spanning the threshold — Run-4's 7m56s — long tool runs, verification, compaction). Mode-gating and latches untouched: plan turns stay silent, one event per gate ever, FM-D1b's one-voice card unchanged | fails-first `TestFirstWriteWarnFiresDuringASpanningGeneration` + `TestRouteWarnFiresDuringASpanningGeneration` (red: compile — `undefined: gateTickInterval`, the same shape L17/L23/L24 shipped theirs as; the behavior it locks in once it compiles: threshold set to cross ~2 s into a single model call that blocks until the event lands or a 5 s cap — today the round loop is inside `ChatWithTools` the whole time, no tick exists, and the turn then answers `end_turn` with no round 2, so the event never fires at all; a fixture guard fatals if the warning landed *before* the generation started, so a round-1 claim cannot pass as a spanning one) + keep-tests `TestFirstWriteLadder`/`TestRouteScaffoldLadder`/`TestGateNoteOneVoice` pinned green (session semantics untouched); Run-4 evidence: 7m56s generation, ticks +11s/+16s/+25s → +8m22s, `first_write` events 0 while S1 failed | ⬤ |
 
 Still-open P1 rows from the previous list:
 
