@@ -478,6 +478,23 @@ func (s *Store) migrate() error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (project_id) REFERENCES projects(id)
 		)`,
+		// export_credits is the SKR ledger: one row per grant, `remaining`
+		// decremented as exports are spent. The balance IS the ledger —
+		// SpareCredits is SUM(remaining), so there is no second number to
+		// drift the way quota.go's three disagreeing limit copies did.
+		// tx_signature is UNIQUE, the same idempotency law
+		// billing_events.provider_event_id enforces: a replayed payment
+		// cannot grant twice, whatever the client claims.
+		`CREATE TABLE IF NOT EXISTS export_credits (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			credits INTEGER NOT NULL,
+			remaining INTEGER NOT NULL,
+			source TEXT NOT NULL,
+			tx_signature TEXT NOT NULL UNIQUE,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		)`,
 		// project_verify_state is W6's durable shadow of the last finished
 		// verification sweep: export/release/APK-ship consult it before
 		// shipping. One row per project; the newest sweep wins.

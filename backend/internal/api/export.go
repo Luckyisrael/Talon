@@ -57,25 +57,114 @@ func exportAllowed(tier string) bool {
 	}
 }
 
-// gateExport enforces ownership AND tier, writing the response on failure.
-// Tier is checked server-side on every call — hiding UI is not enforcement.
+// gateExport enforces ownership, writing the response on failure. Tier is
+// deliberately NOT checked here: this helper is shared by Create, UploadAsset
+// and ListAssets, and the store checklist is preparation rather than
+// shipping — an owner must be able to read and add their own screenshots at a
+// balance of zero, which is also the only way the paywall sheet can render the
+// offer it exists to sell (ExportPanel calls ListAssets the moment it opens).
+// Paying for the build belongs to chargeExportCredit, which only Create calls:
+// hiding UI is not enforcement, but neither is charging for the screen that
+// explains the charge.
 func (h *ExportHandler) gateExport(w http.ResponseWriter, r *http.Request, projectID int64) (*store.Project, bool) {
 	project, err := h.store.GetProject(projectID)
 	if err != nil || project.UserID != GetUserID(r.Context()) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return nil, false
 	}
+	return project, true
+}
+
+// packAmount and packCredits are the SKR offer the refusal quotes back.
+// Environment-tunable because the split between SKR paid and exports granted
+// is a commercial decision, not code; the defaults match the plan (100 SKR
+// unlocks 5 signed exports).
+func packAmount() int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SKR_PRICE_AMOUNT"))); err == nil && n > 0 {
+		return n
+	}
+	return 100
+}
+
+func packCredits() int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SKR_PRICE_CREDITS"))); err == nil && n > 0 {
+		return n
+	}
+	return 5
+}
+
+// chargeExportCredit is the paywall, and the release build is the only surface
+// it guards. It runs in two stages so that neither half can be wrong in the
+// way the other one protects against:
+//
+//	mayExport        — refuses early, spends nothing. A zero-balance owner is
+//	                   told what is missing before any verification or approval
+//	                   work runs, and a project that later fails verification
+//	                   has cost them nothing.
+//	takeExportCredit — spends, and sits immediately before the job exists, so
+//	                   the invariant is exact: one credit bought one export job.
+//
+// The early read is never a reservation. The spend is its own conditional
+// UPDATE, so a balance of 1 still admits exactly one of two exports that reach
+// takeExportCredit together — mayExport only ever decides *when* to refuse.
+func (h *ExportHandler) exportUser(w http.ResponseWriter, r *http.Request) (*store.User, bool) {
 	user, err := h.store.GetUserByID(GetUserID(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load your account")
 		return nil, false
 	}
-	if !exportAllowed(user.Tier) {
-		writeError(w, http.StatusForbidden,
-			"Release export needs the Pro plan — upgrade to sign release builds and generate store bundles.")
-		return nil, false
+	return user, true
+}
+
+// mayExport is the fast paywall. Paid tiers always pass: exportAllowed has
+// always been their entitlement, they hold no ledger rows, and inventing a
+// 402 they cannot clear would take away something they already have.
+func (h *ExportHandler) mayExport(w http.ResponseWriter, user *store.User) bool {
+	if exportAllowed(user.Tier) {
+		return true
 	}
-	return project, true
+	spare, err := h.store.SpareCredits(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not read your export credits")
+		return false
+	}
+	if spare <= 0 {
+		h.writeCreditsRequired(w, spare)
+		return false
+	}
+	return true
+}
+
+// takeExportCredit takes the payment for the job it is about to create.
+func (h *ExportHandler) takeExportCredit(w http.ResponseWriter, user *store.User) bool {
+	if exportAllowed(user.Tier) {
+		return true
+	}
+	spent, err := h.store.ConsumeCredit(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not read your export credits")
+		return false
+	}
+	if !spent {
+		h.writeCreditsRequired(w, 0)
+		return false
+	}
+	return true
+}
+
+// writeCreditsRequired answers 402 Payment Required with the offer inline, so
+// the unlock sheet renders from the refusal alone — no second round trip and
+// no prose-parsing. A 403 would say "forbidden, ever" and hand the client
+// nothing to unlock against.
+func (h *ExportHandler) writeCreditsRequired(w http.ResponseWriter, spare int) {
+	writeJSON(w, http.StatusPaymentRequired, map[string]interface{}{
+		"error":               "a release build spends one credit — you have none left",
+		"code":                "export_credits_required",
+		"spare_credits":       spare,
+		"credits_per_export":  1,
+		"skr_amount_per_pack": packAmount(),
+		"credits_per_pack":    packCredits(),
+	})
 }
 
 type exportRequest struct {
@@ -99,6 +188,10 @@ func (h *ExportHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	user, ok := h.exportUser(w, r)
+	if !ok {
+		return
+	}
 
 	var req exportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -108,6 +201,13 @@ func (h *ExportHandler) Create(w http.ResponseWriter, r *http.Request) {
 	req.WhatsNew = strings.TrimSpace(req.WhatsNew)
 	if req.WhatsNew == "" {
 		writeError(w, http.StatusBadRequest, "whats_new is required — it goes into the submission bundle as the release notes")
+		return
+	}
+
+	// The paywall answers before any verification or approval work runs, and
+	// it spends nothing: a zero-balance owner is told what is missing without
+	// paying for a release that was never going to start.
+	if !h.mayExport(w, user) {
 		return
 	}
 
@@ -129,6 +229,13 @@ func (h *ExportHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if out := approveUserAction(h.store, project.ID, ws, scopeReleaseExport,
 		"export release bundle for project "+project.Name); out != approval.AllowedOnce {
 		writeError(w, http.StatusForbidden, "export approval is "+out.String())
+		return
+	}
+
+	// The credit is taken here — after every refusal that costs no compute,
+	// immediately before the job it pays for — so an unpaid owner is never
+	// charged for a release that policy or the approval seam turned down.
+	if !h.takeExportCredit(w, user) {
 		return
 	}
 
