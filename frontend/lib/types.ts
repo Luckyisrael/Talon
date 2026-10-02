@@ -458,6 +458,25 @@ export interface ExportJob {
   error?: string;
 }
 
+/**
+ * The submission bundle the server writes beside a finished APK: the README
+ * verbatim plus the manifest it recorded.
+ *
+ * Served as written, not re-derived — a surface shows what the server
+ * committed to instead of re-authoring the steps, the package, the costs or
+ * the portal address (FM-SUBa(i)/(ii)/(iii)).
+ */
+export interface SubmissionBundle {
+  submit_md: string;
+  manifest: {
+    android_package: string;
+    portal_url: string;
+    costs_note: string;
+    publish_command: string;
+    [key: string]: unknown;
+  };
+}
+
 export interface TriageReport {
   id: number;
   project_id: number;

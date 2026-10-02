@@ -34,6 +34,10 @@ type SubmissionBundle struct {
 	Assets         AssetSet `json:"assets"`
 	PublishCommand string   `json:"publish_command"`
 	CostsNote      string   `json:"costs_note"`
+	// PortalURL is server-stated so no client has to know it: the portal is
+	// not deep-linkable (there is no documented scheme carrying a package
+	// name), so the address travels with the bundle a surface already trusts.
+	PortalURL string `json:"portal_url"`
 }
 
 type AssetSet struct {
@@ -49,6 +53,14 @@ type AssetSet struct {
 type CatalogInput struct {
 	WhatsNew string
 }
+
+// PortalURL is the Solana dApp Publisher Portal. It is a single constant
+// because two copies is how a surface ends up pointing somewhere the docs no
+// longer recognise (FM-SUBa(ii)): Solana Mobile documents no deep-link scheme
+// for the portal — publish.solanamobile.com takes no path and no query, the
+// user finds the app in the sidebar after logging in — so this address is
+// served, never typed into a client.
+const PortalURL = "https://publish.solanamobile.com"
 
 // costsNote is the honest SOL disclosure: real publishing costs real SOL
 // (portal fees + ArDrive storage, ~0.2 SOL typically) plus KYC/KYB and a
@@ -68,6 +80,7 @@ func WriteBundle(dir string, bundle SubmissionBundle) (string, error) {
 	if bundle.CostsNote == "" {
 		bundle.CostsNote = costsNote
 	}
+	bundle.PortalURL = PortalURL
 	apkBase := filepath.Base(bundle.APK)
 	bundle.PublishCommand = fmt.Sprintf(
 		"dapp-store --apk-file ./%s --keypair <publisher-keypair.json> --whats-new %q",
@@ -86,7 +99,7 @@ func WriteBundle(dir string, bundle SubmissionBundle) (string, error) {
 	sb.WriteString("# Submit this release to the Solana dApp Store\n\n")
 	sb.WriteString("Talon built and signed this APK; submission is yours, with your own wallet.\n\n")
 	sb.WriteString("## Option A — Publisher Portal (recommended for a first release)\n\n")
-	sb.WriteString("1. Sign up at https://publish.solanamobile.com and complete KYC/KYB.\n")
+	sb.WriteString("1. Sign up at " + PortalURL + " and complete KYC/KYB.\n")
 	sb.WriteString("2. Create the app in the portal if it does not exist yet (the portal matches\n")
 	sb.WriteString(fmt.Sprintf("   it by package name `%s`).\n", bundle.AndroidPackage))
 	sb.WriteString("3. Upload this APK as a new version and approve the signing requests.\n\n")

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { exportApi, projects as projectsApi, usage as usageApi } from "@/lib/api";
 import type { ExportJob, Project, ProjectAsset } from "@/lib/types";
+import { SubmissionAssist } from "./SubmissionAssist";
 
 /**
  * Release export, from inside the IDE.
@@ -260,11 +261,10 @@ export default function ExportPanel({ projectId }: ExportPanelProps) {
                     >
                       {downloading ? "Downloading…" : "Download signed APK"}
                     </button>
-                    <p className="mt-3 font-mono text-xs leading-relaxed text-ash">
-                      Publishing costs real SOL (~0.2 for fees + storage). Submit
-                      with your own wallet at publish.solanamobile.com — the
-                      bundle includes the exact CLI command.
-                    </p>
+                    {/* FM-SUBa: the how-to-submit is served, never typed here.
+                        SubmissionAssist carries the package, the portal
+                        address, the server's own costs note and both files. */}
+                    <SubmissionAssist jobId={job.id} />
                   </div>
                 ) : (
                   <p className="mt-2 text-sm text-coral-red">

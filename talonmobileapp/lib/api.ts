@@ -287,6 +287,25 @@ export interface ExportJob {
   error?: string
 }
 
+/**
+ * The submission bundle the server writes beside a finished APK: the README
+ * verbatim, plus the manifest it recorded.
+ *
+ * Served as written, not re-derived — a surface shows what the server
+ * committed to instead of re-authoring the steps, the package, the costs or
+ * the portal address (FM-SUBa(i)/(ii)/(iii)).
+ */
+export interface SubmissionBundle {
+  submit_md: string
+  manifest: {
+    android_package: string
+    portal_url: string
+    costs_note: string
+    publish_command: string
+    [key: string]: unknown
+  }
+}
+
 export interface NotificationRow {
   id: number
   kind: string
@@ -929,6 +948,11 @@ export const exportApi = {
   },
   get(jobId: number) {
     return request<ExportJob>(`/v1/exports/${jobId}`)
+  },
+  // How to submit this release. The files live on the server's disk, so this
+  // is the only way a phone can read them (FM-SUBa(i)).
+  bundle(jobId: number) {
+    return request<SubmissionBundle>(`/v1/exports/${jobId}/bundle`)
   },
 }
 

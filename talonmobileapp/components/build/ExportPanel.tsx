@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Linking, StyleSheet, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { address } from '@solana/kit';
 import { useMobileWallet } from '@wallet-ui/react-native-kit';
-import { Card, Field, GhostButton, LimeButton, UIText } from '@/components/ui';
+import { Card, Field, GhostButton, LimeButton, MarkdownView, UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
 import { useExportJob, useStartExport } from '@/hooks';
-import { skrApi, type SkrQuote, type SkrVerdict } from '@/lib/api';
+import { exportApi, skrApi, type SkrQuote, type SkrVerdict, type SubmissionBundle } from '@/lib/api';
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   findAssociatedTokenAddress,
@@ -201,6 +201,10 @@ export function ExportPanel({ projectId }: { projectId: number }) {
             Release build {job.data.status}
           </UIText>
         )}
+        {/* FM-SUBa(i): a finished export hands over how to submit it — the
+            server's own README, the package it was built under, and the
+            portal to submit at. Nothing on this side is authored. */}
+        {job.data?.status === 'done' && <SubmissionAssist jobId={job.data.id} />}
       </Card>
 
       {sheetOpen && (
@@ -229,7 +233,62 @@ export function ExportPanel({ projectId }: { projectId: number }) {
   );
 }
 
+/**
+ * What a finished export hands over.
+ *
+ * FM-SUBa(i)/(ii): the bundle is written to the server's disk and served
+ * verbatim, so this panel shows what the server committed to rather than
+ * re-authoring it. Two things are deliberately NOT authored here:
+ *
+ *   the portal address — Solana Mobile documents no deep-link scheme for the
+ *   Publisher Portal (publish.solanamobile.com takes no path and no query;
+ *   you find the app in the sidebar after logging in), so there is nothing
+ *   to deep-link with and the address must travel on the wire;
+ *
+ *   the package name — `solanadappstore://details?id=` exists but opens the
+ *   LISTING page, which does not exist until the app is approved, so it is
+ *   useless at this moment. The portal matches by package name, which is why
+ *   the name is printed beside the button: it is what the user carries there.
+ */
+function SubmissionAssist({ jobId }: { jobId: number }) {
+  const bundle = useQuery<SubmissionBundle>({
+    queryKey: ['export-bundle', jobId],
+    queryFn: () => exportApi.bundle(jobId),
+    gcTime: 0,
+  });
+
+  if (bundle.isError) {
+    return (
+      <UIText variant="bodySm" tone="danger">
+        Could not load the submission instructions for this release.
+      </UIText>
+    );
+  }
+  if (!bundle.data) {
+    return <UIText variant="bodySm" tone="muted">Preparing the submission instructions…</UIText>;
+  }
+
+  const { manifest } = bundle.data;
+  return (
+    <View style={styles.assist}>
+      <UIText variant="bodySm" tone="muted">
+        Your package
+      </UIText>
+      <UIText variant="monoSm">{manifest.android_package}</UIText>
+      <LimeButton
+        title="Open Publisher Portal"
+        onPress={() => void Linking.openURL(manifest.portal_url)}
+      />
+      {/* SUBMIT.md verbatim: the steps, the CLI command and the honest costs
+          note the server wrote. Rendering them keeps every surface on the
+          wording the server actually committed to. */}
+      <MarkdownView>{bundle.data.submit_md}</MarkdownView>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   wrap: { gap: Spacing.s12 },
+  assist: { gap: Spacing.s8 },
   sheet: { gap: Spacing.s12, borderColor: Colors.graphite, borderWidth: StyleSheet.hairlineWidth },
 });

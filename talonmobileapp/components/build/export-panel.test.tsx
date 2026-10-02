@@ -1,5 +1,6 @@
 import React from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+import { Linking } from 'react-native'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMobileWallet } from '@wallet-ui/react-native-kit'
 import type { Instruction } from '@solana/kit'
@@ -45,7 +46,7 @@ jest.mock('@/lib/api', () => {
   return {
     ...actual,
     skrApi: { quote: jest.fn(), verify: jest.fn() },
-    exportApi: { ...actual.exportApi, start: jest.fn(), get: jest.fn() },
+    exportApi: { ...actual.exportApi, start: jest.fn(), get: jest.fn(), bundle: jest.fn() },
   }
 })
 
@@ -219,4 +220,70 @@ it('a pending payment re-verifies the same signature instead of resending (FM-SK
   expect(asked[0]).toBe(SIGNATURE)
   expect(asked[1]).toBe(SIGNATURE)
   expect(asked[0]).toBe(asked[1])
+})
+
+// Row L38 — FM-SUBa(i)/(ii): a paid export has to hand over HOW to submit it.
+//
+// The bundle is written by the server and served by the server; the phone's
+// only job is to show what it says. The package below is a value this panel
+// has no other way to obtain, so finding it on screen proves the bundle
+// arrived. The portal address is deliberately one no client would have
+// hardcoded — pressing the button can only reach it through
+// `manifest.portal_url`, which is the drift FM-SUBa(ii) names.
+const PORTAL = 'https://publish.example.test/portal'
+const PACKAGE = 'com.talon.l38demo'
+
+const servedBundle = () => ({
+  submit_md: [
+    '# Submit this release to the Solana dApp Store',
+    '',
+    'Talon built and signed this APK; submission is yours, with your own wallet.',
+    '',
+    '## Option A — Publisher Portal (recommended for a first release)',
+    '',
+    `1. Sign up at ${PORTAL} and complete KYC/KYB.`,
+    `2. Create the app in the portal if it does not exist yet (the portal matches`,
+    `   it by package name \`${PACKAGE}\`).`,
+    '3. Upload this APK as a new version and approve the signing requests.',
+  ].join('\n'),
+  manifest: {
+    android_package: PACKAGE,
+    portal_url: PORTAL,
+    costs_note:
+      'Publishing to the Solana dApp Store costs real SOL: keep ~0.2 SOL in your publisher wallet.',
+    publish_command: 'dapp-store --apk-file ./release.apk --keypair <publisher-keypair.json>',
+  },
+})
+
+/** Drive the panel to the state a finished export leaves behind. */
+async function renderFinishedExport() {
+  ;(skrApi.quote as jest.Mock).mockResolvedValue(quoteOf({ spare_credits: 5 }))
+  ;(exportApi.start as jest.Mock).mockResolvedValue({ job_id: 41 })
+  ;(exportApi.get as jest.Mock).mockResolvedValue({ id: 41, project_id: 7, status: 'done' })
+  ;(exportApi.bundle as jest.Mock).mockResolvedValue(servedBundle())
+
+  await renderPanel()
+  // A balance of 5 spends nothing — the export goes straight to the build.
+  fireEvent.press(await screen.findByText('Export'))
+}
+
+it('a finished export hands over the submission bundle, not just a status (FM-SUBa(i))', async () => {
+  await renderFinishedExport()
+
+  // The done branch used to print only "Release build done": an APK with no
+  // idea what to do with it, because SUBMIT.md lives on the server's disk.
+  expect(await screen.findByText('Open Publisher Portal')).toBeTruthy()
+  expect(exportApi.bundle).toHaveBeenCalledWith(41)
+})
+
+it('the package name sits beside the portal button, and the link is the one the server sent (FM-SUBa(ii))', async () => {
+  await renderFinishedExport()
+
+  // A package this panel cannot know on its own — only the bundle carries it.
+  // findAll: the README quotes it too, and markdown renders that separately.
+  expect((await screen.findAllByText(PACKAGE)).length).toBeGreaterThan(0)
+
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true)
+  fireEvent.press(screen.getByText('Open Publisher Portal'))
+  expect(openURL).toHaveBeenCalledWith(PORTAL)
 })

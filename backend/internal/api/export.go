@@ -370,6 +370,66 @@ func (h *ExportHandler) Download(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, job.ArtifactPath)
 }
 
+// submissionBundleResponse hands over the two files WriteBundle wrote beside
+// the APK. The files ARE the contract: they are served as bytes rather than
+// re-derived from a struct, so a surface renders exactly the steps, package,
+// costs and portal address the server committed to (FM-SUBa(i)/(iii)).
+type submissionBundleResponse struct {
+	SubmitMD string          `json:"submit_md"`
+	Manifest json.RawMessage `json:"manifest"`
+}
+
+// Bundle serves the submission bundle: GET /v1/exports/{id}/bundle.
+//
+// It exists because WriteBundle's output is only ever written to the
+// server's disk — manifest_path is an absolute path no phone or browser can
+// reach — so today a user who paid for an export gets an APK and no idea what
+// to do with it. The gate is the one Get and Download already take: the
+// owning project, then a build that has actually finished (a queued job has
+// no bundle, and saying which state the job is in beats an empty answer a
+// client would render as done).
+func (h *ExportHandler) Bundle(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid export id")
+		return
+	}
+	job, err := h.store.GetExportJob(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "export not found")
+		return
+	}
+	project, err := h.store.GetProject(job.ProjectID)
+	if err != nil || project.UserID != GetUserID(r.Context()) {
+		writeError(w, http.StatusNotFound, "export not found")
+		return
+	}
+	if job.Status != "done" {
+		writeError(w, http.StatusConflict,
+			fmt.Sprintf("export is %s — the submission bundle is written when the build finishes", job.Status))
+		return
+	}
+	if job.ManifestPath == "" {
+		writeError(w, http.StatusNotFound, "submission bundle not found")
+		return
+	}
+	manifest, err := os.ReadFile(job.ManifestPath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "submission bundle not found")
+		return
+	}
+	// SUBMIT.md is written beside the manifest, in the artifact's directory.
+	submit, err := os.ReadFile(filepath.Join(filepath.Dir(job.ManifestPath), "SUBMIT.md"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "submission bundle not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, submissionBundleResponse{
+		SubmitMD: string(submit),
+		Manifest: json.RawMessage(manifest),
+	})
+}
+
 // UploadAsset validates and stores one store asset:
 // POST /v1/projects/{id}/assets (multipart: kind=screenshot|icon|banner,
 // file=<png/jpeg>). Validation failures are 400s with the reason — a bad

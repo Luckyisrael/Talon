@@ -16,6 +16,7 @@ import type {
   ProjectMemory,
   PromptResponse,
   Session,
+  SubmissionBundle,
   TriageReport,
   Usage,
 } from "./types";
@@ -1151,6 +1152,11 @@ export const exportApi = {
   },
   downloadUrl(jobId: number) {
     return `${BASE}/v1/exports/${jobId}/download`;
+  },
+  // How to submit this release. The files live on the server's disk, so this
+  // is the only way a browser can read them (FM-SUBa(i)).
+  async bundle(jobId: number) {
+    return request<SubmissionBundle>(`/v1/exports/${jobId}/bundle`);
   },
   async uploadAsset(projectId: number, kind: "screenshot" | "icon" | "banner", file: File) {
     const token = getToken();

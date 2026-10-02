@@ -529,6 +529,10 @@ func main() {
 		r.Put("/v1/projects/{id}/triage", triageHandler.Save)
 		r.Get("/v1/exports/{id}", exportHandler.Get)
 		r.Get("/v1/exports/{id}/download", exportHandler.Download)
+		// The submission bundle WriteBundle already writes: SUBMIT.md and
+		// dapp-store.json, which live on the server's disk and are otherwise
+		// unreachable from either surface (FM-SUBa(i)).
+		r.Get("/v1/exports/{id}/bundle", exportHandler.Bundle)
 
 		// SKR payment for export credits: quote the pack the paywall offers,
 		// then re-derive the payment from the chain before the ledger moves.
