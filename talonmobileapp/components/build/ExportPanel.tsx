@@ -96,6 +96,8 @@ export function ExportPanel({ projectId }: { projectId: number }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [paying, setPaying] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const { account, connect, sendTransactions, client } = useMobileWallet();
   const quote = useQuery<SkrQuote>({ queryKey: ['skr-quote'], queryFn: () => skrApi.quote() });
@@ -113,6 +115,24 @@ export function ExportPanel({ projectId }: { projectId: number }) {
       return;
     }
     setSheetOpen(true);
+  }
+
+  /**
+   * Take delivery of the artifact (FM-APKa). The endpoint needs the session
+   * token, so this goes through the API seam rather than a link, and the
+   * file lands in the share sheet instead of a sandbox nobody can browse.
+   */
+  async function downloadApk() {
+    if (!job.data || job.data.status !== 'done') return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      await exportApi.downloadApk(job.data.id, `project-${projectId}-release.apk`);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'Could not download the APK.');
+    } finally {
+      setDownloading(false);
+    }
   }
 
   async function pay() {
@@ -200,6 +220,24 @@ export function ExportPanel({ projectId }: { projectId: number }) {
           <UIText variant="bodySm" tone="muted">
             Release build {job.data.status}
           </UIText>
+        )}
+        {/* FM-APKa(i): a paid export must be *takeable* — the file itself,
+            not only the instructions for what to do with it. The web panel
+            has always had this button; the phone is the surface that could
+            not hand the artifact over at all. */}
+        {job.data?.status === 'done' && (
+          <View style={styles.download}>
+            <LimeButton
+              title={downloading ? 'Preparing APK…' : 'Download signed APK'}
+              disabled={downloading}
+              onPress={() => void downloadApk()}
+            />
+            {downloadError && (
+              <UIText variant="bodySm" tone="danger">
+                {downloadError}
+              </UIText>
+            )}
+          </View>
         )}
         {/* FM-SUBa(i): a finished export hands over how to submit it — the
             server's own README, the package it was built under, and the
@@ -290,5 +328,6 @@ function SubmissionAssist({ jobId }: { jobId: number }) {
 const styles = StyleSheet.create({
   wrap: { gap: Spacing.s12 },
   assist: { gap: Spacing.s8 },
+  download: { gap: Spacing.s8 },
   sheet: { gap: Spacing.s12, borderColor: Colors.graphite, borderWidth: StyleSheet.hairlineWidth },
 });

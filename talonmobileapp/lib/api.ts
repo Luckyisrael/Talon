@@ -954,6 +954,68 @@ export const exportApi = {
   bundle(jobId: number) {
     return request<SubmissionBundle>(`/v1/exports/${jobId}/bundle`)
   },
+  // The signed artifact itself. Exposed because the download rides the
+  // session token, so a surface has to fetch rather than link (FM-APKa(ii)).
+  downloadUrl(jobId: number) {
+    return `${BASE}/v1/exports/${jobId}/download`
+  },
+  /**
+   * Hand the signed APK to the person who paid for it.
+   *
+   * Three things have to be true for this to be a delivery rather than a
+   * file that exists (FM-APKa): the session token rides the request, because
+   * no link can carry a Bearer header; the bytes land in the app's cache and
+   * are immediately handed to the system share sheet, because a file written
+   * into a sandbox nobody can browse is not reachable; and the write is
+   * `idempotent`, because expo-file-system's download defaults to throwing
+   * "when the target file already exists" — the first export would work and
+   * every one after it would throw on a name the device still holds.
+   *
+   * Both modules are imported lazily: they are native, and importing them at
+   * module scope would pull them into every screen and every suite that
+   * imports this file.
+   *
+   * @returns the local uri the file was written to.
+   */
+  async downloadApk(jobId: number, filename: string) {
+    // `require`, not `import()` — two reasons, both load-bearing. They are
+    // native modules that must stay OUT of this file's static graph (every
+    // suite and every screen that imports `lib/api` would otherwise have to
+    // load them), and jest's mock registry answers `require`: a dynamic
+    // import of expo-file-system instead reaches the package's own
+    // `exports` default, `src/index.ts`, which node_modules are excluded
+    // from transforming — so it is parsed as CJS and dies on its `export`
+    // statements.
+    const { File, Paths } = require('expo-file-system') as typeof import('expo-file-system')
+    // Named export, not `.default`: expo-sharing's types declare `shareAsync`
+    // as a named export and no default at all, so `.default` would be
+    // undefined against the real package even though a hand-written mock
+    // would happily provide one.
+    const { shareAsync } = require('expo-sharing') as typeof import('expo-sharing')
+    // Also `require`, for the same reason: `await import('./auth')` takes
+    // jest's ESM path, which does not consult CJS mock factories — the
+    // registered mock for `@/lib/auth` is skipped and the loader then parses
+    // auth.ts (whose line 1 is `import * as SecureStore …`) as CJS:
+    // "Unexpected import statement in CJS module." `request` keeps its own
+    // dynamic import, which is exercised without a mock and unaffected.
+    const { getToken } = require('./auth') as typeof import('./auth')
+
+    const token = await getToken()
+    const file = await File.downloadFileAsync(
+      `${BASE}/v1/exports/${jobId}/download`,
+      new File(Paths.cache, filename),
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        idempotent: true,
+      },
+    )
+
+    await shareAsync(file.uri, {
+      mimeType: 'application/vnd.android.package-apk',
+      dialogTitle: filename,
+    })
+    return file.uri
+  },
 }
 
 // ── SKR ────────────────────────────────────────────────────────────────

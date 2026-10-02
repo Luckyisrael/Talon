@@ -26,6 +26,7 @@
       "/android/",
       "/\\.expo/"
     ],
+    "testTimeout": 15000,
     "testEnvironmentOptions": {
       "customExportConditions": [
         "node",
@@ -66,6 +67,7 @@
     "expo-constants": "~55.0.9",
     "expo-dev-client": "~55.0.18",
     "expo-document-picker": "~55.0.17",
+    "expo-file-system": "~55.0.26",
     "expo-font": "~55.0.4",
     "expo-haptics": "~55.0.9",
     "expo-image": "~55.0.6",
@@ -74,6 +76,7 @@
     "expo-linking": "~55.0.8",
     "expo-router": "~55.0.7",
     "expo-secure-store": "~55.0.18",
+    "expo-sharing": "~55.0.24",
     "expo-splash-screen": "~55.0.12",
     "expo-status-bar": "~55.0.4",
     "expo-symbols": "~55.0.5",

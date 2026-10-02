@@ -69,6 +69,39 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   getAllKeys: async () => [],
 }))
 
+// Row L39 — FM-APKa: two native modules the download seam talks to, and the
+// session whose token rides along. Both modules are real on a device and
+// absent under jest; what matters here is the CONTRACT between them — the
+// header + overwrite that go INTO the download, and the file uri + APK mime
+// that come OUT into the share sheet.
+jest.mock('expo-file-system', () => {
+  const downloadFileAsync = jest.fn(async () => ({ uri: 'file:///cache/release.apk' }))
+  class File {
+    constructor(..._path: unknown[]) {}
+    static downloadFileAsync = downloadFileAsync
+  }
+  return { File, Paths: { cache: 'file:///cache/' } }
+})
+
+jest.mock('expo-sharing', () => ({
+  // Named export — expo-sharing declares `shareAsync` and no default, so the
+  // mock has to match the shape the real package (and the code under test)
+  // actually resolves.
+  shareAsync: jest.fn(async () => undefined),
+}))
+
+// The download endpoint takes a Bearer token (FM-APKa(ii)); getToken has to
+// answer with something a header can be built from.
+jest.mock('@/lib/auth', () => ({
+  secureStoreFault: jest.fn(() => null),
+  getToken: jest.fn(async () => 'test-token'),
+  setToken: jest.fn(async () => undefined),
+  getRefreshToken: jest.fn(async () => null),
+  setRefreshToken: jest.fn(async () => undefined),
+  clearToken: jest.fn(async () => undefined),
+  isAuthenticated: jest.fn(async () => true),
+}))
+
 const quoteOf = (over: Partial<Record<string, unknown>> = {}) => ({
   skr_amount: 37,
   credits: 5,
@@ -101,7 +134,21 @@ const wallet = {
 async function renderPanel(projectId = 7) {
   // gcTime: 0 — a query's default 5-minute garbage-collection timer would
   // keep the event loop alive after the suite and stop jest from exiting.
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+  //
+  // MUTATIONS carry their own gcTime, configured separately under
+  // `defaultOptions.mutations`, and the pay path leaves one behind: pressing
+  // Pay settles `startExport.mutate`, and the mutation cache then holds that
+  // settled mutation for five minutes whether or not anything reads it again.
+  // Queries-only therefore covered half the story — which is why this suite
+  // printed its results and sat for five minutes whenever it was run on its
+  // own, while render-only suites (and build-export, which stubs the mutation
+  // hook) exited normally.
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { gcTime: 0 },
+    },
+  })
   const view = await render(
     <QueryClientProvider client={client}>
       <ExportPanel projectId={projectId} />
@@ -286,4 +333,52 @@ it('the package name sits beside the portal button, and the link is the one the 
   const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true)
   fireEvent.press(screen.getByText('Open Publisher Portal'))
   expect(openURL).toHaveBeenCalledWith(PORTAL)
+})
+
+// Row L39 — FM-APKa: the artifact has to reach the human who paid for it.
+//
+// N1 the done branch is where the user learns the build finished, and a
+//    finished build with no way to take the file is a build they cannot use
+//    (FM-APKa(i)). The web panel has had this button all along.
+// N2 the download endpoint needs the session token, which no link can carry
+//    (FM-APKa(ii) — the web panel says so in its own comment), and
+//    expo-file-system refuses a second write to the same name unless it is
+//    told to overwrite (FM-APKa(iv)). The hand-off to the share sheet is what
+//    makes the bytes reachable at all (FM-APKa(iii)) — a file written into
+//    the app's sandbox is not a download the user can open.
+it('a finished export offers the signed APK it was paid for (FM-APKa(i))', async () => {
+  await renderFinishedExport()
+
+  // Today the done branch prints a status line and the submission assist:
+  // it says HOW to submit and hands over nothing to submit.
+  expect(await screen.findByText('Download signed APK')).toBeTruthy()
+})
+
+it('the download carries the session token and shares the result (FM-APKa(ii)/(iii)/(iv))', async () => {
+  const { File } = jest.requireMock('expo-file-system') as {
+    File: { downloadFileAsync: jest.Mock }
+  }
+  const Sharing = jest.requireMock('expo-sharing') as { shareAsync: jest.Mock }
+
+  const uri = await exportApi.downloadApk(41, 'project-7-release.apk')
+
+  const call = File.downloadFileAsync.mock.calls[0] as [
+    string,
+    unknown,
+    { headers?: Record<string, string>; idempotent?: boolean },
+  ]
+  expect(File.downloadFileAsync).toHaveBeenCalledTimes(1)
+  // The endpoint the server registered, not a URL typed beside it.
+  expect(call[0]).toContain('/v1/exports/41/download')
+  // The session rides the request, or the endpoint answers 401.
+  expect(call[2].headers?.Authorization).toBe('Bearer test-token')
+  // Otherwise the SECOND export throws on a name the device still holds.
+  expect(call[2].idempotent).toBe(true)
+
+  const shared = Sharing.shareAsync.mock.calls[0] as [string, { mimeType?: string }]
+  expect(Sharing.shareAsync).toHaveBeenCalledTimes(1)
+  // The bytes leave the sandbox — that is the whole point of iii.
+  expect(shared[0]).toBe('file:///cache/release.apk')
+  expect(String(shared[1].mimeType)).toContain('android.package-apk')
+  expect(uri).toBe('file:///cache/release.apk')
 })
