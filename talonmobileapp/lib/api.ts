@@ -49,8 +49,19 @@ async function parseResponse<T>(res: Response): Promise<T> {
     // Attach the HTTP status: callers must be able to tell "missing" (404 →
     // verify-state reads as no-row, no claim) from "broken" (anything else →
     // rethrow, the badge hides). Additive — the message is unchanged.
-    const error = new Error(body.error || `request failed (${res.status})`) as Error & { status?: number }
+    //
+    // The whole body rides alongside it under `.detail`, because a refusal is
+    // often the only place the server states its offer: a 402's code /
+    // spare_credits / skr_amount_per_pack / credits_per_pack are what the
+    // unlock sheet renders, and a 422's `reason` is the verdict the payment
+    // screen has to show. Keeping only `.message` threw all of that away at
+    // the client's front door.
+    const error = new Error(body.error || `request failed (${res.status})`) as Error & {
+      status?: number
+      detail?: Record<string, any>
+    }
     error.status = res.status
+    error.detail = body
     throw error
   }
   if (res.status === 204) return undefined as T
@@ -918,5 +929,43 @@ export const exportApi = {
   },
   get(jobId: number) {
     return request<ExportJob>(`/v1/exports/${jobId}`)
+  },
+}
+
+// ── SKR ────────────────────────────────────────────────────────────────
+
+// What the server says the pack costs: the amount, the mint and the treasury
+// the phone must pay. All five fields are server-stated on purpose — a price
+// or a mint baked into the binary cannot be changed without a store release,
+// and a rotated treasury would strand every installed client.
+export type SkrQuote = {
+  skr_amount: number
+  credits: number
+  mint: string
+  treasury: string
+  spare_credits: number
+}
+
+// The backend's three-way answer about a payment: 200 verified, 200 pending
+// (verified:false, reason "pending"), or 422 rejected. A rejected verdict is
+// delivered on the thrown error's `.detail` rather than as a resolved value,
+// so that 422 keeps its HTTP meaning — out of the success path — while still
+// handing the client the reason it must display.
+export type SkrVerdict = {
+  verified: boolean
+  reason: string
+  credits_added: number
+  spare_credits: number
+}
+
+export const skrApi = {
+  quote() {
+    return request<SkrQuote>('/v1/skr/quote')
+  },
+  verify(signature: string) {
+    return request<SkrVerdict>('/v1/skr/verify', {
+      method: 'POST',
+      body: JSON.stringify({ signature }),
+    })
   },
 }

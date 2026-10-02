@@ -14,6 +14,7 @@ import { PlanCard } from '@/components/build/PlanCard';
 import { QuestionCard } from '@/components/build/QuestionCard';
 import { VerifyBadge } from '@/components/build/VerifyBadge';
 import { VerifyEvidenceRow } from '@/components/build/VerifyEvidence';
+import { ExportPanel } from '@/components/build/ExportPanel';
 import { FileBrowser } from '@/components/files/FileBrowser';
 import { Colors, Spacing, Type } from '@/constants/theme';
 import { useActiveProject, usePromptStream } from '@/hooks';
@@ -93,7 +94,7 @@ export default function BuildScreen() {
   // visible decision at a time.
   const [queueInstead, setQueueInstead] = React.useState(false);
   const [answers, setAnswers] = React.useState<string[]>([]);
-  const [subView, setSubView] = React.useState<'chat' | 'files'>('chat');
+  const [subView, setSubView] = React.useState<'chat' | 'files' | 'export'>('chat');
   const [staged, setStaged] = React.useState<LocalAttachment[]>([]);
   const [attError, setAttError] = React.useState<string | null>(null);
   const [uploading, setUploading] = React.useState(false);
@@ -425,9 +426,9 @@ export default function BuildScreen() {
         </View>
         {projectId && (
           <View style={styles.subTabs}>
-            {(['chat', 'files'] as const).map(v => (
+            {(['chat', 'files', 'export'] as const).map(v => (
               <Pressable key={v} onPress={() => setSubView(v)} style={[styles.subTab, subView === v && styles.subTabOn]}>
-                <Text style={{ color: subView === v ? Colors.paper : Colors.fog, fontSize: Type.label.fontSize, fontWeight: '500' }}>{v === 'chat' ? 'Chat' : `Files`}</Text>
+                <Text style={{ color: subView === v ? Colors.paper : Colors.fog, fontSize: Type.label.fontSize, fontWeight: '500' }}>{v === 'chat' ? 'Chat' : v === 'files' ? 'Files' : `Export`}</Text>
               </Pressable>
             ))}
           </View>
@@ -461,6 +462,10 @@ export default function BuildScreen() {
       ) : subView === 'files' ? (
         <View style={{ flex: 1, marginTop: Spacing.s12 }}>
           <FileBrowser projectId={projectId} />
+        </View>
+      ) : subView === 'export' ? (
+        <View style={{ flex: 1, marginTop: Spacing.s12 }}>
+          <ExportPanel projectId={projectId} />
         </View>
       ) : (
       <ScrollView

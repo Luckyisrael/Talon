@@ -60,57 +60,11 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   removeItem: async () => undefined,
   getAllKeys: async () => [],
 }))
-// Reanimated boots native Worklets at import time (TraceRow → Transcript), and
-// even its official mock transitively re-requires src/index (→ worklets boot).
-// A self-contained factory breaks the chain: chainable layout animations, RN
-// primitives for Animated.View, no-op hooks. Enough surface for the app's
-// usages (Animated.View, FadeInDown.duration, useSharedValue-style hooks).
-jest.mock('react-native-reanimated', () => {
-  // jest hoists mock factories above all imports, so `require()` is the only
-  // way out of the factory: a static import would be re-ordered, an
-  // outer-scope reference is forbidden by jest's hoisting transform.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const RN = require('react-native')
-  const chain: any = new Proxy(
-    function () {
-      return chain
-    },
-    { get: () => () => chain, apply: () => chain },
-  )
-  const Animated = {
-    View: RN.View,
-    Text: RN.Text,
-    Image: RN.Image,
-    ScrollView: RN.ScrollView,
-    createAnimatedComponent: (c: unknown) => c,
-  }
-  return {
-    __esModule: true,
-    default: Animated,
-    FadeIn: chain,
-    FadeInDown: chain,
-    FadeInUp: chain,
-    FadeOut: chain,
-    FadeOutUp: chain,
-    FadeOutDown: chain,
-    Layout: chain,
-    SlideInRight: chain,
-    SlideOutRight: chain,
-    useSharedValue: (v: unknown) => ({ value: v }),
-    useAnimatedStyle: (fn: () => unknown) => {
-      try {
-        return fn()
-      } catch {
-        return {}
-      }
-    },
-    withTiming: (v: unknown) => v,
-    withSpring: (v: unknown) => v,
-    useReducedMotion: () => false,
-    runOnJS: (fn: unknown) => fn,
-    runOnUI: (fn: unknown) => fn,
-  }
-})
+// Reanimated boots native Worklets at import time (TraceRow → Transcript).
+// The factory lives in test/native-seams so every screen-rendering suite uses
+// one seam instead of growing its own copy — see that file for why reanimated's
+// official mock does not break the chain.
+jest.mock('react-native-reanimated', () => require('@/test/native-seams').reanimated())
 
 /**
  * Loads a module under test, surviving a module that does not exist YET: RED

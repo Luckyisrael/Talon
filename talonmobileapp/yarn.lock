@@ -5932,6 +5932,7 @@ __metadata:
     react-native: "npm:0.83.10"
     react-native-gesture-handler: "npm:~2.30.0"
     react-native-get-random-values: "npm:~1.11.0"
+    react-native-keyboard-controller: "npm:^1.22.5"
     react-native-markdown-display: "npm:^7.0.2"
     react-native-onesignal: "npm:^5.5.10"
     react-native-qrcode-styled: "npm:^0.4.0"
@@ -12229,6 +12230,19 @@ __metadata:
     react: "*"
     react-native: "*"
   checksum: 10c0/28cebd5f1f3632864ff5e342278721d1e5e38627ae73859a8814012116ef15c629fee7137a6c9c97bb05d94bbe639b0b47e69b36fc2735ab53ed31570140663f
+  languageName: node
+  linkType: hard
+
+"react-native-keyboard-controller@npm:^1.22.5":
+  version: 1.22.5
+  resolution: "react-native-keyboard-controller@npm:1.22.5"
+  dependencies:
+    react-native-is-edge-to-edge: "npm:^1.2.1"
+  peerDependencies:
+    react: "*"
+    react-native: "*"
+    react-native-reanimated: ">=3.0.0"
+  checksum: 10c0/734014dd77ff5a6f05b18f0b0bf192f43967bbcb0d05d1812d01b1733079fccdff282bf729453ea94b7eeef6947bbb8ae53b4f4eb00d2b5af6fed40f3398c97d
   languageName: node
   linkType: hard
 

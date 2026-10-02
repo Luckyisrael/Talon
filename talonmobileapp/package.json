@@ -25,7 +25,14 @@
       "/node_modules/",
       "/android/",
       "/\\.expo/"
-    ]
+    ],
+    "testEnvironmentOptions": {
+      "customExportConditions": [
+        "node",
+        "require",
+        "react-native"
+      ]
+    }
   },
   "displayName": "Talon",
   "description": "Talon companion app — build Solana apps by talking.",
@@ -80,6 +87,7 @@
     "react-native": "0.83.10",
     "react-native-gesture-handler": "~2.30.0",
     "react-native-get-random-values": "~1.11.0",
+    "react-native-keyboard-controller": "^1.22.5",
     "react-native-markdown-display": "^7.0.2",
     "react-native-onesignal": "^5.5.10",
     "react-native-qrcode-styled": "^0.4.0",
