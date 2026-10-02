@@ -35,6 +35,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/notify"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/redroid"
+	"github.com/luckyisrael/talon/backend/internal/skr"
 	"github.com/luckyisrael/talon/backend/internal/store"
 	"github.com/luckyisrael/talon/backend/internal/workspace"
 	"github.com/luckyisrael/talon/backend/internal/ws"
@@ -342,6 +343,37 @@ func main() {
 	meHandler := api.NewMeHandler(s)
 	log.Printf("billing ready (provider %s, test mode)", billingProvider.Name())
 
+	// SKR payment for release-export credits. The endpoint, mint and treasury
+	// are read once, here, and are unreachable from any request: a caller who
+	// could choose them would be choosing the oracle that judges their own
+	// payment. With them absent the paywall still quotes its price and the
+	// export gate still refuses correctly — only verify reports itself
+	// unavailable, which is the honest answer when there is no chain to ask.
+	skrVerifier := skr.New(skr.ConfigFromEnv())
+	skrHandler := api.NewSkrHandler(s, skrVerifier)
+	if cfg := skrVerifier.Config(); cfg.RPCURL != "" && cfg.Mint != "" {
+		// Probe the mint now rather than at the first purchase. A mistyped
+		// SKR_MINT would otherwise be a silent black hole where nobody can
+		// ever buy, and the first symptom would be a customer's failure
+		// instead of a warning in the boot log.
+		decimals, owner, err := skrVerifier.ProbeMint(context.Background())
+		switch {
+		case err != nil:
+			log.Printf("WARNING: SKR mint probe failed (%v) — /v1/skr/verify will refuse every payment until SKR_MINT and SKR_RPC_URL are right", err)
+		case owner != skr.TokenProgram:
+			log.Printf("WARNING: SKR_MINT is owned by %s, not the SPL token program — it is not a mint, so no transfer will ever match it", owner)
+		case cfg.Decimals > 0 && cfg.Decimals != decimals:
+			// Verification never uses SKR_DECIMALS — it reads the exponent off
+			// the very balances it is judging — so this can only ever be an
+			// operator noticing their config disagrees with the chain.
+			log.Printf("WARNING: SKR_DECIMALS=%d but the chain says %d — the chain wins; fix the env", cfg.Decimals, decimals)
+		default:
+			log.Printf("skr payment ready (%d SKR for %d exports, mint %s)", cfg.Price, cfg.Credits, cfg.Mint)
+		}
+	} else {
+		log.Printf("skr payment unconfigured (SKR_RPC_URL / SKR_MINT unset) — verify reports itself unavailable, the paywall still quotes its price")
+	}
+
 	// Premium GitHub integration (W4). gitremote.Load reads the OAuth app config
 	// and the token-encryption key from the environment; when the OAuth app is
 	// unset the integration reports itself unconfigured and every credential-bound
@@ -497,6 +529,11 @@ func main() {
 		r.Put("/v1/projects/{id}/triage", triageHandler.Save)
 		r.Get("/v1/exports/{id}", exportHandler.Get)
 		r.Get("/v1/exports/{id}/download", exportHandler.Download)
+
+		// SKR payment for export credits: quote the pack the paywall offers,
+		// then re-derive the payment from the chain before the ledger moves.
+		r.Post("/v1/skr/quote", skrHandler.Quote)
+		r.Post("/v1/skr/verify", skrHandler.Verify)
 
 		r.Post("/v1/sessions", sessionHandler.Create)
 		r.Get("/v1/sessions/{id}", sessionHandler.Get)

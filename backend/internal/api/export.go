@@ -18,6 +18,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/metrics"
 	"github.com/luckyisrael/talon/backend/internal/release"
 	"github.com/luckyisrael/talon/backend/internal/secrets"
+	"github.com/luckyisrael/talon/backend/internal/skr"
 	"github.com/luckyisrael/talon/backend/internal/store"
 )
 
@@ -75,23 +76,13 @@ func (h *ExportHandler) gateExport(w http.ResponseWriter, r *http.Request, proje
 	return project, true
 }
 
-// packAmount and packCredits are the SKR offer the refusal quotes back.
-// Environment-tunable because the split between SKR paid and exports granted
-// is a commercial decision, not code; the defaults match the plan (100 SKR
-// unlocks 5 signed exports).
-func packAmount() int {
-	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SKR_PRICE_AMOUNT"))); err == nil && n > 0 {
-		return n
-	}
-	return 100
-}
-
-func packCredits() int {
-	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SKR_PRICE_CREDITS"))); err == nil && n > 0 {
-		return n
-	}
-	return 5
-}
+// The offer the refusal quotes back, read through the skr package rather than
+// re-parsed here: the price the paywall quotes and the price the chain is
+// asked to confirm must be one number with one default. quota.go's comment
+// about three disagreeing copies of a limit is exactly why this is not a
+// second getenv with a second 100/5 sitting next to it.
+func packAmount() int  { return skr.Price() }
+func packCredits() int { return skr.Credits() }
 
 // chargeExportCredit is the paywall, and the release build is the only surface
 // it guards. It runs in two stages so that neither half can be wrong in the
