@@ -336,3 +336,18 @@ test('L54b3 — a paused turn reports files but claims no verdict (checks never 
   expect(st.evidence?.verified).toBeUndefined()
   expect(st.evidence?.filesTouched).toEqual(['src/a.ts'])
 })
+
+// ── L56c / FM-ANSQa: a plan-less plan frame is a QUESTION reply ─────────────
+//
+// The plan path emits its `plan` event with `message` and NO `plan` when the
+// model asks instead of settling (planAsksQuestion). normalizePlan(absence)
+// produced an empty-but-truthy PlanData, so an empty PlanCard with "Approve &
+// build" rendered over the question — approve would ship an empty PLAN.md.
+// The web guards d.plan ? … : null; the card may only exist when a plan does.
+
+test('L56c — plan event without a plan key adopts no plan (question reply)', () => {
+  const st = reduceEvent(seed, ev('plan', { message: 'Whose wallets are we tracking?' }))
+  expect(st.plan).toBeUndefined()
+  // The message still lands as the canonical reply — the question shows.
+  expect(st.text).toBe('Whose wallets are we tracking?')
+})

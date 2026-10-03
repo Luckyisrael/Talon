@@ -141,7 +141,26 @@ export function RestoredTranscript({
         // the prompt row's files_touched union. Files only: the union carries
         // no verdict, so a seed can never claim a check ran or passed.
         const seedFiles = !hasMarker && t.prompt_id != null ? promptEvidence?.[t.prompt_id]?.files_touched : undefined
-        const showQuestion = !!(question && waitingPromptId)
+        // FM-ANSQa / L56 — the wait owns exactly ONE surface, on the turn
+        // that carries it: the last turn, matching waitingPromptId (legacy
+        // rows without a prompt id keep passing). An ask_user anywhere else
+        // is history — an old answered question must not re-open as a live
+        // box keyed to the newest wait (the web pins isLastTurn likewise).
+        const ownsWait =
+          !!waitingPromptId && i === turns.length - 1 && (t.prompt_id == null || t.prompt_id === waitingPromptId)
+        const showQuestion = !!(question && waitingPromptId && ownsWait)
+        // FM-ANSQa(i) / L56 — a plan-mode question waits as PLAIN TEXT: the
+        // plan path emits no `question` frame and stores the exchange
+        // text-only (persistPlanExchange + planJSON(nil)), so no ask_user
+        // block exists to key a card on. The waiting turn's own last text IS
+        // the question planAsksQuestion classified — without this card the
+        // composer's "answer the question in the transcript first" points at
+        // nothing (prompt 84's stranded state). Absent text falls back to the
+        // ask_user default: waiting is a render contract, a surface exists.
+        const waitingFallback =
+          waitingPromptId && !question && ownsWait
+            ? { id: waitingPromptId, text: lastStoredText(blocks) ?? 'The agent asked a question.' }
+            : null
 
         const rows: React.ReactNode[] = []
         // The plan card is the turn: it renders at the TOP of its row — the
@@ -204,16 +223,22 @@ export function RestoredTranscript({
           )
         })
         const seedRow = seedFiles?.length ? <VerifyEvidenceRow evidence={{ filesTouched: seedFiles }} /> : null
-        if (rows.length === 0 && !seedRow && !showQuestion) return null
+        if (rows.length === 0 && !seedRow && !showQuestion && !waitingFallback) return null
         return (
           <View key={i} style={styles.assistantWrap}>
             {rows}
             {seedRow}
-            {question && waitingPromptId ? (
+            {question && waitingPromptId && ownsWait ? (
               <QuestionCard
                 question={str(inputOf(question, 'question')) ?? 'The agent asked a question.'}
                 choices={arrayOfStrings(inputOf(question, 'choices'))}
                 onAnswer={(text) => onAnswer(waitingPromptId, text)}
+              />
+            ) : waitingFallback ? (
+              <QuestionCard
+                question={waitingFallback.text}
+                choices={[]}
+                onAnswer={(text) => onAnswer(waitingFallback.id, text)}
               />
             ) : null}
           </View>
@@ -226,6 +251,17 @@ export function RestoredTranscript({
 function inputOf(b: ConversationBlock, key: string): unknown {
   const input = (b.input ?? {}) as Record<string, unknown>
   return input[key]
+}
+
+// lastStoredText is the waiting turn's own question prose: the last text
+// block it persisted (persistPlanExchange guarantees a non-empty message,
+// so this is the text planAsksQuestion classified as the question).
+function lastStoredText(blocks: ConversationBlock[]): string | undefined {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i]
+    if (b.kind === 'text' && b.text?.trim()) return b.text
+  }
+  return undefined
 }
 
 // TurnEndRow renders the terminal marker — the line that says how a turn ended.

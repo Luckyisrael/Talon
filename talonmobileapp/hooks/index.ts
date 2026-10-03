@@ -454,7 +454,14 @@ function reduceFrame(state: TurnState, ev: StreamEvent): TurnState {
       // L52a: the plan card is the turn — it moves to the TOP, so the
       // timeline drops the envelope's thinking/narration and keeps the
       // message as one closing narration row beneath it.
-      const plan = normalizePlan(data.plan);
+      // FM-ANSQa(ii) / L56: a plan-less `plan` frame is a QUESTION reply
+      // (planAsksQuestion's waiting shape — message present, plan absent).
+      // Normalizing the absence produced an empty-but-truthy PlanData, so an
+      // empty PlanCard with "Approve & build" rendered over the question and
+      // approve would ship an empty PLAN.md into a build. The web guards
+      // `d.plan ? … : null`; no plan key, no card — the message still lands
+      // as the canonical narration.
+      const plan = data.plan ? normalizePlan(data.plan) : undefined;
       const msg = typeof data.message === 'string' && data.message ? data.message : 'Plan ready.';
       const kept = tl(state).filter((i) => i.kind !== 'thinking' && i.kind !== 'narration');
       const seq = state.timelineSeq ?? 0;
