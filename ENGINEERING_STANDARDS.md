@@ -1297,6 +1297,27 @@ Failure modes (written before the code, TEST_RULES §3):
   The law: **fingerprint equality strips separators and case on both
   sides and compares the full hex value — a format difference must never
   accuse a correct signature, and an empty fingerprint must never pass.**
+- **FM-ROUTERa (candidate L48)** — the route tree is not a test directory.
+  Failure modes: (i) *A test file in `app/` kills the app.* Expo Router
+  imports every file under `app/` through `require.context` at bundle time;
+  a `*.test.tsx` there is not a route, but it is imported anyway, and its
+  `@testing-library/react-native` import reaches Node built-ins
+  (`require("console")`, `require("util")`) that the native runtime does
+  not have → `Android Bundling failed`. LIVE: starting the companion app's
+  Metro died 153s in with the exact stack — `app/menu/help.test.tsx →
+  "@testing-library/react-native" → require("console")` — and two more test
+  files (`(tabs)/build-export.test.tsx`, `(tabs)/device.test.tsx`) waited
+  behind it to break the same way. (ii) *Jest cannot see the break.* The
+  same suite passes under `npm test` because Jest runs in Node, where
+  `console`/`util` exist — the two toolchains disagree, so only the
+  bundler catches it, and only 153 seconds into a cold start: a green test
+  gate and a dead app on the same commit. (iii) *Even when it bundles it is
+  still wrong.* The test becomes a navigable bogus route (`/menu/help.test`),
+  route generation pollutes, and the next person copies the pattern. The
+  law: **`app/` is routes only — tests live outside the route tree (beside
+  their sources or under `__tests__/`), Node-only dev libraries must never
+  be reachable from a route, and a guard test fails the suite if a
+  `*.test.*`/`*.spec.*` file ever appears under `app/` again.**
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -1343,6 +1364,7 @@ Failure modes (written before the code, TEST_RULES §3):
 | L45 | **An orphan keystore file is moved aside, not misdiagnosed (FM-KEYSa)** — `Keystore.Ensure`'s no-row path stats the target before `-genkeypair`: an existing file is renamed `<name>.orphaned-<unix>` with a log line naming the project and the reason (no row owns it → its password died with the row → unreadable by construction), so genkeypair always starts on a clean path; the write order stays row-after-success (the row remains the source of truth) and the row-without-file branch keeps its regenerate-and-log behavior — the two branches now degrade symmetrically | fails-first release test (real keytool): temp keystore dir seeded with a valid JKS written under a password no row has ever seen, no row → RED pre-fix (`keytool failed: … keystore password was incorrect`, no row saved — the exact live failure, export job 1 / 05:58:31), GREEN: `Ensure` returns a working record (stored password opens it via `-list`), the orphan sits renamed `.orphaned-*` beside it, and a second `Ensure` reuses the same file — LIVE on the fixed server: the real orphan was moved aside at 06:07:55 (`moved aside to keystores/project-1.jks.orphaned-1791004075 and regenerating`) and export jobs 4/5 sailed past `Ensure` | ⬤ |
 | L46 | **Each password reader gets its own file (FM-SIGNa)** — `Builder.signAPK` writes TWO 0600 temp files (one for `--ks-pass file:`, one for `--key-pass file:`) instead of passing a single path twice; both are cleaned up, argv stays password-free, and the rest of the invocation is unchanged | fails-first sign test (real keytool + apksigner + a `aapt package`-built 611-byte fixture, skipping exactly where production's own SDK gate would): `signAPK` over a keystore from `Ensure` → RED pre-fix (`apksigner failed … Failed to read Key … end of file reached` — the byte-for-byte live failure, export job 3 / 07:26:32; isolated repro A), GREEN: the signed artifact passes `apksigner verify --print-certs` printing the keystore's DN; shared-file-with-newline ruled out as a fix (repro B), two-files proven (repro C) — LIVE: export job 5 ran `sign` → `verify-signature` clean on the fixed binary (08:36:13), the first signing in this codebase's life | ⬤ |
 | L47 | **Fingerprint equality compares bytes, not spelling (FM-FPRa)** — `sameFingerprint`'s normalizer strips every non-hex separator (`:` and whitespace) and uppercases BOTH sides before comparing, so apksigner's bare-hex digest and keytool's colon-delimited digest of the same certificate equate; the full hex value must match (no prefix/substring shortcuts) and the `a != ""` empty guard stays | fails-first unit test with the LIVE strings from export job 4: `sameFingerprint("a6cedc…5584", "A6:CE:DC:DA:…:5584")` → RED pre-fix (`false` — the export's exact `verify-signature` failure, 08:02:31), GREEN: `true`; a genuinely different fingerprint, a truncated one, and two empties all stay `false` — LIVE: export job 5 logged `release verified (package com.talon.neighborhoodrewards, signer a6cedc…5584)` at 08:36:17, the two spellings equated in production | ⬤ |
+| L48 | **`app/` is routes only — tests never sit in the route tree (FM-ROUTERa)** — the three test files under `app/` (`menu/help`, `(tabs)/build-export`, `(tabs)/device`) move to `__tests__/` mirroring the structure, the two relative screen imports rewritten through the `@/` mapper; a guard test walks `app/` recursively and fails the suite if any `*.test.*`/`*.spec.*` file appears there | fails-first guard test → RED while the three files sit in `app/` (listing them, quoting the live `Android Bundling failed … require("console")` stack from `expo start`), GREEN after the move: guard passes and the full mobile suite is green via `npm test` from `talonmobileapp`; bundle check: Metro serves `index.bundle?platform=android` without the `require.context` crash | ⬤ |
 
 Still-open P1 rows from the previous list:
 
