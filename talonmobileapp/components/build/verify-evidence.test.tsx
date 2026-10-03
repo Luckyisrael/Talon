@@ -385,3 +385,53 @@ test('F9 — VerifyBadge: renders "Build verified · {ago}" on a 200, nothing on
   await waitFor(() => expect(fetch404).toHaveBeenCalled())
   expect(absent.queryByText(/Build verified/)).toBeNull()
 })
+
+// ── L54 / FM-VRFYa: an empty-but-present payload claims NOTHING ─────────────
+//
+// "finished, nothing to verify" was always the documented meaning of an
+// empty payload (VerifyEvidence's own comment) — but the renderer still
+// took the marker's rounds and mounted a row for it, and every old
+// no-changes marker in the wild carries `verified:false` with zero files
+// and no policy. Absence of work = absence of a verdict, in both
+// directions: the row does not mount, F2's payload-less legacy rounds and
+// F3's honest failure stay exactly as pinned.
+
+test('L54b4 — restore: present payload with no verdict and no work renders NO row', async () => {
+  const comps = mod('@/components/build/VerifyEvidence')
+  expect(typeof comps.evidenceFromMarker).toBe('function')
+  const evidence = comps.evidenceFromMarker({
+    kind: 'turn_end',
+    status: 'completed',
+    rounds: 1,
+    verify: { files_touched: [], verify_policy: '', skipped_gates: [] },
+  })
+  expect(evidence).toBeUndefined()
+})
+
+test('L54b5 — restore: an old false-verdict marker with no work stops claiming', async () => {
+  const comps = mod('@/components/build/VerifyEvidence')
+  expect(typeof comps.evidenceFromMarker).toBe('function')
+  // The exact shape backend shipped for every no-changes turn before L54:
+  // verified:false, zero files, empty policy — "checks did not pass" from
+  // a check that never ran.
+  const evidence = comps.evidenceFromMarker({
+    kind: 'turn_end',
+    status: 'completed',
+    rounds: 1,
+    verify: { files_touched: [], verified: false, verify_policy: '', skipped_gates: [] },
+  })
+  expect(evidence).toBeUndefined()
+})
+
+test('L54b6 — restore: a false verdict WITH work stays claimable (F3 unchanged)', async () => {
+  const comps = mod('@/components/build/VerifyEvidence')
+  expect(typeof comps.evidenceFromMarker).toBe('function')
+  const evidence = comps.evidenceFromMarker({
+    kind: 'turn_end',
+    status: 'failed',
+    rounds: 2,
+    verify: { files_touched: [], verified: false, verify_policy: 'strict', skipped_gates: [] },
+  })
+  expect(evidence?.verified).toBe(false)
+  expect(evidence?.verifyPolicy).toBe('strict')
+})

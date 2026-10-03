@@ -79,6 +79,15 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 // not work (it boots native Worklets at import time through build.tsx).
 jest.mock('react-native-reanimated', () => require('@/test/native-seams').reanimated())
 
+// L50 — BuildScreen now imports KeyboardStickyView, and under jest the
+// package's native TurboModule is absent (its LINKING_ERROR throws at
+// module eval). Replace it at the seam, same marker approach as
+// build-keyboard.test.tsx; the wiring itself is pinned there.
+jest.mock('react-native-keyboard-controller', () => ({
+  KeyboardProvider: ({ children }: { children?: React.ReactNode }) => children,
+  KeyboardStickyView: ({ children }: { children?: React.ReactNode }) => children,
+}))
+
 // The panel talks to the wallet, which is a native session (and whose
 // nanostores dependency is ESM-only, so jest cannot require it at all).
 // This suite only mounts the panel and reads its quote — the payment path
@@ -133,7 +142,6 @@ beforeEach(() => {
     steer: jest.fn(),
     parkQueue: jest.fn(),
     stop: jest.fn(),
-    diag: jest.fn(),
   })
   ;(useStartExport as jest.Mock).mockReturnValue({ mutate: mockStart, isPending: false })
   ;(useExportJob as jest.Mock).mockReturnValue({ data: null })

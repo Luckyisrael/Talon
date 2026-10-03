@@ -386,23 +386,24 @@ func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		buildOptions{PersistUserTurn: true, MeterPrompt: true, Mode: req.Mode, PermissionMode: req.PermissionMode, Attachments: attachments})
 
 	response := map[string]interface{}{
-		"id":                   prompt.ID,
-		"mode":                 "build",
-		"message":              "",
-		"files_touched":        []string{},
-		"verified":             false,
-		"verified_best_effort": false,
-		"verify_policy":        "",
-		"rounds":               0,
-		"remaining_tasks":      []string{},
+		"id":              prompt.ID,
+		"mode":            "build",
+		"message":         "",
+		"files_touched":   []string{},
+		"verify_policy":   "",
+		"rounds":          0,
+		"remaining_tasks": []string{},
+		// L54 / FM-VRFYa: no verified keys in the default seed — absence
+		// is the no-claim state. A hard-failed build (no outcome) claims
+		// nothing rather than "checks did not pass".
 	}
 	if outcome != nil {
 		response["message"] = outcome.FinalText
 		response["files_touched"] = outcome.FilesTouched
-		response["verified"] = outcome.Verified
+		// L54: verified keys only when checks could have run.
+		applyVerdict(response, outcome)
 		// W6: policy annotation — a verified:true with verified_best_effort:true
 		// means best-effort gates never ran; verify_policy says who decided.
-		response["verified_best_effort"] = outcome.VerifiedBestEffort
 		response["verify_policy"] = outcome.VerifyPolicy
 		response["rounds"] = outcome.Rounds
 		response["usage"] = outcome.Usage
@@ -1151,6 +1152,53 @@ func (h *PromptHandler) dispatchNotification(userID int64, kind notify.Kind, tit
 	notify.Dispatch(h.store, h.notifier, userID, kind, title, body)
 }
 
+// ── L54 / FM-VRFYa: the wire claims only what could have been checked ───────
+//
+// Every emitter shipped `verified:false` whenever no check ran (the
+// no-changes path leaves the zero value), and both clients key the red chip
+// on `verified`'s PRESENCE — so "checks did not pass · 1 round" came out on
+// every single turn, a claim the backend never made. Absence is the
+// no-claim state the wire already documents; these two helpers are the one
+// place that decides when a verdict exists.
+//
+// verdictClaim: a verdict exists only when checks could have run — files
+// were touched, a policy classified the sweep, or gates were recorded as
+// skipped — AND the turn was not paused or round-exhausted out of its
+// checks. `Verified` alone is not enough: no-changes, cancelled and
+// mid-question outcomes all carry the zero value with nothing behind it.
+func verdictClaim(outcome *orchestrator.BuildOutcome) bool {
+	if outcome == nil || outcome.Paused || outcome.Exhausted {
+		return false
+	}
+	return len(outcome.FilesTouched) > 0 || outcome.VerifyPolicy != "" || len(outcome.SkippedGates) > 0
+}
+
+// applyVerdict writes the verdict keys onto a frame/row ONLY when a check
+// could have run. Everything else on the frame (files, policy, rounds,
+// cost) keeps reporting what the turn did — a count is not a verdict.
+func applyVerdict(dst map[string]interface{}, outcome *orchestrator.BuildOutcome) {
+	if verdictClaim(outcome) {
+		dst["verified"] = outcome.Verified
+		dst["verified_best_effort"] = outcome.VerifiedBestEffort
+	}
+}
+
+// turnEndEvidence builds the marker's verify payload (persistTurnEnd).
+// Always written when an outcome exists — an empty-but-present payload
+// means "finished, nothing to verify", which is exactly what lets clients
+// tell a legacy payload-less marker (rounds only) from a no-changes turn
+// (no verdict, renders nothing). The verdict keys ride only when a check
+// could have run (see verdictClaim).
+func turnEndEvidence(outcome *orchestrator.BuildOutcome) map[string]interface{} {
+	evidence := map[string]interface{}{
+		"files_touched": wireStrings(outcome.FilesTouched),
+		"verify_policy": outcome.VerifyPolicy,
+		"skipped_gates": wireStrings(outcome.SkippedGates),
+	}
+	applyVerdict(evidence, outcome)
+	return evidence
+}
+
 func (h *PromptHandler) finishBuildStream(w http.ResponseWriter, flusher http.Flusher, outcome *orchestrator.BuildOutcome, err error) {
 	if err != nil {
 		writeSSE(w, "error", map[string]string{"message": friendlyAIError(err)})
@@ -1162,8 +1210,9 @@ func (h *PromptHandler) finishBuildStream(w http.ResponseWriter, flusher http.Fl
 	if outcome != nil {
 		payload["message"] = outcome.FinalText
 		payload["files_touched"] = outcome.FilesTouched
-		payload["verified"] = outcome.Verified
-		payload["verified_best_effort"] = outcome.VerifiedBestEffort
+		// L54 / FM-VRFYa: verified keys only when checks could have run —
+		// absence is the no-claim state both clients key off.
+		applyVerdict(payload, outcome)
 		payload["verify_policy"] = outcome.VerifyPolicy
 		payload["skipped_gates"] = outcome.SkippedGates
 		payload["rounds"] = outcome.Rounds
@@ -1904,15 +1953,11 @@ func (h *PromptHandler) persistTurnEnd(projectID, promptID int64, status string,
 	// instant — so a reload restores what this turn changed and how it
 	// was checked exactly as it streamed. Absent only when there was no
 	// outcome (crash paths): an EMPTY payload means "finished, nothing
-	// to verify", never "unknown".
+	// to verify", never "unknown". L54 / FM-VRFYa: the verdict keys ride
+	// only when checks could have run (turnEndEvidence) — a no-changes
+	// marker keeps its payload and loses its `verified:false` claim.
 	if outcome != nil {
-		evidence := map[string]interface{}{
-			"files_touched":        wireStrings(outcome.FilesTouched),
-			"verified":             outcome.Verified,
-			"verified_best_effort": outcome.VerifiedBestEffort,
-			"verify_policy":        outcome.VerifyPolicy,
-			"skipped_gates":        wireStrings(outcome.SkippedGates),
-		}
+		evidence := turnEndEvidence(outcome)
 		if raw, merr := json.Marshal(evidence); merr == nil {
 			block.Verify = raw
 		} else {

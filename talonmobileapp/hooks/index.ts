@@ -26,6 +26,7 @@ import {
   triageApi,
   usageApi,
   openMetroStream,
+  type ConversationBlock,
   type MetroEvent,
   type PlanData,
   type PlanTask,
@@ -35,6 +36,7 @@ import {
 } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { SHOW_TRIAGE } from '@/lib/flags';
+import { OUTPUT_TAIL, seedFromBlocks, type TimelineItem } from '@/lib/timeline';
 
 // ── Auth bootstrap ─────────────────────────────────────
 
@@ -133,6 +135,14 @@ export interface TurnState {
    *  delivering, and the UI shows nothing but a spinner. The web renders these
    *  as their own row; the mobile must too. */
   thinking: string;
+  /** L51 / FM-THINKa — is thinking what arrived LAST? Set by thinking.delta,
+   *  cleared by every content frame other than another thinking delta (the
+   *  seam around reduceEvent's switch). The ThinkingRow's label reads this:
+   *  "Thinking… <t>" while true, "Thought for <t>" once false — the only
+   *  honest signal, since any guess from unrelated state is wrong in both
+   *  directions (frozen "Thinking…" over a 60 s tool call, or a finished
+   *  stamp mid-burst). */
+  thinkingActive?: boolean;
   /** Live stdout/stderr from the agent's commands (typecheck, lint, build).
    *  Bounded to a tail — the full log would grow without limit in device
    *  memory; the tail is what tells the user what is happening right now. */
@@ -182,15 +192,93 @@ export interface TurnState {
    *  remaining/cost), mapped by reduceEvent on 'done'. The live twin of the
    *  restored marker's verify row — the web footer's fields, the same claims
    *  in the same words. Undefined until a done frame lands; absent keys on
-   *  the frame itself claim nothing (the marker's absence rule, mirrored). */
+   *  the frame itself claim nothing (the marker's absence rule, mirrored).
+   *  L54 / FM-VRFYa: the done mapping additionally requires something worth
+   *  claiming — a verdict or work reported — before evidence exists at all,
+   *  so a no-checks frame cannot mount the false "checks did not pass" row. */
   evidence?: TurnEvidence;
+  /** L52 / FM-TLKa — the chronological timeline. Every visible row the turn
+   *  produces (thinking segments, narration, tools, decisions, skills, output)
+   *  in ARRIVAL order; the render source for the live tail. The legacy
+   *  thinking/toolCalls/text fields keep updating beside it unchanged (the
+   *  L51 signal and the P-series contracts), but nothing renders from them.
+   *  Undefined only for test fixtures that predate it — every reducer path
+   *  materializes it. */
+  timeline?: TimelineItem[];
+  /** Monotonic key mint for timeline rows: appended exactly once per new
+   *  item, never reused, so a drop (the plan case clears thinking/narration)
+   *  can never mint a duplicate React key. */
+  timelineSeq?: number;
 }
 
-const initialTurn: TurnState = { phase: 'idle', text: '', thinking: '', output: '', tasks: [], toolCalls: [] };
+const initialTurn: TurnState = {
+  phase: 'idle',
+  text: '',
+  thinking: '',
+  thinkingActive: false,
+  output: '',
+  tasks: [],
+  toolCalls: [],
+  timeline: [],
+  timelineSeq: 0,
+};
+
+// ── Timeline helpers (L52 / FM-TLKa) ────────────────────────────────────────
+// The timeline is the ordered render source. Two invariants live here:
+//   · a NEW row mints its key from timelineSeq (monotonic, never reused);
+//   · a trailing segment of the same kind folds (thinking + narration text
+//     accumulate in place; command output extends in place) — except a
+//     thinking segment the settle pass already froze, which reopens as a
+//     fresh arrival (burst → act → burst reads as two moments).
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+type NewItem = DistributiveOmit<TimelineItem, 'key'>;
+type TimelineAppend = { timeline: TimelineItem[]; timelineSeq: number };
+
+function tl(state: TurnState): TimelineItem[] {
+  return state.timeline ?? [];
+}
+
+function mint(state: TurnState, item: NewItem): TimelineAppend {
+  const seq = state.timelineSeq ?? 0;
+  return {
+    timeline: [...tl(state), { ...item, key: `tl-${seq}` } as TimelineItem],
+    timelineSeq: seq + 1,
+  };
+}
+
+function replaceTail(state: TurnState, item: TimelineItem): TimelineAppend {
+  const cur = tl(state);
+  return { timeline: [...cur.slice(0, -1), item], timelineSeq: state.timelineSeq ?? cur.length };
+}
 
 // Exported as a test seam (mobile row 46): the done-frame mapping is pure
 // state math and must be pin-able without a live SSE round trip.
 export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
+  let next = reduceFrame(state, ev);
+  // L51 / FM-THINKa — thinking is the active activity only while thinking is
+  // what arrived last: any content frame except another thinking delta ends
+  // the burst. `phase` frames are exempt (they name the round, not output);
+  // a frame that returns state unchanged (the suppressed write_adr row)
+  // still ends it — the model acted.
+  if (ev.kind !== 'thinking.delta' && ev.kind !== 'phase' && next.thinkingActive) {
+    next = { ...next, thinkingActive: false };
+  }
+  // L52 / FM-TLKa — the same settle rule the label reads: a live thinking
+  // segment freezes to "Thought for <t>" the moment the model acts on it.
+  // Run with the seam above so one content frame does both.
+  if (ev.kind !== 'thinking.delta' && ev.kind !== 'phase') {
+    const cur = tl(next);
+    if (cur.some((i) => i.kind === 'thinking' && i.streaming)) {
+      next = {
+        ...next,
+        timeline: cur.map((i) => (i.kind === 'thinking' && i.streaming ? { ...i, streaming: false } : i)),
+      };
+    }
+  }
+  return next;
+}
+
+function reduceFrame(state: TurnState, ev: StreamEvent): TurnState {
   let data: Record<string, unknown> = {};
   try {
     data = JSON.parse(ev.data) as Record<string, unknown>;
@@ -209,52 +297,136 @@ export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
         activity: phaseLabel(String(data.phase ?? '')),
         promptId: state.promptId ?? (Number(data.prompt_id ?? 0) || undefined),
       };
-    case 'text.delta':
-      return { ...state, text: state.text + String(data.text ?? '') };
-    case 'thinking.delta':
+    case 'text.delta': {
+      // Narration folds into its trailing segment (or opens one): the words
+      // the user asked to see while the model works, at the position they
+      // arrived — L52's timeline, not a fixed slot above the tools.
+      const chunk = String(data.text ?? '');
+      const cur = tl(state);
+      const last = cur[cur.length - 1];
+      if (last?.kind === 'narration') {
+        return {
+          ...state,
+          text: state.text + chunk,
+          ...replaceTail(state, { ...last, text: last.text + chunk }),
+        };
+      }
+      return { ...state, text: state.text + chunk, ...mint(state, { kind: 'narration', text: chunk }) };
+    }
+    case 'thinking.delta': {
       // Reasoning is most of what a turn produces while the user watches. It
       // used to be dropped here ("kept server-side"), which meant the entire
       // thinking phase rendered as nothing — the blank screen during a build.
       // Accumulate it and render it as its own live row, as the web does.
-      return { ...state, thinking: state.thinking + String(data.text ?? '') };
+      //
+      // L52 / FM-TLKa: a burst appends to its TRAILING live segment — or
+      // opens a new one when the arrival position says so (a tool ran in
+      // between, or the previous segment settled). The wall of text stays
+      // one tap away either way (L51); this only decides WHERE the segment
+      // sits in the chronology.
+      const chunk = String(data.text ?? '');
+      const cur = tl(state);
+      const last = cur[cur.length - 1];
+      if (last?.kind === 'thinking' && last.streaming) {
+        return {
+          ...state,
+          thinking: state.thinking + chunk,
+          thinkingActive: true,
+          ...replaceTail(state, { ...last, text: last.text + chunk, streaming: true }),
+        };
+      }
+      return {
+        ...state,
+        thinking: state.thinking + chunk,
+        thinkingActive: true,
+        ...mint(state, { kind: 'thinking', text: chunk, streaming: true }),
+      };
+    }
     case 'tool_call': {
       const name = String(data.name ?? '');
       // write_adr / write_memory render as the decision card the `decision`
       // frame carries, not as a bare tool row — the same suppression the web
       // applies, so one recorded decision never shows twice.
       if (name === 'write_adr' || name === 'write_memory') return state;
+      const status = String(data.status ?? '');
+      const id = typeof data.id === 'string' && data.id ? data.id : undefined;
+      const cur = tl(state);
+      // L52b: a paired running→completed frame settles ONE row in place —
+      // keyed by the call id — instead of appending a second (the phantom
+      // spinner the fixed-slot tail showed). An id-less frame never
+      // collides with a keyed one: it appends. The legacy toolCalls field
+      // keeps appending every frame exactly as its contracts pin it.
+      if (id) {
+        const idx = cur.findIndex((i) => i.kind === 'tool' && i.id === id);
+        const prev = idx >= 0 ? cur[idx] : undefined;
+        if (prev?.kind === 'tool') {
+          return {
+            ...state,
+            toolCalls: [...state.toolCalls, { name, status }],
+            timeline: [...cur.slice(0, idx), { ...prev, status, name: name || prev.name }, ...cur.slice(idx + 1)],
+          };
+        }
+      }
+      const next = mint(state, { kind: 'tool', id, name, status });
       return {
         ...state,
-        toolCalls: [...state.toolCalls, { name, status: String(data.status ?? '') }],
+        toolCalls: [...state.toolCalls, { name, status }],
+        timeline: next.timeline,
+        timelineSeq: next.timelineSeq,
       };
     }
-    case 'verify':
+    case 'verify': {
       // A verification result (typecheck, lint, boot). The web renders this as
       // a trace row; without it the mobile shows a tool running and then
       // nothing about whether it passed — the outcome of the work is exactly
       // what "everything that is happening" means.
+      const name = `Checked ${String(data.stage ?? '')}`.trim();
+      const status = String(data.status ?? '');
+      const cur = tl(state);
+      // Same upsert as a paired tool frame, keyed by stage: the sweep's
+      // running→completed frames settle one row.
+      const idx = cur.findIndex((i) => i.kind === 'tool' && i.name === name);
+      const prev = idx >= 0 ? cur[idx] : undefined;
+      if (prev?.kind === 'tool') {
+        return {
+          ...state,
+          toolCalls: [
+            ...state.toolCalls,
+            { name, status },
+          ],
+          timeline: [...cur.slice(0, idx), { ...prev, status }, ...cur.slice(idx + 1)],
+        };
+      }
+      const next = mint(state, { kind: 'tool', name, status });
       return {
         ...state,
-        toolCalls: [
-          ...state.toolCalls,
-          {
-            name: `Checked ${String(data.stage ?? '')}`.trim(),
-            status: String(data.status ?? ''),
-          },
-        ],
+        toolCalls: [...state.toolCalls, { name, status }],
+        timeline: next.timeline,
+        timelineSeq: next.timelineSeq,
       };
-    case 'diag':
-      // TEMP DIAGNOSTIC — transport stage markers from openStream. Surfaced on
-      // the build screen so we can see where the SSE connection stalls.
-      return { ...state, output: (state.output + '\n' + String(data ?? '')).slice(-2000) };
-    case 'command_output':
+    }
+    case 'command_output': {
       // Live stdout/stderr from run_command, typecheck, lint and build_apk.
       // Bounded like the web's trace tail: unbounded accumulation of a full
       // build log in device memory is a stutter, not a feature.
+      const chunk = String(data.text ?? '');
+      const cur = tl(state);
+      const last = cur[cur.length - 1];
+      if (last?.kind === 'output') {
+        return {
+          ...state,
+          output: (state.output + chunk).slice(-OUTPUT_TAIL),
+          ...replaceTail(state, { ...last, text: (last.text + chunk).slice(-OUTPUT_TAIL) }),
+        };
+      }
+      // L52d: output opens its own row right behind the running tool that
+      // produced it — interleaved, never hoisted to the screen's bottom.
       return {
         ...state,
-        output: (state.output + String(data.text ?? '')).slice(-2000),
+        output: (state.output + chunk).slice(-OUTPUT_TAIL),
+        ...mint(state, { kind: 'output', text: chunk.slice(-OUTPUT_TAIL) }),
       };
+    }
     case 'task_update': {
       const task: PlanTask = {
         id: String(data.id ?? ''),
@@ -279,15 +451,35 @@ export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
       // The parsed plan is the canonical reply (the web's plan case): it
       // replaces the streamed narration, so the model's private reasoning or
       // raw JSON envelope never renders over the plan the user approves.
+      // L52a: the plan card is the turn — it moves to the TOP, so the
+      // timeline drops the envelope's thinking/narration and keeps the
+      // message as one closing narration row beneath it.
       const plan = normalizePlan(data.plan);
       const msg = typeof data.message === 'string' && data.message ? data.message : 'Plan ready.';
-      return { ...state, plan, planMessage: msg, text: msg, thinking: '' };
+      const kept = tl(state).filter((i) => i.kind !== 'thinking' && i.kind !== 'narration');
+      const seq = state.timelineSeq ?? 0;
+      return {
+        ...state,
+        plan,
+        planMessage: msg,
+        text: msg,
+        thinking: '',
+        timeline: [...kept, { key: `tl-${seq}`, kind: 'narration', text: msg }],
+        timelineSeq: seq + 1,
+      };
     }
     case 'guardrail_reject': {
       // A guardrail refused an action: a visible failed row, the web's
       // "Blocked" trace line. Dropped (the old default), the model was
       // stopped and the screen said nothing at all.
       const firstLine = typeof data.error === 'string' && data.error ? data.error.split('\n')[0] : '';
+      const blocked: NewItem = {
+        kind: 'tool',
+        name: 'Blocked',
+        status: 'error',
+        target: firstLine || (typeof data.tool === 'string' ? data.tool : ''),
+      };
+      const next = mint(state, blocked);
       return {
         ...state,
         toolCalls: [
@@ -298,6 +490,8 @@ export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
             target: firstLine || (typeof data.tool === 'string' ? data.tool : ''),
           },
         ],
+        timeline: next.timeline,
+        timelineSeq: next.timelineSeq,
       };
     }
     case 'decision': {
@@ -310,13 +504,33 @@ export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
           : typeof data.content === 'string'
             ? data.content
             : '';
+      // L52c: a decision lands at ITS position with the full text behind a
+      // tap — the decision itself renders once, in the chronology.
+      const decided: NewItem = {
+        kind: 'decision',
+        name: `Recorded ${variant}`,
+        target: head.split('\n')[0] || undefined,
+        summary: head || undefined,
+      };
+      const next = mint(state, decided);
       return {
         ...state,
         toolCalls: [
           ...state.toolCalls,
           { name: `Recorded ${variant}`, status: 'completed', target: head.split('\n')[0] || undefined },
         ],
+        timeline: next.timeline,
+        timelineSeq: next.timelineSeq,
       };
+    }
+    case 'skills_group': {
+      // The skill bodies the orchestrator injected this round — a chip row,
+      // so "the model is using your skill library" is visible, not
+      // implied. The wire carries the group as a bare JSON array.
+      const names = (Array.isArray(data) ? data : []).filter((s): s is string => typeof s === 'string');
+      if (names.length === 0) return state;
+      const next = mint(state, { kind: 'skill', title: names.join(', ') });
+      return { ...state, timeline: next.timeline, timelineSeq: next.timelineSeq };
     }
     case 'error':
       return { ...state, phase: 'error', error: String(data.message ?? 'the turn failed') };
@@ -327,20 +541,53 @@ export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
       // refetch — and ABSENT keys stay undefined, claiming nothing (the
       // marker's absence rule, mirrored). Failure frames without an outcome
       // carry only {status} → evidence renders as nothing.
-      const evidence: TurnEvidence = {
-        filesTouched: Array.isArray(data.files_touched) ? (data.files_touched as string[]) : [],
-        verified: typeof data.verified === 'boolean' ? data.verified : undefined,
-        verifiedBestEffort: typeof data.verified_best_effort === 'boolean' ? data.verified_best_effort : undefined,
-        verifyPolicy: typeof data.verify_policy === 'string' ? data.verify_policy : undefined,
-        skippedGates: Array.isArray(data.skipped_gates) ? (data.skipped_gates as string[]) : [],
-        rounds: typeof data.rounds === 'number' ? data.rounds : undefined,
-        remainingTasks: Array.isArray(data.remaining_tasks) ? (data.remaining_tasks as string[]) : undefined,
-        costUsd: typeof data.cost_usd === 'number' ? data.cost_usd : undefined,
-      };
+      const filesTouched = Array.isArray(data.files_touched) ? (data.files_touched as string[]) : [];
+      const skippedGates = Array.isArray(data.skipped_gates) ? (data.skipped_gates as string[]) : [];
+      const verifyPolicy = typeof data.verify_policy === 'string' ? data.verify_policy : undefined;
+      const remainingTasks = Array.isArray(data.remaining_tasks) ? (data.remaining_tasks as string[]) : undefined;
+      const costUsd = typeof data.cost_usd === 'number' ? data.cost_usd : undefined;
+      const rounds = typeof data.rounds === 'number' ? data.rounds : undefined;
+      const rawVerified = typeof data.verified === 'boolean' ? data.verified : undefined;
+      // L54 / FM-VRFYa — a verdict only exists when checks could have run:
+      // files touched, or a policy that classified the sweep. `verified:false`
+      // with nothing behind it is not a failed check, it is a claim the
+      // backend never made — the "checks did not pass · 1 round" that came
+      // out on every no-changes turn. Rounds alone are a count, never a
+      // verdict: with no verdict and nothing else worth reporting there is
+      // no evidence row at all.
+      const hasWork = filesTouched.length > 0 || skippedGates.length > 0 || !!verifyPolicy;
+      const verdict = hasWork || rawVerified === true ? rawVerified : undefined;
+      const claimable =
+        verdict !== undefined ||
+        hasWork ||
+        (remainingTasks?.length ?? 0) > 0 ||
+        costUsd !== undefined;
+      const evidence: TurnEvidence | undefined = claimable
+        ? {
+            filesTouched,
+            verified: verdict,
+            verifiedBestEffort:
+              verdict !== undefined && typeof data.verified_best_effort === 'boolean'
+                ? data.verified_best_effort
+                : undefined,
+            verifyPolicy,
+            skippedGates,
+            rounds,
+            remainingTasks,
+            costUsd,
+          }
+        : undefined;
       // Adopt the frame's message when the turn streamed no words: a turn
       // that ends in tools alone still said something (web's narration
-      // adoption, AIChat done handler).
+      // adoption, AIChat done handler). The timeline carries the adopted
+      // words as its closing row — nothing renders from `text` anymore.
       const adopted = state.text === '' && typeof data.message === 'string' && data.message ? data.message : undefined;
+      const adoption = adopted
+        ? (() => {
+            const n = mint(state, { kind: 'narration', text: adopted });
+            return { timeline: n.timeline, timelineSeq: n.timelineSeq };
+          })()
+        : {};
       const status = String(data.status ?? 'success');
       // A pause is not the end of the turn: on 'waiting' the ask_user card
       // owns the conversation and must survive the frame that closes the
@@ -349,14 +596,14 @@ export function reduceEvent(state: TurnState, ev: StreamEvent): TurnState {
       // "turn finished" over a failure — and the banner's resume detection
       // reads the failed status from history right after.
       if (status === 'waiting' && state.phase === 'waiting') {
-        return { ...state, evidence, ...(adopted ? { text: adopted } : {}) };
+        return { ...state, evidence, ...(adopted ? { text: adopted, ...adoption } : {}) };
       }
       if (status === 'failed') {
         const message =
           state.error ?? (typeof data.message === 'string' && data.message ? data.message : 'the turn failed');
         return { ...state, phase: 'error', error: message, evidence };
       }
-      return { ...state, phase: 'done', evidence, ...(adopted ? { text: adopted } : {}) };
+      return { ...state, phase: 'done', evidence, ...(adopted ? { text: adopted, ...adoption } : {}) };
     }
     default:
       return state;
@@ -378,25 +625,9 @@ export function usePromptStream(projectId: number | null) {
 
   useEffect(() => () => closeRef.current?.(), []);
 
-  // TEMP DIAGNOSTIC — counting what actually reaches the app. The symptom is a
-  // static screen with the fallback "Working" label, which means not even phase
-  // events arrive mid-turn. This counts raw SSE events and remembers the last
-  // few, so the screen can show us instead of us guessing. Remove once live
-  // streaming works.
-  const [diag, setDiag] = React.useState<{ count: number; kinds: string[]; lastData: string }>({
-    count: 0,
-    kinds: [],
-    lastData: '',
-  });
-
   function applyEvents(onEvent: (ev: StreamEvent) => void) {
     return (ev: StreamEvent) => {
       onEvent(ev);
-      setDiag((prev) => ({
-        count: prev.count + 1,
-        kinds: [...prev.kinds, ev.kind].slice(-8),
-        lastData: ev.data.slice(-120),
-      }));
       setTurn((prev) => reduceEvent(prev, ev));
     };
   }
@@ -466,8 +697,19 @@ export function usePromptStream(projectId: number | null) {
     return answerPrompt(pid, text);
   }
 
-  async function answerPrompt(promptId: number, text: string) {
-    setTurn((prev) => ({ ...prev, phase: 'streaming', question: undefined, questionPromptId: undefined }));
+  async function answerPrompt(promptId: number, text: string, seedBlocks?: ConversationBlock[]) {
+    // L53c / FM-RSUMa: an answer from the RESTORED card carries the prompt's
+    // stored blocks — the continuation appends onto them instead of a blank
+    // tail. No blocks (the live card's short path) keeps the turn in place:
+    // there the tail already carries everything the history holds.
+    const seeded = seedBlocks && seedBlocks.length > 0 ? seedFromBlocks(seedBlocks) : undefined;
+    setTurn((prev) => ({
+      ...(seeded ? { ...initialTurn, timeline: seeded } : prev),
+      phase: 'streaming',
+      question: undefined,
+      questionPromptId: undefined,
+      ...(seeded ? { promptId, queue: prev.queue ?? [] } : {}),
+    }));
     closeRef.current?.();
     closeRef.current = await promptsApi.answer(
       promptId,
@@ -481,9 +723,19 @@ export function usePromptStream(projectId: number | null) {
   // replays the transcript and the agent picks up where it stopped. No echo,
   // this continues the existing turn rather than starting one. A parked queue
   // rides through (the web's planQueueRef is not cleared by resume either).
-  async function resume(promptId: number) {
+  // L53c: seedBlocks rebuild the interrupted rounds into the tail — without
+  // them the resume stream continued into an empty screen (the 69 KB of
+  // invisible streaming: the SEQUENCE was there, the CONTENT was not).
+  async function resume(promptId: number, seedBlocks?: ConversationBlock[]) {
     closeRef.current?.();
-    setTurn((prev) => ({ ...initialTurn, phase: 'streaming', queue: prev.queue ?? [] }));
+    const seeded = seedBlocks && seedBlocks.length > 0 ? seedFromBlocks(seedBlocks) : undefined;
+    setTurn((prev) => ({
+      ...initialTurn,
+      phase: 'streaming',
+      promptId,
+      queue: prev.queue ?? [],
+      ...(seeded ? { timeline: seeded } : {}),
+    }));
     closeRef.current = await promptsApi.resume(
       promptId,
       applyEvents(() => {}),
@@ -519,7 +771,7 @@ export function usePromptStream(projectId: number | null) {
     void send('plan', next.text, [], projectId);
   }, [turn.phase, turn.queue, projectId, send]);
 
-  return { turn, send, answer, answerPrompt, resume, discard, stop, steer, parkQueue, diag };
+  return { turn, send, answer, answerPrompt, resume, discard, stop, steer, parkQueue };
 }
 
 // ── Device session ────────────────────────────────────

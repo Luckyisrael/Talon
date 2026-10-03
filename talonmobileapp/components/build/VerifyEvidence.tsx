@@ -29,16 +29,31 @@ export function hasEvidence(e: TurnEvidence): boolean {
  *  payload when present; rounds alone on a completed marker (legacy — claims
  *  nothing); nothing otherwise — a non-clean ending already says its rounds in
  *  the status row, so they are not repeated here (the web's footer would show
- *  them twice; mobile's status row owns that half of the sentence). */
+ *  them twice; mobile's status row owns that half of the sentence).
+ *
+ *  L54 / FM-VRFYa — a payload present but empty of work claims NOTHING:
+ *  "finished, nothing to verify" is the documented meaning of an
+ *  empty-but-present payload (the comment at the top), so the row does not
+ *  mount on its rounds, and an old marker carrying `verified:false` with
+ *  zero files and no policy — the exact shape every no-changes turn was
+ *  written with — stops claiming a check that never ran. A false verdict
+ *  WITH work (files, policy, skipped gates) stays claimable: that one is
+ *  real (F3). The payload-less legacy branch is untouched (F2). */
 export function evidenceFromMarker(block: ConversationBlock): TurnEvidence | undefined {
   const rounds = block.status === 'completed' ? block.rounds : undefined
   if (block.verify) {
+    const files = block.verify.files_touched ?? []
+    const skips = block.verify.skipped_gates ?? []
+    const policy = block.verify.verify_policy
+    const hasWork = files.length > 0 || skips.length > 0 || !!policy
+    const verdict = hasWork || block.verify.verified === true ? block.verify.verified : undefined
+    if (verdict === undefined && !hasWork) return undefined // finished, nothing to verify
     return {
-      filesTouched: block.verify.files_touched ?? [],
-      verified: block.verify.verified,
-      verifiedBestEffort: block.verify.verified_best_effort,
-      verifyPolicy: block.verify.verify_policy,
-      skippedGates: block.verify.skipped_gates ?? [],
+      filesTouched: files,
+      verified: verdict,
+      verifiedBestEffort: verdict !== undefined ? block.verify.verified_best_effort : undefined,
+      verifyPolicy: policy,
+      skippedGates: skips,
       rounds,
     }
   }

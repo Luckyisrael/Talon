@@ -326,14 +326,32 @@ function turnsToEntries(
           rounds: block.rounds,
         });
         if (block.verify) {
-          restoredEvidence = {
-            filesTouched: block.verify.files_touched ?? [],
-            verified: block.verify.verified,
-            verifiedBestEffort: block.verify.verified_best_effort,
-            verifyPolicy: block.verify.verify_policy,
-            skippedGates: block.verify.skipped_gates ?? [],
-            rounds: block.rounds,
-          };
+          // L54c2 / FM-VRFYa — a payload present but empty of work claims
+          // NOTHING: "finished, nothing to verify" is the documented meaning
+          // of an empty payload, so the footer stays down (an old marker
+          // carrying verified:false with zero files and no policy claimed a
+          // check that never ran). A false verdict WITH work keeps claimable
+          // — that one is real (F3). Payload-less legacy markers are the
+          // branch below (F2).
+          const files = block.verify.files_touched ?? [];
+          const skips = block.verify.skipped_gates ?? [];
+          const policy = block.verify.verify_policy;
+          const hasWork = files.length > 0 || skips.length > 0 || !!policy;
+          const verdict =
+            hasWork || block.verify.verified === true
+              ? block.verify.verified
+              : undefined;
+          if (verdict !== undefined || hasWork) {
+            restoredEvidence = {
+              filesTouched: files,
+              verified: verdict,
+              verifiedBestEffort:
+                verdict !== undefined ? block.verify.verified_best_effort : undefined,
+              verifyPolicy: policy,
+              skippedGates: skips,
+              rounds: block.rounds,
+            };
+          }
         } else if (block.rounds !== undefined) {
           // Legacy marker (no verify payload): the round count is still
           // something the marker actually knows — report it, claim no checks.
@@ -1261,6 +1279,27 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
               const skipped = Array.isArray(d.skipped_gates) ? d.skipped_gates : [];
               const stalled = d.status === "stalled";
               const failed = d.status === "failed";
+              // L54c / FM-VRFYa — the verdict rule, the twin of the backend's
+              // omission: verified keys only when checks could have run
+              // (files, policy, skips) or the verdict itself is an explicit
+              // true. A no-changes done ({rounds: 1, files_touched: []},
+              // verified key absent since the L54 backend fix) claims
+              // nothing at all — no footer — instead of a red "checks did
+              // not pass" over "1 round" the backend never asserted.
+              const policy =
+                typeof d.verify_policy === "string" ? d.verify_policy : undefined;
+              const remaining = Array.isArray(d.remaining_tasks)
+                ? d.remaining_tasks
+                : undefined;
+              const hasWork =
+                touched.length > 0 || skipped.length > 0 || !!policy;
+              const verdict =
+                hasWork || d.verified === true ? d.verified : undefined;
+              const claimable =
+                verdict !== undefined ||
+                hasWork ||
+                (remaining?.length ?? 0) > 0 ||
+                d.cost_usd !== undefined;
               patch((prev) => {
                 // Adopt the frame's message as narration only when the turn
                 // streamed no words of its own (a restarted stream, a tools-
@@ -1306,20 +1345,25 @@ const AIChat = forwardRef<AIChatHandle, AIChatProps>(
                       : stalled
                         ? "STALLED"
                         : "DONE",
-                  filesTouched: touched,
-                  verified: d.verified,
-                  verifiedBestEffort: d.verified_best_effort,
-                  verifyPolicy: d.verify_policy,
-                  skippedGates: skipped,
-                  rounds: d.rounds,
-                  remainingTasks: Array.isArray(d.remaining_tasks)
-                    ? d.remaining_tasks
-                    : undefined,
-                  ...(d.cost_usd !== undefined
+                  ...(claimable
                     ? {
-                        costUsd: d.cost_usd,
-                        routedProvider: d.routed_provider,
-                        budgetStop: d.budget_stop,
+                        filesTouched: touched,
+                        verified: verdict,
+                        verifiedBestEffort:
+                          verdict !== undefined
+                            ? d.verified_best_effort
+                            : undefined,
+                        verifyPolicy: policy,
+                        skippedGates: skipped,
+                        rounds: d.rounds,
+                        remainingTasks: remaining,
+                        ...(d.cost_usd !== undefined
+                          ? {
+                              costUsd: d.cost_usd,
+                              routedProvider: d.routed_provider,
+                              budgetStop: d.budget_stop,
+                            }
+                          : {}),
                       }
                     : {}),
                   traceRows: rows,

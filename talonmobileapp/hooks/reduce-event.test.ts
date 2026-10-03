@@ -205,3 +205,134 @@ test('P9 — task_update upserts by id: one row, rewritten, never duplicated', (
   expect(flipped.tasks).toHaveLength(1)
   expect(flipped.tasks[0]).toMatchObject({ id: 'plan:1', status: 'completed', result: 'ok' })
 })
+
+// ── L51 / FM-THINKa: thinkingActive is the "is it thinking right now" signal ──
+//
+// The ThinkingRow's label must distinguish a live burst from a finished one.
+// The reducer is the only place that knows which frame arrived last, so the
+// signal lives there: thinking.delta sets it, any content frame other than
+// another thinking delta (or a phase frame — that names the round, not
+// output) clears it. Pre-fix the field does not exist: the label would have
+// to guess from unrelated state and be wrong in both directions.
+
+test('L51a — thinking.delta marks thinking as the active activity', () => {
+  const st = reduceEvent(seed, ev('thinking.delta', { text: 'first inspect the wallet kit' }))
+  expect(st.thinking).toContain('first inspect the wallet kit')
+  expect(st.thinkingActive).toBe(true)
+})
+
+test('L51b — a content frame ends the burst: thinkingActive clears', () => {
+  const thinking = reduceEvent(seed, ev('thinking.delta', { text: 'planning the tip flow' }))
+  expect(thinking.thinkingActive).toBe(true)
+
+  const afterText = reduceEvent(thinking, ev('text.delta', { text: 'Here is the plan.' }))
+  expect(afterText.thinkingActive).toBe(false)
+
+  const afterTool = reduceEvent(thinking, ev('tool_call', { name: 'write_file', status: 'running' }))
+  expect(afterTool.thinkingActive).toBe(false)
+})
+
+test('L51c — phase frames do NOT end the burst (they name the round, not output)', () => {
+  const thinking = reduceEvent(seed, ev('thinking.delta', { text: 'weighing two designs' }))
+  const phased = reduceEvent(thinking, ev('phase', { phase: 'GENERATE', prompt_id: 7 }))
+  expect(phased.thinkingActive).toBe(true)
+  expect(phased.promptId).toBe(7)
+})
+
+// ── L52 / FM-TLKa: one chronological timeline, appended in arrival order ────
+//
+// The fixed-bucket reducer could not interleave: reasoning pinned above the
+// trace no matter when it arrived, paired running/completed frames appended
+// twice (phantom spinners), narration held apart from the tools it narrates.
+// `timeline` is the ordered render source; the legacy thinking/toolCalls/text
+// fields keep updating exactly as the L51/P-series tests pin them.
+
+test('L52a — thinking after a tool call opens a NEW segment at the arrival position', () => {
+  const t1 = reduceEvent(seed, ev('thinking.delta', { text: 'now let me look at how x is structured' }))
+  const withTool = reduceEvent(t1, ev('tool_call', { id: 'call_1', name: 'read_file', status: 'running' }))
+  const t2 = reduceEvent(withTool, ev('thinking.delta', { text: 'the file is fine' }))
+
+  expect(t2.timeline?.map((i) => i.kind)).toEqual(['thinking', 'tool', 'thinking'])
+  // The tool frame settles the first segment; the new one is live.
+  expect(t2.timeline?.[0]).toMatchObject({ streaming: false })
+  expect(t2.timeline?.[2]).toMatchObject({ text: 'the file is fine', streaming: true })
+})
+
+test('L52b — paired running/completed frames settle ONE row in place', () => {
+  const running = reduceEvent(seed, ev('tool_call', { id: 'call_9', name: 'run_command', status: 'running' }))
+  const settled = reduceEvent(running, ev('tool_call', { id: 'call_9', name: 'run_command', status: 'completed' }))
+
+  const tools = settled.timeline?.filter((i) => i.kind === 'tool')
+  expect(tools).toHaveLength(1)
+  expect(tools?.[0]).toMatchObject({ status: 'completed' })
+  // An id-less frame never collides with a keyed one: it appends.
+  const second = reduceEvent(settled, ev('tool_call', { name: 'read_skill', status: 'completed' }))
+  expect(second.timeline?.filter((i) => i.kind === 'tool')).toHaveLength(2)
+})
+
+test('L52c — narration folds into its segment; a decision lands after it', () => {
+  const a = reduceEvent(seed, ev('text.delta', { text: 'Hello ' }))
+  const b = reduceEvent(a, ev('text.delta', { text: 'world' }))
+  expect(b.timeline).toHaveLength(1)
+  expect(b.timeline?.[0]).toMatchObject({ kind: 'narration', text: 'Hello world' })
+
+  const c = reduceEvent(b, ev('decision', { variant: 'adr', decision: 'Use Solana Kit for accounts' }))
+  expect(c.timeline?.map((i) => i.kind)).toEqual(['narration', 'decision'])
+  expect(c.timeline?.[1]).toMatchObject({
+    name: 'Recorded ADR',
+    target: 'Use Solana Kit for accounts',
+    summary: 'Use Solana Kit for accounts',
+  })
+})
+
+test('L52d — command output attaches behind the running tool and extends in place', () => {
+  const tool = reduceEvent(seed, ev('tool_call', { id: 'c1', name: 'run_command', status: 'running' }))
+  const out = reduceEvent(tool, ev('command_output', { text: 'compiling…' }))
+  expect(out.timeline?.map((i) => i.kind)).toEqual(['tool', 'output'])
+
+  const more = reduceEvent(out, ev('command_output', { text: '\ndone' }))
+  expect(more.timeline).toHaveLength(2)
+  expect(more.timeline?.[1]).toMatchObject({ text: expect.stringContaining('done') })
+  // Legacy output keeps its bounded-tail contract.
+  expect(more.output).toContain('done')
+})
+
+test('L52e — suppressed write_adr/write_memory stay suppressed; skills_group lands as a chip row', () => {
+  const suppressed = reduceEvent(seed, ev('tool_call', { name: 'write_adr', status: 'completed' }))
+  expect(suppressed.timeline?.some((i) => i.kind === 'tool')).toBeFalsy()
+
+  // The wire carries the group as a bare JSON array — same parse path as every frame.
+  const skilled = reduceEvent(seed, ev('skills_group', ['expo-router', 'expo-secure-store'] as unknown as Record<string, unknown>))
+  expect(skilled.timeline?.[0]).toMatchObject({ kind: 'skill', title: 'expo-router, expo-secure-store' })
+})
+
+// ── L54 / FM-VRFYa: a done frame with no verdict builds no claim ────────────
+//
+// Every emitter shipped `verified:false` whenever no check ran — the frame
+// the phone rendered as "checks did not pass · 1 round" on EVERY turn.
+// Absence is the no-claim state: no verdict, no files, nothing else worth
+// reporting → evidence stays undefined and the footer row never mounts.
+
+test('L54b — a no-checks done frame builds NO evidence (the false claim itself)', () => {
+  const st = reduceEvent(
+    seed,
+    ev('done', { status: 'success', rounds: 1, files_touched: [], verify_policy: '', message: 'Nothing to change.' }),
+  )
+  expect(st.evidence).toBeUndefined()
+})
+
+test('L54b2 — a genuine failure keeps its claim: files + policy ride the verdict', () => {
+  const st = reduceEvent(
+    seed,
+    ev('done', { status: 'success', rounds: 2, files_touched: ['src/a.ts'], verified: false, verify_policy: 'strict' }),
+  )
+  expect(st.evidence?.verified).toBe(false)
+  expect(st.evidence?.filesTouched).toEqual(['src/a.ts'])
+  expect(st.evidence?.rounds).toBe(2)
+})
+
+test('L54b3 — a paused turn reports files but claims no verdict (checks never finished)', () => {
+  const st = reduceEvent(seed, ev('done', { status: 'paused', rounds: 3, files_touched: ['src/a.ts'] }))
+  expect(st.evidence?.verified).toBeUndefined()
+  expect(st.evidence?.filesTouched).toEqual(['src/a.ts'])
+})

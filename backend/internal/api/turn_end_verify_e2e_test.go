@@ -273,8 +273,18 @@ func TestTurnEndVerifyE2E(t *testing.T) {
 
 		files := jsonStringSlice(payload, "files_touched")
 		check("F2 files_touched is an honest empty", len(files) == 0, fmt.Sprintf("files=%v", files))
-		verified, vOK := payload["verified"].(bool)
-		check("F2 verified is false", vOK && !verified, fmt.Sprintf("verified=%v present=%v", payload["verified"], vOK))
+		// L54 / FM-VRFYa — the contract change: an empty payload must NOT
+		// carry a verdict. Pre-fix the marker shipped `verified:false` here
+		// (a check that never ran claiming it failed — the "checks did not
+		// pass" on every no-changes turn), and F2 pinned that lie as
+		// "evidence present". Absence is the no-claim state now: payload
+		// present, files empty, no verified key at all.
+		_, vOK := payload["verified"].(bool)
+		check("F2 verified is absent — nothing could have been checked", !vOK,
+			fmt.Sprintf("verified=%v present=%v", payload["verified"], vOK))
+		_, beOK := payload["verified_best_effort"].(bool)
+		check("F2 verified_best_effort is absent too", !beOK,
+			fmt.Sprintf("verified_best_effort=%v present=%v", payload["verified_best_effort"], beOK))
 		check("F2 verify_policy is empty (no sweep)", payloadString(payload, "verify_policy") == "",
 			fmt.Sprintf("policy=%q", payloadString(payload, "verify_policy")))
 	})

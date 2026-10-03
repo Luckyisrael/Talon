@@ -529,7 +529,7 @@ export const testInfoApi = {
   },
 }
 
-// ── Streams (SSE via fetch, Expo's fetch keeps the connection open) ──
+// ── Streams (SSE via expo/fetch — settles at headers, streams the body) ──
 
 /**
  * Open a backend SSE endpoint with the auth token. Returns (events, close):
@@ -549,18 +549,20 @@ export async function openStream(
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(init?.headers as Record<string, string>),
   }
-  // TEMP DIAGNOSTIC — stage markers so the build screen can show exactly where
-  // the SSE stream stalls. The symptom is events=0: nothing reaches the app,
-  // so the failure is in the transport, not the reducer. These marks pin it.
-  const marks: string[] = []
-  const mark = (stage: string) => {
-    marks.push(stage)
-    onEvent({ kind: 'diag', data: stage })
-  }
-  // Connect deadline: fetch() resolving IS the response headers arriving, so
-  // this only bounds the wait for first byte — body reads stay unbounded (a
-  // build turn streams for minutes). Without it a dead connection parks the
-  // screen at fetch-start forever with no error to show.
+  // L49 / FM-SSEa — the stream fetch is expo/fetch, not the global one.
+  // React Native's global fetch is whatwg-fetch 3.6.20: its promise settles
+  // only in xhr.onload (the whole body), and an SSE body does not arrive
+  // until the turn ends — so the connect deadline below fired first and the
+  // app cancelled its own healthy stream (the two phone deaths in the
+  // backend log: resume latency_ms=15013, stream latency_ms=14850). expo/fetch
+  // resolves at response headers and streams chunks through
+  // body.getReader(); the lazy require keeps its native module out of this
+  // file's static graph (L39's seam rule).
+  const { fetch: streamFetch } = require('expo/fetch') as typeof import('expo/fetch')
+  // Connect deadline: streamFetch resolving IS the response headers
+  // arriving, so this only bounds the wait for first byte — body reads stay
+  // unbounded (a build turn streams for minutes). Without it a dead
+  // connection parks the screen at fetch-start forever with no error to show.
   const CONNECT_TIMEOUT_MS = 15_000
   let connectTimedOut = false
   const fetchConnect = async (url: string, opts: RequestInit) => {
@@ -573,20 +575,18 @@ export async function openStream(
       }, CONNECT_TIMEOUT_MS)
     })
     try {
-      return await Promise.race([fetch(url, opts), deadline])
+      return await Promise.race([streamFetch(url, opts), deadline])
     } finally {
       clearTimeout(timer)
     }
   }
   ;(async () => {
     try {
-      mark('fetch-start')
       let res = await fetchConnect(`${BASE}${path}`, {
         ...init,
         signal: controller.signal,
         headers,
       })
-      mark(`status-${res.status}`)
       // Streams open rarely but live long: a 401 here gets the same silent
       // rotation as request(), once, before the session is treated as dead.
       if (res.status === 401 && token) {
@@ -597,30 +597,20 @@ export async function openStream(
             signal: controller.signal,
             headers: { ...headers, Authorization: `Bearer ${fresh}` },
           })
-          mark(`retry-status-${res.status}`)
         } catch {
           // Refresh failed: the handling below reports it.
         }
       }
       if (!res.ok || !res.body) {
-        mark(`no-body-or-not-ok-ok=${res.ok}-body=${res.body != null}`)
         throw new Error(`stream failed (${res.status})`)
       }
-      mark('has-body')
       const reader = res.body.getReader()
-      mark('has-reader')
       const decoder = new TextDecoder()
       let buf = ''
       let kind = ''
-      let chunks = 0
       for (;;) {
         const { done, value } = await reader.read()
-        if (done) {
-          mark('read-done')
-          break
-        }
-        chunks += 1
-        if (chunks <= 3) mark(`chunk-${chunks}-bytes=${value?.length ?? 0}`)
+        if (done) break
         buf += decoder.decode(value, { stream: true })
         let nl: number
         while ((nl = buf.indexOf('\n')) >= 0) {
@@ -634,22 +624,17 @@ export async function openStream(
           }
         }
       }
-      mark('loop-exit')
     } catch (err) {
       if (connectTimedOut) {
         // The race can settle with either our deadline error or the abort
         // rejection — report the one truth we care about either way.
-        mark(`error:connect-timeout-${CONNECT_TIMEOUT_MS}ms-no-headers`)
         onError?.(
           new Error(
             `The server never answered this stream (no response headers after ${CONNECT_TIMEOUT_MS}ms). Check the backend and that the app can reach it.`,
           ),
         )
       } else if (!controller.signal.aborted) {
-        mark(`error:${err instanceof Error ? err.message : String(err)}`)
         onError?.(err instanceof Error ? err : new Error(String(err)))
-      } else {
-        mark('aborted')
       }
     }
   })()

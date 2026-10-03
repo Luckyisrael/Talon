@@ -1318,6 +1318,175 @@ Failure modes (written before the code, TEST_RULES §3):
   their sources or under `__tests__/`), Node-only dev libraries must never
   be reachable from a route, and a guard test fails the suite if a
   `*.test.*`/`*.spec.*` file ever appears under `app/` again.**
+- **FM-SSEa (candidate L49)** — the phone's stream must settle on headers
+  and deliver while the turn is open.
+  Failure modes: (i) *The transport can never resolve mid-turn.* `openStream`
+  awaits the **global** `fetch`, and React Native's is whatwg-fetch 3.6.20,
+  whose promise settles only in `xhr.onload` — the entire response body, i.e.
+  the moment the turn ENDS. An SSE body stays open for the whole turn, so
+  `fetch()` never resolves, the 15 s connect deadline (which exists to bound
+  the wait for *headers*) fires instead, and `controller.abort()` makes the
+  app cancel its OWN healthy stream. LIVE, today: both phone turns died at
+  request+15 s — `POST /v1/prompts/75/resume … latency_ms=15013`,
+  `POST /v1/prompts/stream … latency_ms=14850`, server-side
+  `openStream: retry attempt 2/3 … context canceled` over
+  `orchestrator: turn model-request-failed after 2 rounds in 15s` — while
+  the server had already written 20–33 KB of events that the app could
+  never read; the same signature produced the morning's USB failure too, so
+  this was never about the transport *link*. (ii) *Nothing renders
+  mid-turn.* Zero events reach `reduceEvent`, the screen keeps only its
+  fallback `PixelGrid label="Working"`, and when the turn dies the
+  conversation refetch fills the transcript in one jump — the user's exact
+  report: "while it is streaming, nothing was appearing on the ui … when it
+  failed, everything it has done, filled the UI." The TEMP DIAGNOSTIC stage
+  markers pinned `events=0` and say to be removed once streaming works.
+  (iii) *The failure is reported in two wrong voices.* The user reads the
+  app's connect-timeout sentence ("The server never answered this stream")
+  plus the server's `friendlyAIError` for context-canceled ("The build was
+  cancelled."), with a verify chip ("checks did not pass") beside them —
+  three strings, none of which says "the client aborted a healthy stream at
+  15 s." The law: **the stream transport settles on response headers and
+  streams the body incrementally — a fetch that waits for body-end can
+  never carry an SSE turn, the connect deadline bounds headers only, and
+  events must reach the reducer while the turn is still running.**
+- **FM-KBDa (candidate L50)** — the composer must live above the keyboard,
+  and the package that does it is native.
+  Failure modes: (i) *The keyboard covers the input.* The app has no
+  keyboard avoidance anywhere (zero `KeyboardAvoidingView` before this
+  row), so the prompt field at the bottom of `Screen`'s flex column is
+  simply under the IME — the user's report: "keyboard blocks the input
+  when i am typing my prompt." (ii) *The fixing package is native: the
+  binary and the JS must agree.* `react-native-keyboard-controller` (added
+  2026-10-02) evaluates `KeyboardControllerNative.getConstants()` at module
+  load; in a binary without the module that access throws LINKING_ERROR,
+  so the package may only be imported by a dev client that carries it. The
+  phone's Sep-24 binary did not (`lastUpdateTime=2026-09-24 18:07:22`,
+  **0** hits for KeyboardController in its dex against **108** for
+  ExpoFetchModule) — the failure this mode names — and the dev client was
+  rebuilt with the package linked on 2026-10-03, which is what makes
+  direct wiring lawful now: the import and the binary move together, or
+  not at all. (iii) *A rebuild without a test is a hope.* Nothing checks
+  that the provider is actually mounted or that the screen it wraps is the
+  screen with the composer. The law: **the composer stays visible above
+  the keyboard — keyboard-controller's `KeyboardProvider` mounts at the
+  app root and `KeyboardStickyView` wraps the composer itself, so the field
+  rides the keyboard instead of sitting under it — on a dev client rebuilt
+  to carry the native module, and a test pins both wirings so the provider
+  can never be quietly unwrapped.**
+
+- **FM-THINKa (candidate L51)** — the live turn shows what the agent *does*,
+  not what it *thinks*.
+  Failure modes: (i) *The raw reasoning streams onto the screen.*
+  `thinking.delta` accumulates into `turn.thinking` and `build.tsx` renders
+  the entire string as it grows — the user's report: streaming "in a very
+  bad and wrong way… you are not supposed to show the user the full thinking
+  text of when the AI is thinking." A build emits hundreds of deltas; the
+  reasoning wall buries the tool/decision/command rows that *are* the
+  progress and scrolls them off screen. (ii) *Hiding thinking wholesale is
+  the same failure inverted.* Every builder's answer is a disclosure, not a
+  cut: CopilotKit's "Thinking… / Thought for X seconds", Claude Code's
+  collapsed stub, DeepSeek's `ReasoningRow` — collapsed by default, a compact
+  duration label, one tap to expand. (iii) *A label that cannot tell running
+  from finished lies.* Without a reducer-carried signal the row guesses from
+  unrelated state — "Thinking…" frozen over a 60 s tool call, or "Thought
+  for…" stamped mid-burst. The law: **decisions, tool calls, skill calls and
+  executed commands are the visible layer of a turn; reasoning arrives as one
+  collapsed row — `Thinking… <t>` while it streams, `Thought for <t>` once it
+  settles — never the raw text by default, one tap away when the user asks,
+  and a test pins the collapsed default so the wall can never come back.**
+
+- **FM-TLKa (candidate L52)** — the live turn is one chronological timeline,
+  not a stack of fixed slots.
+  Failure modes: (i) *Fixed slots destroy chronology.* The reducer buckets
+  thinking (one string), tool calls (one array) and narration (one string)
+  separately and `build.tsx` renders them in fixed positions — one
+  `ThinkingRow` pinned above the whole trace, the plan card pinned below the
+  tail. Reasoning that arrives after a tool call still renders at the top;
+  the plan reads as "the decisions are at the bottom and everything is one
+  big decision" (the user's report), and the interleave the user asked for —
+  *thinking → "now let me look at how x is structured" → read file → thinking*
+  — is structurally impossible. (ii) *Paired frames duplicate every tool row.*
+  The backend emits `running` then `completed` under the same id
+  (`looplisteners.go`); the reducer appends both and never keeps the id — a
+  phantom spinner per tool that never settles. This is also why stopping the
+  build "adjusted everything": the history restore collapsed the duplicates
+  into one row each. (iii) *A feed that cannot follow itself.* No auto-follow
+  exists — new rows land below the fold while the screen holds still.
+  (iv) *The restore drops what it stored.* Thinking blocks are persisted
+  (271 rows in the live DB carry `type:"thinking"`) yet the restored
+  transcript filters only `text`/`tool_use` and renders narration → plan →
+  tools in fixed order — the same chronology loss after every reload, and
+  no thoughts at all (the user's stop-observation).
+  The law: **every event renders at its arrival position — one ordered
+  timeline. Thinking opens a collapsed segment where it started (a one-line
+  live preview while it streams, tap to expand) and settles in place; tool
+  rows upsert by id, running → settled in place, never twice; narration
+  streams where it lands; the plan card sits at the top of its turn with the
+  checklist ticking beneath it; the restored transcript walks stored blocks
+  in stored order, thinking included; and the feed auto-follows the newest
+  row with a `↓ live` pill to rejoin after the user scrolls away.**
+- **FM-RSUMa (candidate L53)** — a resumed turn streams where the user can
+  see it.
+  Failure modes: (i) *Resume is invisible by construction.* `liveVisible`
+  retires the tail the instant `historyHasTurn` matches — and a resumed
+  prompt id is already in history (the interrupted turn is persisted), so the
+  first `phase` frame (which carries `prompt_id`) hides the tail and every
+  event after it reduces into an unmounted screen. Server-side proof from
+  the user's own session: `POST /v1/prompts/75/resume bytes=69375` — 69 KB
+  of real thinking/tool frames streamed while the phone showed nothing;
+  the report: "when I press resume it doesn't stream". The same retirement
+  fires on any mid-stream history refetch (tab focus), killing a live build
+  the same way. (ii) *Naively un-hiding duplicates rows.* The retirement also
+  guards the restored transcript against the live tail — removing it without
+  excluding the live prompt renders the same rounds from both sides.
+  The law: **the tail never retires while the turn is streaming or waiting;
+  while it shows, the restored transcript excludes that prompt's rows; both
+  release together at done/error, when the refetch absorbs the whole turn —
+  and resume/answer seed the tail from the prompt's stored blocks so the
+  continuation picks up exactly where it stopped instead of starting blank.**
+- **FM-VRFYa (candidate L54)** — the footer claims only what ran.
+  Failure modes: (i) *A default verdict reads as an accusation.* Every
+  emitter sends `verified:false` whenever no check ran — the no-changes,
+  paused and cancelled paths leave the zero value (`orchestrator.go`'s
+  `done-no-changes` emits success with `Verified` unset, the `turn_end`
+  marker marshals the same zeros) — and the row renders the red chip on any
+  false, so "checks did not pass · 1 round" comes out on *every* turn, a
+  claim the backend never made (the user's report). The wire contract already
+  says absent keys claim nothing; the emitters just never omit the key.
+  (ii) *Suppressing everywhere hides the real failure* — `verified:false`
+  with files written and a policy is exactly when the red chip is honest.
+  The law: **absence is the no-claim state. The backend omits the
+  verdict keys (`verified`/`verified_best_effort`) unless checks could
+  have run — files touched, a verify policy, or recorded skips — and the
+  turn was not paused or round-exhausted out of its checks; both clients
+  render the verdict words only from a present key. Files and rounds are
+  descriptive, not verdicts: a file count may ride alone (it says what
+  changed), a round count rides with a claim or from a legacy
+  payload-less marker (the only marker predating the payload, F2) — a
+  payload that exists but carries no verdict claims nothing at all, and
+  a cancelled or failed turn keeps its rounds in its own status
+  sentence, never the footer.**
+
+- **FM-APKi (candidate L55)** — the dev client installs from inside the app.
+  Failure modes: (i) *The button hands the URL to the browser.* The device
+  tab's "Download the dev client (APK)" is `Linking.openURL(dev_client_url)`
+  — the system browser opens an owner-authenticated endpoint carrying none
+  of the session the app already holds, so the phone gets bounced to the web
+  login ("the web is asking me to authenticate again"), or to a `localhost`
+  URL that resolves to the phone itself. (ii) *The token never rides the
+  URL* — a query-string token would land in browser history and server logs;
+  it belongs in the `Authorization` header the session already holds.
+  (iii) *A `file://` install intent dies on modern Android*
+  (`FileUriExposedException`, API 24+) — a silent failure is the same as no
+  install, so intent refusal falls back to the system share sheet, which the
+  repo already ships (L39's `expo-sharing` seam) and which still never
+  touches a browser.
+  The law: **download in-app over the session token (the exact
+  `File.downloadFileAsync` seam L39 proved), fire Android's install intent
+  (`ACTION_VIEW` + `application/vnd.android.package-archive`) so the OS asks
+  its one-time "install unknown apps" question itself, and on refusal hand
+  the file to the share sheet — no browser, no second login, no token
+  outside the header.**
 
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
@@ -1365,6 +1534,13 @@ Failure modes (written before the code, TEST_RULES §3):
 | L46 | **Each password reader gets its own file (FM-SIGNa)** — `Builder.signAPK` writes TWO 0600 temp files (one for `--ks-pass file:`, one for `--key-pass file:`) instead of passing a single path twice; both are cleaned up, argv stays password-free, and the rest of the invocation is unchanged | fails-first sign test (real keytool + apksigner + a `aapt package`-built 611-byte fixture, skipping exactly where production's own SDK gate would): `signAPK` over a keystore from `Ensure` → RED pre-fix (`apksigner failed … Failed to read Key … end of file reached` — the byte-for-byte live failure, export job 3 / 07:26:32; isolated repro A), GREEN: the signed artifact passes `apksigner verify --print-certs` printing the keystore's DN; shared-file-with-newline ruled out as a fix (repro B), two-files proven (repro C) — LIVE: export job 5 ran `sign` → `verify-signature` clean on the fixed binary (08:36:13), the first signing in this codebase's life | ⬤ |
 | L47 | **Fingerprint equality compares bytes, not spelling (FM-FPRa)** — `sameFingerprint`'s normalizer strips every non-hex separator (`:` and whitespace) and uppercases BOTH sides before comparing, so apksigner's bare-hex digest and keytool's colon-delimited digest of the same certificate equate; the full hex value must match (no prefix/substring shortcuts) and the `a != ""` empty guard stays | fails-first unit test with the LIVE strings from export job 4: `sameFingerprint("a6cedc…5584", "A6:CE:DC:DA:…:5584")` → RED pre-fix (`false` — the export's exact `verify-signature` failure, 08:02:31), GREEN: `true`; a genuinely different fingerprint, a truncated one, and two empties all stay `false` — LIVE: export job 5 logged `release verified (package com.talon.neighborhoodrewards, signer a6cedc…5584)` at 08:36:17, the two spellings equated in production | ⬤ |
 | L48 | **`app/` is routes only — tests never sit in the route tree (FM-ROUTERa)** — the three test files under `app/` (`menu/help`, `(tabs)/build-export`, `(tabs)/device`) move to `__tests__/` mirroring the structure, the two relative screen imports rewritten through the `@/` mapper; a guard test walks `app/` recursively and fails the suite if any `*.test.*`/`*.spec.*` file appears there | fails-first guard test → RED while the three files sit in `app/` (listing them, quoting the live `Android Bundling failed … require("console")` stack from `expo start`), GREEN after the move: guard passes and the full mobile suite is green via `npm test` from `talonmobileapp`; bundle check: Metro serves `index.bundle?platform=android` without the `require.context` crash | ⬤ |
+| L49 | **The phone's stream settles on headers and delivers while the turn is open (FM-SSEa)** — (a) `openStream` gets its fetch from `expo/fetch` through a **lazy `require(…)` inside the function** (L39's pattern — native, so it stays out of `lib/api`'s static graph; the phone's exact APK carries `ExpoFetchModule`, 108 hits in `classes2.dex`): its promise resolves at `RESPONSE_RECEIVED` — headers — and body chunks arrive via `didReceiveResponseData` → `response.body.getReader()`, so the 15 s connect deadline bounds headers, its documented job, instead of outliving a turn it cannot see; the initial call **and** the 401-retry path both go through it; (b) the TEMP DIAGNOSTIC scaffolding leaves with the fix — `api.ts`'s stage `marks`/`diag` events, the hook's `diag` counter and `applyEvents` arm, `reduceEvent`'s `diag` case, `build.tsx`'s `diagBox`, the build-export mock's `diag` key — its own comments say *remove once streaming works*, and a `stream debug (dev)` box must not be on camera; (c) nothing else moves: the reducer and the screen already render thinking/text/output/tasks live (`PixelGrid` was only the fallback with zero events) — the events were the missing half | fails-first `lib/api-stream.test.ts`: `'delivers events while the stream is still open'` + `'never talks to the browser fetch for a stream'` — global `fetch` stubbed to whatwg-fetch semantics (settles only at body end), `expo/fetch` mocked to settle at headers with a caller-fed reader; RED/GREEN: RED = `'delivers events while the stream is still open'` received only the diag stage marker (no events) + `'never talks to the browser fetch'` — browser fetch called **once** with the real URL; GREEN = both green in the full 13-suite run. **Live (2026-10-03, user's phone): new project streamed live mid-turn — "i just created a new project and saw that it streams"**; backend log same session: `POST /v1/prompts/stream bytes=17460 latency_ms=5289 status=200` with events rendered as they arrived instead of the pre-fix 15 s death | ⬤ |
+| L50 | **The composer lives above the keyboard (FM-KBDa)** — (a) `components/app-providers.tsx` mounts keyboard-controller's `KeyboardProvider` at the app root — static import, lawful because the dev client was rebuilt with the package linked on 2026-10-03, so the import and the binary move together (FM-KBDa(ii)); (b) `app/(tabs)/build.tsx` wraps **the composer block** in the package's `KeyboardStickyView` — the one element that must ride the keyboard, offset `{closed:0, opened:0}` so it sticks exactly at the IME edge — instead of a whole-screen avoider, which the shipped `android:windowSoftInputMode="adjustResize"` already resizes (a second whole-screen pad would double-offset); (c) nothing else moves: the composer's flex column, `Screen`'s layout and the manifest stay as they are, and no link guard exists to drift | fails-first `components/app-providers.test.tsx` (RED: the provider marker is absent — the root never mounted it) + `__tests__/(tabs)/build-keyboard.test.tsx` (RED: the composer is not wrapped by the package's sticky view); keep-gates `npm test` / `tsc --noEmit` / `lint:check`; live keyboard evidence on the rebuilt phone recorded in the evidence cell after the run | ⬤ |
+| L51 | **Reasoning collapses; activity is the interface (FM-THINKa)** — (a) reducer: `thinking.delta` sets `thinkingActive: true`, and one seam around the frame switch clears it on every content frame except another thinking delta (`phase` frames name the round, not output) — the honest "is the model thinking right now" signal; (b) new `components/build/ThinkingRow.tsx`: collapsed-by-default disclosure row — `Thinking… <t>` ticking while `thinkingActive`, frozen `Thought for <t>` after, tap toggles the full reasoning text (the researched pattern: CopilotKit's header+toggle, Claude Code's collapsed stub, DeepSeek's `ReasoningRow`); (c) `build.tsx` swaps the raw `thinkingBox` dump for `ThinkingRow`, placed above the trace so the decision reads before the act — the tool/skill/verify/decision/command `TraceRow`s and the phase `PixelGrid` stay the visible progress layer untouched | RED: `L51a/b/c` — `thinkingActive` `Expected: true / Received: undefined` (field absent) + `thinking-row` suite `Could not locate module @/components/build/ThinkingRow` (accepted module-red form); GREEN = `thinking-row` 3/3 + `reduce-event` L51 block green, full run **58/58 (14 suites), tsc 0, lint:check 0 errors**; **Live (2026-10-03, user's phone): the collapsed row rendered mid-stream — the report that opened L52 ("only showing thinking at the top") is this row working, positioned in a fixed slot; L52 inherits it per-segment** | ⬤ |
+| L52 | **One chronological timeline: interleaved thinking, in-place tools, plan on top (FM-TLKa)** — (a) `TurnState` gains `timeline: TimelineItem[]` (`thinking` \| `narration` \| `tool` \| `decision` \| `skill` \| `output`) appended/upserted in arrival order by `reduceFrame`: thinking deltas fold into a trailing streaming segment or open a new one; narration folds the same way; `tool_call` frames upsert by `data.id` — the paired `running`/`completed` frames settle one row in place instead of appending twice — id-less frames append; `verify` upserts by stage; `decision` appends its row (the suppressed `write_adr`/`write_memory` rule unchanged); `command_output` extends a trailing output block or opens one behind the running tool; the legacy `thinking`/`toolCalls`/`text` fields keep updating exactly as they do today, so L51's signal and every pinned contract hold; (b) `build.tsx` renders the timeline in order — `PlanCard` + checklist move **above** it (top of the turn; the card's outlive rule and the approve action untouched), question/answers/evidence/`PixelGrid` keep their roles below; (c) `ThinkingRow` gains `preview` — the segment's first line, clamped, rendered only while it runs: one honest line of "now it's looking at x" under the ticking label, full text still one tap away; (d) auto-follow through a pure `lib/live-follow.ts` helper (at the bottom → follow; a manual scroll-up releases; the `↓ live` pill re-attaches) wired to the tail's `ScrollView`; (e) `Transcript.tsx` walks each turn's stored blocks **in stored order** — `thinking` → collapsed `Thought for …` row, `text` → markdown where it sits, `tool_use` → `TraceRow` (`write_adr`/`write_memory` → `Recorded …` with the input's decision head, the web's reconstruction), `plan` → card — and only the newest `turn_end` per prompt renders its marker, so a stale "Turn cancelled" can no longer outlive its replacement | fails-first, five reds: `reduce-event` `L52a` (thinking-after-tool folds into a new segment at the end — today `timeline` is absent, `Received: undefined`), `L52b` (running+completed same id → **one** row settled — today two), `L52c` (narration split, decision in arrival order), `lib/live-follow` (module absent — accepted module-red), `thinking-row` `L52d` (preview absent while running); plus `transcript.test.tsx` reds (thinking block renders `Thought for …`; newest marker wins) and a `build` resume-visibility red (tail hidden while streaming with history holding the prompt — L53's gate, pinned here because it is the same render); GREEN (2026-10-03): `npm test` 21 suites / 90 tests — `reduce-event` 23 (L52a–e + L54b + every legacy pin), `live-follow`/`turn-visibility`/`timeline` 8, `thinking-row` 5 (L52d1 preview red → green), `transcript` 4 (L52i/j/k reds → green), `build-resume` 2; `tsc --noEmit` clean; `lint:check` 0 errors; live interleaved observation on the phone recorded after the run | ⬤ |
+| L53 | **Resume streams in view (FM-RSUMa)** — (a) tail visibility becomes one pure rule: visible while `streaming`/`waiting` **regardless of** `historyHasTurn`, and on `done`/`error` only until history carries the prompt; (b) while the tail shows a prompt, `RestoredTranscript` receives history with that prompt's rows filtered out — one filter point released together with (a) at settle, so a mid-stream refetch (tab focus, stream-dead poll) can neither duplicate the rounds nor kill the view; (c) `resume()` and `answerPrompt()` accept the prompt's stored blocks from the screen's already-loaded history and seed the timeline before streaming (settled thinking segments, settled tool rows through the shared label map, decisions, narration) — the continuation picks up where it stopped instead of a blank tail | fails-first: `lib/turn-visibility.test.ts` (`isTailVisible('streaming', true)` must be true — today's inline rule answers false, the 69 KB-invisible-resume state as a pure function) + `build` component red (history seeded with the live prompt's rows: the tail's content must render while streaming — absent today) + seed red (`seedFromBlocks` module absent); GREEN (2026-10-03): full run 21 suites / 90 tests — `turn-visibility` pins (`isTailVisible('streaming', true)` true, `excludeLivePrompt` drops the prompt's rows only while the tail shows them, released at settle) + `build-resume` component reds → green (tail renders while streaming with history holding the prompt, restored user bubble kept, no double rows, seeded resume continues onto the interrupted rounds); **live proof = press Resume on the phone and watch frames arrive**, backend line `POST /v1/prompts/{id}/resume` with the tail visible, recorded here after the run | ⬤ |
+| L54 | **The footer claims only what ran (FM-VRFYa)** — (a) backend omits `verified`/`verified_best_effort` from the `done` frame (`finishBuildStream`), the `turn_end` marker payload and the non-stream build response unless a check could have run — `FilesTouched`, `VerifyPolicy` or `SkippedGates` present — and the outcome is neither `Paused` nor `Exhausted` (`verdictClaim`, the single rule all three emitters read); no check could have run means no verdict; genuine failures carry files + policy and stay claimable; (b) mobile: the red chip already keys off `verified`'s presence — the missing half is the claim gate: verdict words only from a present key; files render alone (descriptive — F6b); rounds render alongside a claim or from a legacy payload-less marker (F2) — a payload present but empty, and a live rounds-only done, render no row at all (a cancelled turn's rounds stay in its status sentence); (c) web `TurnFooter` gets the same two gates — live `done` mapping and restore `turn_end` mapping — one vocabulary, both clients | fails-first, three reds: Go `TestDoneFrameOmitsVerifiedWhenNothingRan` (today's payload ships `"verified":false` for a no-changes outcome — the exact `done-no-changes after 1 rounds` shape from the live log) + marker twin; jest `verify-evidence` `L54b` (rounds-only evidence renders a row today — `Received: "1 round"`); web vitest `TurnFooter` (false + zero files still claims); GREEN (2026-10-03): `go test ./internal/api/` — `verdict_wire_test.go` red → green (done frame omits `verified` when nothing ran, keeps it when checks ran; `verdictClaim`/`turnEndEvidence` pinned) + e2e F1–F11 with F2 rewritten to the absence pin (`verified`/`verified_best_effort` absent, files empty, policy empty, payload still present); mobile `verify-evidence` 14 (L54b4–6 reds → green); web vitest 18 files / 101 tests (L54c/L54c2 reds → green, F1–F11 hold); full `go test ./...` carries only the pre-existing MEANT-TO-STAY-RED FM-DEVd APK-artifact test (user rebuild via `build-dev-client.sh`); **live = a no-changes/plan turn on the phone shows no "checks did not pass"**, recorded here after the run | ⬤ |
+| L55 | **The dev client installs from inside the app (FM-APKi)** — (a) new `lib/devclient.ts`: `downloadAndInstallDevClient(url)` — `expo-file-system`'s `File.downloadFileAsync` over the `getToken()` header with `idempotent: true` (L39's proven seam, lazy `require` so the native module stays out of the static graph), then `expo-intent-launcher`'s `ACTION_VIEW` + `application/vnd.android.package-archive` on the file URI, `shareAsync` (expo-sharing, already in the tree) as the fallback when the intent refuses; (b) `device.tsx` swaps `Linking.openURL` for the helper with busy → installing → error states — the browser path is deleted, not demoted; (c) `expo-intent-launcher` joins the manifest (stageable: `package.json` + `yarn.lock`) | fails-first `__tests__/(tabs)/device-install.test.tsx`, three reds: pressing the APK button must **not** call `Linking.openURL` (today it does — the browser/auth wall itself), the download must carry `Authorization: Bearer` (today no download exists — `Received: undefined`), the resolved file must reach `startActivityAsync('android.intent.action.VIEW', …archive MIME)` with `shareAsync` only on refusal (intent never called today); GREEN (2026-10-03): full run 21 suites / 90 tests — `lib/devclient.test.ts` 4 (session token rides the Authorization header never the URL, ACTION_VIEW + archive MIME reaches `startActivityAsync`, intent refusal falls back to `shareAsync`, a failed download surfaces) + `device-install.test.tsx` (button drives the helper, `Linking.openURL` never called); `expo-intent-launcher@~55.0.16` in package.json + yarn.lock + install-state; **live install on the phone after the template rebuild**, recorded here after the run | ⬤ |
 
 Still-open P1 rows from the previous list:
 

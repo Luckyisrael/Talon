@@ -2,6 +2,7 @@ import React from 'react'
 import { StyleSheet, TouchableOpacity, View } from 'react-native'
 import { MarkdownView, UIText } from '@/components/ui'
 import { TraceRow } from '@/components/build/TraceRow'
+import { ThinkingRow } from '@/components/build/ThinkingRow'
 import { QuestionCard } from '@/components/build/QuestionCard'
 import { TurnAttachments } from '@/components/build/Attachments'
 import { Colors, Spacing } from '@/constants/theme'
@@ -76,6 +77,22 @@ export function RestoredTranscript({
     return null
   }, [turns])
 
+  // L52k / FM-TLKa — only the NEWEST marker per prompt renders. Resume cycles
+  // leave a stale "Turn cancelled" from the interrupted attempt beside the
+  // completed marker that superseded it; without this rule one turn ends
+  // twice, the older ending outliving the newer one. Stored order is
+  // chronological, so the last marker seen wins.
+  const latestMarker = React.useMemo(() => {
+    const map = new Map<number | string, { row: number; block: number }>()
+    turns.forEach((t, i) => {
+      const key: number | string = t.prompt_id ?? `row-${i}`
+      ;(t.blocks ?? []).forEach((b, j) => {
+        if (b.kind === 'turn_end') map.set(key, { row: i, block: j })
+      })
+    })
+    return map
+  }, [turns])
+
   return (
     <View style={styles.stack}>
       {turns.map((t, i) => {
@@ -108,45 +125,90 @@ export function RestoredTranscript({
           )
         }
 
-        const narration = (t.blocks ?? [])
-          .filter((b) => b.kind === 'text' && b.text?.trim())
-          .map((b) => b.text!)
-          .join('\n\n')
-        const tools = (t.blocks ?? []).filter((b) => b.kind === 'tool_use')
-        const question = (t.blocks ?? []).find((b) => b.kind === 'tool_use' && b.name === 'ask_user')
-        const ending = (t.blocks ?? []).find((b) => b.kind === 'turn_end')
+        // L52e / FM-TLKa — the restore walks stored blocks IN STORED ORDER:
+        // thinking as collapsed rows, prose as markdown, tools and decisions
+        // as trace rows, the plan card, the newest marker — each at the
+        // position it happened. The old fixed buckets hoisted every word
+        // above every tool (narration first, plan pinned between) and dropped
+        // stored thinking entirely (271 rows in the live DB carry
+        // type:"thinking" and none of them rendered after a reload).
+        const blocks = t.blocks ?? []
+        const promptKey: number | string = t.prompt_id ?? `row-${i}`
+        const question = blocks.find((b) => b.kind === 'tool_use' && b.name === 'ask_user')
+        const hasMarker = blocks.some((b) => b.kind === 'turn_end')
         const isPlanTurn = restoredPlan?.turn === i
         // M4: a marker-less newest turn has no footer to rebuild — seed it from
         // the prompt row's files_touched union. Files only: the union carries
         // no verdict, so a seed can never claim a check ran or passed.
-        const seedFiles = !ending && t.prompt_id != null ? promptEvidence?.[t.prompt_id]?.files_touched : undefined
-        if (!narration && tools.length === 0 && !ending && !seedFiles?.length && !isPlanTurn) return null
+        const seedFiles = !hasMarker && t.prompt_id != null ? promptEvidence?.[t.prompt_id]?.files_touched : undefined
+        const showQuestion = !!(question && waitingPromptId)
+
+        const rows: React.ReactNode[] = []
+        // The plan card is the turn: it renders at the TOP of its row — the
+        // same position the live tail gives it (L52a) — so the card does not
+        // jump from above (streaming) to below (restored) at settle.
+        if (isPlanTurn && restoredPlan) {
+          rows.push(<PlanCard key="plan" plan={restoredPlan.plan} onApprove={onApprovePlan} />)
+        }
+        blocks.forEach((b, j) => {
+          const key = `b${j}`
+          if (b.kind === 'thinking') {
+            const text = b.text ?? ''
+            if (text.trim()) rows.push(<ThinkingRow key={key} text={text} running={false} />)
+            return
+          }
+          if (b.kind === 'text') {
+            if (b.text?.trim()) rows.push(<MarkdownView key={key}>{b.text}</MarkdownView>)
+            return
+          }
+          if (b.kind === 'context') {
+            if (b.title) rows.push(<ContextRow key={key} block={b} />)
+            return
+          }
+          if (b.kind === 'plan') return // hoisted above the row (see plan card)
+          if (b.kind === 'turn_end') {
+            // Newest-wins: a superseded marker renders nothing — the marker
+            // that replaced it owns the ending.
+            const latest = latestMarker.get(promptKey)
+            if (latest && latest.row === i && latest.block === j) rows.push(<TurnEndRow key={key} block={b} />)
+            return
+          }
+          if (b.kind !== 'tool_use' || b.name === 'ask_user') return
+          const input = (b.input ?? {}) as Record<string, unknown>
+          const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
+          if (b.name === 'write_adr' || b.name === 'write_memory') {
+            // The decision's text lives in its input — reconstructed the way
+            // the web rebuilds it: one row, titled, full text one tap away.
+            const full = str(input.decision) ?? str(input.content) ?? ''
+            if (!full.trim()) return
+            rows.push(
+              <TraceRow
+                key={key}
+                tool={b.name}
+                label={b.name === 'write_adr' ? 'Recorded ADR' : 'Recorded memory'}
+                target={full.split('\n')[0] || undefined}
+                summary={full}
+                status={b.id && outcomes.get(b.id) ? 'fail' : 'done'}
+              />,
+            )
+            return
+          }
+          rows.push(
+            <TraceRow
+              key={key}
+              tool={b.name}
+              label={toolLabel(b.name ?? '', input)}
+              target={str(input.path) ?? str(input.command) ?? str(input.pattern) ?? ''}
+              status={b.id && outcomes.get(b.id) ? 'fail' : 'done'}
+            />,
+          )
+        })
+        const seedRow = seedFiles?.length ? <VerifyEvidenceRow evidence={{ filesTouched: seedFiles }} /> : null
+        if (rows.length === 0 && !seedRow && !showQuestion) return null
         return (
           <View key={i} style={styles.assistantWrap}>
-            {narration ? <MarkdownView>{narration}</MarkdownView> : null}
-            {isPlanTurn && restoredPlan ? (
-              <PlanCard plan={restoredPlan.plan} onApprove={onApprovePlan} />
-            ) : null}
-            {tools
-              .filter((b) => b.name !== 'ask_user')
-              .map((b, j) => {
-                const input = (b.input ?? {}) as Record<string, unknown>
-                const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
-                return (
-                  <TraceRow
-                    key={j}
-                    tool={b.name}
-                    label={toolLabel(b.name ?? '', input)}
-                    target={str(input.path) ?? str(input.command) ?? str(input.pattern) ?? ''}
-                    status={b.id && outcomes.get(b.id) ? 'fail' : 'done'}
-                  />
-                )
-              })}
-            {ending ? (
-              <TurnEndRow block={ending} />
-            ) : seedFiles?.length ? (
-              <VerifyEvidenceRow evidence={{ filesTouched: seedFiles }} />
-            ) : null}
+            {rows}
+            {seedRow}
             {question && waitingPromptId ? (
               <QuestionCard
                 question={str(inputOf(question, 'question')) ?? 'The agent asked a question.'}

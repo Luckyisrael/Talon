@@ -290,6 +290,51 @@ describe("row 45 — verify evidence wired into the web client", () => {
     expect(screen.getByText("3 rounds")).toBeTruthy();
   });
 
+  it("L54c: a live done with no verdict and nothing to claim renders no footer", async () => {
+    // The user-reported shape: a turn that completed with nothing to
+    // change. Pre-fix the footer still mounted on `rounds` alone —
+    // "1 round" under a red "checks did not pass" the backend never
+    // made. Absence of a verdict + no files/remaining/cost = no row.
+    render(<AIChat projectId={1} />);
+    await sendAndStream([
+      {
+        type: "done",
+        data: {
+          status: "success",
+          rounds: 1,
+          files_touched: [],
+          message: "Nothing needed changing.",
+        },
+      },
+    ]);
+    // The frame landed — its message became the narration.
+    await screen.findByText(/Nothing needed changing\./);
+    expect(screen.queryByText(/1 round/)).toBeNull();
+    expect(screen.queryByText(/checks did not pass/)).toBeNull();
+  });
+
+  it("L54c2: a restored marker whose payload carries no verdict claims nothing", async () => {
+    // The new backend writes an empty-but-present payload ("finished,
+    // nothing to verify") — no verdict, no work, so the footer stays
+    // down. F2's payload-LESS legacy marker still reports its rounds.
+    restoredTurns.push(
+      userTurn("just checking"),
+      assistantTurn([
+        { type: "text", text: "Nothing needed changing." },
+        {
+          type: "turn_end",
+          status: "completed",
+          rounds: 1,
+          verify: { files_touched: [], verify_policy: "", skipped_gates: [] },
+        },
+      ]),
+    );
+    render(<AIChat projectId={1} />);
+    await screen.findByText(/Nothing needed changing\./);
+    expect(screen.queryByText(/1 round/)).toBeNull();
+    expect(screen.queryByText(/checks did not pass/)).toBeNull();
+  });
+
   it("F4: the workspace transcript renders end and context rows", async () => {
     render(
       <AgentWorkspace

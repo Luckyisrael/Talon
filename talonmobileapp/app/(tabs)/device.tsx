@@ -6,6 +6,7 @@ import { Badge, LimeButton, Screen, UIText } from '@/components/ui'
 import { Colors, Spacing } from '@/constants/theme'
 import { useActiveProject, useCreateSession, useDestroySession, useDeviceSession, useLiveSession, useMetro, useTestInfo } from '@/hooks'
 import { getSessionId, setSessionId } from '@/lib/session'
+import { downloadAndInstallDevClient } from '@/lib/devclient'
 import { type MetroEvent } from '@/lib/api'
 
 // Device tab: Metro-first connection details for the phone in your hand.
@@ -90,6 +91,28 @@ export default function DeviceScreen() {
     setTimeout(() => setCopied(false), 1500)
   }
 
+  // L55 / FM-APKi — the APK installs from inside the app. The button used
+  // to hand the URL to the system browser, which carries no session (the
+  // re-auth wall the user hit on camera) and resolves localhost URLs to
+  // the phone itself. The helper downloads with the session token and
+  // fires the system install intent; a failure surfaces here as its own
+  // honest line, never a silent no-op.
+  const [apkWorking, setApkWorking] = React.useState(false)
+  const [apkError, setApkError] = React.useState<string | null>(null)
+  async function installDevClient() {
+    const url = testInfo?.dev_client_url
+    if (!url || apkWorking) return
+    setApkWorking(true)
+    setApkError(null)
+    try {
+      await downloadAndInstallDevClient(url)
+      setApkWorking(false)
+    } catch (e) {
+      setApkWorking(false)
+      setApkError(e instanceof Error ? e.message : 'could not install the dev client')
+    }
+  }
+
   async function startSession() {
     if (projectId == null) return
     const s = await createSession.mutateAsync(projectId)
@@ -163,11 +186,22 @@ export default function DeviceScreen() {
                 />
               ) : null}
               {testInfo?.dev_client_url ? (
-                <Pressable onPress={() => void Linking.openURL(testInfo.dev_client_url!)}>
-                  <UIText variant="label" tone="muted" style={styles.underline}>
-                    Download the dev client (APK)
-                  </UIText>
-                </Pressable>
+                <View>
+                  <Pressable
+                    onPress={() => void installDevClient()}
+                    disabled={apkWorking}
+                    accessibilityLabel="Download and install the dev client"
+                  >
+                    <UIText variant="label" tone={apkWorking ? 'faint' : 'muted'} style={styles.underline}>
+                      {apkWorking ? 'preparing the install…' : 'Download the dev client (APK)'}
+                    </UIText>
+                  </Pressable>
+                  {apkError ? (
+                    <UIText variant="label" tone="danger" style={styles.apkError}>
+                      {apkError}
+                    </UIText>
+                  ) : null}
+                </View>
               ) : null}
             </View>
           </View>
@@ -329,6 +363,7 @@ const styles = StyleSheet.create({
   },
   actions: { gap: Spacing.s8, alignItems: 'stretch' },
   underline: { textDecorationLine: 'underline', textAlign: 'center' },
+  apkError: { marginTop: 4, textAlign: 'center' },
   kvRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   destroyBtn: {
     minHeight: 44,

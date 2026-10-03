@@ -4,9 +4,11 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { Add, ArrowUp, Stop } from 'iconsax-react-native';
+import { KeyboardStickyView } from 'react-native-keyboard-controller';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Field, GhostButton, LimeButton, Screen, UIText } from '@/components/ui';
 import { StagedAttachments } from '@/components/build/Attachments';
+import { ThinkingRow } from '@/components/build/ThinkingRow';
 import { RestoredTranscript, type RestoredTurn } from '@/components/build/Transcript';
 import { TraceRow } from '@/components/build/TraceRow';
 import { PixelGrid } from '@/components/build/PixelGrid';
@@ -24,10 +26,13 @@ import {
   isResumable,
   projectsApi,
   promptsApi,
+  type ConversationBlock,
   type LatestPrompt,
   type PlanData,
   type PlanTask,
 } from '@/lib/api';
+import { followAfterScroll, livePillVisible } from '@/lib/live-follow';
+import { excludeLivePrompt, isTailVisible } from '@/lib/turn-visibility';
 import { loadSnapshot, saveSnapshot } from '@/lib/history-cache';
 import {
   MAX_ATTACHMENTS,
@@ -85,7 +90,7 @@ export default function BuildScreen() {
   // the bottom of this screen in every sub-view.
   const project = useActiveProject();
   const projectId = project?.id ?? null;
-  const { turn, send, answer, answerPrompt, resume, discard, steer, parkQueue, stop, diag } = usePromptStream(projectId);
+  const { turn, send, answer, answerPrompt, resume, discard, steer, parkQueue, stop } = usePromptStream(projectId);
   const [draft, setDraft] = React.useState('');
   const [mode, setMode] = React.useState<'plan' | 'build'>('build');
   // H2 delivery toggle, the web's queueInstead: OFF (default) a submitted
@@ -220,13 +225,71 @@ export default function BuildScreen() {
   // retires so nothing is shown twice. Without the retirement check a finished
   // turn's streamed text and tool rows would duplicate the rows history just
   // loaded.
+  //
+  // L53 / FM-RSUMa — isTailVisible: streaming/waiting NEVER retire on
+  // historyHasTurn. A resumed prompt id is ALREADY in history (the
+  // interrupted turn is persisted — that is what makes it resumable), so the
+  // old rule retired the tail on the first phase frame of the resume and
+  // every frame after it reduced into an unmounted screen (the user's
+  // `POST /v1/prompts/75/resume bytes=69375` streaming into nothing).
   const historyHasTurn = React.useMemo(
     () => (turn.promptId != null && history.some((t) => t.prompt_id === turn.promptId)),
     [history, turn.promptId],
   );
-  const liveVisible =
-    (turn.phase === 'streaming' || turn.phase === 'waiting' || turn.phase === 'done' || turn.phase === 'error') &&
-    !historyHasTurn;
+  const liveVisible = isTailVisible(turn.phase, historyHasTurn);
+
+  // L53b — while the tail shows prompt P, the restore drops P's rows so
+  // nothing renders twice (the tail seeds assistant rows from these very
+  // blocks). The stored user bubble steps aside only when the tail echoes
+  // it; a resume/answer has no echo, so the prompt itself stays put.
+  // Released together with the tail at settle — no row is ever lost.
+  const restoredTurns = React.useMemo(
+    () => excludeLivePrompt(history, turn.phase, turn.promptId, turn.userEcho != null),
+    [history, turn.phase, turn.promptId, turn.userEcho],
+  );
+  // The prompt's own stored blocks — what resume/answer seed the tail with,
+  // so the continuation appends onto where it stopped instead of a blank
+  // screen (L53c). Same source as the exclusion above: if a row is dropped
+  // from the restore, its content is in the tail.
+  const seedBlocksFor = React.useCallback(
+    (pid: number): ConversationBlock[] => {
+      const out: ConversationBlock[] = [];
+      for (const t of history) {
+        if (t.prompt_id !== pid || t.role === 'user') continue;
+        out.push(...(t.blocks ?? []));
+      }
+      return out;
+    },
+    [history],
+  );
+
+  // L52d / FM-TLKa — the feed rides the live edge and lets go the moment
+  // the reader scrolls away. Content growth re-anchors only while
+  // following (a scroll up never yanked the reader back down); the ↓ live
+  // pill is the way back. All position math is the pure rule in
+  // lib/live-follow — this is only its wiring.
+  const scrollRef = React.useRef<ScrollView>(null);
+  const [following, setFollowing] = React.useState(true);
+  const contentHRef = React.useRef(0);
+  const viewportHRef = React.useRef(0);
+  const liveProducing = turn.phase === 'streaming' || turn.phase === 'waiting';
+  const jumpToLive = React.useCallback(() => {
+    setFollowing(true);
+    scrollRef.current?.scrollToEnd({ animated: true });
+  }, []);
+  const onStreamScroll = (e: { nativeEvent: { contentOffset: { y: number } } }) => {
+    const next = followAfterScroll(e.nativeEvent.contentOffset.y, contentHRef.current, viewportHRef.current);
+    setFollowing((prev) => (prev === next ? prev : next));
+  };
+  const onStreamContentSize = (_w: number, h: number) => {
+    contentHRef.current = h;
+    // Follow = stay pinned to the bottom as rows land. Instant, not
+    // animated: a per-delta animation would queue and fight the reader.
+    if (following) scrollRef.current?.scrollToEnd({ animated: false });
+  };
+  const onStreamLayout = (e: { nativeEvent: { layout: { height: number } } }) => {
+    viewportHRef.current = e.nativeEvent.layout.height;
+  };
 
   function addPicked(assets: { uri: string; name?: string | null; mimeType?: string | null; fileSize?: number | null }[]) {
     if (pendingBlock()) return;
@@ -353,6 +416,9 @@ export default function BuildScreen() {
       setAttError(null);
       setAnswers([]);
       setResumable(null);
+      // A fresh turn starts attached to the live edge — the echo lands at
+      // the bottom, where the reader is looking.
+      setFollowing(true);
       send(mode, text, ids, projectId);
     } catch (e) {
       setAttError(e instanceof Error ? e.message : 'could not start the turn');
@@ -468,10 +534,16 @@ export default function BuildScreen() {
           <ExportPanel projectId={projectId} />
         </View>
       ) : (
+      <View style={styles.streamWrap}>
       <ScrollView
+        ref={scrollRef}
         style={styles.stream}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadHistory()} tintColor={Colors.fog} />}
+        onScroll={onStreamScroll}
+        onContentSizeChange={onStreamContentSize}
+        onLayout={onStreamLayout}
+        scrollEventThrottle={16}
       >
         <View style={styles.stack}>
           {/* The transcript is always rendered. It is the durable log, and the
@@ -488,10 +560,10 @@ export default function BuildScreen() {
                 </UIText>
               )}
               <RestoredTranscript
-                turns={history}
+                turns={restoredTurns}
                 projectId={projectId}
                 waitingPromptId={waitingId}
-                onAnswer={(pid, text) => void answerPrompt(pid, text)}
+                onAnswer={(pid, text) => void answerPrompt(pid, text, seedBlocksFor(pid))}
                 onApprovePlan={approvePlan}
                 promptEvidence={promptEvidence}
               />
@@ -547,6 +619,15 @@ export default function BuildScreen() {
                 </View>
               ))}
 
+              {/* L52a / FM-TLKa — the plan card is the turn: it renders at
+                  the TOP of the tail (above its checklist), the position the
+                  restored card gives it too — so the card never jumps from
+                  bottom (streaming) to top (restored) when history absorbs
+                  the turn. */}
+              {turn.plan && !historyHasTurn ? (
+                <PlanCard plan={turn.plan} message={turn.planMessage} onApprove={approvePlan} />
+              ) : null}
+
               {/* Live task updates, the plan shape the agent is working to. */}
               {turn.tasks.map((t: PlanTask) => (
                 <View key={t.id} style={styles.taskRow}>
@@ -566,18 +647,69 @@ export default function BuildScreen() {
                 </View>
               ))}
 
-              {/* The live tool trace. */}
-              {turn.toolCalls.map((c, i) => {
-                const meta = toolRow(c.name);
-                return (
-                  <TraceRow
-                    key={i}
-                    tool={c.name.split(' ')[0]}
-                    label={meta.label}
-                    target={c.target ?? meta.target ?? c.name}
-                    status={c.status === 'completed' ? 'done' : c.status === 'error' ? 'fail' : 'running'}
-                  />
-                );
+              {/* L52 / FM-TLKa — the chronological timeline: every row at
+                  the position it ARRIVED. Reasoning segments (collapsed,
+                  one live line of preview), narration, tools (paired
+                  running/completed frames settle one row), decisions,
+                  skill chips and command output interleave in arrival
+                  order — the fixed buckets above rendered tool work before
+                  the reasoning that ordered it, on every turn. */}
+              {turn.timeline?.map((item) => {
+                switch (item.kind) {
+                  case 'thinking':
+                    return (
+                      <ThinkingRow key={item.key} text={item.text} running={item.streaming} preview />
+                    );
+                  case 'narration':
+                    return (
+                      <UIText key={item.key} variant="body" tone="hero" style={styles.echo}>
+                        {item.text}
+                      </UIText>
+                    );
+                  case 'skill':
+                    return (
+                      <View key={item.key} style={styles.parkedRow}>
+                        <UIText variant="caption" tone="muted" numberOfLines={2}>
+                          ◆ {item.title}
+                        </UIText>
+                      </View>
+                    );
+                  case 'output':
+                    return (
+                      <View key={item.key} style={styles.outputBox}>
+                        <UIText variant="monoSm" tone="faint" numberOfLines={8}>
+                          {item.text}
+                        </UIText>
+                      </View>
+                    );
+                  case 'decision':
+                    return (
+                      <TraceRow
+                        key={item.key}
+                        tool={item.name.split(' ')[0]}
+                        label={item.name}
+                        target={item.target}
+                        summary={item.summary}
+                        status="done"
+                      />
+                    );
+                  case 'tool':
+                    return (
+                      <TraceRow
+                        key={item.key}
+                        tool={item.name.split(' ')[0]}
+                        label={toolRow(item.name).label}
+                        target={item.target ?? toolRow(item.name).target ?? item.name}
+                        status={
+                          item.status === 'completed'
+                            ? 'done'
+                            : item.status === 'error' || item.status === 'fail'
+                              ? 'fail'
+                              : 'running'
+                        }
+                      />
+                    );
+                }
               })}
 
               {/* The ask_user pause, the negotiation-first law, mobile side.
@@ -591,7 +723,17 @@ export default function BuildScreen() {
                   }
                   onAnswer={(a) => {
                     setAnswers((prev) => [...prev, a]);
-                    answer(a);
+                    // L53c: the answer's continuation seeds from the prompt's
+                    // stored blocks when history holds them (it does after any
+                    // refetch mid-wait) — same source as the restore
+                    // exclusion, so the tail carries what the restore drops.
+                    // No prompt id yet (first phase frame) → the plain path.
+                    const pid = turn.questionPromptId;
+                    if (pid != null && pid > 0) {
+                      void answerPrompt(pid, a, seedBlocksFor(pid));
+                    } else {
+                      answer(a);
+                    }
                   }}
                 />
               )}
@@ -601,39 +743,11 @@ export default function BuildScreen() {
                 </UIText>
               ))}
 
-              {/* Live command output — typecheck, lint and build stdout as it
-                  prints. The web streams this to a terminal pane and into the
-                  trace; the mobile shows the bounded tail, which is what tells
-                  you what the tools are doing right now. */}
-              {turn.output !== '' && (
-                <View style={styles.outputBox}>
-                  <UIText variant="monoSm" tone="faint" numberOfLines={8}>
-                    {turn.output}
-                  </UIText>
-                </View>
-              )}
-
-              {/* The model's reasoning, streamed live. This is the bulk of
-                  what a turn produces while the user watches — a build emits
-                  hundreds of thinking deltas — and it is what fills the dead
-                  window between sending the prompt and the first tool call.
-                  Rendered before the text, as the web orders it: the decision
-                  before the act. */}
-              {turn.thinking !== '' && (
-                <View style={styles.thinkingBox}>
-                  <UIText variant="caption" tone="faint">Thinking</UIText>
-                  <UIText variant="bodySm" tone="muted" style={styles.thinkingText}>
-                    {turn.thinking}
-                  </UIText>
-                </View>
-              )}
-
-              {/* The assistant's streamed text. */}
-              {turn.text !== '' && (
-                <UIText variant="body" tone="hero" style={styles.echo}>
-                  {turn.text}
-                </UIText>
-              )}
+              {/* Live output and the assistant's words no longer render as
+                  fixed slots: they ride the timeline at their arrival
+                  position (the reducer keeps the legacy `output`/`text`
+                  fields updating for their pinned contracts — nothing
+                  renders from them). */}
 
               {/* The done frame's verify evidence — the live twin of the
                   restored marker's footer, so the claim lands when the turn
@@ -645,13 +759,12 @@ export default function BuildScreen() {
             </View>
           )}
 
-          {/* The parsed plan outlives the live tail: it renders even after
-              history absorbs this turn, until the restored card in the
-              transcript above takes over (historyHasTurn) or the next send
-              clears it — the approve button never disappears mid-decision. */}
-          {turn.plan && !historyHasTurn ? (
-            <PlanCard plan={turn.plan} message={turn.planMessage} onApprove={approvePlan} />
-          ) : null}
+          {/* The parsed plan card moved INSIDE the tail (L52a — top of the
+              turn): its condition is unchanged, and the restored card in
+              the transcript above still takes over once history absorbs
+              this turn (historyHasTurn) — the approve button never
+              disappears mid-decision, it only changes position once, with
+              the turn. */}
 
           {/* A settled turn's failure, shown only briefly before loadHistory
               absorbs it into the transcript above. */}
@@ -660,25 +773,26 @@ export default function BuildScreen() {
               {turn.error}
             </UIText>
           )}
-
-          {/* TEMP DIAGNOSTIC — shows exactly what the SSE stream delivered to
-              this app, so we can see whether events arrive live or only at the
-              end. Dev builds only, clearly labeled so it doesn't read as a
-              feature. Remove once streaming is verified end to end. */}
-          {__DEV__ && turn.phase !== 'idle' && (
-            <View style={styles.diagBox}>
-              <UIText variant="monoSm" tone="faint">
-                stream debug (dev): events={diag.count} kinds={diag.kinds.join(',') || 'none'}
-              </UIText>
-              {diag.lastData ? (
-                <UIText variant="monoSm" tone="faint" numberOfLines={3}>
-                  last: {diag.lastData}
-                </UIText>
-              ) : null}
-            </View>
-          )}
         </View>
       </ScrollView>
+      {/* ↓ live — the way back when a reader scrolls up mid-turn: pressing
+          it re-attaches to the live edge. Only while the turn is still
+          producing AND the follow is off; a settled turn has nothing to
+          rejoin. */}
+      {liveVisible && livePillVisible(following, liveProducing) ? (
+        <Pressable
+          testID="live-pill"
+          onPress={jumpToLive}
+          accessibilityRole="button"
+          accessibilityLabel="Jump to the live edge"
+          style={styles.livePill}
+        >
+          <UIText variant="monoSm" style={styles.livePillText}>
+            ↓ live
+          </UIText>
+        </Pressable>
+      ) : null}
+      </View>
       )}
 
       {/* The resume/discard offer for a build turn that died before it
@@ -702,7 +816,10 @@ export default function BuildScreen() {
                 setResumable(null);
                 setAttError(null);
                 setMode('build');
-                void resume(id);
+                // L53c: the interrupted rounds ride into the tail, so the
+                // resume stream continues where it stopped — on screen.
+                setFollowing(true);
+                void resume(id, seedBlocksFor(id));
               }}
             />
             <GhostButton
@@ -726,6 +843,7 @@ export default function BuildScreen() {
       )}
 
       {projectId != null && (
+      <KeyboardStickyView>
       <View style={styles.composer}>
         <StagedAttachments
           items={staged}
@@ -808,6 +926,7 @@ export default function BuildScreen() {
           </Pressable>
         </View>
       </View>
+      </KeyboardStickyView>
       )}
     </Screen>
   );
@@ -828,6 +947,25 @@ const styles = StyleSheet.create({
   subTab: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 9999, backgroundColor: Colors.carbon },
   subTabOn: { backgroundColor: Colors.graphite },
   stream: { flex: 1, marginTop: Spacing.s12 },
+  // The stream wrapper owns the ↓ live pill's coordinate space: absolute
+  // over the feed's bottom-right, above the composer (its parent ends where
+  // the composer begins).
+  streamWrap: { flex: 1 },
+  livePill: {
+    position: 'absolute',
+    right: 12,
+    bottom: 12,
+    backgroundColor: Colors.acidLime,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
+  },
+  livePillText: { color: Colors.acidLimeInk, fontWeight: '600' },
   stack: { gap: Spacing.s12, paddingBottom: Spacing.s16 },
   empty: { textAlign: 'center', paddingVertical: Spacing.s16 },
   gate: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.s12, paddingHorizontal: Spacing.s16 },
@@ -910,8 +1048,5 @@ const styles = StyleSheet.create({
   liveTurn: { gap: 12, paddingVertical: 8, borderTopWidth: 1, borderTopColor: Colors.graphite, marginTop: 8 },
   // Reasoning is set apart from the model's prose by surface, not colour: it
   // reads as the machine's working, subordinate to what it eventually says.
-  thinkingBox: { gap: 4, padding: 10, backgroundColor: Colors.carbon, borderRadius: 8 },
-  thinkingText: { lineHeight: 18 },
   outputBox: { padding: 10, backgroundColor: Colors.void, borderRadius: 8 },
-  diagBox: { padding: 8, backgroundColor: Colors.carbon, borderRadius: 8, gap: 4 },
 });

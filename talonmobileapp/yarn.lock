@@ -5913,6 +5913,7 @@ __metadata:
     expo-haptics: "npm:~55.0.9"
     expo-image: "npm:~55.0.6"
     expo-image-picker: "npm:~55.0.24"
+    expo-intent-launcher: "npm:~55.0.16"
     expo-linear-gradient: "npm:~55.0.18"
     expo-linking: "npm:~55.0.8"
     expo-router: "npm:~55.0.7"
@@ -8344,6 +8345,15 @@ __metadata:
     react-native-web:
       optional: true
   checksum: 10c0/6e31ebe8fd18cafa202f5a66542e71ba0762ba810956f9ce5cc193cf7dd8b22f51462292542c9c3959ef5dc691be8356eae1117ac7315fe90c3b1c46165ceb93
+  languageName: node
+  linkType: hard
+
+"expo-intent-launcher@npm:~55.0.16":
+  version: 55.0.16
+  resolution: "expo-intent-launcher@npm:55.0.16"
+  peerDependencies:
+    expo: "*"
+  checksum: 10c0/89048d92c90b22b9818e3150b216f1d98d30f3fe1b3dba5e73bb3b93515d8d9ef057dbd157bfee1b573363288185d98a9996718da5e55d2961d07875aa5cecf8
   languageName: node
   linkType: hard
 
