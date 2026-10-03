@@ -2,7 +2,7 @@ import React from 'react'
 import { Linking } from 'react-native'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import DeviceScreen from './device'
+import DeviceScreen from '@/app/(tabs)/device'
 import { openMetroStream, projectsApi, sessionsApi, testInfoApi } from '@/lib/api'
 
 // L32 / FM-DEVb + FM-DEVc — the Device tab's truth stays on the server.

@@ -1,6 +1,6 @@
 import React from 'react'
 import { render, screen } from '@testing-library/react-native'
-import HelpScreen from './help'
+import HelpScreen from '@/app/menu/help'
 
 // FM-DEVf(iii) — the FAQ described only pairing a SECOND phone, so on one
 // device the user had no answer for the path they are actually on: no
