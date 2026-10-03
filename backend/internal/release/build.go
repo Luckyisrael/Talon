@@ -325,11 +325,21 @@ func ensureAbiFilters(gradlePropsPath, gradleBuildPath string) error {
 // never on the command line where ps could read it — and returns the final
 // artifact path under the exports dir.
 func (b *Builder) signAPK(ctx context.Context, apksigner, unsigned, ksPath, alias, password string, projectID int64) (string, error) {
-	pwPath, cleanup, err := passFile(password)
+	// FM-SIGNa: apksigner reads each `file:` password path as ONE shared
+	// stream — the keystore read consumes it and the key read hits "end of
+	// file reached" (keytool reopens per flag, which is why generation
+	// worked and this did not). One file per reader; argv stays free of
+	// the secret either way.
+	ksPassPath, ksCleanup, err := passFile(password)
 	if err != nil {
 		return "", err
 	}
-	defer cleanup()
+	defer ksCleanup()
+	keyPassPath, keyCleanup, err := passFile(password)
+	if err != nil {
+		return "", err
+	}
+	defer keyCleanup()
 
 	if err := os.MkdirAll(b.exportsDir(), 0o755); err != nil {
 		return "", err
@@ -339,7 +349,7 @@ func (b *Builder) signAPK(ctx context.Context, apksigner, unsigned, ksPath, alia
 	// "file:<path>"); the single-arg colon form (--ks-pass:file) is rejected
 	// by this build-tools version.
 	args := []string{"sign", "--ks", ksPath, "--ks-key-alias", alias,
-		"--ks-pass", "file:" + pwPath, "--key-pass", "file:" + pwPath,
+		"--ks-pass", "file:" + ksPassPath, "--key-pass", "file:" + keyPassPath,
 		"--out", signed, unsigned}
 	if out, err := exec.CommandContext(ctx, apksigner, args...).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("apksigner failed: %v\n%s", err, tail(string(out)))
@@ -420,11 +430,23 @@ func signerFingerprint(ctx context.Context, apksigner, apk string) (string, erro
 	return "", fmt.Errorf("no signer certificate in apksigner output")
 }
 
+// sameFingerprint compares certificate SHA-256 fingerprints as bytes, not
+// spelling: apksigner prints bare lowercase hex, keytool prints colon-
+// delimited uppercase — same 32 bytes (FM-FPRa: a format difference must
+// never accuse a correct signature). Empty never passes.
 func sameFingerprint(a, b string) bool {
 	norm := func(s string) string {
-		return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(s), " ", ""))
+		var out strings.Builder
+		for _, r := range strings.TrimSpace(s) {
+			if r == ':' || r == ' ' || r == '\t' {
+				continue
+			}
+			out.WriteRune(r)
+		}
+		return strings.ToUpper(out.String())
 	}
-	return norm(a) == norm(b) && a != ""
+	na, nb := norm(a), norm(b)
+	return na != "" && na == nb
 }
 
 func runIn(ctx context.Context, dir string, env []string, name string, args ...string) (string, error) {

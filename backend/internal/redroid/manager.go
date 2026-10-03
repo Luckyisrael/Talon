@@ -1,10 +1,10 @@
 package redroid
 
 import (
-	"net"
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +40,18 @@ type Manager struct {
 	maxContainers int
 	gradleCache   string
 	androidCache  string
+	// warmClaim marks containers the live warm pool has prepaid; the sweep
+	// spares them (FM-POOLa). Wired once at startup via ProtectWarm, before
+	// the cleanup-loop goroutine starts — the loop only ever reads it.
+	warmClaim func(containerID string) bool
+}
+
+// ProtectWarm wires the live warm pool's claim into the sweep: containers
+// it reports as prepaid are not orphans, so the periodic cleanup loop never
+// collects the pool's own boot. Called once during startup, after NewPool
+// and before StartCleanupLoop.
+func (m *Manager) ProtectWarm(isWarm func(containerID string) bool) {
+	m.warmClaim = isWarm
 }
 
 // NewManager creates a container manager backed by the Docker daemon.

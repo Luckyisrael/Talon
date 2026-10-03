@@ -223,7 +223,6 @@ func main() {
 		if err := containerMgr.Reconcile(s); err != nil {
 			log.Printf("WARNING: could not reconcile running containers: %v", err)
 		}
-		containerMgr.StartCleanupLoop(s, 5*time.Minute)
 		log.Printf("container manager ready (max %d devices)", maxContainers)
 	}
 
@@ -307,6 +306,17 @@ func main() {
 	var warmPool *redroid.Pool
 	if warmPoolSize > 0 && containerMgr != nil {
 		warmPool = redroid.NewPool(containerMgr, warmPoolSize)
+	}
+	// The periodic sweep starts only once the warm pool can be spared
+	// (FM-POOLa): ProtectWarm is wired before the loop goroutine starts, so
+	// the field is never written concurrently; the startup Reconcile above
+	// already ran pool-less and still collects foreign crash leftovers.
+	// With no pool the claim stays nil — today's behavior.
+	if containerMgr != nil {
+		if warmPool != nil {
+			containerMgr.ProtectWarm(warmPool.IsWarm)
+		}
+		containerMgr.StartCleanupLoop(s, 5*time.Minute)
 	}
 	sessionHandler := api.NewSessionHandler(s, containerMgr, portAlloc, relayAlloc, warmPool, workspaceDir, devClientMgr, walletMgr, pushNotifier)
 

@@ -39,10 +39,19 @@ func decideAction(exists bool, state string) containerAction {
 	}
 }
 
-// Reconcile compares DB session state against actual Docker container state.
-// It recovers tracking of running containers and removes orphans.
-// This runs on server startup to handle containers that survived a backend restart.
+// Reconcile runs the full startup sweep: repair every active session's
+// container, then remove what nothing claims — docker-side orphans and the
+// legacy shared container. Startup and the 5-minute cleanup loop take this
+// path. Tests take the non-sweeping reconcile below, so a suite sharing the
+// daemon with a live server cannot remove product containers (FM-TESTa).
 func (m *Manager) Reconcile(s *store.Store) error {
+	return m.reconcile(s, true)
+}
+
+// reconcile is Reconcile's body; sweepOrphans gates the destructive half.
+// Production passes true (behavior unchanged); tests pass false and get the
+// DB→docker repair only — their "touches nothing" then holds by construction.
+func (m *Manager) reconcile(s *store.Store, sweepOrphans bool) error {
 	log.Println("reconciler: starting reconciliation sweep")
 
 	// 1. Get all active sessions from DB (state != "destroyed")
@@ -119,22 +128,45 @@ func (m *Manager) Reconcile(s *store.Store) error {
 		}
 	}
 
-	// 4. For each Docker container: if no DB session claims it, it's an orphan
+	// 4. Containers nothing claims are orphans: no active session, AND not
+	// warm-claimed by THIS process. A warm boot belongs to no session by
+	// design (negative id), so without the second arm the 5-minute loop
+	// collects the pool's prepaid container every tick (FM-POOLa(i)). The
+	// startup sweep runs before the pool exists (warmClaim nil), so a
+	// crashed process's leftovers are still collected (FM-POOLa(iii)).
 	orphaned := 0
-	for _, info := range dockerContainers {
-		if _, claimed := dbByContainerID[info.ContainerID]; !claimed {
+	if sweepOrphans {
+		for _, info := range orphanPlan(dockerContainers, dbByContainerID, m.warmClaim) {
 			log.Printf("reconciler: orphan container %s (session %d, port %d) → removing",
 				shortID(info.ContainerID), info.SessionID, info.ADBPort)
 			m.forceRemove(info.ContainerID)
 			orphaned++
 		}
-	}
 
-	// 5. Also check for the old legacy container
-	m.removeLegacyContainer()
+		// 5. Also check for the old legacy container
+		m.removeLegacyContainer()
+	}
 
 	log.Printf("reconciler: complete — recovered=%d, destroyed=%d, orphaned=%d", recovered, markedDestroyed, orphaned)
 	return nil
+}
+
+// orphanPlan is the sweep's removal decision, pure so it is testable
+// without the daemon: remove exactly the containers no active session
+// claims and the live warm pool has not prepaid; nil isWarm (no pool
+// wired) means nothing is warm-claimed.
+func orphanPlan(dockerContainers []ContainerInfo, claimed map[string]*store.Session, isWarm func(string) bool) []ContainerInfo {
+	var plan []ContainerInfo
+	for _, info := range dockerContainers {
+		if _, claimedByID := claimed[info.ContainerID]; claimedByID {
+			continue
+		}
+		if isWarm != nil && isWarm(info.ContainerID) {
+			continue
+		}
+		plan = append(plan, info)
+	}
+	return plan
 }
 
 // removeLegacyContainer removes the old single shared container if it exists.

@@ -47,16 +47,16 @@ const (
 // Relay bridges one public port to one metro address for one session.
 type Relay struct {
 	publicPort int
-	metroAddr   string
+	metroAddr  string
 	listener   net.Listener
 	// token, when set, is the credential the deep link carries (§2.4):
 	// connections must present it on their first request. Empty means the
 	// relay is open — the shape used by tests and any pre-token caller.
 	token string
 
-	mu       sync.Mutex
-	conns    map[net.Conn]struct{}
-	closed   bool
+	mu     sync.Mutex
+	conns  map[net.Conn]struct{}
+	closed bool
 	// trusted holds phone addresses that completed the §2.4 handshake.
 	// The Expo dev client drops query params when it reduces the deep
 	// link to host:port, so the credential can only be checked once —
@@ -86,11 +86,11 @@ func startRelay(publicPort int, metroAddr, token string) (*Relay, error) {
 	}
 	r := &Relay{
 		publicPort: publicPort,
-		metroAddr:   metroAddr,
-		listener:    l,
-		conns:    make(map[net.Conn]struct{}),
-		trusted:  make(map[string]bool),
-		token:    token,
+		metroAddr:  metroAddr,
+		listener:   l,
+		conns:      make(map[net.Conn]struct{}),
+		trusted:    make(map[string]bool),
+		token:      token,
 	}
 	go r.acceptLoop()
 	if token != "" {
@@ -218,6 +218,7 @@ func (r *Relay) serveConn(public net.Conn) {
 	upstream, err := net.DialTimeout("tcp", r.metroAddr, dialTimeout)
 	if err != nil {
 		log.Printf("relay %d: upstream dial %s: %v", r.publicPort, r.metroAddr, err)
+		r.replyUnavailable(public)
 		return
 	}
 	defer upstream.Close()
@@ -233,6 +234,29 @@ func (r *Relay) serveConn(public net.Conn) {
 	go func() { io.Copy(public, upstream); done <- struct{}{} }()
 	<-done
 	// Whichever direction finished first decides: the connection is done.
+}
+
+// replyUnavailable answers an HTTP client whose upstream is not up yet with
+// a retryable status instead of the silent close that made an API consumer
+// crash with "other side closed" (FM-RELAYa — the server wires the relay
+// when metro's startup wait TIMES OUT, so refused dials are a window this
+// process itself creates). The short drain consumes whatever the client
+// already sent — kernel bytes in the open path, the token-gate's peeked
+// request in the spliced path — so the close that follows carries no
+// unread data: a RST there would eat this very response. Only reached
+// AFTER the §2.4 token check, so an unauthenticated prober still learns
+// nothing about upstream state.
+func (r *Relay) replyUnavailable(public net.Conn) {
+	_ = public.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+	var drain [1024]byte
+	_, _ = public.Read(drain[:])
+	_ = public.SetReadDeadline(time.Time{})
+	body := "upstream not ready: " + r.metroAddr + " — retry shortly\n"
+	_, _ = io.WriteString(public, "HTTP/1.1 503 Service Unavailable\r\n"+
+		"Content-Type: text/plain\r\n"+
+		"Connection: close\r\n"+
+		"Retry-After: 5\r\n"+
+		"Content-Length: "+itoa(len(body))+"\r\n\r\n"+body)
 }
 
 // Stop tears the relay down: listener closed, live conns dropped. Idempotent

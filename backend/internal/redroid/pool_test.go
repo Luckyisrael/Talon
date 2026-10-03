@@ -1,6 +1,50 @@
 package redroid
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+// FM-POOLa(ii): Claim's stale-entry drop must refill the slot it just
+// emptied. The worker boots ONLY on the p.claim signal (a successful claim
+// sends it), so a drop that stays silent leaves the pool permanently cold
+// for the life of the process — the container died while idle, the map is
+// empty, and nothing is left running to re-warm it.
+//
+// RED pre-fix: no signal is queued for the freed slot. Docker is needed
+// only to 404 the rename of a container that does not exist — no container
+// is created, started, or removed.
+func TestClaimStaleDropRefillsSlot(t *testing.T) {
+	if !dockerAvailable() {
+		t.Skip("docker daemon unavailable")
+	}
+	mgr, err := NewManager(NewPortAllocator(15555, 16555), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	// A pool without its worker (constructed directly so no real boot
+	// happens): one slot, seeded with an entry whose container is gone.
+	p := &Pool{
+		mgr:   mgr,
+		size:  1,
+		warm:  map[string]*WarmEntry{dead: {ContainerID: dead, Port: 15555, BootedAt: time.Now()}},
+		claim: make(chan struct{}, 1),
+		stop:  make(chan struct{}),
+	}
+	if info := p.Claim(1); info != nil {
+		t.Fatalf("Claim of a dead container must fall through to the cold path (nil), got %+v", info)
+	}
+	if len(p.warm) != 0 {
+		t.Errorf("stale entry must be dropped from the warm map, %d left", len(p.warm))
+	}
+	select {
+	case <-p.claim:
+		// Signal queued: the worker refills the slot the drop freed.
+	default:
+		t.Errorf("FM-POOLa(ii): stale drop freed the slot but queued no refill signal — the pool can never re-warm for the life of the process")
+	}
+}
 
 // The allocator's claim-side rebooking: a warm container's port moves to
 // the claiming session without a free/allocate race window where another

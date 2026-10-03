@@ -1121,9 +1121,15 @@ drain:
 		h.finishBuildStream(w, flusher, res.outcome, res.err)
 		// E: the turn's terminal state is the other moment worth a push —
 		// success (with the verification verdict) or failure (with the
-		// reason). A paused turn is not terminal; the question push above
-		// already fired.
-		if res.outcome == nil || !res.outcome.Paused {
+		// reason). Neither resumable stop is terminal, so neither may push
+		// (FM-NOTIFa): ask_user (Paused — the question push above already
+		// fired) and the round budget (Exhausted — Resume continues it; it
+		// also returns a nil error, which is how it slipped past this guard
+		// live and pushed "Build finished / verified: false" over a
+		// half-built app). Stalled, BudgetStop and HookStop are terminal and
+		// still push; an error still pushes build_failed. Classify any new
+		// stop added to BuildOutcome here.
+		if res.outcome == nil || (!res.outcome.Paused && !res.outcome.Exhausted) {
 			if res.err == nil {
 				verified := res.outcome != nil && res.outcome.Verified
 				h.dispatchNotification(userID, notify.KindBuildSuccess,

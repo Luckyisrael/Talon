@@ -122,6 +122,15 @@ func (p *Pool) Warm() []*WarmEntry {
 	return out
 }
 
+// IsWarm reports whether the live pool holds this container prepaid — the
+// claim the sweeper consults before calling anything an orphan (FM-POOLa).
+func (p *Pool) IsWarm(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.warm[id]
+	return ok
+}
+
 // Claim takes a warm container for a session, renaming it into the
 // session's name — from then on it IS a session container and the rest of
 // the lifecycle treats it as one. Returns nil when the pool is empty:
@@ -136,9 +145,15 @@ func (p *Pool) Claim(sessionID int64) *ContainerInfo {
 		// pause, and destroy all see an ordinary session container.
 		info, err := p.mgr.retagWarmContainer(entry, sessionID)
 		if err != nil {
-			// A stale warm entry (container died while idle): drop it,
-			// keep claiming through the rest of the pool.
+			// A stale warm entry (container died while idle): drop it and
+			// refill the slot it freed — the same signal a successful claim
+			// sends. Without it the worker never boots again and the pool
+			// stays permanently cold for the life of the process (FM-POOLa).
 			log.Printf("warm pool: claim retag failed (stale entry dropped): %v", err)
+			select {
+			case p.claim <- struct{}{}:
+			default:
+			}
 			continue
 		}
 		// Signal the worker to refill the freed slot (non-blocking: the

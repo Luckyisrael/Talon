@@ -191,9 +191,12 @@ func (s *Store) Ping(ctx context.Context) error {
 
 func (s *Store) migrate() error {
 	queries := []string{
+		// FM-IDENTa: no column-level UNIQUE on email — uniqueness over real
+		// addresses is the partial index migrateUsersEmailUnique creates, so
+		// any number of wallet users may share the empty string.
 		`CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			email TEXT UNIQUE NOT NULL,
+			email TEXT NOT NULL,
 			password_hash TEXT NOT NULL,
 			tier TEXT DEFAULT 'free',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -867,6 +870,130 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	// FM-IDENTa, schema half: enforce uniqueness over real addresses only.
+	// Last in the migration so every users column added above already exists
+	// for the copy; a legacy file (email TEXT UNIQUE NOT NULL) is rebuilt
+	// once, a fresh file just gets the index.
+	if err := s.migrateUsersEmailUnique(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// migrateUsersEmailUnique enforces the schema half of FM-IDENTa: uniqueness
+// over REAL addresses only, so the empty string any number of wallet users
+// share is not a key. Fresh files are born without a column-level UNIQUE (see
+// the CREATE TABLE above) and get their partial index here — unconditionally,
+// because a fresh file never matches the legacy DDL below and this is the
+// only place its index comes from: a silently skipped CREATE would ship a
+// users table with no email uniqueness at all (FM-IDENTa(iv)). Files created
+// before FM-IDENTa carry email TEXT UNIQUE NOT NULL, which SQLite cannot drop
+// in place, so the table is rebuilt once — the rebuild's own output does not
+// contain the legacy text, so detection cannot fire twice.
+func (s *Store) migrateUsersEmailUnique() error {
+	var ddl string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&ddl); err != nil {
+		return fmt.Errorf("users table: %w", err)
+	}
+	if strings.Contains(ddl, "email TEXT UNIQUE NOT NULL") {
+		if err := s.rebuildUsersEmail(); err != nil {
+			return fmt.Errorf("users.email rebuild: %w", err)
+		}
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email != ''`); err != nil {
+		return fmt.Errorf("users.email partial index: %w", err)
+	}
+	return nil
+}
+
+// rebuildUsersEmail swaps the legacy users table for one without the
+// column-level UNIQUE. The whole thing rides a single pinned connection: the
+// DSN opens every pooled conn _pragma=foreign_keys(ON) and eleven tables
+// reference users(id) — DROP TABLE users fails outright with children present
+// (FM-IDENTa(iii)) — and PRAGMA foreign_keys is per-connection, so an OFF on
+// one pool member says nothing about the conn that runs the next statement.
+// Defers run LIFO: rollback the uncommitted transaction, restore enforcement,
+// then hand the conn back to the pool.
+func (s *Store) rebuildUsersEmail() error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	defer func() {
+		// A no-op inside an open transaction, hence deferred past the rollback.
+		_, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys=ON")
+	}()
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return err
+	}
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	// The official SQLite rebuild: copy carries the explicit ids, so
+	// AUTOINCREMENT continues past the copied max, and the index is created
+	// inside the transaction so a crash cannot leave the new table unindexed.
+	for _, q := range []string{
+		`CREATE TABLE users_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			email TEXT NOT NULL,
+			password_hash TEXT NOT NULL,
+			tier TEXT DEFAULT 'free',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			display_name TEXT DEFAULT '',
+			provider TEXT DEFAULT '',
+			avatar_url TEXT DEFAULT '',
+			onesignal_id TEXT DEFAULT ''
+		)`,
+		`INSERT INTO users_new (id, email, password_hash, tier, created_at, display_name, provider, avatar_url, onesignal_id)
+			SELECT id, email, password_hash, tier, created_at, display_name, provider, avatar_url, onesignal_id FROM users`,
+		`DROP TABLE users`,
+		`ALTER TABLE users_new RENAME TO users`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email != ''`,
+	} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("%s: %w", strings.Split(q, "\n")[0], err)
+		}
+	}
+
+	// The copy must leave every FK resolvable. A dangling reference rolls the
+	// whole swap back rather than shipping a schema the next query trips over.
+	fk, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("foreign_key_check: %w", err)
+	}
+	bad := ""
+	for fk.Next() {
+		var table, parent sql.NullString
+		var rowid, fkid sql.NullInt64
+		if err := fk.Scan(&table, &rowid, &parent, &fkid); err != nil {
+			fk.Close()
+			return err
+		}
+		if bad == "" {
+			bad = table.String
+		}
+	}
+	fk.Close()
+	if bad != "" {
+		return fmt.Errorf("foreign_key_check found a dangling reference after the rebuild (first: %s)", bad)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
 	return nil
 }
 
@@ -890,7 +1017,10 @@ func (s *Store) CreateUser(email, passwordHash string) (*User, error) {
 // account signing in twice is one user; profile drift (a new avatar, a
 // changed name) refreshes the cached fields. A provider identity whose
 // email collides with an existing user links to that user — the email was
-// already verified by the provider, so it is the same human.
+// already verified by the provider, so it is the same human. Only a
+// *presented* email can collide: an absent one ("" — wallet sign-ins carry
+// none) links nothing and gets its own account, because the empty string is
+// not an identity (FM-IDENTa).
 func (s *Store) UpsertOAuthUser(provider, providerID, email, name, avatarURL string) (*User, error) {
 	// 1) The bound path: this provider account already exists.
 	if u, err := s.GetUserByProvider(provider, providerID); err == nil {
@@ -913,20 +1043,26 @@ func (s *Store) UpsertOAuthUser(provider, providerID, email, name, avatarURL str
 	}
 
 	// 2) The email path: the same human, already known. Link the provider
-	// identity to the existing account.
-	if existing, err := s.GetUserByEmail(email); err == nil {
-		if _, err := s.db.Exec(
-			`INSERT INTO users_oauth_identity (user_id, provider, provider_id, email, name, avatar_url) VALUES (?, ?, ?, ?, ?, ?)`,
-			existing.ID, provider, providerID, email, name, avatarURL,
-		); err != nil {
+	// identity to the existing account — but only when an address was
+	// actually presented. GetUserByEmail("") would match the first
+	// email-less row and graft this identity onto that account, so a wallet
+	// sign-in must fall through to "create fresh" instead (FM-IDENTa(i);
+	// the schema half is migrateUsersEmailUnique).
+	if email != "" {
+		if existing, err := s.GetUserByEmail(email); err == nil {
+			if _, err := s.db.Exec(
+				`INSERT INTO users_oauth_identity (user_id, provider, provider_id, email, name, avatar_url) VALUES (?, ?, ?, ?, ?, ?)`,
+				existing.ID, provider, providerID, email, name, avatarURL,
+			); err != nil {
+				return nil, err
+			}
+			if _, err := s.db.Exec("UPDATE users SET provider = ?, avatar_url = ? WHERE id = ?", provider, avatarURL, existing.ID); err != nil {
+				return nil, err
+			}
+			return s.GetUserByID(existing.ID)
+		} else if !errors.Is(err, ErrUserNotFound) && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		if _, err := s.db.Exec("UPDATE users SET provider = ?, avatar_url = ? WHERE id = ?", provider, avatarURL, existing.ID); err != nil {
-			return nil, err
-		}
-		return s.GetUserByID(existing.ID)
-	} else if !errors.Is(err, ErrUserNotFound) && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
 	}
 
 	// 3) A brand-new human: users row + identity row.

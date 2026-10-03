@@ -120,8 +120,9 @@ func (h *WalletAuthHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verified owner. The account-linking law of UpsertOAuthUser, with the
-	// wallet as the identity: bind if bound, link to email-less (wallet
-	// users have no email until they add one), else create fresh.
+	// wallet as the identity: bind if bound by address, else create fresh.
+	// A wallet presents no email (none "until they add one"), and an absent
+	// email links nothing — two wallets are two accounts (FM-IDENTa).
 	user, err := h.store.UpsertOAuthUser("solana", req.Wallet, "", "", "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not link wallet account")

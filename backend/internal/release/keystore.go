@@ -62,6 +62,23 @@ func (k *Keystore) Ensure(ctx context.Context, projectID int64) (*store.Keystore
 	path := filepath.Join(dir, fmt.Sprintf("project-%d.jks", projectID))
 	alias := fmt.Sprintf("project-%d", projectID)
 
+	// FM-KEYSa: reaching this point means no row owns `path` (or its row's
+	// file is gone — handled above). A file here is an ORPHAN from another
+	// database: its password lived only in the row that no longer exists,
+	// so nobody can ever open it again. keytool would OPEN it with the
+	// fresh password below and answer "keystore password was incorrect" —
+	// a lie about a password that was minted seconds ago and never used,
+	// repeated on every future export because the row is only written
+	// after a successful generation. Move it aside: bytes preserved for
+	// an operator, path clean for the generation that must run here.
+	if _, statErr := os.Stat(path); statErr == nil {
+		orphan := fmt.Sprintf("%s.orphaned-%d", path, time.Now().Unix())
+		if renErr := os.Rename(path, orphan); renErr != nil {
+			return nil, fmt.Errorf("orphan keystore %s (no database row owns it, so its password is gone) could not be moved aside: %w", path, renErr)
+		}
+		log.Printf("release: orphan keystore for project %d has no row (unreadable — its password died with the row); moved aside to %s and regenerating", projectID, orphan)
+	}
+
 	password, err := randomPassword()
 	if err != nil {
 		return nil, err

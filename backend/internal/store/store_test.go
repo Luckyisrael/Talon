@@ -1,8 +1,11 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -681,5 +684,224 @@ func TestPushTokenRoundTrip(t *testing.T) {
 	id, err = s.GetOneSignalID(u.ID)
 	if err != nil || id != "os-ext-123" {
 		t.Fatalf("push target after set = %q, %v", id, err)
+	}
+}
+
+// ── FM-IDENTa: an empty email is not an identity ──
+//
+// A wallet sign-in presents an address and no email ("wallet users have no
+// email until they add one"), so UpsertOAuthUser is called with email "".
+// The empty string must not be a key: two wallets are two humans and must
+// land on two accounts. Binding still happens by (provider, provider_id) —
+// the bound path — and a real email still links two providers to one human.
+
+func TestUpsertOAuthUserSeparateAccountsForEmailLessWallets(t *testing.T) {
+	s := newTestStore(t)
+
+	owner, err := s.UpsertOAuthUser("solana", "2Lc7KRVkspxfOwner11111111111111111111111111111", "", "", "")
+	if err != nil {
+		t.Fatalf("first wallet sign-in: %v", err)
+	}
+	stranger, err := s.UpsertOAuthUser("solana", "7iWNDrWCcHH9Stranger222222222222222222222222222", "", "", "")
+	if err != nil {
+		t.Fatalf("second wallet sign-in: %v", err)
+	}
+
+	if stranger.ID == owner.ID {
+		t.Fatalf("second wallet linked to the first wallet's account: both identities on user_id=%d — an empty email merged two humans (FM-IDENTa(i))", owner.ID)
+	}
+	if owner.Email != "" || stranger.Email != "" {
+		t.Fatalf("wallet users gained an email: owner=%q stranger=%q", owner.Email, stranger.Email)
+	}
+
+	// The bound path must be untouched: the first wallet signing in again is
+	// still the first wallet's account, not a third one.
+	again, err := s.UpsertOAuthUser("solana", "2Lc7KRVkspxfOwner11111111111111111111111111111", "", "", "")
+	if err != nil {
+		t.Fatalf("repeat wallet sign-in: %v", err)
+	}
+	if again.ID != owner.ID {
+		t.Fatalf("repeat sign-in gave user %d, want the bound user %d", again.ID, owner.ID)
+	}
+
+	// Each identity row must resolve back to its own account.
+	if u, err := s.GetUserByProvider("solana", "7iWNDrWCcHH9Stranger222222222222222222222222222"); err != nil || u.ID != stranger.ID {
+		t.Fatalf("stranger identity resolves to %v, %v (want user %d)", u, err, stranger.ID)
+	}
+
+	var n int
+	if err := s.db.QueryRow("SELECT count(*) FROM users").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("users rows = %d, want 2 (owner + stranger)", n)
+	}
+}
+
+// The linking law as it must stay: identity binds by address, an email links
+// only when there is one. Both halves predate FM-IDENTa and must survive it.
+func TestUpsertOAuthUserLinkingLawUnchanged(t *testing.T) {
+	s := newTestStore(t)
+
+	// A real email presented by two different providers is the same human.
+	github, err := s.UpsertOAuthUser("github", "gh-1", "same@example.com", "GH", "")
+	if err != nil {
+		t.Fatalf("github sign-in: %v", err)
+	}
+	google, err := s.UpsertOAuthUser("google", "go-1", "same@example.com", "GO", "")
+	if err != nil {
+		t.Fatalf("google sign-in: %v", err)
+	}
+	if google.ID != github.ID {
+		t.Fatalf("one email became two accounts: github=%d google=%d — the email link stopped working", github.ID, google.ID)
+	}
+
+	// A different email is a different human even on the same provider.
+	other, err := s.UpsertOAuthUser("github", "gh-2", "other@example.com", "Other", "")
+	if err != nil {
+		t.Fatalf("second github sign-in: %v", err)
+	}
+	if other.ID == github.ID {
+		t.Fatalf("two different emails share user %d — the email path links everything", other.ID)
+	}
+}
+
+// Uniqueness of REAL addresses is the whole point of the partial index that
+// replaces the column-level UNIQUE: a duplicate must still surface as
+// ErrDuplicateEmail, which is matched on the "UNIQUE constraint failed"
+// substring of the driver's error.
+func TestCreateUserDuplicateEmailStillRejected(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.CreateUser("dup@example.com", "hash-1"); err != nil {
+		t.Fatalf("first CreateUser: %v", err)
+	}
+	if _, err := s.CreateUser("dup@example.com", "hash-2"); !errors.Is(err, ErrDuplicateEmail) {
+		t.Fatalf("duplicate CreateUser err = %v, want ErrDuplicateEmail", err)
+	}
+}
+
+// A database created before FM-IDENTa carries email TEXT UNIQUE NOT NULL: at
+// most one email-less row is possible, so a second wallet can never get its
+// own account. migrate() must rebuild the table (SQLite cannot drop a
+// column-level UNIQUE in place) onto a partial index over real addresses
+// only — on one pinned connection with foreign keys off, because eleven
+// tables reference users(id) — and must do it exactly once.
+func TestMigrateRebuildsLegacyUsersEmail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+
+	// Hand-build the pre-FM-IDENTa file: legacy users DDL plus an FK child
+	// holding a row, so the rebuild's DROP TABLE has something to trip on.
+	fixture, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open fixture: %v", err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			email TEXT UNIQUE NOT NULL,
+			password_hash TEXT NOT NULL,
+			tier TEXT DEFAULT 'free',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE projects (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			name TEXT NOT NULL,
+			plan_json TEXT DEFAULT '',
+			status TEXT DEFAULT 'active',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		)`,
+		`INSERT INTO users (email, password_hash, tier) VALUES ('', 'hash', 'pro')`,
+		`INSERT INTO projects (user_id, name) VALUES (1, 'legacy-project')`,
+	} {
+		if _, err := fixture.Exec(q); err != nil {
+			fixture.Close()
+			t.Fatalf("fixture %q: %v", q, err)
+		}
+	}
+	if err := fixture.Close(); err != nil {
+		t.Fatalf("close fixture: %v", err)
+	}
+
+	s, err := New(path)
+	if err != nil {
+		t.Fatalf("New on legacy file: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	// (1) The legacy constraint must be gone — rebuild ran.
+	var ddl string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&ddl); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(ddl, "email TEXT UNIQUE NOT NULL") {
+		t.Fatalf("users still carries the column-level UNIQUE, so the rebuild never ran:\n%s", ddl)
+	}
+
+	// (2) The partial index must exist, and must actually be partial.
+	var idxSQL string
+	err = s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='index' AND name = 'idx_users_email'`).Scan(&idxSQL)
+	if err != nil {
+		t.Fatalf("partial index missing: %v", err)
+	}
+	if !strings.Contains(idxSQL, "email != ''") {
+		t.Fatalf("index is not partial over real addresses: %s", idxSQL)
+	}
+
+	// (3) Rows and the FK child survived the rebuild.
+	var tier string
+	if err := s.db.QueryRow(`SELECT tier FROM users WHERE id = 1`).Scan(&tier); err != nil || tier != "pro" {
+		t.Fatalf("user 1 tier = %q, %v (want pro) — the rebuild lost data", tier, err)
+	}
+	rows, err := s.db.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatalf("foreign_key_check: %v", err)
+	}
+	violations := 0
+	for rows.Next() {
+		violations++
+	}
+	rows.Close()
+	if violations != 0 {
+		t.Fatalf("foreign_key_check reported %d violation(s) after the rebuild", violations)
+	}
+	var children int
+	if err := s.db.QueryRow(`SELECT count(*) FROM projects WHERE user_id = 1`).Scan(&children); err != nil || children != 1 {
+		t.Fatalf("child rows = %d, %v (want 1) — the rebuild orphaned the FK", children, err)
+	}
+
+	// (4) The behavioral proof: a second email-less wallet gets its own
+	// account on the migrated file (this is what the live server must do).
+	stranger, err := s.UpsertOAuthUser("solana", "7iWNDrWCcHH9Stranger222222222222222222222222222", "", "", "")
+	if err != nil {
+		t.Fatalf("second wallet on migrated file: %v", err)
+	}
+	if stranger.ID == 1 {
+		t.Fatal("second wallet merged into user 1 on the migrated file — the rebuild did not fix the merge")
+	}
+
+	// (5) Real addresses are still unique on the migrated file.
+	if _, err := s.CreateUser("dup@example.com", "h1"); err != nil {
+		t.Fatalf("first CreateUser on migrated file: %v", err)
+	}
+	if _, err := s.CreateUser("dup@example.com", "h2"); !errors.Is(err, ErrDuplicateEmail) {
+		t.Fatalf("duplicate on migrated file err = %v, want ErrDuplicateEmail", err)
+	}
+
+	// (6) Idempotence: a second boot must not rebuild again.
+	if err := s.Close(); err != nil {
+		t.Fatalf("close before re-open: %v", err)
+	}
+	s2, err := New(path)
+	if err != nil {
+		t.Fatalf("second New on rebuilt file: %v", err)
+	}
+	defer s2.Close()
+	if err := s2.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&ddl); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(ddl, "email TEXT UNIQUE NOT NULL") {
+		t.Fatalf("second boot reintroduced or failed to keep the new shape:\n%s", ddl)
 	}
 }

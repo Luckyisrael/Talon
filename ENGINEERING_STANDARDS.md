@@ -1046,6 +1046,258 @@ Failure modes (written before the code, TEST_RULES §3):
   token rides the request, the bytes land where the user can reach them, and
   the same download twice still works.**
 
+- **FM-IDENTa (candidate L40)** — an empty email is not an identity: two
+  wallets must never become one account. Failure modes: (i) *The absent
+  address matches the first absent address.* Wallet sign-in calls
+  `UpsertOAuthUser("solana", addr, "", "", "")` — a wallet user has no email
+  "until they add one" — and step 2 answers `GetUserByEmail("")` before it
+  ever looks at the address. The first email-less row stores `email=''`, so
+  every later wallet's `users_oauth_identity` row links to *that* account:
+  journey3's stranger wallet signed in as the owner (both rows on
+  `user_id=1`), which makes every ownership probe answer as the wrong human —
+  an authorization check that cannot fail, and a second user that cannot
+  exist. (ii) *Guarding the lookup alone deadlocks creation.* `users.email`
+  is `TEXT UNIQUE NOT NULL`, so `''` is a key with room for exactly one
+  holder; skip step 2 and the second wallet's INSERT still collides, the
+  code reads `UNIQUE constraint failed` as a check-then-insert race and
+  recurses into the same upsert — re-colliding, forever. Uniqueness must
+  therefore move off the column onto a partial index (`… ON users(email)
+  WHERE email != ''`): real addresses stay unique, the empty string admits
+  any number of rows. SQLite cannot drop a column-level UNIQUE in place, so
+  this is a table rebuild — create `users_new`, copy, drop, rename.
+  (iii) *The rebuild fights the foreign keys.* Eleven tables carry
+  `REFERENCES users(id)` and the DSN opens every connection
+  `_pragma=foreign_keys(ON)`: `DROP TABLE users` with children present fails
+  outright (`FOREIGN KEY constraint failed`, observed on this database), and
+  the pragma is **per connection** — turning it off on one of the pool's
+  eight says nothing about the connection that runs the next statement. The
+  rebuild therefore rides one pinned `db.Conn` for its whole life: OFF
+  before the transaction, the copy, rename and index inside it,
+  `foreign_key_check` before the commit, ON again before the conn goes back
+  to the pool. (iv) *The fix half-lands.* The two halves ship together or
+  not at all: the Go guard without the schema turns a merge into unbounded
+  recursion (step 3 collides on the column's `''`, the race-retry re-enters,
+  collides, re-enters); the schema without the guard leaves
+  `GetUserByEmail("")` matching the first email-less row, so the merge
+  survives the migration looking like success. Detection keys off the legacy
+  DDL text, so it must fire exactly when the old constraint is present and
+  never again — a rebuild that matches forever rewrites the table on every
+  boot — and because a fresh database never matches (its `CREATE TABLE` is
+  written without `UNIQUE`), the partial index must be created
+  unconditionally or a new deployment ships a users table with no email
+  uniqueness at all and `CreateUser`'s `ErrDuplicateEmail` (matched on the
+  `UNIQUE constraint failed` substring) never fires again. The law:
+  **identity is bound by `(provider, provider_id)`; an email links only when
+  one was presented, and an email-less account is its own account** — the
+  empty string is never a key, uniqueness covers real addresses only, and
+  the schema surgery runs once, on one pinned connection, with foreign keys
+  restored before anything else queries.
+
+- **FM-NOTIFa (candidate L41)** — a push may claim only the state the turn
+  is actually in; "finished" means finished. Failure modes: (i) *The budget
+  pause claims the build finished.* There are two pauses and the terminal
+  guard checked one. `outcome.Paused` is ask_user (done status `waiting`),
+  and the guard `if res.outcome == nil || !res.outcome.Paused` was written
+  for it — but `outcome.Exhausted`, the round budget (done status
+  `paused`, prompt row `paused`, Resume continues it), also returns a nil
+  error by design, so it fell straight through and dispatched
+  `build_success` — "Build finished / verified: false" — for a turn that
+  had stopped mid-work with the model still asking for rounds. Live
+  evidence: journey3's build hit the 60-round budget and the owner's
+  notification history gained exactly that row (id 4, 01:30:56 UTC) while
+  the prompt row read `paused`. Every exhausted resume repeats it — a build
+  paused four times pushes five "finished" pushes — and the client that
+  uses `build_success` to drop its spinner shows *done* over a half-built
+  app. (ii) *The count rots with it.* The product's own notification stage
+  and the E2E assert exactly one `build_success` at the end; with the false
+  rows in the history the honest number is `1 + exhausted legs + 1`, so the
+  check can neither pass nor distinguish a real completion from a pause —
+  and deleting rows to make it pass hides the bug instead of fixing the
+  guard. (iii) *Over-blocking silences the one push that matters.* The
+  mirror mistake is a guard so broad it also swallows the genuine finish —
+  then the user who waited for a build is never told it is ready, and the
+  failure is invisible (an absent push asserts nothing). The terminal side
+  must therefore be pinned by the same test: a leg that ends `success`
+  still fires exactly one `build_success`. Boundary, decided: `Stalled`
+  keeps pushing (it is terminal by contract — not resumable, and the push
+  carries `verified: false`), as do `BudgetStop`/`HookStop`; only the two
+  resumable stops go quiet. The law: **the push reports the turn's real
+  terminal state — `build_success` only when the turn is over and not
+  resumable, `build_failed` only on error, nothing pushed for a stop the
+  client is expected to continue — and the finished side keeps firing
+  exactly once.**
+- **FM-TESTa (candidate L42)** — test code may not exercise a destructive
+  shared-daemon path it does not need, and "read-only" is a claim to be
+  asserted, never commented. Failure modes: (i) *The reconcile test sweeps
+  the live fleet.* `TestReconcileDestroysGoneContainers` documents itself
+  as "read-only here: the fixture container id matches nothing, so nothing
+  is created or removed" — true of the DB→docker half only.
+  `Manager.Reconcile`'s second half lists every `talon-redroid-*` container
+  on the daemon and force-removes the ones no active session claims; a test
+  store claims nothing, so every product container is an orphan to it.
+  Witnessed live: the full backend gate, run on the box while the test
+  server was up, destroyed the warm pool's prepaid container — docker
+  events `kill signal=9 → die exitCode=137 → destroy` at 04:49:03, 46
+  seconds after "warm pool: container ready (port 15555, 1/1 warm)". Had a
+  device session been live its `talon-redroid-<session>` container would
+  have died the same way: a user's device killed mid-use by `go test`, on
+  any machine where service and suite share one daemon (the normal dev box
+  and the VPS alike). (ii) *The collateral is invisible — the test stays
+  green.* Its assertions touch only its own store rows; whether the daemon
+  lost containers never enters the result. CI reads `ok`, docker events go
+  unread, and the comment keeps promising read-only. A destructive side
+  effect with no assertion is a bug the suite can carry forever. (iii) *The
+  mirror: skipping hides the test.* Guarding with `t.Skip` whenever
+  containers exist would make safety a function of daemon luck (an empty
+  daemon at CI time) and silently stop testing reconcile exactly where
+  servers run. The sweep must move behind a seam the test does not take,
+  and the read-only claim must become an assertion — a before/after
+  container census — so a later change that re-arms the sweep in the test
+  path turns the test RED instead of killing the fleet quietly. The law:
+  **test code drives only the non-destructive half of a shared-daemon
+  sweep; "touches nothing" is proven by a census assertion, never by a
+  comment; the production sweep (startup and cleanup loop) keeps its full
+  behavior.**
+- **FM-POOLa (candidate L43)** — the sweeper must not destroy what the pool
+  has prepaid, and a dropped slot must refill. Failure modes: (i) *The
+  5-minute cleanup loop destroys the warm pool's container.*
+  `StartCleanupLoop(s, 5*time.Minute)` runs the full `Reconcile` on the
+  live daemon, and its orphan branch removes every `talon-redroid-*`
+  container no active session claims — while a warm entry has no session
+  by design (it boots under a negative id precisely so it belongs to
+  none). Every tick therefore pays the prepaid boot back as an orphan: the
+  container dies within five minutes of boot, the in-memory warm map keeps
+  pointing at it, and every later claim fails retag → "stale entry dropped"
+  → cold path. DV4's whole promise (a booted device waiting when a session
+  opens) silently expires after the first tick, with only a claim-time log
+  line as evidence. (ii) *A stale drop never refills the slot.* `Claim`
+  signals `p.claim` only after a successful retag; the stale path
+  `continue`s without signaling, and the worker boots only on that signal —
+  so once the pool empties, for any reason (the sweep, a daemon restart, an
+  OOM-killed container), it can never re-warm for the life of the process.
+  Startup's "1/1 warm" decays to a permanently cold pool nothing is left
+  running to notice. (iii) *The mirror: over-sparing leaks containers.*
+  Sparing by name prefix or by the sign of the session id would also spare
+  the PREVIOUS process's warm leftovers at startup — crash orphans holding
+  1GB/1CPU forever, collected by nothing but the next process's sweep. The
+  spare must key on this running process's live warm map by container
+  identity: present → spare, absent → sweep as before, so the startup sweep
+  still collects foreign leftovers. The law: **orphan = no active session
+  AND not warm-claimed by this running process — the periodic sweep spares
+  only its own prepaid entries, the startup sweep still collects foreign
+  ones — and a claim that drops a stale entry signals a refill for the slot
+  it emptied.**
+- **FM-RELAYa (candidate L44)** — a relay that cannot reach its upstream
+  owes the client an HTTP status; a silent socket close is not an answer.
+  Failure modes: (i) *The startup window is a trapdoor.* The server wires
+  `public :17555 → 127.0.0.1:<metro>` the moment metro's startup wait
+  times out — "metro startup timeout for session 2, continuing anyway"
+  (05:47:33) — while metro only began listening seven seconds later
+  (05:47:40). Any client doing the documented flow (test-info → phone
+  relay) inside that window hits a refused dial, and `serveConn` answers
+  by returning: the socket closes with **zero bytes** — no status line,
+  no body, no retry hint. (ii) *An API consumer cannot classify the
+  failure.* The E2E driver's `fetch` threw `SocketError: other side
+  closed` on exactly this and the run died at its relay stage
+  (journey3b.mjs:446, uncaught) — an unguarded client crashes on what is
+  a five-second retry, a guarded one cannot tell "upstream not ready"
+  from "relay dead" from a network partition, and the only diagnosis
+  lives in a server log no client can read. (iii) *The mirrors.* Answering
+  200 empty would lie — there is no upstream; answering before the §2.4
+  token gate would leak upstream state to unauthenticated probers; and
+  closing with the client's request still unread in the kernel would RST
+  the very response a fix writes. The law: **after the token gate, an
+  unreachable upstream gets an HTTP 503 with `Connection: close` and
+  `Retry-After`, written over drained request bytes so the close is
+  graceful — the client's retry decision comes from a status line, never
+  from whether the socket happened to die.**
+- **FM-KEYSa (candidate L45)** — a keystore file no row owns has no
+  password, so generation must move it aside; and "the file exists" may
+  never wear keytool's "password was incorrect" disguise. Failure modes:
+  (i) *The orphan file wedges every export with a lie.* `Keystore.Ensure`
+  generates when `GetKeystore` returns no row; `-genkeypair` then OPENS
+  the existing `./keystores/project-1.jks` — a keystore from an earlier
+  database whose password is encrypted in a row that no longer exists —
+  and answers `java.io.IOException: keystore password was incorrect`. The
+  password was a fresh 32-byte random minted seconds earlier and never
+  used; there is no wrong password anywhere. LIVE: export job 1 failed
+  with exactly this (server log 05:58:31) while the `project_keystores`
+  table was empty and `keystores/project-1.jks` dated the day before.
+  (ii) *The wedge is permanent and self-hiding.* The row is written only
+  AFTER genkeypair succeeds, so the same failure returns on every future
+  export — the project can never ship again until a human discovers a
+  file nothing in the DB mentions. A DB restore or swap (VPS backups
+  restore the database, not `./keystores`) lands in this state by
+  default, and the older orphan `project-24.jks` proves it has happened
+  before. (iii) *The mirrors.* Overwriting the file outright would discard
+  bytes that might be a published app's signing key (stores reject
+  updates signed with a different key) — but keeping it is equally wrong:
+  with no row the password is GONE, so the file is unreadable by
+  construction. The asymmetry that hides the bug is the tell:
+  row-without-file regenerates with a log line, file-without-row crashes
+  with a misdiagnosis. The law: **the row is the source of truth — a
+  keystore file no row owns is unreadable, so generation renames it aside
+  with a loud log and writes a fresh key; the error that means "file
+  exists" is never allowed to masquerade as "password incorrect".**
+- **FM-SIGNa (candidate L46)** — a secret given to two readers through one
+  file is consumed by the first, and a path that has never executed in
+  production is not a path that works. Failure modes: (i) *Two readers,
+  one stream.* `Builder.signAPK` passes ONE `passFile` path as both
+  `--ks-pass file:` and `--key-pass file:`. keytool's `-storepass:file` /
+  `-keypass:file` reopens the file per flag — keystore GENERATION works,
+  which is why every password test so far passed — but apksigner's
+  `PasswordRetriever` reads each `file:` path as a single shared stream:
+  the keystore-password read consumes it and the key-password read hits
+  `end of file reached`. LIVE: export job 3 built for 44 minutes
+  (identity → prebuild → identity-patch → assembleRelease →
+  verify-identity → sign) and died at 07:26:32 with `apksigner failed …
+  Failed to read Key "project-1" password … end of file reached in
+  /tmp/release-pass-*` — every export, forever, at the last step. An
+  isolated repro pins it exactly: shared file without newline fails,
+  shared file WITH newline fails (the stream is shared regardless of
+  content), two separate files sign and verify clean. (ii) *Failure
+  stacking hid it.* Job 1 died inside `Ensure` (FM-KEYSa) before any
+  build ran; job 2 was killed mid-gradle by a harness restart; job 3 was
+  the first run in this codebase's life to REACH `phase: sign` — a
+  never-executed seam, green behind two earlier blockers, with unit
+  coverage that only ever exercised keytool's reopen-per-flag reader.
+  (iii) *The mirrors.* Putting the password on argv would pass and
+  regress the exact leak the 0600 temp file exists to prevent (`ps`
+  reads argv); sharing one file LOOKS right — the same secret twice is
+  the same file — which is why review waved it through; and apksigner's
+  per-path sharing is its contract, not a bug to work around with
+  trimming or buffering. The law: **every password consumer gets its own
+  file — a secret shared between two readers is consumed, not shared —
+  and a production path that has never run end to end is untested, no
+  matter how many of its helpers have tests.**
+- **FM-FPRa (candidate L47)** — a fingerprint gate must compare decoded
+  bytes, never their spelling. Failure modes: (i) *The equality checks
+  presentation.* `sameFingerprint` normalizes with trim + space-removal +
+  uppercase but does NOT strip colons — while its only two producers emit
+  exactly the two spellings that differ by colons: apksigner's
+  `SHA-256 digest: a6cedc…5584` (bare lowercase hex) and keytool's
+  `SHA256: A6:CE:DC:…:5584` (colon-delimited). The live strings are the
+  SAME 32 bytes. LIVE: export job 4 got through `sign` for the first time
+  in this codebase's life (FM-SIGNa fixed) and died at `verify-signature`
+  (08:02:31) with `signature check failed: APK signer "a6cedc…5584" !=
+  keystore "A6:CE:…:5584"` — a correct signature accused of being wrong.
+  (ii) *A correct gate makes the bug more blocking, not less.* The check
+  exists to prove the artifact carries the project's own key (app stores
+  reject updates signed with a different key), so it is fail-closed by
+  design — and because every correct build fails the format comparison,
+  no export can ever ship while the message sends the operator hunting a
+  wrong key that is not wrong. This is the third never-executed seam in
+  a row: job 1 died inside `Ensure`, job 3 at `sign`, job 4 here — each
+  fix exposing the next untested comparison, exactly as the stacked
+  failure chain predicts. (iii) *The mirrors.* Deleting the check voids
+  the store guarantee (a wrong-key APK must not ship); weakening it to
+  a prefix match would pass on truncated or wrong-length strings. The
+  fix is canonicalization, not deletion: a certificate SHA-256 is 32
+  bytes of hex — case, separators, and field labels are presentation.
+  The law: **fingerprint equality strips separators and case on both
+  sides and compares the full hex value — a format difference must never
+  accuse a correct signature, and an empty fingerprint must never pass.**
+
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
 | L3 | **Routes-first contract** — (i) `SystemPromptBuild` gains the ordering rule: scaffold every planned `app/` route as a *compiling* skeleton within the first minutes, before infrastructure; (ii) code-side route ladder in the build loop: no `app/**.tsx` write by +5 min → advisory line in the round card, by +10 min → warning event (L2's pattern — prose failed, code enforces). Route coverage stays the gate it is today | fails-first ladder test; Run-2 S2 = 46m05s, S5 = 2.1/h → **Run-3 S2 = 13m59s, S5 = 7.5/h ✅ (first pass), S3 = 6/6 routes**; warning fired once at +11 min | ⬤ |
@@ -1083,6 +1335,14 @@ Failure modes (written before the code, TEST_RULES §3):
 | L37 | **The phone can pay, and says so (FM-SKRb)** — (a) `lib/api.ts` gains an additive `detail` carrying the whole refusal body, so the 402's `code` / `spare_credits` / `skr_amount_per_pack` / `credits_per_pack` reach the sheet that must render them; `.message` and `.status` are untouched, extending the exact mechanism line 808 already reads; (b) `skrApi` (`quote`, `verify`) sits beside `exportApi`, and the export start keeps its 402 offer instead of flattening it to a sentence; (c) `lib/skr-transfer.ts` builds the payment the way Solana Mobile's own `skr-staking` sample builds theirs — **no dependency added**: `findAssociatedTokenAddress` from kit's `getProgramDerivedAddress` over seeds `[owner, Tokenkeg…, mint]` under `ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL`; a `CreateIdempotent` ATA instruction (`data: [1]`, six accounts, payer `WRITABLE_SIGNER`) because a treasury that has never been paid has nowhere to receive; and a `TransferChecked` (discriminator **12**, accounts source → mint → owner → dest) so the mint rides along and a wrong destination fails rather than paying a different token's account; the raw amount is `quote.skr_amount × 10^decimals` with decimals from `getTokenSupply` on the **quoted** mint, so no exponent is constant in the binary; **no dependency added** — the only `package.json` edit is inside the `jest` block (see evidence); (d) `components/build/ExportPanel.tsx`, mounted as the build tab's third sub-view: quote first, `spare_credits ≥ 1` skips the sheet entirely, otherwise pay → keep the signature → verify (retrying `pending`, never re-sending) → start → poll, and a non-`verified` verdict never reaches `exportApi.start` | fails-first, two rounds, 12 tests. **Round A** behavioral, against today's shipped code — `lib/api.test.ts` 2 red / 1 green: `'keeps the paywall offer on the thrown error'` (**Received: undefined** — `parseResponse` attaches only `.status`, so `spare_credits` / `skr_amount_per_pack` / `credits_per_pack` are gone before any sheet could read them) and `'still hands a non-402 refusal its own body'` (**TypeError: Cannot read properties of undefined (reading 'error')**), while `'leaves a successful start alone'` stayed green. **Round B**, written before any source existed and observed red: `lib/skr-transfer.test.ts` → `Could not locate module @/lib/skr-transfer`, covering `'transfer carries the mint and the amount, not just the pair'` (discriminator 12 and the mint in account[1] are the whole point of choosing it over `Transfer`), `'the treasury account is created idempotently, so a second purchase cannot fail'` (a plain `Create` fails the second time), `'the pack amount comes from the mint decimals, never a constant'` (run at 6, 9 and 4 — a hardcoded exponent fails two of the three) and `'the associated token address answers to both owner and mint'`; `components/build/ExportPanel` absent → `Could not locate module @/components/build/ExportPanel`, covering `'prices the pack from the quote the server sent, never from a constant'` (quotes **37** SKR against an unusual mint and asserts both reach the instructions while the backend's own mint does not), `'skips the paywall when the account already holds a credit'`, `'a rejected payment never starts the build'` and `'a pending payment re-verifies the same signature instead of resending'`; `app/(tabs)/build-export.test.tsx` → `Unable to find an element with text: Export` (the build tab offered Chat and Files only). **Harness corrections recorded rather than skipped**, each re-verified by the full suite going green: (1) jest rejects `.mjs` *before* transforming it (`unstable_shouldLoadAsEsm`), so `transformIgnorePatterns` cannot reach `@solana/kit` — resolution had to change instead: `testEnvironmentOptions.customExportConditions: ['node','require','react-native']`, which selects kit's `dist/index.node.cjs` because `node` precedes `react-native` in its export map; no dependency was added, and the five pre-existing suites were run immediately and stayed green. (2) TanStack's default 5-minute `gcTime` timer held the event loop open after every render-only suite, so jest never exited — `gcTime: 0`, the setting `device` and `verify-evidence` already use. (3) jest's worker cannot JSON-serialize a BigInt, so a *failing* BigInt assertion reports `Do not know how to serialize a BigInt` instead of the diff; read those with `--runInBand`, noted in the suite header. Gates: `npm test` **9/9 suites, 43/43 tests** (31 pre-existing + 12 new), `tsc --noEmit` exit 0. | ⬤ |
 | L38 | **The export hands over how to submit it (FM-SUBa)** — (a) `ExportHandler.Bundle` at `GET /v1/exports/{id}/bundle`, registered beside `Get` and `Download` in `cmd/server/main.go`: the same owning-project gate, `done`-only with a **409** naming the job's actual status, answering `{"submit_md": …, "manifest": …}` where `submit_md` is `SUBMIT.md` read verbatim and `manifest` is `dapp-store.json` passed through as `json.RawMessage` — **the files are the contract**, so a surface renders what the server wrote instead of re-authoring the steps, and `android_package` / `costs_note` / `publish_command` all arrive from one source; (b) `release.PortalURL` becomes the single constant behind the README's portal line **and** a new `SubmissionBundle.PortalURL`, so the link is server-stated once and lands inside `dapp-store.json`; (c) mobile `ExportPanel`'s done branch fetches the bundle, renders `submit_md` verbatim through the existing `MarkdownView`, and offers **Open Publisher Portal** (`Linking.openURL(manifest.portal_url)`) with the package name printed beside it; (d) web `ExportPanel`'s done branch does the same and replaces its hand-typed costs sentence with `manifest.costs_note`, plus `SUBMIT.md` and `dapp-store.json` offered as file downloads. Auto-submission stays out: Talon still never touches a publisher keypair | fails-first, three surfaces, all red before any source existed. **Backend** — compile-red naming exactly what is missing (the accepted form L33 and L36 shipped theirs in): `h.Bundle undefined (type *ExportHandler has no field or method Bundle)` at all three call sites, plus `undefined: release.PortalURL` and `written.PortalURL undefined (type release.SubmissionBundle has no field or method PortalURL)` → `FAIL internal/api [build failed]`. The two cases: `TestExportBundleHandsOverTheReadmeAndManifest` — a done job whose files the real `WriteBundle` wrote, with `CostsNote` left empty on purpose so the disclosure that comes back must be the shipped default: 200 with `submit_md` byte-identical to the file on disk and carrying `Option A — Publisher Portal`, `manifest.portal_url` = `https://publish.solanamobile.com`, `manifest.android_package` = `com.talon.l38demo` named by both file and README, `costs_note` naming `0.2 SOL`; the same test owns the gates — a stranger's job → **404**, a `queued` job → **409** whose body names `queued` — plus `TestPortalURLIsOneConstantNotAClientLiteral` (the README line and `dapp-store.json`'s `portal_url` must be one value). **Mobile** jest: `'a finished export hands over the submission bundle, not just a status'` (**Unable to find an element with text: Open Publisher Portal**) and `'the package name sits beside the portal button, and the link is the one the server sent'` (**Unable to find an element with text: com.talon.l38demo**), with the four pre-existing FM-SKRb cases green throughout (2 failed / 4 passed at red, 6/6 at green). **Web** vitest: `Failed to resolve import "./SubmissionAssist" from "components/ide/ExportPanel.test.tsx". Does the file exist?` → `no tests`, covering `'a finished export shows the served package, portal and costs note'` and `'the bundle download hands over SUBMIT.md and dapp-store.json'`. **Harness notes, recorded rather than skipped:** (1) the web done branch sits behind a 10 s poll and `@testing-library/dom` 10.4.1 only auto-advances fake timers when a `jest` global exists (`jestFakeTimersAreEnabled()` tests `typeof jest !== 'undefined'`, absent under vitest), so that suite drives `SubmissionAssist` directly — the full job → done → assist path is covered on mobile, whose mocked job query resolves immediately; (2) a single-suite jest run of `export-panel` prints its results and then hangs (`Jest did not exit one second after the test run has completed`, `--detectOpenHandles` reports nothing) — reproduced with **only the pre-existing FM-SKRb tests**, so it is a property of running that file alone and not of these tests, and the multi-suite run exits cleanly, so iteration read the printed results under `timeout`; (3) the first full frontend run reported 2 × 5000 ms timeouts (`PhonePreview`, `TestOnPhone`), both green in isolation and on re-run — parallel-load flake, not a regression. Gates: backend `go build ./...` clean and `go test ./...` **51 ok** plus the intentional `TestShippedDevClientAPKDeclaresItsOwnPackage`; mobile `npm test` **9/9 suites, 45/45 tests** (43 + 2) with `tsc --noEmit` exit 0; frontend `npx vitest run` **18/18 files, 99/99 tests** (97 + 2). | ⬤ |
 | L39 | **The phone takes delivery of the APK it paid for (FM-APKa)** — (a) mobile `lib/api.ts` gains `exportApi.downloadUrl(jobId)` and `exportApi.downloadApk(jobId, filename)`: the download rides the **session token** (the same `getToken()` the `request` helper already uses) into `File.downloadFileAsync(url, new File(Paths.cache, filename), { headers, idempotent: true })`, and the result goes to `shareAsync(file.uri, …)` — expo-sharing's **named** export; the package declares no default at all, so `.default` would be `undefined` against the real package while a hand-written mock would happily supply one — so the bytes leave the app's sandbox through the system share sheet instead of being written where nobody can open them; `idempotent: true` is what makes the *second* export work against a filename the device already holds (FM-APKa(iv)); `expo-file-system` (already in the tree), `expo-sharing` (added) and `./auth` are all reached through a **lazy `require(…)` inside the function**, not `await import(…)`: they are native, or must stay out of `lib/api`'s static graph, and jest's ESM dynamic-import path does not consult CJS mock factories — an `await import('./auth')` under a registered `@/lib/auth` mock loads auth.ts (whose line 1 is `import * as SecureStore …`) as CJS and dies on *Unexpected import statement in CJS module*, which is exactly what the run before the seam was written in CJS form reported. Loading `lib/api.ts` anywhere else still does not drag a native module into the module graph; (b) `ExportPanel`'s done branch gains **Download signed APK** with busy and failure states, beside the submission assist, and the two share one job id so the button can never offer a different artifact than the assist describes | fails-first, two reds that each name what is missing, observed before any source existed: jest `'a finished export offers the signed APK it was paid for'` → **Unable to find an element with text: Download signed APK** (the done branch renders a status line and the assist — nothing hands over a file), and `'the download carries the session token and shares the result'` → **TypeError: _api.exportApi.downloadApk is not a function** (the seam does not exist); the second asserts the `Authorization` header and `idempotent: true` reach the download and that the APK mime reaches `shareAsync`, so a token-less request (FM-APKa(ii)) or bytes left in the sandbox (FM-APKa(iii)) cannot pass; harness note recorded: the single-suite jest hang in L38's evidence was root-caused to this suite's QueryClient — `gcTime: 0` was set on **queries** but the pay path settles `startExport.mutate`, and a *mutation's* 5-minute `gcTime` lives under `defaultOptions.mutations`, so any run that paid left a `timeout:300000` from `@tanstack/query-core/timeoutManager` behind (render-only suites exited, which is why it looked file-specific); `mutations: { gcTime: 0 }` added — `npm test -- export-panel` now exits **0** with no `Jest did not exit`; the frontend twin is `testTimeout: 15000` in `vitest.config.ts` (18 files on 8 CPUs starved two trivial renders past vitest's 5 s default) | ⬤ |
+| L40 | **An absent email is not an identity (FM-IDENTa)** — (a) `UpsertOAuthUser` step 2 is guarded `email != ""`: the email path runs only when an address was presented, so a wallet sign-in falls through to "create fresh" unless `(provider, provider_id)` is already bound — step 1 (bound path) is untouched, and a real email still links two providers to one human; (b) `migrate()` gains the rebuild, keyed off the legacy DDL (`sqlite_master.sql` for `users` containing `email TEXT UNIQUE NOT NULL`): a legacy table is rebuilt on a **single pinned `db.Conn`** — `PRAGMA foreign_keys=OFF` before `BeginTx`, `CREATE TABLE users_new` in the final nine-column shape *without* the column-level `UNIQUE`, `INSERT INTO users_new (…) SELECT … FROM users` with explicit ids so AUTOINCREMENT continues past the copied max, `DROP TABLE users`, `ALTER TABLE users_new RENAME TO users`, `PRAGMA foreign_key_check` (any row rolls the transaction back), `COMMIT`, `PRAGMA foreign_keys=ON` before the conn returns to the pool — then `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email != ''` runs unconditionally so fresh databases get the same guarantee, and `queries`' `CREATE TABLE users` drops `UNIQUE` so new files are born with the new shape and the detection text stays a pure legacy marker; (c) `walletauth.go`'s comment states the law it actually follows — bind by address, link by email only when there is one, else create fresh | fails-first store tests, both red observed before any fix existed: `TestUpsertOAuthUserSeparateAccountsForEmailLessWallets` → **second wallet returned user 1 — both identity rows on `user_id=1`** (the merge), `TestMigrateRebuildsLegacyUsersEmail` → **"users still carries the column-level UNIQUE, so the rebuild never ran"** — the same test then requires the partial `idx_users_email` to exist on the file; the same file carries the keep-tests that must not move: a duplicate *real* address still yields `ErrDuplicateEmail` (the partial index's message must keep containing `UNIQUE constraint failed`), the same wallet signing in twice stays one account (bound path), one real address from two providers stays one account (the linking law), and a second `New()` on the rebuilt file is a no-op with `pragma_foreign_key_check` clean and the child row still pointing at its parent | ⬤ |
+| L41 | **The push tells the truth about where the turn stopped (FM-NOTIFa)** — the terminal guard in `PromptHandler.Stream` becomes `if res.outcome == nil \|\| (!res.outcome.Paused && !res.outcome.Exhausted)`: both resumable stops — ask_user (`Paused`, done `waiting`) and the round budget (`Exhausted`, done `paused`) — go quiet, `Exhausted` was the one that fell through because it also returns a nil error, while `Stalled`, `BudgetStop` and `HookStop` stay terminal and still push, and an error still pushes `build_failed`; the guard's comment now names both pauses so the next stop added to `BuildOutcome` has to be classified here | fails-first api test with the scripted stand-in provider, `TestBudgetPauseIsNotBuildSuccess` (AI_MAX_ROUNDS=2): leg 1 spends the budget → done frame `status=paused` **and zero `build_success` rows** (pre-fix: one row — `Build finished / verified: false`, the same row journey3 recorded live as notification id 4), leg 2 resumes → done `status=success` **and exactly one `build_success`** (pre-fix: two) — the second half pins FM-NOTIFa(iii), the real finish must keep firing once; the live false row in the journey DB is deleted with the fix, and stage 8 of the end-to-end journey then asserts `build_success == 1` against a clean history | ⬤ |
+| L42 | **A test sweeps only what it owes (FM-TESTa)** — `Manager.Reconcile` splits: the public `Reconcile(s)` keeps the full startup sweep (DB→docker repair + orphan destruction + legacy removal, behavior unchanged) and delegates to an internal `reconcile(s, sweepOrphans bool)`; `TestReconcileDestroysGoneContainers` calls the non-sweeping half so its "nothing is created or removed" comment becomes true by construction, and it gains the census: `ListContainers()` snapshotted before and after the call, asserted identical — the comment becomes an assertion | fails-first: with a probe container `talon-redroid-7777` running, the pre-fix test (full sweep) fails the census — RED, the exact destruction FM-TESTa(i) witnessed live (docker events kill→destroy, the 04:49:03 gate run that took the warm container); after the split the same run passes with the probe still alive; the swept half stays covered by L43's pure orphan-plan test so the production sweep keeps a test | ⬤ |
+| L43 | **The sweeper spares what the pool prepaid, and a dropped slot refills (FM-POOLa)** — (a) the orphan loop's decision extracts into a pure `orphanPlan(docker []ContainerInfo, claimed map[string]*store.Session, isWarm func(string) bool) []ContainerInfo` used by the sweep; (b) `Manager` gains `ProtectWarm(isWarm func(containerID string) bool)` consulted only by the orphan branch (`nil` = today's behavior), `Pool` gains `IsWarm(id)` under its mutex, and `main.go` wires them together by moving `StartCleanupLoop` to after `NewPool` — the startup `Reconcile` still runs before the pool exists, so foreign crash leftovers are still collected, and the loop starts only after the spare is wired (happens-before, no race); (c) `Claim`'s stale-entry drop signals `p.claim` before `continue`, exactly as a successful claim does | fails-first: (1) pool test — a warm map seeded with a dead container id, `Claim` → retag 404 → drop: RED pre-fix (no refill signal queued — select on `p.claim` finds nothing), GREEN: signal present; (2) pure `orphanPlan` test — unclaimed+not-warm → planned (pins the production sweep), unclaimed+warm → spared, claimed → never touched; (3) live, with the probe running against the current binary: the very next 5-minute cleanup tick destroys it (`orphaned=1` in the reconciler log, docker events at the tick) — and after the fix the server's real warm container survives a full tick — witnessed live on the fixed binary at 06:11:40 (`recovered=0, destroyed=0, orphaned=0`, `talon-redroid--3` still Up) | ⬤ |
+| L44 | **The relay answers "upstream not ready" with a status (FM-RELAYa)** — `internal/relay/relay.go`'s dial-failure path gains `replyUnavailable`: drain the request bytes already arriving (short deadline, so the following close carries no unread data and cannot RST the answer), then write `HTTP/1.1 503 Service Unavailable` + `Retry-After: 5` + `Connection: close` + a body naming the upstream — instead of returning into a silent close; the §2.4 token gate still runs first, so an unauthenticated prober learns nothing, and the pass-through path is untouched | fails-first relay test: `Start(freePort, closedPort)` (a metro address nothing listens on), the "phone" writes `GET /index.bundle…` → RED pre-fix (read fails with zero bytes — EOF/reset, exactly the `SocketError: other side closed` that killed journey3b at :446), GREEN: status line `503`, `Retry-After: 5`, body names the refused upstream; live failure evidence on record: server log `05:47:33 upstream dial … connection refused` (relay wired at startup-timeout) vs metro listening `05:47:40` | ⬤ |
+| L45 | **An orphan keystore file is moved aside, not misdiagnosed (FM-KEYSa)** — `Keystore.Ensure`'s no-row path stats the target before `-genkeypair`: an existing file is renamed `<name>.orphaned-<unix>` with a log line naming the project and the reason (no row owns it → its password died with the row → unreadable by construction), so genkeypair always starts on a clean path; the write order stays row-after-success (the row remains the source of truth) and the row-without-file branch keeps its regenerate-and-log behavior — the two branches now degrade symmetrically | fails-first release test (real keytool): temp keystore dir seeded with a valid JKS written under a password no row has ever seen, no row → RED pre-fix (`keytool failed: … keystore password was incorrect`, no row saved — the exact live failure, export job 1 / 05:58:31), GREEN: `Ensure` returns a working record (stored password opens it via `-list`), the orphan sits renamed `.orphaned-*` beside it, and a second `Ensure` reuses the same file — LIVE on the fixed server: the real orphan was moved aside at 06:07:55 (`moved aside to keystores/project-1.jks.orphaned-1791004075 and regenerating`) and export jobs 4/5 sailed past `Ensure` | ⬤ |
+| L46 | **Each password reader gets its own file (FM-SIGNa)** — `Builder.signAPK` writes TWO 0600 temp files (one for `--ks-pass file:`, one for `--key-pass file:`) instead of passing a single path twice; both are cleaned up, argv stays password-free, and the rest of the invocation is unchanged | fails-first sign test (real keytool + apksigner + a `aapt package`-built 611-byte fixture, skipping exactly where production's own SDK gate would): `signAPK` over a keystore from `Ensure` → RED pre-fix (`apksigner failed … Failed to read Key … end of file reached` — the byte-for-byte live failure, export job 3 / 07:26:32; isolated repro A), GREEN: the signed artifact passes `apksigner verify --print-certs` printing the keystore's DN; shared-file-with-newline ruled out as a fix (repro B), two-files proven (repro C) — LIVE: export job 5 ran `sign` → `verify-signature` clean on the fixed binary (08:36:13), the first signing in this codebase's life | ⬤ |
+| L47 | **Fingerprint equality compares bytes, not spelling (FM-FPRa)** — `sameFingerprint`'s normalizer strips every non-hex separator (`:` and whitespace) and uppercases BOTH sides before comparing, so apksigner's bare-hex digest and keytool's colon-delimited digest of the same certificate equate; the full hex value must match (no prefix/substring shortcuts) and the `a != ""` empty guard stays | fails-first unit test with the LIVE strings from export job 4: `sameFingerprint("a6cedc…5584", "A6:CE:DC:DA:…:5584")` → RED pre-fix (`false` — the export's exact `verify-signature` failure, 08:02:31), GREEN: `true`; a genuinely different fingerprint, a truncated one, and two empties all stay `false` — LIVE: export job 5 logged `release verified (package com.talon.neighborhoodrewards, signer a6cedc…5584)` at 08:36:17, the two spellings equated in production | ⬤ |
 
 Still-open P1 rows from the previous list:
 

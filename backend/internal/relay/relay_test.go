@@ -1,8 +1,10 @@
 package relay
 
 import (
+	"fmt"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -363,5 +365,49 @@ func TestTokenDiesWithRelay(t *testing.T) {
 	defer StopSession(901)
 	if r2.Token() == "" || r2.Token() == old {
 		t.Fatalf("token reuse across relay restarts: old=%q new=%q", old, r2.Token())
+	}
+}
+
+// FM-RELAYa: an unreachable upstream owes the client an HTTP status, never
+// a silent close. The relay is wired to a port nothing listens on — the
+// exact window the server itself creates (log: "metro startup timeout …
+// continuing anyway" at 05:47:33 wired the relay, metro began listening at
+// 05:47:40 — seven seconds of refused dials the server made reachable).
+//
+// RED pre-fix: serveConn returns into a silent close — the phone reads zero
+// bytes, the exact shape that killed an unguarded API fetch with
+// "SocketError: other side closed" (journey3b.mjs:446). GREEN: a status
+// line the client can classify and retry from.
+func TestRelayAnswers503WhenUpstreamIsDown(t *testing.T) {
+	dead := freePort(t)
+	r, err := Start(freePort(t), fmt.Sprintf("127.0.0.1:%d", dead))
+	if err != nil {
+		t.Fatalf("relay start: %v", err)
+	}
+	defer r.Stop()
+
+	phone, err := net.DialTimeout("tcp", r.listener.Addr().String(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("phone dial: %v", err)
+	}
+	defer phone.Close()
+
+	if _, err := phone.Write([]byte("GET /index.bundle?platform=android HTTP/1.1\r\nHost: relay\r\n\r\n")); err != nil {
+		t.Fatalf("phone write: %v", err)
+	}
+	phone.SetReadDeadline(time.Now().Add(3 * time.Second))
+	resp, _ := io.ReadAll(phone)
+	if len(resp) == 0 {
+		t.Fatalf("FM-RELAYa: upstream down (%s) — the relay closed with ZERO bytes; an API client cannot classify the failure, and an unguarded fetch dies on exactly this (SocketError: other side closed)", r.metroAddr)
+	}
+	got := string(resp)
+	if !strings.Contains(got, "503 Service Unavailable") {
+		t.Errorf("want a 503 status line, got: %q", got)
+	}
+	if !strings.Contains(got, "Retry-After: 5") {
+		t.Errorf("want Retry-After: 5 so the client knows a retry is cheap, got: %q", got)
+	}
+	if !strings.Contains(got, "Connection: close") {
+		t.Errorf("want Connection: close, got: %q", got)
 	}
 }
