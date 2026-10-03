@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { MenuScreen } from '@/components/nav/MenuScreen'
 import { Badge, Field, LimeButton, SubtleCard, UIText } from '@/components/ui'
-import { Colors, Spacing } from '@/constants/theme'
+import { Colors, Radii, Spacing } from '@/constants/theme'
 import { useActiveProject, useCreateProject, useProjects, useSetActiveProject } from '@/hooks'
 import { memoryApi } from '@/lib/api'
 import { useQuery } from '@tanstack/react-query'
@@ -73,7 +73,11 @@ export default function ProjectsScreen() {
         </UIText>
       )}
       <ScrollView showsVerticalScrollIndicator={false}>
-        <View style={styles.stack}>
+        {/* Two boxed tiles per row: a dashboard of apps, not a list of rows.
+            space-between keeps the outer edges flush (a lone last tile stays
+            left at half width), and every tile is the same height — the
+            active pin sits on the tile's bottom edge either way. */}
+        <View style={styles.grid}>
           {(projects ?? []).map((p) => {
             const isActive = active?.id === p.id
             return (
@@ -84,17 +88,23 @@ export default function ProjectsScreen() {
                   await setActiveProject(p.id)
                   router.replace('/(tabs)/build')
                 }}
-                style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                style={({ pressed }) => [
+                  styles.tile,
+                  isActive && styles.tileActive,
+                  pressed && styles.pressed,
+                ]}
               >
-                <View style={styles.meta}>
-                  <UIText variant="body" tone="hero" numberOfLines={1}>
-                    {p.name}
-                  </UIText>
-                  <UIText variant="caption" tone="faint" numberOfLines={1}>
-                    {p.status || 'active'}
-                  </UIText>
-                </View>
-                {isActive && <Badge label="active" tone="running" />}
+                <UIText variant="title" tone="hero" numberOfLines={2}>
+                  {p.name}
+                </UIText>
+                <UIText variant="caption" tone="faint" numberOfLines={1} style={styles.tileStatus}>
+                  {p.status || 'active'}
+                </UIText>
+                {isActive && (
+                  <View style={styles.tileFoot}>
+                    <Badge label="active" tone="running" />
+                  </View>
+                )}
               </Pressable>
             )
           })}
@@ -133,18 +143,28 @@ const styles = StyleSheet.create({
   createRow: { flexDirection: 'row', gap: Spacing.s8 },
   createField: { flex: 1 },
   createBtn: { minWidth: 88 },
-  stack: { gap: Spacing.s8, paddingBottom: Spacing.s32 },
-  row: {
+  grid: {
     flexDirection: 'row',
-    alignItems: 'center',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
-    gap: Spacing.s12,
-    minHeight: 60,
-    paddingHorizontal: 14,
-    borderRadius: 10,
+    rowGap: Spacing.s12,
+    paddingBottom: Spacing.s32,
+  },
+  tile: {
+    width: '48%',
+    minHeight: 104,
+    gap: 2,
+    padding: 12,
+    borderRadius: Radii.cards,
     backgroundColor: Colors.carbon,
   },
-  meta: { gap: 2, flex: 1 },
+  // The active pin is tonal, like the active pill — carbon carries the box,
+  // the lime wash says "this one is pinned", the badge says it in words.
+  tileActive: { backgroundColor: 'rgba(228,242,34,0.10)' },
+  tileStatus: { flexShrink: 1 },
+  // marginTop: auto parks the badge on the tile's bottom edge so every tile
+  // in a row reads as the same box, active or not.
+  tileFoot: { marginTop: 'auto', paddingTop: Spacing.s8 },
   pressed: { opacity: 0.7 },
   memHead: { marginTop: Spacing.s8 },
   memType: { marginBottom: 2 },
