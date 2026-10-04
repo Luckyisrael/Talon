@@ -7,7 +7,11 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
-    include: ["components/**/*.test.{ts,tsx}", "lib/**/*.test.{ts,tsx}"],
+    include: [
+      "components/**/*.test.{ts,tsx}",
+      "lib/**/*.test.{ts,tsx}",
+      "app/**/*.test.{ts,tsx}",
+    ],
     css: false,
     // Observed: the first full run reported 2 × 5000ms timeouts (PhonePreview,
     // TestOnPhone) — both trivial renders that passed in isolation and on

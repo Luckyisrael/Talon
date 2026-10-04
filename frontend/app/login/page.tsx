@@ -5,10 +5,13 @@ import Link from "next/link";
 import { auth } from "@/lib/api";
 
 /**
- * Sign-in is OAuth: GitHub and Google — email/password is gone. The buttons
+ * Sign-in is OAuth — GitHub first — email/password is gone. The buttons
  * render from the server's honest provider list: a provider without
  * credentials on the server shows disabled with its reason, never a dead
  * click.
+ *
+ * L64/FM-PROVa: Google's offer is retired as a comment — visible in
+ * source, absent on screen. A return is an uncomment, not a rebuild.
  *
  * The flow: the browser navigates to /v1/auth/{provider}/start (the backend
  * 302s to the provider's consent screen), the provider returns the browser
@@ -45,9 +48,15 @@ export default function LoginPage() {
 
   const allProviders = [
     { id: "github", name: "GitHub" },
-    { id: "google", name: "Google" },
+    // L64/FM-PROVa — Google retires as a comment: the JSX, the entry and
+    // the mark branch on the mobile side all survive as source, so the
+    // day Google returns it is an uncomment — not a re-implementation.
+    // { id: "google", name: "Google" },
   ];
   const isConfigured = (id: string) => providers?.some((p) => p.id === id) ?? false;
+  // The subtitle names what is actually offered — a hardcoded "or Google"
+  // outlives its own retirement.
+  const providerNames = allProviders.map((p) => p.name).join(" or ");
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4 bg-void">
@@ -64,7 +73,7 @@ export default function LoginPage() {
 
         <div className="card">
           <h1 className="text-[17px] font-medium tracking-tight text-paper text-center mb-1">Welcome back</h1>
-          <p className="text-sm text-fog text-center mb-6">Sign in with GitHub or Google</p>
+          <p className="text-sm text-fog text-center mb-6">Sign in with {providerNames}</p>
 
           <div className="flex flex-col gap-3">
             {allProviders.map((p) => {

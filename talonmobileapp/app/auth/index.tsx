@@ -128,7 +128,10 @@ export default function AuthScreen() {
 
   const allProviders = [
     { id: 'github', name: 'GitHub' },
-    { id: 'google', name: 'Google' },
+    // L64/FM-PROVa — Google retires as a comment: the entry stays in
+    // source (the G-mark branch below stays with it) so its return is an
+    // uncomment, not a rebuild. Nothing rendered may offer it meanwhile.
+    // { id: 'google', name: 'Google' },
   ];
   const isOn = (id: string) => providers?.some((p) => p.id === id) ?? false;
   // OAuth returns through the talon:// scheme, which only exists in dev and
