@@ -12,10 +12,13 @@ package api
 // once; junk never reaches the chain; and the exponent comes from the chain.
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -366,5 +369,38 @@ func TestSkrVerificationUsesTheChainsOwnDecimals(t *testing.T) {
 	}
 	if !strings.HasPrefix(out.Reason, "verified") && out.Reason != "" {
 		t.Errorf("reason = %q on a successful verification", out.Reason)
+	}
+}
+
+// FM-SKRc(ii) — a failing ledger read must say WHY on the server log before
+// the friendly line reaches the client. Red today: Quote writes the friendly
+// 500 and logs nothing, so a dead ledger (missing table, closed driver,
+// corrupted file) leaves no trace but the user-facing sentence — the field
+// record being four export panels all reading "could not read your export
+// credits" with nothing behind it.
+func TestQuoteLogsTheRawCreditsError(t *testing.T) {
+	st, err := store.New(filepath.Join(t.TempDir(), "quote-log.db"))
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	h := NewSkrHandler(st, skr.New(skr.Config{Price: 100, Credits: 5}))
+	// The driver's own failure: a ledger that cannot be read at all.
+	if err := st.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	req := authedRequest(1, "")
+	rec := httptest.NewRecorder()
+	h.Quote(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("a dead ledger must still 500, got %d", rec.Code)
+	}
+	if !strings.Contains(buf.String(), "database is closed") {
+		t.Fatalf("FM-SKRc(ii): the raw driver error never reached the log — the quote 500s silently; log = %q", buf.String())
 	}
 }

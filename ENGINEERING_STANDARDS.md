@@ -1599,6 +1599,94 @@ Failure modes (written before the code, TEST_RULES §3):
   fails identically twice and dies with at most one extra request; a flap
   is absorbed.**
 
+- **FM-SKRc (candidate L62)** — the paywall's first question must reach
+  the server the server actually serves. Failure modes: (i) *The client
+  asks in a method the server never registered.* `skrApi.quote()` sends
+  **GET** while the router registers `POST /v1/skr/quote` — every quote
+  dies 405, and the panel's error branch renders "could not read your
+  export credits": a wire-contract error wearing the costume of a ledger
+  failure. Both sides' tests passed because every one mocked past the
+  transport (field record: four `GET /v1/skr/quote status=405`, 03:52).
+  (ii) *The ledger's own failures are invisible.* the five
+  `SpareCredits`/`ConsumeCredit` error paths write the friendly line and
+  return without logging the driver's error — FM-RAWa's lesson never
+  reached the credit tables. The law: **each paywall endpoint is called
+  in the method the router registered, a test pins the pair from the
+  client side, and every credits-read failure logs its raw error before
+  the friendly one.**
+
+- **FM-WALLa (candidate L63)** — one wallet to one GitHub account,
+  linked to the account that is signed in. Failure modes: (i) *Wallet
+  sign-in is a sign-up, not a link.* P17's public challenge/verify mints
+  its JWT through `UpsertOAuthUser` with an empty email — a never-seen
+  wallet creates a **fresh account** instead of joining the GitHub
+  account in front of it, splitting one human across two rows. Nothing
+  at the API layer links a wallet to the *current* session. (ii) *Two
+  wallets per account.* the schema unique is only `(provider,
+  provider_id)` (a wallet can't serve two accounts) — nothing stops an
+  account accumulating solana identities; a second connect must REPLACE
+  the first, and a wallet already bound elsewhere must be refused by
+  name. (iii) *The connect control lies.* the onboarding "Connect
+  wallet" button routes to `/auth` — a button that promises connection
+  and delivers navigation. The law: **connecting runs against the
+  session (authenticated challenge + verify under `/v1/me/wallet`), the
+  identity lands on the signed-in account with replace semantics, a
+  wallet owned by another account is refused with that fact, and the
+  control drives a real signature over the P17 challenge.**
+
+- **FM-PROVa (candidate L64)** — a sign-in surface offers only what the
+  product backs, and retirements stay reversible. Failure modes: (i)
+  *Google sits on both login screens* as the second offer beside
+  GitHub — a control that starts OAuth for a provider the product is not
+  shipping (worst case: "not configured on this server", a dead button;
+  best case: a support thread about an account the product doesn't
+  manage). (ii) *Deleting the offer outright* turns Google's eventual
+  return into a re-implementation instead of a uncomment — the JSX, the
+  provider entry and the mark branch must survive as source. The law:
+  **both surfaces carry Google's offer as a comment — visible in source,
+  absent on screen — and each rendered provider list matches exactly
+  what the product backs today.**
+
+- **FM-WALLb (candidate L65)** — an unconnected wallet must be hard to
+  forget. Failure modes: (i) *Silent absence.* nothing tells a
+  GitHub-only account it lacks the wallet the product assumes (payments,
+  publisher identity) — the reminder the user asked for. (ii) *The state
+  lives server-side where no surface can see it.* `/v1/me` does not
+  report wallet linkage, so every surface would invent its own probe and
+  disagree. (iii) *A reminder that outlives its reason.* the badge must
+  disappear the moment a wallet links — never latched, never cached
+  stale. The law: **`/v1/me` states `wallet_linked`, and every
+  navigation surface — web rail and mobile drawer — renders the
+  reminder BOLD while it is false, vanishing on the first successful
+  link.**
+
+- **FM-SKRd (candidate L66)** — the export surface teaches its own
+  paywall. Failure modes: (i) *The web tells free users a lie of
+  omission*: "Release export needs the Pro plan" — hiding that free
+  users export with SKR credits at all. (ii) *A 402 escaping the
+  pre-gate is swallowed* — the client parses `spare_credits` /
+  `skr_amount_per_pack` into `error.detail` and no UI branch ever reads
+  it: silence where an offer belonged. (iii) *The sheet says price, not
+  system* — a first-time reader sees "N SKR unlocks M exports" with no
+  balance context, no what-a-credit-is, no how-do-I-get-SKR. The law:
+  **every export surface states the actual rule (free = one credit per
+  release, pack size and price), shows the balance it read server-side,
+  and explains SKR — and any refusal, pre-gate or 402, lands as that
+  same detailed offer, never a raw sentence and never silence.**
+
+- **FM-SESSa (candidate L67)** — a dead session ends at the sign-in
+  screen, from anywhere. Failure modes: (i) *Mobile's dead refresh
+  strands the user.* the transport clears the token on a failed
+  refresh — and nothing observes it: the app keeps whatever screen it
+  was on while every request starts failing, until the user navigates
+  by hand. Web already hard-redirects (`handleExpiredSession`); mobile
+  has no equivalent. (ii) *The rescue is scattered* across splash,
+  auth-screen self-heal and settings — a death on any other screen
+  depends on that screen remembering to check. The law: **token death
+  emits one event the root observes, landing the app on `/auth` from
+  any screen, while the transport keeps its job (refresh → retry →
+  clear → emit) and web's existing redirect stays the model.**
+
 | # | Fix | Evidence / guard | Status |
 |---|-----|------------------|--------|
 | L3 | **Routes-first contract** — (i) `SystemPromptBuild` gains the ordering rule: scaffold every planned `app/` route as a *compiling* skeleton within the first minutes, before infrastructure; (ii) code-side route ladder in the build loop: no `app/**.tsx` write by +5 min → advisory line in the round card, by +10 min → warning event (L2's pattern — prose failed, code enforces). Route coverage stays the gate it is today | fails-first ladder test; Run-2 S2 = 46m05s, S5 = 2.1/h → **Run-3 S2 = 13m59s, S5 = 7.5/h ✅ (first pass), S3 = 6/6 routes**; warning fired once at +11 min | ⬤ |
@@ -1659,6 +1747,12 @@ Failure modes (written before the code, TEST_RULES §3):
 | L59 | **A 401/403 gets one backoff retry, then the same death (FM-AUTHa)** — (a) new `Client.authBackoff` field + `authRetryDelay()` (0 ⇒ `defaultAuthBackoff` 3 s, test-shrunk — the `rateLimitWindow` pattern), carried by `clone()`; (b) all four gateway call sites gain the same branch: a first 401/403 waits `authRetryDelay` (ctx-cancellable), reports `llm/retry` reason `unauthorized (HTTP 40x)`, retries once — a second refusal returns the original status-bearing error, so `friendlyAIError`'s mapping and everything keying on `401`/`403` stays byte-identical; (c) `retryClass` maps `unauthorized`/`HTTP 401`/`HTTP 403` → `auth_rejected` so the audit groups the incident instead of burying it in `other` | fails-first `TestOpenStream401GetsExactlyOneRetryThenFails` (`openStream` = the path plan/build turns take) + `TestDoWithRetry401GetsExactlyOneRetryThenFails` + `TestChatAnthropic401GetsExactlyOneRetryThenFails` + `TestChatOpenAI401GetsExactlyOneRetryThenFails` (each red: **1** request reaches the gateway — the first refusal returns) + `TestRetryClassGroupsAuthRejections` (red: `other`); **GREEN (2026-10-04):** all five reds → green — every site sends exactly 2 requests against an always-401 gateway (10 ms shrunk backoff) and still returns the status-bearing error `friendlyAIError` maps, `retryClass("unauthorized (HTTP 401)")` → `auth_rejected`, `go test ./internal/ai/ ./internal/orchestrator/` ok; full-run note: api suite 295 s under load-30 (the user's concurrent `expo run:android` — `npx eslint` ~42 s per lint gate, baseline-identical); live = the next gateway flap logs `api: raw error …`, records `llm/retry` class `auth_rejected`, and survives one Continue; **live (2026-10-04 02:40):** gateway 403 → `openStream: HTTP 403 — identity rejected, one retry in 3s` (02:40:33) — one wait, one retry, second refusal returned the original status-bearing error → `turn model-request-failed after 1 rounds` (02:40:39); cause was a hard quota wall (`pre-consume quota failed`), so the turn correctly died after its single retry instead of hammering — the survives-one-transient-flap half still awaits the post-top-up window | ⬤ |
 | L60 | **The install intent crosses the app boundary (FM-APKj)** — (a) `lib/devclient.ts` fires `startActivityAsync` with `data: file.contentUri` (expo-file-system's `content://…FileSystemFileProvider/…`: provider manifest carries `grantUriPermissions="true"` and `file_system_provider_paths.xml` covers `cache-path`, where `downloadFileAsync` writes) instead of `file.uri`'s `file://…`, plus `flags: 1` (`FLAG_GRANT_READ_URI_PERMISSION` — expo-intent-launcher's `params.flags`, native `intent.addFlags`) so the package installer's different UID can read the file; (b) the share-sheet fallback (L55c) is untouched — it now fires only on genuine refusals instead of on every device; (c) JS-only — Metro reload picks it up, no APK rebuild; (d) `talonmobileapp/app.json` gains `android.permissions: ["REQUEST_INSTALL_PACKAGES"]` — the API-26 gate for *initiating* an install (verified: prebuild's `setAndroidPermissions` only ever adds, so `INTERNET` et al stay) — one native rebuild (`expo prebuild --clean` + `run:android`, answering the same stale-generated-dir trap L33 hit) re-generates the merged manifest with it | fails-first `lib/devclient.test.ts` `L60` (red: the intent is called with `data: 'file:///cache/app-debug.apk'` — the exact shape `prepareToLeaveProcess` rejects on API 24+ — and no `flags` key at all, so the installer would hold an unreadable URI); L55b retargeted alongside it — its law is *intent + archive MIME*, the URI's shape is L60's; **GREEN (2026-10-04):** the red ran first (intent `data: 'file:///cache/app-debug.apk'`, no `flags` key) then went green — the intent now carries `data: 'content://com.talon.app.FileSystemFileProvider/cached_expo_files/app-debug.apk'` + `flags: 1`; mobile gates: `npm test` 21 suites / 94 tests, `npx tsc --noEmit` clean, `lint:check` 0 errors (7 pre-existing warnings, none in touched files); field observation that opened this row: the user's tap was landing on the **share sheet** — the L55c fallback firing on every attempt; **field round 2 (03:33):** with the content URI live the tap now cycles "preparing the install…" → back with **no dialog, no error, no share sheet** — merged-manifest audit: `REQUEST_INSTALL_PACKAGES` 0 matches (FileProvider ✓ ×7) = FM-APKj(iii), the source app was never allowed to *start* an install; **GREEN (L60d):** `app.json` gains `android.permissions: ["REQUEST_INSTALL_PACKAGES"]` (red: `Received array: []` → green), gates `npm test` 21 suites / 95 tests + `tsc` clean + `lint:check` 0 errors; artifact half and the live phrase await the native rebuild (`expo prebuild -p android --clean` + `run:android` — same stale-generated-dir trap L33 hit) — first tap then shows Android's one-time "install unknown apps" toggle, next shows the install confirm | ⬤ |
 | L61 | **The dev client has two deliveries, both deliberate (FM-APKi(iv))** — (a) `lib/devclient.ts` splits the seam: private `downloadDevClientApk(url)` carrying L55a's contract (session token in the `Authorization` header, never the URL; `idempotent: true`) as the single download both paths share, feeding the unchanged `downloadAndInstallDevClient` (L55/L60 intent path) and new `downloadAndShareDevClient` — straight to `shareAsync(file.uri, …)` with the archive MIME, expo-sharing wrapping the file in its own FileProvider (L39's proven export seam), never attempting the install intent; (b) `device.tsx` gains **Share (APK)** beside the download control in a wrapping row, its own `shareDevClient` handler, and one shared `apkAction` state (`'install' \| 'share' \| null`) so two 160 MB downloads can never race — busy labels per action (`preparing the install…` / `preparing the share…`), one honest `apkError` line for both | fails-first two reds: jest `L61a` (compile-red — `downloadAndShareDevClient` does not exist; the missing export names the missing path, the accepted form L33/L36 shipped theirs in) + jest `L61b` (red: no share control renders — `Unable to find an element with text: Share (APK)`; it must call the share helper with the URL while the install helper and `Linking.openURL` stay untouched); **GREEN (2026-10-04):** both reds observed first (`downloadAndShareDevClient is not a function` — the missing export; `Unable to find an element with text: Share (APK)` — the missing control), then green — private `downloadDevClientApk` now feeds both deliveries from one seam; gates `npm test` 21 suites / 97 tests, `tsc --noEmit` clean, `lint:check` 0 errors (7 baseline warnings); **live pending** — after the user's Metro reload the Share (APK) control renders beside the download and opens the share sheet with the file | ⬤ |
+| L62 | **The paywall's first question arrives (FM-SKRc)** — (a) mobile `skrApi.quote()` gains `{ method: 'POST' }` — the client moves to the router's contract (route untouched; an audit of all 13 client calls against `main.go` confirms this is the only method mismatch); (b) all five credits-read failure sites (`SkrHandler.Quote`, `SkrHandler.Verify` ×2, `mayExport`, `takeExportCredit`) log the raw driver error before the friendly line | fails-first jest `L62` (red: `Expected: "POST" / Received: undefined` — `request()`'s GET default against a POST-only route; the four `GET /v1/skr/quote status=405` at 03:52 being the field record) + Go `TestQuoteLogsTheRawCreditsError` (red: closed ledger, `log = ""` — the quote 500s silently) → **GREEN**: jest 4/4, mobile 21/98 + `tsc` clean + lint 0 errors (7 baseline); Go `api` 49.6 s ok, `store` ok, `go vet` clean; live probe after restart: `POST /v1/skr/quote → 401` (routed, auth-required) vs `GET → 405` (the method the client no longer sends) | ⬤ |
+| L63 | **One wallet to one account, linked where the user stands (FM-WALLa)** — (a) new authenticated pair `/v1/me/wallet/challenge` + `/v1/me/wallet/verify` (session required): verify proves the signature over the exact challenge bytes, then `LinkWallet(userID, pubkey)` — store law: a pubkey already bound to ANOTHER account → refused with that fact; an account with an existing solana identity → `provider_id` replaced in place (one row per account, never two); (b) P17 public login endpoints untouched (they are the primitive); (c) mobile wires the real flow — `useMobileWallet()` signs the challenge, the session token rides verify, and the onboarding "Connect wallet" CTA stops routing to `/auth` and runs it | fails-first Go `TestWalletLinkAttachesToTheSignedInAccount` (red: route 404 — no link path exists at all), `TestWalletLinkRefusesAWalletBoundToAnotherAccount` (red: no store method), `TestWalletLinkReplacesTheExistingWallet` (red: second identity would insert, not replace) + jest `L63c` (red: onboarding CTA navigates to `/auth` instead of requesting a signature) | ⬤ |
+| L64 | **Google's offer retires as a comment (FM-PROVa)** — (a) web `login/page.tsx`: the google provider entry commented with the return note; (b) mobile `app/auth/index.tsx`: same — its provider entry and mark branch survive as source; both rendered lists = GitHub only | fails-first web vitest `L64` (red: login still renders "Continue with Google") + jest `L64` (red: auth screen still renders it) | ⬤ |
+| L65 | **The reminder never lets an unlinked wallet go unnoticed (FM-WALLb)** — (a) `/v1/me` profile gains `wallet_linked` (an EXISTS solana identity for the user); (b) web IconRail renders a BOLD accent reminder row while false — `font-semibold`, accent pair, lamp dot — resolving to nothing on link; (c) mobile Drawer renders the same reminder and routes into the connect flow | fails-first Go `TestMeReportsWalletLinked` (red: profile JSON has no `wallet_linked` key) + web vitest `L65` (red: no reminder row when `wallet_linked: false`) + jest `L65` (red: drawer has no reminder) | ⬤ |
+| L66 | **The export surface teaches its own paywall (FM-SKRd)** — (a) web ExportPanel drops the "Pro plan" line for free users and gains `skrApi.quote()` (`frontend/lib/api.ts`, POST per L62's contract): the real rule — one credit per release, pack size/price, current balance — with payment directed to the app where the wallet lives; (b) mobile `useStartExport` gains `onError`: a 402 renders the parsed `detail` as the same credit sheet (no silence), and the sheet copy gains the system explanation (what a credit is, why SKR, balance line); (c) quote failure shows its real reason, not only "try again" | fails-first web vitest `L66` (red: free user shown "Release export needs the Pro plan" while the quote says a credits path exists) + jest `L66` (red: a 402 from startExport renders nothing — `Received: undefined`) | ⬤ |
+| L67 | **A dead session lands on sign-in from anywhere (FM-SESSa)** — (a) mobile transport (`lib/api.ts`) emits `auth:expired` the moment a refresh dies (after clearToken), exactly once per death; (b) the root layout observes it and `router.replace('/auth')` — guarded against the auth screen itself; web's `handleExpiredSession` stays the model, untouched | fails-first jest `L67` (red: kill the refresh, dispatch a request from a deep screen — token cleared, no event emitted, navigation never happens) | ⬤ |
 
 Still-open P1 rows from the previous list:
 

@@ -1031,7 +1031,9 @@ export type SkrVerdict = {
 
 export const skrApi = {
   quote() {
-    return request<SkrQuote>('/v1/skr/quote')
+    // L62/FM-SKRc(i): the router registers POST — request()'s GET default
+    // made every quote die 405 behind "could not read your export credits".
+    return request<SkrQuote>('/v1/skr/quote', { method: 'POST' })
   },
   verify(signature: string) {
     return request<SkrVerdict>('/v1/skr/verify', {

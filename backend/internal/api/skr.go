@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -34,6 +35,7 @@ func (h *SkrHandler) Quote(w http.ResponseWriter, r *http.Request) {
 	cfg := h.verifier.Config()
 	spare, err := h.store.SpareCredits(GetUserID(r.Context()))
 	if err != nil {
+		log.Printf("api: spare credits read failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not read your export credits")
 		return
 	}
@@ -97,6 +99,7 @@ func (h *SkrHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	if verdict.Status != skr.StatusVerified {
 		spare, err := h.store.SpareCredits(userID)
 		if err != nil {
+			log.Printf("api: spare credits read failed after chain verdict: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not read your export credits")
 			return
 		}
@@ -128,6 +131,7 @@ func (h *SkrHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 	spare, err := h.store.SpareCredits(userID)
 	if err != nil {
+		log.Printf("api: spare credits read failed after grant: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not read your export credits")
 		return
 	}

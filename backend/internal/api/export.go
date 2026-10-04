@@ -116,6 +116,7 @@ func (h *ExportHandler) mayExport(w http.ResponseWriter, user *store.User) bool 
 	}
 	spare, err := h.store.SpareCredits(user.ID)
 	if err != nil {
+		log.Printf("api: export pre-check credits read failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not read your export credits")
 		return false
 	}
@@ -133,6 +134,7 @@ func (h *ExportHandler) takeExportCredit(w http.ResponseWriter, user *store.User
 	}
 	spent, err := h.store.ConsumeCredit(user.ID)
 	if err != nil {
+		log.Printf("api: export credit spend failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not read your export credits")
 		return false
 	}

@@ -1,4 +1,4 @@
-import { exportApi } from '@/lib/api'
+import { exportApi, skrApi } from '@/lib/api'
 
 // FM-SKRb(i) — a refusal has to reach the caller as an offer, not as prose.
 //
@@ -86,5 +86,29 @@ describe('exportApi.start', () => {
       project_id: 7,
       status: 'queued',
     })
+  })
+})
+
+// FM-SKRc(i) — the paywall's first question must reach the server the
+// server actually serves. The router registers POST /v1/skr/quote; the
+// client sent GET (request()'s default), so every quote died 405 and the
+// panel rendered "could not read your export credits" — a wire-contract
+// error wearing the costume of a ledger failure (field record: four
+// GET /v1/skr/quote status=405 at 03:52). Red today: quote() passes no
+// method, so fetch is called with none — GET.
+describe('L62 — the quote reaches the router in the method the router registered', () => {
+  it('calls POST /v1/skr/quote', async () => {
+    respond(200, {
+      skr_amount: 100,
+      credits: 5,
+      mint: 'mint',
+      treasury: 'treasury',
+      spare_credits: 0,
+    })
+
+    await skrApi.quote()
+
+    const init = (global.fetch as jest.Mock).mock.calls[0][1] as RequestInit
+    expect(init.method).toBe('POST')
   })
 })
