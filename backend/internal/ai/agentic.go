@@ -118,6 +118,10 @@ func (c *Client) doWithRetry(ctx context.Context, url string, body []byte, setHe
 	// a minute (FM-429a). Reset every round: a plain transient still ladders
 	// exactly as before.
 	rateLimitWaited := false
+	// FM-AUTHa: a first identity rejection (401/403) waits authRetryDelay
+	// and retries once below; rateLimitWaited suppresses the loop-top
+	// ladder so the two waits never stack.
+	authRetried := false
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 && !rateLimitWaited {
@@ -198,8 +202,25 @@ func (c *Client) doWithRetry(ctx context.Context, url string, body []byte, setHe
 			}
 			continue
 		default:
-			// 4xx other than 429 will not succeed on retry.
-			return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncate(string(respBody), 1000))
+			// 4xx other than 429 will not succeed on retry — except a
+			// first identity rejection, which gets one backoff retry
+			// (FM-AUTHa): a gateway that authenticates on client identity
+			// can flap mid-run, and one flap must not kill a healthy turn.
+			// A second refusal returns this same status-bearing error.
+			err := fmt.Errorf("API error (status %d): %s", resp.StatusCode, truncate(string(respBody), 1000))
+			if !authRetried && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && attempt < maxRetries-1 {
+				authRetried = true
+				lastErr = err
+				delay := c.authRetryDelay()
+				log.Printf("%s: HTTP %d — identity rejected, one retry in %v", label, resp.StatusCode, delay)
+				c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("unauthorized (HTTP %d)", resp.StatusCode), delay)
+				if werr := waitBackoff(ctx, delay); werr != nil {
+					return nil, werr
+				}
+				rateLimitWaited = true
+				continue
+			}
+			return nil, err
 		}
 	}
 

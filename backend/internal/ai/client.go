@@ -64,6 +64,13 @@ type Client struct {
 	// tests shrink it so a real wait stays test-sized.
 	rateLimitWindow time.Duration
 
+	// authBackoff is how long a 401/403 waits before its single retry
+	// (FM-AUTHa): a gateway that authenticates on client identity can
+	// reject a valid key mid-run, and one flap must not kill a healthy
+	// turn — while a dead key fails identically twice and dies. 0 selects
+	// defaultAuthBackoff — tests shrink it so a real wait stays test-sized.
+	authBackoff time.Duration
+
 	// userAgent is the transport identity sent on every request
 	// (AI_USER_AGENT). Some gateways authenticate on it before they read
 	// the key, so it is configuration, not decoration — and it is attached
@@ -317,6 +324,7 @@ func (c *Client) clone() Client {
 		streamStall:     c.streamStall,
 		streamRestarts:  c.streamRestarts,
 		rateLimitWindow: c.rateLimitWindow,
+		authBackoff:     c.authBackoff,
 		userAgent:       c.userAgent,
 		workspaceDir:    c.workspaceDir,
 		lastErr:         c.lastErr,
@@ -372,6 +380,12 @@ func (c *Client) reportRetry(attempt, maxRetries int, reason string, after time.
 // in production (Run-5's "Cluster RPM rate limit exceeded" reset inside it).
 const defaultRateLimitWindow = time.Minute
 
+// defaultAuthBackoff is the single wait an identity rejection (401/403)
+// takes before its one retry (FM-AUTHa). Short on purpose: a flap clears
+// in seconds, and a genuinely dead key must not stall the user longer
+// than that before failing the same way again.
+const defaultAuthBackoff = 3 * time.Second
+
 // rateLimitDelay is how long to wait after an HTTP 429: the gateway's own
 // Retry-After when it sends one — it knows when its budget refills — else the
 // rate window (FM-429a). Deliberately not the flaky-502 ladder: that budget
@@ -386,6 +400,16 @@ func (c *Client) rateLimitDelay(retryAfter string) time.Duration {
 		return c.rateLimitWindow
 	}
 	return defaultRateLimitWindow
+}
+
+// authRetryDelay is how long a 401/403 waits before its single retry
+// (FM-AUTHa). 0 selects defaultAuthBackoff — tests shrink it so a real
+// wait stays test-sized.
+func (c *Client) authRetryDelay() time.Duration {
+	if c.authBackoff > 0 {
+		return c.authBackoff
+	}
+	return defaultAuthBackoff
 }
 
 // parseRetryAfter reads the Retry-After header (delta-seconds or an HTTP
@@ -537,10 +561,13 @@ func (f *PlanFeature) UnmarshalJSON(b []byte) error {
 // carries text, and every declared file is an exact workspace-relative path
 // — no absolute paths, no traversal, no node_modules, no globs, no "./"
 // prefix or backslashes (a declared path the workspace can never produce
-// would make the FM-C1b audit flip the feature forever). Errors name the
-// offending feature, so a rejection tells the plan model what to fix instead
-// of failing as envelope theatre. A feature without files stays legal:
-// model-only marking is the honest legacy path.
+// would make the FM-C1b audit flip the feature forever). The glob law binds
+// `*` and `?` only: brackets are ordinary filename characters, and Expo
+// Router's `[param]` routes are exact paths the workspace really produces
+// (FM-C1e — rejecting them failed a real plan as "no globs"). Errors name
+// the offending feature, so a rejection tells the plan model what to fix
+// instead of failing as envelope theatre. A feature without files stays
+// legal: model-only marking is the honest legacy path.
 func (p *AppPlan) Validate() error {
 	if p == nil {
 		return nil
@@ -567,7 +594,7 @@ func (p *AppPlan) Validate() error {
 				return fmt.Errorf("feature %q: file %q escapes the workspace", label, declared)
 			case file == "node_modules" || strings.HasPrefix(file, "node_modules/"):
 				return fmt.Errorf("feature %q: file %q is a dependency, not source", label, declared)
-			case strings.ContainsAny(file, "*?["):
+			case strings.ContainsAny(file, "*?"):
 				return fmt.Errorf("feature %q: file %q must be an exact path — no globs", label, declared)
 			}
 		}
@@ -756,6 +783,10 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 	// 3s/6s on top of a minute (FM-429a). Reset every round: a later plain
 	// retry still ladders exactly as before.
 	waitApplied := false
+	// FM-AUTHa: a first identity rejection (401/403) waits authRetryDelay
+	// and retries once; waitApplied keeps the loop-top ladder from stacking
+	// on top of that wait, as it already does for the 429 window.
+	authRetried := false
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 && !waitApplied {
 			log.Printf("chatAnthropic: retry attempt %d/%d", attempt+1, maxRetries)
@@ -848,6 +879,21 @@ func (c *Client) chatAnthropic(ctx context.Context, system string, history []Pro
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			// FM-AUTHa: one backoff retry on a first identity rejection —
+			// a gateway-side flap must not kill a healthy turn; a second
+			// refusal returns this same status-bearing error, and a
+			// rejection on the last attempt fails immediately.
+			if !authRetried && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && attempt < maxRetries-1 {
+				authRetried = true
+				delay := c.authRetryDelay()
+				log.Printf("chatAnthropic: HTTP %d — identity rejected, one retry in %v", resp.StatusCode, delay)
+				c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("unauthorized (HTTP %d)", resp.StatusCode), delay)
+				if werr := waitBackoff(ctx, delay); werr != nil {
+					return "", fmt.Errorf("cancelled while waiting to retry: %w", werr)
+				}
+				waitApplied = true
+				continue
+			}
 			return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 		}
 
@@ -916,6 +962,9 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 	// 3s/6s on top of a minute (FM-429a). Reset every round: a later plain
 	// retry still ladders exactly as before.
 	waitApplied := false
+	// FM-AUTHa: same law as chatAnthropic — one backoff retry on a first
+	// identity rejection, reported, with no ladder stacked on top.
+	authRetried := false
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 && !waitApplied {
 			log.Printf("chatOpenAI: retry attempt %d/%d", attempt+1, maxRetries)
@@ -1010,6 +1059,19 @@ func (c *Client) chatOpenAI(ctx context.Context, system string, history []Prompt
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			// FM-AUTHa: one backoff retry on a first identity rejection —
+			// same law as chatAnthropic.
+			if !authRetried && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && attempt < maxRetries-1 {
+				authRetried = true
+				delay := c.authRetryDelay()
+				log.Printf("chatOpenAI: HTTP %d — identity rejected, one retry in %v", resp.StatusCode, delay)
+				c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("unauthorized (HTTP %d)", resp.StatusCode), delay)
+				if werr := waitBackoff(ctx, delay); werr != nil {
+					return "", fmt.Errorf("cancelled while waiting to retry: %w", werr)
+				}
+				waitApplied = true
+				continue
+			}
 			return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 		}
 
@@ -1106,8 +1168,14 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 	var lastErr error
 	var lastRateLimited bool
 	var lastRetryAfter string
+	// FM-AUTHa: a first identity rejection (401/403) waits authRetryDelay
+	// and retries once below; branchWaited tells the loop top this attempt
+	// already waited its backoff, so the flaky-502 ladder does not stack
+	// on top of it.
+	authRetried := false
+	branchWaited := false
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
+		if attempt > 0 && !branchWaited {
 			// A 429 waits the rate window (or the gateway's Retry-After);
 			// everything else keeps the flaky-502 ladder (FM-429a).
 			delay := time.Duration(attempt*3) * time.Second
@@ -1124,6 +1192,7 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 				return nil, fmt.Errorf("cancelled while waiting to retry: %w", err)
 			}
 		}
+		branchWaited = false
 		req, err := c.newRequest(ctx, url, body)
 		if err != nil {
 			return nil, err
@@ -1170,6 +1239,27 @@ func (c *Client) openStream(ctx context.Context, url string, body []byte, setHea
 		default:
 			err := fmt.Errorf("AI service returned HTTP %d: %s", resp.StatusCode, truncate(string(detail), 500))
 			c.noteFailure(err)
+			// FM-AUTHa: a first identity rejection waits authRetryDelay and
+			// retries once — a gateway-side flap must not kill a healthy
+			// turn. A second refusal returns this same status-bearing error
+			// so the friendly mapping (401/403 → credentials) stays
+			// byte-identical, and a rejection arriving on the last attempt
+			// fails immediately rather than promising a retry the budget
+			// cannot pay.
+			if !authRetried && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && attempt < maxRetries-1 {
+				authRetried = true
+				lastErr = err
+				lastRateLimited = false
+				lastRetryAfter = ""
+				delay := c.authRetryDelay()
+				log.Printf("openStream: HTTP %d — identity rejected, one retry in %v", resp.StatusCode, delay)
+				c.reportRetry(attempt+1, maxRetries, fmt.Sprintf("unauthorized (HTTP %d)", resp.StatusCode), delay)
+				if werr := waitBackoff(ctx, delay); werr != nil {
+					return nil, fmt.Errorf("cancelled while waiting to retry: %w", werr)
+				}
+				branchWaited = true
+				continue
+			}
 			return nil, err
 		}
 	}

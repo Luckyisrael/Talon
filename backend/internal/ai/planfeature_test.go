@@ -66,6 +66,7 @@ func TestPlanRejectsMalformedFeatureFiles(t *testing.T) {
 		{"parent traversal", "../secrets.ts"},
 		{"node_modules", "node_modules/react/index.js"},
 		{"glob", "app/*.tsx"},
+		{"question wildcard", "app/?.tsx"},
 	}
 	for _, tc := range malformed {
 		p := AppPlan{Features: []PlanFeature{{Text: "send SOL", Files: []string{tc.file}}}}
@@ -92,5 +93,27 @@ func TestPlanRejectsMalformedFeatureFiles(t *testing.T) {
 	}
 	if err := validate(AppPlan{Features: []PlanFeature{{Text: "   "}}}); err == nil {
 		t.Error("an empty feature text must be rejected, not seeded as a nameless task")
+	}
+}
+
+// FM-C1e — written first (TEST_RULES §3). An Expo Router dynamic route is
+// an exact filename the workspace really produces — `app/address/[address].tsx`
+// is what Expo builds for `/address/:address`. The glob law binds `*` and
+// `?` only; brackets are ordinary filename characters. Red today: the
+// `ContainsAny("*?[")` guard answers "must be an exact path — no globs"
+// and fails the whole plan turn (2026-10-03, prompt 84: the user answered
+// the plan question, planning re-ran 45 s, this validator killed it and
+// nothing saved).
+func TestPlanAllowsExpoDynamicRouteFiles(t *testing.T) {
+	exactDespiteBrackets := []string{
+		"app/address/[address].tsx",
+		"app/post/[id]/[slug].tsx",
+		"app/(tabs)/settings/[section].tsx",
+	}
+	for _, file := range exactDespiteBrackets {
+		p := AppPlan{Features: []PlanFeature{{Text: "page recent transactions", Files: []string{file}}}}
+		if err := p.Validate(); err != nil {
+			t.Errorf("Expo Router dynamic route %q must pass the plan door — it is an exact path, got: %v", file, err)
+		}
 	}
 }

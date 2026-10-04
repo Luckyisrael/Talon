@@ -2829,6 +2829,14 @@ func friendlyAIError(err error) string {
 	if err == nil {
 		return ""
 	}
+	// FM-RAWa: the rewrite is for the user; the raw error is evidence. It
+	// is logged here — before the switch, at the one choke every friendly
+	// form funnels through — because every durable record below the API
+	// (SSE error events, prompts.response, turn_end) carries only the
+	// rewrite: agentrouter's "unauthorized client detected" became "check
+	// the server's AI_API_KEY", and nothing on the server could contradict
+	// it (2026-10-03, prompts 84/85).
+	log.Printf("api: raw error behind friendly message: %v", err)
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "429"), strings.Contains(msg, "rate limit"):

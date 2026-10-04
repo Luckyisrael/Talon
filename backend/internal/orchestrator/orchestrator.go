@@ -598,6 +598,11 @@ func retryClass(why string) string {
 		return "timeout"
 	case strings.Contains(why, "transient"):
 		return "transient"
+	// FM-AUTHa: an identity rejection is its own incident class — "other"
+	// hides the gateway refusing our key-shaped requests behind the same
+	// bucket as a generic blip, and an operator must be able to count it.
+	case strings.Contains(why, "unauthorized"), strings.Contains(why, "HTTP 401"), strings.Contains(why, "HTTP 403"):
+		return "auth_rejected"
 	}
 	return "other"
 }
