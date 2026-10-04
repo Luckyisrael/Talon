@@ -325,6 +325,8 @@ export interface User {
   avatar_url?: string
   tier?: string
   onesignal_id?: string
+  /** L65/FM-WALLb: whether this account holds its connected wallet. */
+  wallet_linked?: boolean
 }
 
 /** One streamed event off a plan/build/answer SSE. kind is the vocabulary. */

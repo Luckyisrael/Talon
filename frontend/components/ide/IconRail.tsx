@@ -17,7 +17,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { conversations as conversationsApi, projects as projectsApi } from "@/lib/api";
+import {
+  conversations as conversationsApi,
+  me as meApi,
+  projects as projectsApi,
+} from "@/lib/api";
 import type { Conversation, Project } from "@/lib/types";
 import CreateProject from "@/components/dashboard/CreateProject";
 
@@ -56,6 +60,27 @@ export default function IconRail({
   const router = useRouter();
   const [list, setList] = useState<Project[] | null>(null);
   const [creating, setCreating] = useState(false);
+
+  // L65/FM-WALLb — the bold reminder lives off ONE server fact. Tri-state
+  // on purpose: false speaks (unlinked → remind), true stays quiet, and
+  // unknown (guest, offline, pre-L65 server) never nags from ignorance.
+  const [walletLinked, setWalletLinked] = useState<boolean | null>(null);
+  const [walletHint, setWalletHint] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    meApi
+      .get()
+      .then((p) => {
+        if (cancelled) return;
+        setWalletLinked(typeof p.wallet_linked === "boolean" ? p.wallet_linked : null);
+      })
+      .catch(() => {
+        // No session or unreachable — a guest is not reminded.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Chat threads are only ever browsed for the project you're currently in —
   // switching to another project's threads means navigating there first, so
@@ -278,6 +303,43 @@ export default function IconRail({
         </div>
       )}
       {collapsed && <div className="flex-1" />}
+
+      {/* L65/FM-WALLb — bold while unlinked, gone the moment a wallet
+          links. The web cannot connect (mobile-only flow), so a click
+          opens the how — the reminder teaches instead of dead-ending. */}
+      {walletLinked === false &&
+        (collapsed ? (
+          <button
+            type="button"
+            aria-label="Connect your wallet"
+            title="Connect your wallet — open the Talon app"
+            onClick={() => setWalletHint((h) => !h)}
+            className="mx-auto flex size-6 flex-none items-center justify-center rounded-lg bg-[var(--accent-soft)]"
+          >
+            <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--color-acid-lime)]" />
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              aria-expanded={walletHint}
+              onClick={() => setWalletHint((h) => !h)}
+              title="How to connect your wallet"
+              className="flex flex-none items-center gap-2 rounded-lg border border-[var(--color-acid-lime)]/30 bg-[var(--accent-soft)] px-2 py-1.5 text-left transition-colors duration-150 hover:bg-[var(--surface-2)]"
+            >
+              <span aria-hidden className="h-1.5 w-1.5 flex-none rounded-full bg-[var(--color-acid-lime)]" />
+              <span className="min-w-0 truncate text-[12.5px] font-semibold text-[var(--accent-2)]">
+                Connect your wallet
+              </span>
+            </button>
+            {walletHint && (
+              <p className="px-1 text-[11px] leading-relaxed text-[var(--label-3)]">
+                One wallet connects to one Talon account. In the Talon app: Menu →
+                Connect wallet.
+              </p>
+            )}
+          </>
+        ))}
 
       <Link
         href="/settings"

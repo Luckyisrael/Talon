@@ -39,6 +39,11 @@ type meResponse struct {
 	CreatedAt    time.Time           `json:"created_at"`
 	Subscription *store.Subscription `json:"subscription,omitempty"`
 	History      []billingEventView  `json:"history"`
+	// WalletLinked is L65/FM-WALLb: whether this account holds its one
+	// connected wallet. The state lives server-side and every navigation
+	// surface (web rail, mobile drawer) renders its reminder from this
+	// single fact — vanishing the moment a wallet links.
+	WalletLinked bool `json:"wallet_linked"`
 }
 
 // profile assembles the full profile for a user from the three sources of truth:
@@ -58,6 +63,10 @@ func (h *MeHandler) profile(userID int64) (*meResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	linked, err := h.store.HasWalletLink(userID)
+	if err != nil {
+		return nil, err
+	}
 	history := make([]billingEventView, 0, len(events))
 	for _, e := range events {
 		history = append(history, billingEventView{Type: e.Type, CreatedAt: e.CreatedAt})
@@ -70,6 +79,7 @@ func (h *MeHandler) profile(userID int64) (*meResponse, error) {
 		CreatedAt:    user.CreatedAt,
 		Subscription: sub,
 		History:      history,
+		WalletLinked: linked,
 	}, nil
 }
 

@@ -1147,6 +1147,19 @@ func (s *Store) LinkWallet(userID int64, wallet string) error {
 	return err
 }
 
+// HasWalletLink reports whether the account holds its one solana identity.
+// /v1/me states it as `wallet_linked`, so every navigation surface reads
+// one server fact instead of inventing probes that disagree (FM-WALLb(ii)).
+func (s *Store) HasWalletLink(userID int64) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM users_oauth_identity WHERE user_id = ? AND provider = 'solana'`,
+		userID).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // ── P17: wallet-auth challenges ──
 //
 // The wallet signs one server-issued message, once. StoreWalletChallenge

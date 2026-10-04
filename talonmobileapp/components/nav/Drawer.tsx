@@ -3,11 +3,13 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Book, Clock, Crown, Folder, Logout, MessageQuestion, Setting, User } from 'iconsax-react-native';
+import { useMobileWallet } from '@wallet-ui/react-native-kit';
+import { Book, Clock, Crown, Folder, Logout, MessageQuestion, Setting, User, Wallet } from 'iconsax-react-native';
 import { UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
 import { authApi, meApi } from '@/lib/api';
 import { clearToken, getToken } from '@/lib/auth';
+import { linkWalletNow } from '@/lib/walletlink';
 
 const ITEMS = [
   { icon: Folder, label: 'Projects', route: '/menu/projects' },
@@ -43,7 +45,7 @@ export function Drawer({
     transform: [{ translateX: (progress.value - 1) * width }],
   }));
 
-  const [me, setMe] = React.useState<{ email: string; tier?: string } | null>(null);
+  const [me, setMe] = React.useState<{ email: string; tier?: string; wallet_linked?: boolean } | null>(null);
   React.useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -55,7 +57,7 @@ export function Drawer({
       }
       try {
         const u = await meApi.get();
-        if (!cancelled) setMe({ email: u.email, tier: u.tier });
+        if (!cancelled) setMe({ email: u.email, tier: u.tier, wallet_linked: u.wallet_linked });
       } catch {
         if (!cancelled) setMe(null);
       }
@@ -64,6 +66,26 @@ export function Drawer({
       cancelled = true;
     };
   }, [open]);
+
+  // L65/FM-WALLb — the bold reminder, off the same server fact the web
+  // rail reads. Its press RUNS the L63 connect flow (session challenge →
+  // MWA signature → verify) and the row vanishes the moment the link
+  // lands — never latched. A cancel or refusal leaves it up: the reminder
+  // survives its own failure so the retry is obvious.
+  const wallet = useMobileWallet();
+  const [connecting, setConnecting] = React.useState(false);
+  async function connectWallet() {
+    if (connecting) return;
+    setConnecting(true);
+    try {
+      await linkWalletNow(wallet);
+      setMe((prev) => (prev ? { ...prev, wallet_linked: true } : prev));
+    } catch {
+      // Cancelled or refused — the reminder stays and can be retried.
+    } finally {
+      setConnecting(false);
+    }
+  }
 
   return (
     <Animated.View style={[styles.sheet, { width }, sheet]}>
@@ -79,6 +101,20 @@ export function Drawer({
             {me ? `${me.email} · ${me.tier ?? 'free'}` : 'Not signed in. Explore freely, nothing syncs yet.'}
           </UIText>
         </View>
+        {me?.wallet_linked === false && (
+          <Pressable
+            style={[styles.item, styles.reminder]}
+            accessibilityRole="button"
+            accessibilityLabel="Connect your wallet"
+            onPress={connectWallet}
+            disabled={connecting}
+          >
+            <Wallet size={24} color={Colors.acidLime} variant="Bulk" />
+            <UIText variant="bodyLg" tone="accent" style={styles.reminderText}>
+              {connecting ? 'Connecting…' : 'Connect your wallet'}
+            </UIText>
+          </Pressable>
+        )}
         {ITEMS.map((item) => {
           const Icon = item.icon;
           return (
@@ -153,5 +189,11 @@ const styles = StyleSheet.create({
     minHeight: 52,
     paddingHorizontal: Spacing.s8,
   },
+  reminder: {
+    borderRadius: 12,
+    backgroundColor: Colors.obsidian,
+    marginBottom: Spacing.s8,
+  },
+  reminderText: { fontWeight: '700', flexShrink: 1 },
   foot: { marginTop: 'auto', paddingBottom: Spacing.s16 },
 });

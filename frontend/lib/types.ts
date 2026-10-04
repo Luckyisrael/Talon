@@ -220,6 +220,13 @@ export interface MeProfile {
   created_at: string;
   subscription?: Subscription;
   history: BillingEventView[];
+  /**
+   * L65/FM-WALLb: whether this account holds its connected wallet. The
+   * server states it; navigation surfaces render their reminder from this
+   * one fact. Optional because a pre-L65 server won't send it — unknown
+   * must not be read as unlinked.
+   */
+  wallet_linked?: boolean;
 }
 
 /** Where to send the user to complete an upgrade, from POST /v1/billing/upgrade. */
