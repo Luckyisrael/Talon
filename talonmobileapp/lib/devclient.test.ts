@@ -31,6 +31,7 @@ import { downloadAndInstallDevClient } from '@/lib/devclient'
 import { File } from 'expo-file-system'
 import { startActivityAsync } from 'expo-intent-launcher'
 import { shareAsync } from 'expo-sharing'
+import appJson from '../app.json'
 
 jest.mock('expo-file-system', () => {
   const downloadFileAsync = jest.fn()
@@ -110,6 +111,18 @@ test('L60 — the install intent carries the content URI and the read grant, nev
   expect(params.data).toBe(CONTENT_URI)
   expect(params.data).not.toMatch(/^file:/)
   expect(params.flags).toBe(1) // FLAG_GRANT_READ_URI_PERMISSION
+})
+
+// L60(d) / FM-APKj(iii) — since API 26 an app must hold
+// `REQUEST_INSTALL_PACKAGES` to *initiate* a package install; without it
+// the installer refuses the session before drawing any UI, so the button
+// cycles back with no dialog and no error. app.json is prebuild's source
+// of truth (the merged manifest is its artifact — re-verified after each
+// rebuild, the FM-DEVd shape).
+test('L60d — the manifest source declares the permission that lets the app start an install', () => {
+  const permissions =
+    (appJson as { expo?: { android?: { permissions?: string[] } } }).expo?.android?.permissions ?? []
+  expect(permissions).toContain('REQUEST_INSTALL_PACKAGES')
 })
 
 test('L55d — a failed download surfaces as an error instead of pretending', async () => {
