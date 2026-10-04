@@ -20,7 +20,14 @@
 //     file:// trap on API 24+, FileUriExposedException), never a silent
 //     failure and never a browser;
 //   L55d — a failed download surfaces as an error; nothing claims
-//     success it did not have.
+//     success it did not have;
+//   L60 / FM-APKj — the intent carries the file's `contentUri`
+//     (`content://…FileSystemFileProvider/…`, not `file://`, which
+//     `Intent.prepareToLeaveProcess` refuses to cross the app boundary
+//     on API 24+) plus FLAG_GRANT_READ_URI_PERMISSION (1), so the
+//     package installer — a different UID — can actually open the file.
+//     Without both, the primary path fails on every modern device and
+//     the L55c fallback silently becomes the real path.
 export async function downloadAndInstallDevClient(url: string): Promise<void> {
   // `require`, not `import` — same three reasons as L39's downloadApk
   // (lib/api.ts): native modules stay OUT of this file's static graph so
@@ -42,11 +49,19 @@ export async function downloadAndInstallDevClient(url: string): Promise<void> {
 
   try {
     await startActivityAsync('android.intent.action.VIEW', {
-      data: file.uri,
+      // contentUri, not uri: a `file://` URI dies at the app boundary on
+      // API 24+ (FileUriExposedException), which made this "primary" path
+      // fail on every device and the share fallback below the real path.
+      data: file.contentUri,
       type: 'application/vnd.android.package-archive',
+      // FLAG_GRANT_READ_URI_PERMISSION — the package installer is a
+      // different UID; without the grant it resolves the intent and then
+      // cannot read the file, failing where the fallback never sees it.
+      flags: 1,
     })
   } catch {
-    // ACTION_VIEW on a raw file:// URI dies on API 24+ with
+    // Genuine refusal only (post-L60: not the everyday path). ACTION_VIEW
+    // on a raw file:// URI used to land here every time on API 24+ with
     // FileUriExposedException. The share sheet hands the downloaded file
     // to the system installer instead — still in-app, still one tap, and
     // the system's package-installer flow (its own permission question,

@@ -18,6 +18,11 @@
 //     file:// trap on API 24+), never a silent failure and never a
 //     browser.
 //
+// And L60 / FM-APKj's pin: the intent carries `contentUri` (a
+// `content://…FileSystemFileProvider/…` the app boundary will pass) plus
+// FLAG_GRANT_READ_URI_PERMISSION — never a bare `file://`, never a
+// content URI the installer lacks the grant to read.
+//
 // Pre-fix this module does not exist — the module-resolution failure IS
 // the red (the house's accepted form): an in-app install has no code to
 // test before it has code.
@@ -40,13 +45,18 @@ jest.mock('expo-sharing', () => ({ shareAsync: jest.fn() }))
 jest.mock('@/lib/auth', () => ({ getToken: jest.fn(async () => 'tok-123') }))
 
 const URL = 'http://10.180.8.39:8080/v1/projects/7/dev-client.apk'
+const CONTENT_URI =
+  'content://com.talon.app.FileSystemFileProvider/cached_expo_files/app-debug.apk'
 const downloadMock = (File as unknown as { downloadFileAsync: jest.Mock }).downloadFileAsync
 const intentMock = startActivityAsync as jest.Mock
 const shareMock = shareAsync as jest.Mock
 
 beforeEach(() => {
   jest.clearAllMocks()
-  downloadMock.mockResolvedValue({ uri: 'file:///cache/app-debug.apk' })
+  downloadMock.mockResolvedValue({
+    uri: 'file:///cache/app-debug.apk',
+    contentUri: CONTENT_URI,
+  })
   intentMock.mockResolvedValue({})
 })
 
@@ -70,10 +80,12 @@ test('L55a — the download carries the session token in the header, never the U
 test('L55b — the install intent fires ACTION_VIEW with the archive MIME', async () => {
   await downloadAndInstallDevClient(URL)
 
-  expect(intentMock).toHaveBeenCalledWith('android.intent.action.VIEW', {
-    data: 'file:///cache/app-debug.apk',
-    type: 'application/vnd.android.package-archive',
-  })
+  // The URI's shape and grant are L60's law; here: the right action with
+  // the archive MIME reaches the intent.
+  expect(intentMock).toHaveBeenCalledWith(
+    'android.intent.action.VIEW',
+    expect.objectContaining({ type: 'application/vnd.android.package-archive' }),
+  )
 })
 
 test('L55c — intent refusal falls back to the share sheet, never a silent failure', async () => {
@@ -82,6 +94,22 @@ test('L55c — intent refusal falls back to the share sheet, never a silent fail
   await downloadAndInstallDevClient(URL)
 
   expect(shareMock).toHaveBeenCalledWith('file:///cache/app-debug.apk', expect.anything())
+})
+
+// L60 / FM-APKj — the intent must carry a URI that survives the app
+// boundary (`content://`, not the `file://` that makes
+// `Intent.prepareToLeaveProcess` throw `FileUriExposedException` on
+// API 24+) and the grant that lets the package installer — a different
+// UID — actually open the file. Without both, the "primary" path fails
+// on every modern device and the share-sheet fallback becomes the real
+// path, every time.
+test('L60 — the install intent carries the content URI and the read grant, never a bare file://', async () => {
+  await downloadAndInstallDevClient(URL)
+
+  const params = intentMock.mock.calls[0][1] as { data: string; flags?: number }
+  expect(params.data).toBe(CONTENT_URI)
+  expect(params.data).not.toMatch(/^file:/)
+  expect(params.flags).toBe(1) // FLAG_GRANT_READ_URI_PERMISSION
 })
 
 test('L55d — a failed download surfaces as an error instead of pretending', async () => {
