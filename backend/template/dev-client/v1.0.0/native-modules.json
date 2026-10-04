@@ -1,7 +1,7 @@
 {
   "templateVersion": "1.0.0",
   "sdkVersion": "55.0.0",
-  "builtAt": "2026-08-09T00:00:00Z",
+  "builtAt": "2026-10-04T01:01:15Z",
   "modules": [
     {
       "name": "react-native-quick-crypto",
@@ -140,6 +140,12 @@
       "version": "55.0.10",
       "nativeLinking": true,
       "androidPackage": "expo.modules.blur"
+    },
+    {
+      "name": "expo-font",
+      "version": "55.0.4",
+      "nativeLinking": true,
+      "androidPackage": "expo.modules.font"
     }
   ]
 }
