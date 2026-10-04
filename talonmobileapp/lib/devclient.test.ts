@@ -27,7 +27,7 @@
 // the red (the house's accepted form): an in-app install has no code to
 // test before it has code.
 
-import { downloadAndInstallDevClient } from '@/lib/devclient'
+import { downloadAndInstallDevClient, downloadAndShareDevClient } from '@/lib/devclient'
 import { File } from 'expo-file-system'
 import { startActivityAsync } from 'expo-intent-launcher'
 import { shareAsync } from 'expo-sharing'
@@ -123,6 +123,28 @@ test('L60d — the manifest source declares the permission that lets the app sta
   const permissions =
     (appJson as { expo?: { android?: { permissions?: string[] } } }).expo?.android?.permissions ?? []
   expect(permissions).toContain('REQUEST_INSTALL_PACKAGES')
+})
+
+// L61a / FM-APKi(iv) — the share delivery is a deliberate choice: it
+// reuses the session-token download and hands the file to the share
+// sheet directly, never touching the install intent (and never a browser).
+test('L61a — the share path downloads with the session token and hands the file to the share sheet', async () => {
+  await downloadAndShareDevClient(URL)
+
+  expect(downloadMock).toHaveBeenCalledTimes(1)
+  const [url, , opts] = downloadMock.mock.calls[0]
+  expect(opts).toEqual(
+    expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer tok-123' }),
+      idempotent: true,
+    }),
+  )
+  expect(String(url)).not.toContain('tok-123')
+  expect(shareMock).toHaveBeenCalledWith(
+    'file:///cache/app-debug.apk',
+    expect.objectContaining({ mimeType: 'application/vnd.android.package-archive' }),
+  )
+  expect(intentMock).not.toHaveBeenCalled()
 })
 
 test('L55d — a failed download surfaces as an error instead of pretending', async () => {

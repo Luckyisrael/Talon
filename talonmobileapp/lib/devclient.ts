@@ -27,25 +27,39 @@
 //     on API 24+) plus FLAG_GRANT_READ_URI_PERMISSION (1), so the
 //     package installer — a different UID — can actually open the file.
 //     Without both, the primary path fails on every modern device and
-//     the L55c fallback silently becomes the real path.
-export async function downloadAndInstallDevClient(url: string): Promise<void> {
-  // `require`, not `import` — same three reasons as L39's downloadApk
-  // (lib/api.ts): native modules stay OUT of this file's static graph so
-  // every suite importing the Device screen stays native-free, jest's
-  // mock registry answers `require`, and `require('./auth')` reaches the
-  // CJS mock for @/lib/auth where `await import()` would not.
+//     the L55c fallback silently becomes the real path;
+//   L61 / FM-APKi(iv) — the share sheet is also a deliberate choice:
+//     `downloadAndShareDevClient` hands the downloaded file straight to
+//     `shareAsync` (expo-sharing wraps it in its own FileProvider —
+//     L39's proven export seam) without ever attempting the install
+//     intent, so a device that can't run the direct flow gets a choice
+//     instead of a post-failure fallback. One download seam feeds both.
+
+// The single download both deliveries share — L55a's contract in one
+// place. `require`, not `import` — same three reasons as L39's
+// downloadApk (lib/api.ts): native modules stay OUT of this file's
+// static graph so every suite importing the Device screen stays
+// native-free, jest's mock registry answers `require`, and
+// `require('./auth')` reaches the CJS mock for @/lib/auth where
+// `await import()` would not.
+async function downloadDevClientApk(url: string) {
   const { File, Paths } = require('expo-file-system') as typeof import('expo-file-system')
-  const { startActivityAsync } = require('expo-intent-launcher') as typeof import('expo-intent-launcher')
   const { getToken } = require('./auth') as typeof import('./auth')
 
   const token = await getToken()
   if (!token) throw new Error('sign in again — the dev client download needs your session')
 
   const filename = url.split('/').pop() || 'app-debug.apk'
-  const file = await File.downloadFileAsync(url, new File(Paths.cache, filename), {
+  return File.downloadFileAsync(url, new File(Paths.cache, filename), {
     headers: { Authorization: `Bearer ${token}` },
     idempotent: true,
   })
+}
+
+export async function downloadAndInstallDevClient(url: string): Promise<void> {
+  const { startActivityAsync } = require('expo-intent-launcher') as typeof import('expo-intent-launcher')
+
+  const file = await downloadDevClientApk(url)
 
   try {
     await startActivityAsync('android.intent.action.VIEW', {
@@ -72,4 +86,19 @@ export async function downloadAndInstallDevClient(url: string): Promise<void> {
       dialogTitle: 'Install the Talon dev client',
     })
   }
+}
+
+// L61 / FM-APKi(iv) — the deliberate second delivery: same session-token
+// download, then straight to the share sheet. `shareAsync` takes the
+// `file://` uri happily because expo-sharing wraps the file in ITS own
+// FileProvider (the L39 export seam) — it is the install intent, not
+// sharing, that refuses raw file URIs at the app boundary.
+export async function downloadAndShareDevClient(url: string): Promise<void> {
+  const file = await downloadDevClientApk(url)
+
+  const { shareAsync } = require('expo-sharing') as typeof import('expo-sharing')
+  await shareAsync(file.uri, {
+    mimeType: 'application/vnd.android.package-archive',
+    dialogTitle: 'Share the Talon dev client',
+  })
 }

@@ -6,7 +6,7 @@ import { Badge, LimeButton, Screen, UIText } from '@/components/ui'
 import { Colors, Spacing } from '@/constants/theme'
 import { useActiveProject, useCreateSession, useDestroySession, useDeviceSession, useLiveSession, useMetro, useTestInfo } from '@/hooks'
 import { getSessionId, setSessionId } from '@/lib/session'
-import { downloadAndInstallDevClient } from '@/lib/devclient'
+import { downloadAndInstallDevClient, downloadAndShareDevClient } from '@/lib/devclient'
 import { type MetroEvent } from '@/lib/api'
 
 // Device tab: Metro-first connection details for the phone in your hand.
@@ -96,20 +96,38 @@ export default function DeviceScreen() {
   // re-auth wall the user hit on camera) and resolves localhost URLs to
   // the phone itself. The helper downloads with the session token and
   // fires the system install intent; a failure surfaces here as its own
-  // honest line, never a silent no-op.
-  const [apkWorking, setApkWorking] = React.useState(false)
+  // honest line, never a silent no-op. L61 adds the sibling choice: the
+  // same download handed to the share sheet instead — one shared action
+  // state so two 160 MB downloads can never race, with the busy label
+  // naming which delivery is in flight.
+  const [apkAction, setApkAction] = React.useState<'install' | 'share' | null>(null)
   const [apkError, setApkError] = React.useState<string | null>(null)
+  const apkWorking = apkAction !== null
   async function installDevClient() {
     const url = testInfo?.dev_client_url
     if (!url || apkWorking) return
-    setApkWorking(true)
+    setApkAction('install')
     setApkError(null)
     try {
       await downloadAndInstallDevClient(url)
-      setApkWorking(false)
+      setApkAction(null)
     } catch (e) {
-      setApkWorking(false)
+      setApkAction(null)
       setApkError(e instanceof Error ? e.message : 'could not install the dev client')
+    }
+  }
+
+  async function shareDevClient() {
+    const url = testInfo?.dev_client_url
+    if (!url || apkWorking) return
+    setApkAction('share')
+    setApkError(null)
+    try {
+      await downloadAndShareDevClient(url)
+      setApkAction(null)
+    } catch (e) {
+      setApkAction(null)
+      setApkError(e instanceof Error ? e.message : 'could not share the dev client')
     }
   }
 
@@ -187,15 +205,26 @@ export default function DeviceScreen() {
               ) : null}
               {testInfo?.dev_client_url ? (
                 <View>
-                  <Pressable
-                    onPress={() => void installDevClient()}
-                    disabled={apkWorking}
-                    accessibilityLabel="Download and install the dev client"
-                  >
-                    <UIText variant="label" tone={apkWorking ? 'faint' : 'muted'} style={styles.underline}>
-                      {apkWorking ? 'preparing the install…' : 'Download the dev client (APK)'}
-                    </UIText>
-                  </Pressable>
+                  <View style={styles.apkRow}>
+                    <Pressable
+                      onPress={() => void installDevClient()}
+                      disabled={apkWorking}
+                      accessibilityLabel="Download and install the dev client"
+                    >
+                      <UIText variant="label" tone={apkWorking ? 'faint' : 'muted'} style={styles.underline}>
+                        {apkAction === 'install' ? 'preparing the install…' : 'Download the dev client (APK)'}
+                      </UIText>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => void shareDevClient()}
+                      disabled={apkWorking}
+                      accessibilityLabel="Share the dev client APK"
+                    >
+                      <UIText variant="label" tone={apkWorking ? 'faint' : 'muted'} style={styles.underline}>
+                        {apkAction === 'share' ? 'preparing the share…' : 'Share (APK)'}
+                      </UIText>
+                    </Pressable>
+                  </View>
                   {apkError ? (
                     <UIText variant="label" tone="danger" style={styles.apkError}>
                       {apkError}
@@ -362,6 +391,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   actions: { gap: Spacing.s8, alignItems: 'stretch' },
+  apkRow: {
+    flexDirection: 'row',
+    gap: Spacing.s12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+  },
   underline: { textDecorationLine: 'underline', textAlign: 'center' },
   apkError: { marginTop: 4, textAlign: 'center' },
   kvRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

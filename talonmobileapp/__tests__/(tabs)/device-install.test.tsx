@@ -4,7 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/react-native'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import DeviceScreen from '@/app/(tabs)/device'
 import { openMetroStream, projectsApi, sessionsApi, testInfoApi } from '@/lib/api'
-import { downloadAndInstallDevClient } from '@/lib/devclient'
+import { downloadAndInstallDevClient, downloadAndShareDevClient } from '@/lib/devclient'
 
 // L55 / FM-APKi — fails-first: the APK button must never reach the browser.
 //
@@ -48,7 +48,10 @@ jest.mock('@/lib/api', () => {
     openMetroStream: jest.fn(),
   }
 })
-jest.mock('@/lib/devclient', () => ({ downloadAndInstallDevClient: jest.fn(async () => {}) }))
+jest.mock('@/lib/devclient', () => ({
+  downloadAndInstallDevClient: jest.fn(async () => {}),
+  downloadAndShareDevClient: jest.fn(async () => {}),
+}))
 
 const APK = 'http://10.180.8.39:8080/v1/projects/7/dev-client.apk'
 const mockList = projectsApi.list as jest.Mock
@@ -57,6 +60,7 @@ const mockLive = sessionsApi.live as jest.Mock
 const mockGet = sessionsApi.get as jest.Mock
 const mockOpenStream = openMetroStream as jest.Mock
 const installMock = downloadAndInstallDevClient as jest.Mock
+const shareMock = downloadAndShareDevClient as jest.Mock
 
 function wrap(qc: QueryClient, ui: React.ReactElement) {
   return <QueryClientProvider client={qc}>{ui}</QueryClientProvider>
@@ -84,5 +88,20 @@ test('L55e — pressing the APK button installs in-app: the browser never sees t
   await fireEvent.press(await screen.findByText('Download the dev client (APK)'))
 
   expect(installMock).toHaveBeenCalledWith(APK)
+  expect(Linking.openURL).not.toHaveBeenCalledWith(APK)
+})
+
+// L61b / FM-APKi(iv) — the share control is a sibling choice beside the
+// download: pressing it shares the APK, and it never touches the install
+// helper or the browser (those are the other button's job, and the
+// browser's was deleted in L55 for carrying no session).
+test('L61b — pressing Share hands the URL to the share path: not the installer, not the browser', async () => {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+  await render(wrap(qc, <DeviceScreen />))
+
+  await fireEvent.press(await screen.findByText('Share (APK)'))
+
+  expect(shareMock).toHaveBeenCalledWith(APK)
+  expect(installMock).not.toHaveBeenCalled()
   expect(Linking.openURL).not.toHaveBeenCalledWith(APK)
 })
