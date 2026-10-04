@@ -6,6 +6,7 @@ import { Colors, Spacing } from '@/constants/theme'
 import { authApi } from '@/lib/api'
 import { getToken, setRefreshToken, setToken } from '@/lib/auth'
 import { registerPushWithBackend } from '@/lib/push'
+import { completePendingWalletLink } from '@/lib/walletlink'
 
 // The OAuth landing screen: the provider returned the app via
 // talon://auth/callback?code=… (expo-router parses the query into
@@ -54,6 +55,12 @@ export default function AuthCallbackScreen() {
         // Bind this device for push now that the JWT exists. Fire-and-
         // forget: a failure here must never block entering the app.
         registerPushWithBackend().catch(() => {})
+        // L63/FM-WALLa: a wallet proven during onboarding attaches to THIS
+        // session — the proof carries the signature, the session carries
+        // the identity. Fire-and-forget: a refused link (wallet taken,
+        // challenge expired) never blocks entering the app; the drawer
+        // reminder is the retry path.
+        completePendingWalletLink().catch(() => {})
         router.replace('/(tabs)/build')
       })
       .catch((err) => {

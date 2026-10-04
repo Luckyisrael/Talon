@@ -1042,3 +1042,37 @@ export const skrApi = {
     })
   },
 }
+
+// L63/FM-WALLa — the two acts of wallet ownership. The public pair below
+// mints a SIGN-IN challenge (anyone may ask — the caller has no session
+// yet; onboarding holds its proof until sign-in). The /v1/me pair mints a
+// LINK challenge: session-bound, so the identity lands on the account
+// standing in front of it — one wallet to one account, replace semantics,
+// a wallet owned elsewhere refused by name (409).
+export type WalletChallenge = { nonce: string; message: string }
+
+export const walletAuthApi = {
+  challenge(wallet: string) {
+    return request<WalletChallenge>('/v1/auth/wallet/challenge', {
+      method: 'POST',
+      body: JSON.stringify({ wallet }),
+    })
+  },
+}
+
+export type WalletProof = { wallet: string; nonce: string; signature: string }
+
+export const walletLinkApi = {
+  challenge(wallet: string) {
+    return request<WalletChallenge>('/v1/me/wallet/challenge', {
+      method: 'POST',
+      body: JSON.stringify({ wallet }),
+    })
+  },
+  verify(proof: WalletProof) {
+    return request<{ linked: boolean; wallet: string }>('/v1/me/wallet/verify', {
+      method: 'POST',
+      body: JSON.stringify(proof),
+    })
+  },
+}

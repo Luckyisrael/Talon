@@ -443,6 +443,10 @@ func main() {
 	authLimiter := api.AuthRateLimiter()
 	promptLimiter := api.PromptRateLimiter()
 
+	// P17's wallet handler serves both acts: the public login pair below
+	// and L63's session-bound connect pair inside the auth group.
+	walletHandler := api.NewWalletAuthHandler(s, authSvc, pushNotifier)
+
 	// Sign-in routes. The provider list and the exchange are cheap local
 	// operations inside the auth limiter; start/callback are browser
 	// navigations to and from the provider and stay unthrottled public
@@ -456,7 +460,6 @@ func main() {
 		r.Post("/v1/auth/logout", oauthHandler.Logout)
 		// P17: wallet sign-in — challenge/verify, same account-linking law
 		// as the OAuth exchange, same auth limiter.
-		walletHandler := api.NewWalletAuthHandler(s, authSvc, pushNotifier)
 		r.Post("/v1/auth/wallet/challenge", walletHandler.Challenge)
 		r.Post("/v1/auth/wallet/verify", walletHandler.Verify)
 	})
@@ -578,6 +581,11 @@ func main() {
 		// they sit inside the auth group. The webhook does not (see below).
 		r.Get("/v1/me", meHandler.Get)
 		r.Put("/v1/me", meHandler.Update)
+		// L63/FM-WALLa: connecting a wallet runs against the session —
+		// the signature lands on the caller's account, one wallet to one
+		// account, replace semantics, refusal by name.
+		r.Post("/v1/me/wallet/challenge", walletHandler.LinkChallenge)
+		r.Post("/v1/me/wallet/verify", walletHandler.LinkVerify)
 		// Sessions: the caller's live logins for inspection and revocation.
 		// Identity comes from the access token, so these sit in the auth
 		// group — unlike /v1/auth/logout, which authenticates by refresh

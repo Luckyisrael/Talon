@@ -1,10 +1,12 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { StyleSheet, View } from 'react-native'
 import Animated, { FadeInDown } from 'react-native-reanimated'
 import { useRouter } from 'expo-router'
 import { Code, Mobile, TaskSquare } from 'iconsax-react-native'
+import { useMobileWallet } from '@wallet-ui/react-native-kit'
 import { GhostButton, LimeButton, Screen, ShotSlot, UIText } from '@/components/ui'
 import { Colors, Spacing } from '@/constants/theme'
+import { beginWalletLink } from '@/lib/walletlink'
 import { useAppStore } from '@/stores/app'
 
 // Onboarding, second pass: the product shot sits in the middle, half height,
@@ -142,8 +144,26 @@ export function FeaturesScreen() {
 export function ConnectScreen() {
   const router = useRouter()
   const markOnboarded = useAppStore((s) => s.markOnboarded)
+  const wallet = useMobileWallet()
+  const [connecting, setConnecting] = useState(false)
   function leave(next: '/auth') {
     void markOnboarded().finally(() => router.push(next))
+  }
+  // L63/FM-WALLa(iii): the control drives the handshake it advertises —
+  // connect, sign the public challenge, hold the proof; the OAuth callback
+  // attaches it to the session being created right after this screen. Any
+  // failure (no wallet app, user cancels, network) still continues to
+  // sign-in: the drawer reminder is the second chance, not a dead end.
+  async function connectNow() {
+    setConnecting(true)
+    try {
+      await beginWalletLink(wallet)
+    } catch {
+      // Handshake abandoned — sign-in proceeds unlinked.
+    } finally {
+      setConnecting(false)
+      leave('/auth')
+    }
   }
   return (
     <Screen>
@@ -168,7 +188,7 @@ export function ConnectScreen() {
           </UIText>
         </Animated.View>
         <Animated.View entering={FadeInDown.duration(450).delay(240)} style={styles.foot}>
-          <LimeButton title="Connect wallet" onPress={() => leave('/auth')} />
+          <LimeButton title={connecting ? 'Connecting…' : 'Connect wallet'} onPress={connectNow} />
           <GhostButton title="Later" onPress={() => leave('/auth')} />
         </Animated.View>
         <UIText variant="caption" tone="faint">

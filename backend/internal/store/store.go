@@ -1104,6 +1104,49 @@ func (s *Store) GetUserByProvider(provider, providerID string) (*User, error) {
 	return u, nil
 }
 
+// ErrWalletOwnedElsewhere reports a wallet that already belongs to another
+// account. The one-wallet-one-account law has two sides and one message:
+// a wallet may serve exactly one account (UNIQUE(provider, provider_id) is
+// the last line), and an account may hold exactly one wallet (replaced in
+// place, never accumulated).
+var ErrWalletOwnedElsewhere = errors.New("this wallet is already linked to another account")
+
+// LinkWallet binds a solana identity to exactly one account: the caller's.
+//
+//   - a pubkey already bound elsewhere → ErrWalletOwnedElsewhere, named —
+//     not a bare UNIQUE failure, and never a silent attach.
+//   - an account that already holds a wallet → provider_id replaced in
+//     place (the second connect swaps, it does not add).
+//   - otherwise → inserted with the absent email a wallet carries
+//     (FM-IDENTa: an empty email links nothing).
+//
+// The bind check reads first so the error can carry the fact; the UNIQUE
+// constraint stays the arbiter of the race.
+func (s *Store) LinkWallet(userID int64, wallet string) error {
+	if bound, err := s.GetUserByProvider("solana", wallet); err == nil && bound.ID != userID {
+		return ErrWalletOwnedElsewhere
+	}
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM users_oauth_identity WHERE user_id = ? AND provider = 'solana' LIMIT 1`,
+		userID).Scan(&id)
+	switch {
+	case err == nil:
+		// Replace: this account's one wallet becomes the new one.
+		_, err = s.db.Exec(`UPDATE users_oauth_identity SET provider_id = ? WHERE id = ?`, wallet, id)
+	case errors.Is(err, sql.ErrNoRows):
+		_, err = s.db.Exec(`INSERT INTO users_oauth_identity (user_id, provider, provider_id) VALUES (?, 'solana', ?)`,
+			userID, wallet)
+	default:
+		return err
+	}
+	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+		// Lost the race for a wallet another account took between the
+		// bind check and the write — same fact, same name.
+		return ErrWalletOwnedElsewhere
+	}
+	return err
+}
+
 // ── P17: wallet-auth challenges ──
 //
 // The wallet signs one server-issued message, once. StoreWalletChallenge

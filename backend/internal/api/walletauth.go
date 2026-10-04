@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -144,6 +145,113 @@ func (h *WalletAuthHandler) Verify(w http.ResponseWriter, r *http.Request) {
 			"email":        user.Email,
 			"display_name": user.DisplayName,
 		},
+	})
+}
+
+// LinkChallenge is POST /v1/me/wallet/challenge — the connect flow, not the
+// login flow. Session-bound (the auth group decides; this second check is
+// for the handler's own honesty): the identity the signature proves will
+// land on the CALLER, so the caller must be someone. The message names the
+// act — connecting, one wallet to one account — instead of signing in.
+func (h *WalletAuthHandler) LinkChallenge(w http.ResponseWriter, r *http.Request) {
+	userID := GetUserID(r.Context())
+	if userID == 0 {
+		writeError(w, http.StatusUnauthorized, "sign in first")
+		return
+	}
+	var req struct {
+		Wallet string `json:"wallet"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Wallet == "" {
+		writeError(w, http.StatusBadRequest, "wallet address required")
+		return
+	}
+
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not mint challenge")
+		return
+	}
+	nonce := hex.EncodeToString(nonceBytes)
+	message := "Talon wallet link\nwallet: " + req.Wallet + "\nnonce: " + nonce + "\n\nConnecting proves you own this wallet. One wallet connects to one Talon account. This request will not trigger any blockchain transaction."
+
+	if err := h.store.StoreWalletChallenge(nonce, message); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not store challenge")
+		return
+	}
+	if n, err := h.store.SweepWalletChallenges(10 * time.Minute); err == nil && n > 0 {
+		_ = n
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"nonce":   nonce,
+		"message": message,
+	})
+}
+
+// LinkVerify is POST /v1/me/wallet/verify — prove the signature over a
+// fresh challenge, then bind the wallet to the caller under the
+// one-wallet-one-account law: a wallet owned elsewhere is refused BY NAME
+// (409), an account that already holds a wallet swaps it (replace), and
+// the challenge is consumed either way so a failed attempt cannot be
+// retried with a corrected guess.
+func (h *WalletAuthHandler) LinkVerify(w http.ResponseWriter, r *http.Request) {
+	userID := GetUserID(r.Context())
+	if userID == 0 {
+		writeError(w, http.StatusUnauthorized, "sign in first")
+		return
+	}
+	var req struct {
+		Wallet    string `json:"wallet"`
+		Nonce     string `json:"nonce"`
+		Signature string `json:"signature"` // base64, as Phantom/Backpack signMessage return
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		req.Wallet == "" || req.Nonce == "" || req.Signature == "" {
+		writeError(w, http.StatusBadRequest, "wallet, nonce, and signature required")
+		return
+	}
+
+	message, err := h.store.ConsumeWalletChallenge(req.Nonce)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "challenge not found or expired")
+		return
+	}
+	// The challenge was minted for a wallet; only that wallet may present
+	// it. Both wordings (login's "Talon sign-in", link's "Talon wallet
+	// link") bind the same way — by address line.
+	if !strings.Contains(message, "wallet: "+req.Wallet+"\n") {
+		writeError(w, http.StatusUnauthorized, "challenge was issued for a different wallet")
+		return
+	}
+
+	pub, err := base58Decode(req.Wallet)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		writeError(w, http.StatusBadRequest, "invalid wallet address")
+		return
+	}
+	sig, err := base64.StdEncoding.DecodeString(req.Signature)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "signature must be base64")
+		return
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), []byte(message), sig) {
+		writeError(w, http.StatusUnauthorized, "signature does not verify")
+		return
+	}
+
+	if err := h.store.LinkWallet(userID, req.Wallet); err != nil {
+		if errors.Is(err, store.ErrWalletOwnedElsewhere) {
+			// The refusal carries the fact the user can act on.
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "could not link wallet")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"linked": true,
+		"wallet": req.Wallet,
 	})
 }
 
