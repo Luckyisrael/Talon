@@ -7,7 +7,26 @@
 // start URL with the talon:// redirect, the backend lands the browser
 // back on the app with a single-use code, and this client exchanges it,
 // the JWT never rides a URL.
+import { DeviceEventEmitter } from 'react-native'
+
 const BASE = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8080'
+
+// FM-SESSa/L67 — token death announces itself, once per session. The
+// transport keeps its whole job (refresh → retry → clear) and this is the
+// last step: the root layout listens for `auth:expired` and lands the app
+// on /auth from whatever screen it was on — the thing clearing the token
+// could never do (FM-SESSa(i): nothing observed it, so the app stayed on
+// a screen whose every request had begun to fail). Keyed to the token
+// that died: N concurrent 401s all clear (idempotent) but the root hears
+// one death, and a later sign-in — a different token — is a different
+// session that announces its own death when it ends.
+let announcedDeathOf: string | null = null
+
+function announceSessionExpired(diedToken: string): void {
+  if (announcedDeathOf === diedToken) return
+  announcedDeathOf = diedToken
+  DeviceEventEmitter.emit('auth:expired')
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { getToken } = await import('./auth')
@@ -33,6 +52,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     const { clearToken } = await import('./auth')
     await clearToken()
+    // …and the last step of the chain: refresh died (or the retry came
+    // back 401 anyway) — tell the root, once, so the whole app can land
+    // on sign-in instead of the current screen failing forever.
+    announceSessionExpired(token)
   }
   return parseResponse<T>(res)
 }

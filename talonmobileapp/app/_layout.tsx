@@ -1,5 +1,6 @@
-import { useEffect } from 'react'
-import { Stack } from 'expo-router'
+import { useEffect, useRef } from 'react'
+import { DeviceEventEmitter } from 'react-native'
+import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as WebBrowser from 'expo-web-browser'
 import 'react-native-reanimated'
@@ -11,13 +12,37 @@ import { initPush } from '@/lib/push'
 WebBrowser.maybeCompleteAuthSession()
 
 export default function RootLayout() {
+  const router = useRouter()
+  const segments = useSegments()
+  // The guard reads segments through a ref so the listener binds once
+  // (a death can arrive at any time) while always seeing the screen the
+  // user is actually on — not the one at mount.
+  const segmentsRef = useRef(segments)
+  segmentsRef.current = segments
+
   // Push initializes once per app start; dark (no-op) until the operator
-  // sets EXPO_PUBLIC_ONESIGNAL_APP_ID. This is the only effect in the root:
-  // init is idempotent and start-once, matching the fonts/auth-gate
-  // exceptions, nothing here reacts to state.
+  // sets EXPO_PUBLIC_ONESIGNAL_APP_ID.
   useEffect(() => {
     initPush()
   }, [])
+
+  // L67 / FM-SESSa — the app's single auth-death observer. The transport
+  // announces `auth:expired` when a refresh dies (after clearToken, once
+  // per session); this is the ONE place that acts on it, so a death lands
+  // sign-in from any screen instead of stranding the user where every
+  // request now fails — before L67 the rescue was scattered across
+  // splash / auth self-heal / settings, each screen only saving itself.
+  // The guard: the auth stack announcing its own death must not stack a
+  // second navigation. Web's handleExpiredSession hard-redirect stays
+  // the model, untouched.
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('auth:expired', () => {
+      if (segmentsRef.current[0] !== 'auth') {
+        router.replace('/auth')
+      }
+    })
+    return () => sub.remove()
+  }, [router])
   return (
     <AppProviders>
       <Stack>
