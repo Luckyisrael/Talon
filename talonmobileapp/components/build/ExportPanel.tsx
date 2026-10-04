@@ -91,9 +91,36 @@ function reasonText(reason: string): string {
   }
 }
 
+/**
+ * A 402 that escaped the pre-gate: the offer the server states in the
+ * refusal itself (parseResponse parks the body on `.detail`). Its numbers
+ * are fresher than the quote — the balance raced between the two — so the
+ * sheet prefers them over what the panel opened with.
+ */
+type CreditRefusal = {
+  spare_credits?: number;
+  skr_amount_per_pack?: number;
+  credits_per_pack?: number;
+};
+
+/**
+ * FM-SKRd(c): the reason the wire actually carried. The canned server
+ * phrase adds nothing actionable, so it degrades to the status code —
+ * the raw cause is on the server log since L62's logging.
+ */
+function quoteFailureText(error: unknown): string {
+  const message =
+    error instanceof Error && error.message ? error.message : 'the server was unreachable';
+  const status = (error as { status?: number } | null)?.status;
+  return /^could not read your export credits$/i.test(message)
+    ? `Could not read your export credits (server ${status ?? 'error'}) — the raw cause is in the server log.`
+    : `Could not read your export credits: ${message}`;
+}
+
 export function ExportPanel({ projectId }: { projectId: number }) {
   const [notes, setNotes] = useState('');
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [refusal, setRefusal] = useState<CreditRefusal | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [paying, setPaying] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -106,12 +133,41 @@ export function ExportPanel({ projectId }: { projectId: number }) {
 
   const offer = quote.data;
 
+  // FM-SKRd(iii): the sheet speaks from the freshest server numbers — a
+  // 402's own detail (it arrived later and IS the refusal being answered)
+  // beats the quote the panel opened with; without a refusal the quote is
+  // the whole story, as before.
+  const live = {
+    skr: refusal?.skr_amount_per_pack ?? offer?.skr_amount,
+    packs: refusal?.credits_per_pack ?? offer?.credits,
+    spare: refusal?.spare_credits ?? offer?.spare_credits,
+  };
+
+  // FM-SKRd(ii): a refusal must land as the offer, never as silence. This
+  // is the mutation's onError — a 402 that escaped the pre-gate opens the
+  // same sheet with the server's own numbers; any other failure is stated
+  // on the card instead of vanishing with the pending state.
+  function queueExport() {
+    startExport.mutate(notes, {
+      onError: (err) => {
+        const e = err as { status?: number; detail?: CreditRefusal };
+        if (e?.status === 402 && e.detail) {
+          setRefusal(e.detail);
+          setSheetOpen(true);
+          return;
+        }
+        setFailure(err instanceof Error ? err.message : 'Could not start the export.');
+      },
+    });
+  }
+
   /** The gate: existing credits skip the whole payment path. */
   function exportRelease() {
     setFailure(null);
+    setRefusal(null);
     if (!offer) return;
     if (offer.spare_credits >= 1) {
-      startExport.mutate(notes);
+      queueExport();
       return;
     }
     setSheetOpen(true);
@@ -140,13 +196,14 @@ export function ExportPanel({ projectId }: { projectId: number }) {
     setPaying(true);
     setFailure(null);
     try {
-      // Every one of these values is quoted; none is ours to pick.
+      // Every one of these values is quoted; none is ours to pick. A
+      // refusal's own price beats the opening quote — it arrived later.
       const mint = address(offer.mint);
       const treasury = address(offer.treasury);
       const who = account ?? (await connect());
       const payer = who.address;
 
-      const raw = await packAmountInRawUnits(offer.skr_amount, mint, client.rpc);
+      const raw = await packAmountInRawUnits(live.skr ?? offer.skr_amount, mint, client.rpc);
       const [treasuryAccount, payerAccount] = await Promise.all([
         findAssociatedTokenAddress(treasury, mint),
         findAssociatedTokenAddress(payer, mint),
@@ -173,7 +230,7 @@ export function ExportPanel({ projectId }: { projectId: number }) {
       const outcome = await settlePayment(signature);
       if (outcome.ok) {
         setSheetOpen(false);
-        startExport.mutate(notes);
+        queueExport();
       } else {
         setFailure(outcome.reason ?? 'rejected');
       }
@@ -188,9 +245,9 @@ export function ExportPanel({ projectId }: { projectId: number }) {
   if (!offer) {
     return (
       <View style={styles.wrap}>
-        <UIText variant="body" tone="muted">
+        <UIText variant="body" tone={quote.isError ? 'danger' : 'muted'}>
           {quote.isError
-            ? 'Could not read your export credits — try again.'
+            ? quoteFailureText(quote.error)
             : 'Checking your export credits…'}
         </UIText>
       </View>
@@ -221,6 +278,11 @@ export function ExportPanel({ projectId }: { projectId: number }) {
             Release build {job.data.status}
           </UIText>
         )}
+        {/* FM-SKRd(ii): a start failure that isn't a 402 still has to be
+            said out loud — pending state ends silently otherwise. */}
+        {failure && !sheetOpen && (
+          <UIText variant="bodySm" tone="danger">{failure}</UIText>
+        )}
         {/* FM-APKa(i): a paid export must be *takeable* — the file itself,
             not only the instructions for what to do with it. The web panel
             has always had this button; the phone is the surface that could
@@ -248,8 +310,19 @@ export function ExportPanel({ projectId }: { projectId: number }) {
       {sheetOpen && (
         <Card style={styles.sheet}>
           <UIText variant="title">No export credits left</UIText>
+          {/* FM-SKRd(iii): the system, not only the price — the balance at
+              this refusal's moment, the pack it offers, what a credit
+              covers, and why the payment is SKR. */}
+          <UIText variant="body" tone="muted">
+            Balance: {live.spare ?? 0} export credits
+          </UIText>
           <UIText variant="body">
-            {offer.skr_amount} SKR unlocks {offer.credits} exports
+            {live.skr} SKR unlocks {live.packs} exports
+          </UIText>
+          <UIText variant="bodySm" tone="muted">
+            One credit covers one release export (the signed APK + store
+            bundle). Credits are paid in SKR, Solana&apos;s token — buy a pack
+            with your wallet right here in the app.
           </UIText>
           {/* Prose for the human, the raw code for verification: a payment
               refusal has to be checkable against what the chain actually
@@ -260,7 +333,7 @@ export function ExportPanel({ projectId }: { projectId: number }) {
             </UIText>
           )}
           <LimeButton
-            title={`Pay ${offer.skr_amount} SKR`}
+            title={`Pay ${live.skr ?? offer.skr_amount} SKR`}
             onPress={pay}
             disabled={paying}
           />

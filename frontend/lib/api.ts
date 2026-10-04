@@ -1010,6 +1010,30 @@ export const usage = {
   },
 };
 
+// ── SKR export credits (L66/FM-SKRd) ────────────────────
+
+/**
+ * The paywall's price sheet, quoted server-side: pack price, pack size,
+ * mint, treasury and the caller's balance — never constants (the price can
+ * change without a deploy). The web reads it to teach free users the real
+ * rule (one credit per release); payment itself happens in the app, where
+ * the wallet lives.
+ */
+export type SkrQuote = {
+  skr_amount: number;
+  credits: number;
+  mint: string;
+  treasury: string;
+  spare_credits: number;
+};
+
+export const skrApi = {
+  /** POST — the router registers POST /v1/skr/quote (L62's contract). */
+  quote() {
+    return request<SkrQuote>("/v1/skr/quote", { method: "POST" });
+  },
+};
+
 // ── Profile & billing (Phase 9) ───────────────────────
 
 /**

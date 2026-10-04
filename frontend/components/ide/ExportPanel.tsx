@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { exportApi, projects as projectsApi, usage as usageApi } from "@/lib/api";
+import {
+  exportApi,
+  projects as projectsApi,
+  skrApi,
+  usage as usageApi,
+  type SkrQuote,
+} from "@/lib/api";
 import type { ExportJob, Project, ProjectAsset } from "@/lib/types";
 import { SubmissionAssist } from "./SubmissionAssist";
 
@@ -14,9 +20,29 @@ import { SubmissionAssist } from "./SubmissionAssist";
  * leaves for Solana's own submission flow. The server enforces the tier and
  * does the work; this panel only mirrors the truth, so a free user sees why
  * the button refuses rather than a button that pretends otherwise.
+ *
+ * L66/FM-SKRd: the free branch teaches its own paywall. "Release export
+ * needs the Pro plan" was a lie of omission — free accounts export with
+ * SKR credits (one per release), and the panel now states that rule from
+ * the server's quote: balance, pack price, pack size, and where payment
+ * happens (the app — the wallet lives there; the web never takes money).
  */
 interface ExportPanelProps {
   projectId: number;
+}
+
+/**
+ * FM-SKRd(c): a quote failure states the reason the wire carried. The
+ * canned server phrase adds nothing actionable, so it degrades to the
+ * status code — the raw cause is on the server log since L62.
+ */
+function quoteFailureText(error: unknown): string {
+  const message =
+    error instanceof Error && error.message ? error.message : "the server was unreachable";
+  const status = (error as { status?: number } | null)?.status;
+  return /^could not read your export credits$/i.test(message)
+    ? `Could not read your export credits (server ${status ?? "error"}) — the raw cause is in the server log.`
+    : `Could not read your export credits: ${message}`;
 }
 
 export default function ExportPanel({ projectId }: ExportPanelProps) {
@@ -30,11 +56,18 @@ export default function ExportPanel({ projectId }: ExportPanelProps) {
   const [project, setProject] = useState<Project | null>(null);
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
+  // L66/FM-SKRd: the free branch's teaching material, all quoted — price,
+  // pack size, balance from the server; a failure keeps its reason so the
+  // panel never degrades to a bare retry.
+  const [quote, setQuote] = useState<SkrQuote | null>(null);
+  const [quoteReason, setQuoteReason] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Tier comes from the server on open — the button label never decides
   // eligibility, the export endpoint does. Project + assets load alongside
-  // so the store checklist is visible before the (long) build starts.
+  // so the store checklist is visible before the (long) build starts, and
+  // the SKR quote arrives with them so a free user's first sight of the
+  // panel is the whole rule, not a stub.
   useEffect(() => {
     if (!open) return;
     usageApi
@@ -49,6 +82,13 @@ export default function ExportPanel({ projectId }: ExportPanelProps) {
       .listAssets(projectId)
       .then(setAssets)
       .catch(() => {});
+    skrApi
+      .quote()
+      .then((q) => {
+        setQuote(q);
+        setQuoteReason(null);
+      })
+      .catch((err: unknown) => setQuoteReason(quoteFailureText(err)));
   }, [open, projectId]);
 
   // Close on outside click and Escape. Mirrors CheckpointMenu.
@@ -196,12 +236,46 @@ export default function ExportPanel({ projectId }: ExportPanelProps) {
 
           <div className="p-3">
             {!isPro ? (
-              <p className="text-sm text-fog">
-                Release export needs the Pro plan.{" "}
-                <a href="/pricing" className="text-mist underline underline-offset-2 hover:text-paper">
-                  See pricing
-                </a>
-              </p>
+              // L66/FM-SKRd(i)/(iii) — the paywall teaches itself: the rule
+              // (one credit per release), the balance the server read, the
+              // pack the server priced, and where payment happens. The old
+              // "needs the Pro plan" line is gone — it hid all of this.
+              <>
+                <p className="text-sm text-fog">
+                  Free accounts export with credits: one export credit spends
+                  per release build.
+                </p>
+                {quoteReason ? (
+                  <p className="mt-2 text-xs text-coral-red">{quoteReason}</p>
+                ) : quote ? (
+                  <>
+                    <p className="mt-2 text-sm text-mist">
+                      Balance: {quote.spare_credits} of {quote.credits} export
+                      credits
+                    </p>
+                    <p className="mt-1 text-sm text-fog">
+                      {quote.skr_amount} SKR unlocks {quote.credits} exports
+                    </p>
+                    <p className="mt-2 text-xs text-ash">
+                      Pay in the Talon app — connect a wallet there (one wallet
+                      per account); the web never takes payments.
+                    </p>
+                  </>
+                ) : (
+                  <p className="mt-2 text-xs text-ash">
+                    Checking your export credits…
+                  </p>
+                )}
+                <p className="mt-3 text-sm text-fog">
+                  <a
+                    href="/pricing"
+                    className="text-mist underline underline-offset-2 hover:text-paper"
+                  >
+                    See pricing
+                  </a>{" "}
+                  — Pro exports without credits.
+                </p>
+              </>
             ) : !job ? (
               <>
                 <p className="gauge mb-1">Store checklist</p>

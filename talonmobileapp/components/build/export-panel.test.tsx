@@ -382,3 +382,44 @@ it('the download carries the session token and shares the result (FM-APKa(ii)/(i
   expect(String(shared[1].mimeType)).toContain('android.package-apk')
   expect(uri).toBe('file:///cache/release.apk')
 })
+
+it('L66 — a 402 that escapes the pre-gate lands as the full offer, never silence (FM-SKRd(ii))', async () => {
+  // The quote says a credit is held, so the gate passes straight through —
+  // and the server then refuses: the balance raced (spent elsewhere since
+  // the quote). Pre-L66 the mutation had no onError, so this refusal
+  // rendered NOTHING — silence where an offer belonged.
+  ;(skrApi.quote as jest.Mock).mockResolvedValue(quoteOf({ spare_credits: 1 }))
+  ;(exportApi.start as jest.Mock).mockRejectedValue(
+    Object.assign(new Error('no export credits left'), {
+      status: 402,
+      detail: {
+        code: 'credits_required',
+        spare_credits: 0,
+        skr_amount_per_pack: 41,
+        credits_per_pack: 6,
+      },
+    }),
+  )
+
+  await renderPanel()
+
+  expect(await screen.findByText('1 of 5 export credits left')).toBeTruthy()
+  fireEvent.press(await screen.findByText('Export'))
+
+  // The refusal IS the offer — the sheet opens on the server's own numbers.
+  expect(await screen.findByText('No export credits left')).toBeTruthy()
+  expect(screen.getByText('41 SKR unlocks 6 exports')).toBeTruthy()
+  // …and it teaches the system, not only the price (FM-SKRd(iii)):
+  // what a credit covers, the balance at refusal time, why SKR.
+  expect(screen.getByText(/One credit covers one release export/)).toBeTruthy()
+  expect(screen.getByText('Balance: 0 export credits')).toBeTruthy()
+  expect(screen.getByText(/paid in SKR/)).toBeTruthy()
+})
+
+it('L66 — a quote failure shows the reason the wire carried, not only "try again" (FM-SKRd(i))', async () => {
+  ;(skrApi.quote as jest.Mock).mockRejectedValue(new Error('the credits ledger is offline'))
+
+  await renderPanel()
+
+  expect(await screen.findByText(/the credits ledger is offline/)).toBeTruthy()
+})
