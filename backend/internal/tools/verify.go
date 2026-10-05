@@ -486,13 +486,22 @@ type RunBoot struct {
 	APKPath       string
 	PkgName       string
 	ADBClient     *ADBRunner
+	// The shipped dev client — wired from api (which imports devclient)
+	// because tools deliberately does not. DevClientPkg is the package it
+	// installs as; DevClientLaunchLink builds the ACTION_VIEW that loads a
+	// workspace into it for a given Metro port. When both are set and a
+	// bundler port is known, run_boot boots THIS path instead of the
+	// project's own APK — see Execute (G-14).
+	DevClientPkg        string
+	DevClientLaunchLink func(metroPort int) string
 }
 
 func (t *RunBoot) Name() string { return "run_boot" }
 
 func (t *RunBoot) Description() string {
-	return "Install the APK on the connected device and confirm the process is alive. " +
-		"Returns passed=true when `adb shell pidof <pkg>` reports a PID, or the failure reason when not."
+	return "Confirm the app boots on the connected device: install the APK when this project has one, " +
+		"otherwise load the workspace through the installed dev client over Metro. " +
+		"Returns passed=true when the process is up and produced first-launch logs, or the failure reason when not."
 }
 
 func (t *RunBoot) InputSchema() json.RawMessage {
@@ -513,6 +522,17 @@ func (t *RunBoot) Execute(ctx context.Context, args json.RawMessage) (ToolResult
 	apk := t.APKPath
 	pkg := t.PkgName
 	if apk == "" || pkg == "" {
+		// G-14: with no APK this used to stop at "boot skipped" — and the
+		// project's package is one nothing ever installs, so the rung was
+		// unreachable by construction while the agent reported the device
+		// as unverified forever. The product's real device path is the
+		// shipped dev client loading the workspace from Metro (that is
+		// what session start installs into the container, and what the
+		// phone in your hand runs). Boot that path when it exists; keep
+		// the honest skip only when there is nothing to boot through.
+		if res, ok := t.bootDevClient(ctx); ok {
+			return marshalVerify(res), nil
+		}
 		return marshalVerify(VerifyResult{Passed: true, Summary: "no apk/pkg supplied — boot skipped"}), nil
 	}
 
@@ -573,6 +593,79 @@ func (t *RunBoot) Execute(ctx context.Context, args json.RawMessage) (ToolResult
 		}), nil
 	}
 	return marshalVerify(bootVerdict(pkg, logs, launch)), nil
+}
+
+// bootDevClient is G-14's branch: boot the workspace through the shipped
+// dev client when this project has no APK of its own. ok=false means the
+// path does not exist (no bundler port, no package wired, dev client absent
+// from this device) and the caller keeps the old honest skip; ok=true means
+// the verdict inside is real — a pass, or a failure worth reporting.
+//
+// The evidence standard is the same one the APK path uses: the log buffer
+// is cleared, the process is launched, pidof must show it, and the first
+// post-launch log line naming the package is what separates "booted" from
+// "process exists but ran no code".
+func (t *RunBoot) bootDevClient(ctx context.Context) (VerifyResult, bool) {
+	adb := t.ADBClient
+	if adb == nil || adb.MetroPort <= 0 || t.DevClientPkg == "" || t.DevClientLaunchLink == nil {
+		return VerifyResult{}, false
+	}
+	// pm path answers "package:/data/app/..." only for a package this
+	// device actually has; a missing client is an honest "not this path".
+	if out, err := adb.Run("pm path " + t.DevClientPkg); err != nil || !strings.Contains(out, "package:") {
+		return VerifyResult{}, false
+	}
+
+	launch := time.Now()
+	_ = adb.ClearLogcat()
+	if out, err := adb.LaunchDevClient(t.DevClientLaunchLink(adb.MetroPort)); err != nil {
+		return VerifyResult{
+			Passed:  false,
+			Errors:  "dev-client launch failed: " + strings.TrimSpace(out),
+			Summary: "process did not come up",
+		}, true
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if out, err := adb.Run("pidof " + t.DevClientPkg); err == nil && strings.TrimSpace(out) != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			return VerifyResult{
+				Passed:  false,
+				Errors:  fmt.Sprintf("pidof %s returned empty for 5s after launch", t.DevClientPkg),
+				Summary: "process did not come up",
+			}, true
+		}
+		select {
+		case <-ctx.Done():
+			return VerifyResult{
+				Passed:  false,
+				Errors:  "boot check cancelled: " + ctx.Err().Error(),
+				Summary: "process did not come up",
+			}, true
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	logs, err := adb.DumpLogcat(t.DevClientPkg, 200)
+	if err != nil {
+		return VerifyResult{
+			Passed:  false,
+			Errors:  "process alive but logcat unreadable: " + err.Error(),
+			Summary: "process did not come up",
+		}, true
+	}
+	vr := bootVerdict(t.DevClientPkg, logs, launch)
+	if vr.Passed {
+		// Name what actually booted — the workspace inside the shipped
+		// client over Metro, never the project's own package, which
+		// nothing installs.
+		vr.Summary = fmt.Sprintf("dev client %s loaded the workspace from Metro :%d — %s",
+			t.DevClientPkg, adb.MetroPort, vr.Summary)
+	}
+	return vr, true
 }
 
 // bootVerdict turns post-launch evidence into the gate result. Pure so the

@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -148,6 +150,30 @@ const DevClientPackage = "com.talon.devclient"
 // wraps the deep link in it. TestDevLauncherLinkWrapsTheDeepLinkForTheLauncher
 // pins it to the file; never edit one without the other.
 const DevClientScheme = "talonapp"
+
+// LaunchLink wraps a raw exp:// deep link in the shape expo-dev-launcher
+// accepts as an ACTION_VIEW: the client's own scheme, host
+// `expo-development-client`, the whole link percent-encoded in ?url= so its
+// own `?token=` stays data instead of splitting into the outer query.
+// DevLauncherURLHelper.kt checks the host (:7) and the url param (:9-11),
+// DevLauncherController.kt:245 bails without them, and only then does :24
+// rewrite the inner exp:// to http:// for the fetch.
+//
+// This is the only ACTION_VIEW that loads: a bare exp:// with an explicit
+// component resolves, opens, and then sits on the dev launcher's home
+// screen without ever fetching (verified on device — zero Metro requests).
+// testinfo's dev_launcher_link and run_boot's dev-client boot both come
+// through here so the two can never drift.
+func LaunchLink(deepLink string) string {
+	return DevClientScheme + "://expo-development-client/?url=" + url.QueryEscape(deepLink)
+}
+
+// LaunchLinkForPort is LaunchLink for a bundler on this device's loopback:
+// the port adb reverse tcp:PORT tcp:PORT forwards, which is how the session
+// container and a USB-tethered phone both reach the host's Metro.
+func LaunchLinkForPort(port int) string {
+	return LaunchLink("exp://127.0.0.1:" + strconv.Itoa(port))
+}
 
 // IsInstalledOnDevice checks if the dev-client is already installed on the device.
 func (m *Manager) IsInstalledOnDevice(adbTarget string) bool {

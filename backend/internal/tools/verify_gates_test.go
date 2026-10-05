@@ -323,3 +323,43 @@ func TestRunPrettierRejectsEscapes(t *testing.T) {
 		}
 	}
 }
+
+// G-14: with no APK of its own the boot rung goes through the shipped dev
+// client — but only when api has actually wired that path in (a known
+// bundler port, the package, the launch link). tools must not invent a
+// client it was never given, so each missing piece keeps the old honest
+// "no apk/pkg supplied — boot skipped", and none of these paths may reach
+// adb: a gate that shells out to prove it did not run would be worse than
+// the skip it replaced.
+func TestRunBootDevClientPathNeedsWiring(t *testing.T) {
+	link := func(port int) string { return "talonapp://expo-development-client/?url=x" }
+	cases := []struct {
+		name string
+		rb   *RunBoot
+	}{
+		{"no bundler port", &RunBoot{
+			ADBClient:    &ADBRunner{Target: "localhost:5555"},
+			DevClientPkg: "com.talon.devclient", DevClientLaunchLink: link,
+		}},
+		{"no package wired", &RunBoot{
+			ADBClient:           &ADBRunner{Target: "localhost:5555", MetroPort: 8081},
+			DevClientLaunchLink: link,
+		}},
+		{"no launch link wired", &RunBoot{
+			ADBClient:    &ADBRunner{Target: "localhost:5555", MetroPort: 8081},
+			DevClientPkg: "com.talon.devclient",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := tc.rb.Execute(context.Background(), json.RawMessage(`{}`))
+			if err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			vr := mustUnmarshalVerify(t, []byte(res.Content))
+			if !vr.Passed || !strings.Contains(vr.Summary, "no apk/pkg") {
+				t.Fatalf("expected the honest skip, got: passed=%v summary=%q", vr.Passed, vr.Summary)
+			}
+		})
+	}
+}

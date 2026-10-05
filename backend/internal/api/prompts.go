@@ -28,6 +28,7 @@ import (
 	"github.com/luckyisrael/talon/backend/internal/hooks"
 	"github.com/luckyisrael/talon/backend/internal/knowledge"
 	"github.com/luckyisrael/talon/backend/internal/metrics"
+	"github.com/luckyisrael/talon/backend/internal/metro"
 	"github.com/luckyisrael/talon/backend/internal/notify"
 	"github.com/luckyisrael/talon/backend/internal/orchestrator"
 	"github.com/luckyisrael/talon/backend/internal/planfile"
@@ -1140,7 +1141,28 @@ drain:
 					"Build failed", friendlyAIError(res.err))
 			}
 		}
+		// G-10: files changed this turn, and Metro's watcher can miss a
+		// create — the device's next launch would come back 500 into a
+		// native crash dialog while every gate above read green. Verify the
+		// bundler's file map now, in the background, while the reply is
+		// being read: warm by the time anyone taps "Open on this phone",
+		// and never asked on the launch path, where the only honest answer
+		// to a stale map is the crash itself. Runs on failed turns too —
+		// a failed turn writes files as well.
+		go h.ensureMetroFresh(projectID)
 	}
+}
+
+// ensureMetroFresh is G-10's hook from the turn: resolve this project's
+// live session and hand its bundler to metro.EnsureFresh. Fire-and-forget —
+// a slow probe must never hold the turn — and a project with no live
+// session is a no-op, because there is no bundler that could be stale.
+func (h *PromptHandler) ensureMetroFresh(projectID int64) {
+	sess, err := h.store.LatestLiveSession(projectID)
+	if err != nil || sess == nil {
+		return
+	}
+	metro.EnsureFresh(sess.ID)
 }
 
 // dispatchNotification is the one send path: dark-safe (nil notifier), and

@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import DeviceScreen from '@/app/(tabs)/device'
 import { openMetroStream, projectsApi, sessionsApi, testInfoApi } from '@/lib/api'
+import { getSessionId } from '@/lib/session'
 
 // L32 / FM-DEVb + FM-DEVc — the Device tab's truth stays on the server.
 //
@@ -201,4 +202,63 @@ it('hands the project to the dev client through the launcher link (FM-DEVf)', as
 
   expect(openURL).toHaveBeenCalledWith(LAUNCHER)
   expect(openURL).not.toHaveBeenCalledWith(DEEP)
+})
+
+// G-02 — a pre-poll snapshot must never be stated as fact.
+//
+// useLiveSession used to call back with `data ?? null` on mount, so before
+// /live-session answered at all the tab concluded "server says idle": it
+// rendered "no session" + [Start session] — a duplicate-session button —
+// while the endpoint was returning 200 with a live row, and the null wiped
+// the id it had just read from SecureStore. Two states, two asserts: while
+// unanswered the tab says it is checking and offers nothing; once the server
+// speaks, whatever it says is what renders.
+it('stays in checking until /live-session answers, never offering a duplicate Start (G-02)', async () => {
+  const qc = freshQueryClient()
+  let release!: (s: unknown) => void
+  mockLive.mockReturnValue(
+    new Promise((res) => {
+      release = res
+    }),
+  )
+
+  await render(wrap(qc, <DeviceScreen />))
+
+  // Pre-poll: no verdict, no button. "no session" is a claim about the
+  // server that the server has not made yet.
+  await screen.findByText('Checking whether a session is running…')
+  expect(screen.queryByText('Start session')).toBeNull()
+  expect(screen.queryByText('no session')).toBeNull()
+  expect(screen.getByText('checking…')).toBeTruthy()
+
+  // The answer lands and is the only thing that decides the screen.
+  release({ id: 7, project_id: 1, state: 'live' })
+  await screen.findByText('#7')
+  expect(screen.queryByText('Start session')).toBeNull()
+})
+
+// The observed half of the same bug: a SecureStore id survived exactly one
+// render, because the unanswered callback reported null and cleared it —
+// so the tab flipped from a known session to a Start button it should never
+// have shown, mid-poll.
+it('keeps the locally known session until the server actually says idle (G-02)', async () => {
+  const qc = freshQueryClient()
+  ;(getSessionId as jest.Mock).mockResolvedValue(7)
+  let release!: (s: unknown) => void
+  mockLive.mockReturnValue(
+    new Promise((res) => {
+      release = res
+    }),
+  )
+
+  await render(wrap(qc, <DeviceScreen />))
+
+  // The cached session stays on screen while the server is still being
+  // asked — no wipe, no Start button competing with a running device.
+  await screen.findByText('#7')
+  expect(screen.queryByText('Start session')).toBeNull()
+
+  // Idle, once actually answered, is what clears it.
+  release(null)
+  await screen.findByText('Start session')
 })

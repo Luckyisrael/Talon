@@ -38,6 +38,16 @@ func FindFreePort() (int, error) {
 }
 
 func Start(sessionID int64, workspaceDir string, adbTarget string) (*Server, error) {
+	return startAt(sessionID, workspaceDir, adbTarget, 0, nil)
+}
+
+// startAt is Start with an explicit bundler port and an emitter to carry
+// over. Port 0 picks a free one — the normal path; the G-10 restart passes
+// the previous port so the adb reverse forward and the DV2 relay, which
+// both captured that number once at session start, keep pointing somewhere
+// real. carry re-attaches existing subscribers (preview badge, the agent's
+// metro_status) across a restart instead of silently orphaning them.
+func startAt(sessionID int64, workspaceDir string, adbTarget string, port int, carry *emitter) (*Server, error) {
 	sessionsMu.Lock()
 	defer sessionsMu.Unlock()
 
@@ -45,21 +55,27 @@ func Start(sessionID int64, workspaceDir string, adbTarget string) (*Server, err
 		return nil, fmt.Errorf("metro already running for session %d", sessionID)
 	}
 
-	port, err := FindFreePort()
-	if err != nil {
-		return nil, fmt.Errorf("failed to find free port: %w", err)
+	if port == 0 {
+		var err error
+		port, err = FindFreePort()
+		if err != nil {
+			return nil, fmt.Errorf("failed to find free port: %w", err)
+		}
 	}
 
 	if adbTarget == "" {
 		adbTarget = "localhost:5555"
 	}
 
+	if carry == nil {
+		carry = &emitter{}
+	}
 	s := &Server{
 		port:         port,
 		ready:        make(chan struct{}),
 		workspaceDir: workspaceDir,
 		target:       adbTarget,
-		events:       &emitter{},
+		events:       carry,
 	}
 
 	// Start Metro directly on native Linux (no WSL wrapper).

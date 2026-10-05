@@ -802,21 +802,37 @@ export function useDeviceSession(sessionId: number | null) {
  *  "no session" while a device is live. Polled, not subscribed — the same
  *  rhythm as useDeviceSession, so both tabs converge on the same row.
  *  onLive receives null when the server reports idle (204). */
+/** answered: the server has given a real answer (a Session or a 204 idle).
+ *  failed: the query errored, so no answer is coming and "idle" would be a
+ *  guess. Both exist so the Device tab can stay in a checking state instead
+ *  of stating a pre-poll snapshot as fact (G-02): `data` is undefined until
+ *  the first response, and reporting null at that point wiped the session id
+ *  just read from SecureStore and offered a duplicate-session Start button
+ *  while /live-session still held a live row. */
 export function useLiveSession(
   projectId: number | null,
   onLive: (session: Session | null) => void,
-) {
+): { answered: boolean; failed: boolean } {
   const cb = React.useRef(onLive);
   cb.current = onLive;
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey: ['live-session', projectId],
     enabled: projectId != null,
     refetchInterval: 5000,
     queryFn: () => (projectId == null ? null : sessionsApi.live(projectId)),
   });
   React.useEffect(() => {
-    cb.current(data ?? null);
+    // No answer yet — not the same as "server says idle" (a 204 arrives as
+    // null). Stay silent so the local id survives until the server speaks.
+    if (data === undefined) return;
+    cb.current(data);
   }, [data]);
+  // No project → the query is disabled and never answers: with nothing to
+  // ask about, idle is the complete truth rather than an unanswered guess.
+  return {
+    answered: data !== undefined || projectId == null,
+    failed: isError && data === undefined,
+  };
 }
 
 export function useCreateSession() {

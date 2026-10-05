@@ -88,6 +88,20 @@ func launchArgs(target, pkg string, metroPort int) []string {
 	return []string{"-s", target, "shell", "am", "start", "-n", pkg + "/.MainActivity"}
 }
 
+// LaunchDevClient fires the ACTION_VIEW that loads a workspace into the
+// shipped dev client. The link must be the launcher's own shape (scheme +
+// host `expo-development-client` + ?url=…) — a bare exp:// resolves and then
+// parks on the launcher's home screen without fetching anything, which was
+// verified on device as zero Metro requests. The caller supplies the link
+// because this package does not import devclient (the AllowlistInterface
+// boundary); devclient.LaunchLinkForPort builds it.
+func (a *ADBRunner) LaunchDevClient(link string) (string, error) {
+	args := []string{"-s", a.Target, "shell", "am", "start",
+		"-a", "android.intent.action.VIEW", "-d", link}
+	out, err := exec.Command("adb", args...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
 func (a *ADBRunner) Run(command string) (string, error) {
 	args := []string{"-s", a.Target, "shell", command}
 	out, err := exec.Command("adb", args...).CombinedOutput()

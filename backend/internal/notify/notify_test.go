@@ -134,14 +134,16 @@ func TestGetReturnsSingleton(t *testing.T) {
 }
 
 // TestPushTargetsPlayerIDsNotExternalIDs pins the field name that made every
-// push a silent no-op. The id the app binds is
-// OneSignal.User.getOnesignalId() — the device's own player id, and the app
-// never calls setExternalId() — so `include_external_user_ids` matched
-// nothing. OneSignal answered 200 with
-// {"errors":["All included players are not subscribed"]}, the status check
-// called that success, and no log line ever explained the silence.
-// Live-verified: include_player_ids delivered, include_external_user_ids did
-// not. Never edit one without the other.
+// push a silent no-op. The id the app binds is its PUSH SUBSCRIPTION id —
+// OneSignal.User.pushSubscription.getIdAsync(); the value below is the one
+// verified delivering to the phone — and the app never calls setExternalId(),
+// so `include_external_user_ids` matched nothing. OneSignal answers 200 with
+// {"errors":["All included players are not subscribed"]} for any target it
+// cannot reach, and the old status-only check called that success (Send now
+// reads the body and fails on it). Live-verified, both layers:
+// include_player_ids delivered where include_external_user_ids did not, and
+// the subscription id delivered where the identity id (getOnesignalId(), the
+// G-11 bug) delivered nothing. Never edit one without the other.
 func TestPushTargetsPlayerIDsNotExternalIDs(t *testing.T) {
 	var got map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@ package devclient
 import (
 	"bytes"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,4 +106,26 @@ func TestShippedDevClientAPKDeclaresItsOwnPackage(t *testing.T) {
 	t.Fatalf("FM-DEVd(ii): the shipped dev-client APK does not declare %q (%d matches in AndroidManifest.xml); the studio mobile app's %q is in it %d times — the artifact still carries the conflicting package, so re-run build-dev-client.sh",
 		DevClientPackage, bytes.Count(manifest, want),
 		mobile, bytes.Count(manifest, utf16le(mobile)))
+}
+
+// LaunchLinkForPort is the one ACTION_VIEW that actually loads: run_boot's
+// dev-client boot and test-info's pairing link both come through it, so the
+// shape (own scheme, launcher host, inner exp:// loopback link preserved)
+// is pinned at the source instead of at each caller.
+func TestLaunchLinkForPortWrapsTheLoopbackDeepLink(t *testing.T) {
+	raw := LaunchLinkForPort(8081)
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	if u.Scheme != DevClientScheme {
+		t.Errorf("scheme = %q, want %q", u.Scheme, DevClientScheme)
+	}
+	if u.Host != "expo-development-client" {
+		t.Errorf("host = %q, want expo-development-client (DevLauncherURLHelper.kt bails without it)", u.Host)
+	}
+	inner := u.Query().Get("url")
+	if inner != "exp://127.0.0.1:8081" {
+		t.Errorf("inner url = %q, want the loopback deep link exp://127.0.0.1:8081", inner)
+	}
 }

@@ -522,7 +522,9 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 		// boot installs the project's APK and polls pidof. The package name
 		// is the project's identity; the APK path is build_apk's standard
 		// output, which exists only after a build — until then the gate
-		// reports its honest "no apk/pkg supplied — boot skipped".
+		// boots the workspace through the shipped dev client instead (the
+		// product's real device path; see run_boot, G-14) and reports its
+		// honest "boot skipped" only when neither path exists.
 		pkgName := ""
 		apkPath := ""
 		if proj, err := h.store.GetProject(projectID); err == nil {
@@ -531,7 +533,14 @@ func (h *PromptHandler) newBuildSession(workspacePath string, projectID, promptI
 		if st, err := os.Stat(filepath.Join(workspacePath, "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk")); err == nil && !st.IsDir() {
 			apkPath = filepath.Join(workspacePath, "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk")
 		}
-		reg.Register(&tools.RunBoot{WorkspacePath: workspacePath, APKPath: apkPath, PkgName: pkgName, ADBClient: adbClient})
+		reg.Register(&tools.RunBoot{
+			WorkspacePath:       workspacePath,
+			APKPath:             apkPath,
+			PkgName:             pkgName,
+			ADBClient:           adbClient,
+			DevClientPkg:        devclient.DevClientPackage,
+			DevClientLaunchLink: devclient.LaunchLinkForPort,
+		})
 		// vision and interact verify through the model's eyes; wire them
 		// only when a client exists (a plain capture otherwise is not a
 		// vision verdict, and the gates would claim verification they

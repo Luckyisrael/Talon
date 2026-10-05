@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -107,18 +106,12 @@ func (h *TestInfoHandler) Info(w http.ResponseWriter, r *http.Request) {
 }
 
 // devLauncherLink wraps a raw exp:// deep link in the shape
-// expo-dev-launcher accepts as an ACTION_VIEW: the client's own scheme, host
-// `expo-development-client`, the whole link percent-encoded in ?url= so its
-// own `?token=` stays data instead of splitting into the outer query.
-// DevLauncherURLHelper.kt checks the host (:7) and the url param (:9-11),
-// DevLauncherController.kt:245 bails without them, and only then does :24
-// rewrite the inner exp:// to http:// for the fetch. The scheme is
-// devclient.DevClientScheme — backend/template/app.json's expo.scheme — so
-// the identity of the dev client keeps one authority beside
-// DevClientPackage (FM-DEVf).
+// expo-dev-launcher accepts as an ACTION_VIEW. The shape lives with the
+// scheme it carries — devclient.LaunchLink — so the pairing link and
+// run_boot's dev-client boot cannot drift apart; the reasoning (the Kotlin
+// line numbers, why bare exp:// opens nothing) is there too.
 func devLauncherLink(deepLink string) string {
-	return devclient.DevClientScheme + "://expo-development-client/?url=" +
-		url.QueryEscape(deepLink)
+	return devclient.LaunchLink(deepLink)
 }
 
 // devClientURL is the authenticated APK download, advertised whenever the

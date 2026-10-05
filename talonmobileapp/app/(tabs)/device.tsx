@@ -61,13 +61,15 @@ export default function DeviceScreen() {
 
   // Ask the server what is actually running. The id discovered here replaces
   // the local one, and is persisted so the next cold start opens on it.
-  useLiveSession(projectId, (live) => {
-    if (live == null) {
+  // `live` says whether the server has answered at all: until it does, this
+  // tab must not claim a session state (G-02).
+  const live = useLiveSession(projectId, (next) => {
+    if (next == null) {
       setLocalSessionId(null)
       if (projectId != null) void setSessionId(projectId, null)
-    } else if (live.id !== sessionId) {
-      setLocalSessionId(live.id)
-      if (projectId != null) void setSessionId(projectId, live.id)
+    } else if (next.id !== sessionId) {
+      setLocalSessionId(next.id)
+      if (projectId != null) void setSessionId(projectId, next.id)
     }
   })
 
@@ -156,9 +158,20 @@ export default function DeviceScreen() {
             Device
           </UIText>
         </View>
+        {/* The badge reports a state only once one is known: before the
+            server answers, "no session" would be a pre-poll snapshot stated
+            as fact (G-02) — the tab stays in checking instead. */}
         <Badge
-          label={sessionId == null ? 'no session' : (session?.state ?? 'live')}
-          tone={sessionId == null ? 'neutral' : 'success'}
+          label={
+            sessionId != null
+              ? (session?.state ?? 'live')
+              : live.answered
+                ? 'no session'
+                : live.failed
+                  ? 'session unknown'
+                  : 'checking…'
+          }
+          tone={sessionId != null ? 'success' : 'neutral'}
         />
       </View>
 
@@ -241,7 +254,17 @@ export default function DeviceScreen() {
             <UIText variant="title" tone="hero">
               Session
             </UIText>
-            {sessionId == null ? (
+            {sessionId == null && !live.answered ? (
+              // No answer yet, no local id: say so and offer nothing. The
+              // Start button used to render right here from a pre-poll
+              // snapshot — a duplicate-session button pressed against a
+              // /live-session that was returning 200 the whole time (G-02).
+              <UIText variant="bodySm" tone="muted">
+                {live.failed
+                  ? 'Could not reach the server — the session state is unknown.'
+                  : 'Checking whether a session is running…'}
+              </UIText>
+            ) : sessionId == null ? (
               <>
                 <UIText variant="bodySm" tone="muted">
                   No session. The pairing QR and Metro relay appear with one.

@@ -108,12 +108,17 @@ func (o *OneSignal) notifyURL() string {
 // product needs: one device by player id, plain title+body.
 //
 // include_player_ids, NOT include_external_user_ids: the id the app binds
-// is OneSignal.User.getOnesignalId() — the device's own player id — and the
-// app never calls setExternalId(). Targeting by external id therefore
-// matches nothing and OneSignal answers 200 with
-// {"errors":["All included players are not subscribed"]}, which the status
-// check below reads as success. Delivery is pinned by
-// TestPushTargetsPlayerIDsNotExternalIDs.
+// is its PUSH SUBSCRIPTION id — OneSignal.User.pushSubscription.getIdAsync()
+// — which is what include_player_ids addresses, and the app never calls
+// setExternalId(), so include_external_user_ids matches nothing. Two bugs
+// shared one symptom (200 with
+// {"errors":["All included players are not subscribed"]}): targeting by
+// external id, and — G-11 — the app posting the IDENTITY id
+// getOnesignalId() instead of the subscription id, which addresses no
+// device at all. Send reads that error out of the body (below), and
+// lib/push.ts now posts the subscription id (verified live: the identity id
+// delivered nothing, the subscription id delivered the notification).
+// Delivery is pinned by TestPushTargetsPlayerIDsNotExternalIDs.
 type onesignalPayload struct {
 	AppID            string            `json:"app_id"`
 	IncludePlayerIDs []string          `json:"include_player_ids"`
@@ -125,11 +130,11 @@ func (o *OneSignal) Send(ctx context.Context, userID int64, kind Kind, title, bo
 	if o.subscriberByID == nil {
 		return fmt.Errorf("onesignal: no subscriber resolver wired")
 	}
-	extID, err := o.subscriberByID(ctx, userID)
+	subID, err := o.subscriberByID(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("resolve subscriber for user %d: %w", userID, err)
 	}
-	if extID == "" {
+	if subID == "" {
 		// The user has no registered device — not an error, just nothing
 		// to deliver to. The in-app history still recorded it.
 		return nil
@@ -137,7 +142,7 @@ func (o *OneSignal) Send(ctx context.Context, userID int64, kind Kind, title, bo
 
 	payload, err := json.Marshal(onesignalPayload{
 		AppID:            o.appID,
-		IncludePlayerIDs: []string{extID},
+		IncludePlayerIDs: []string{subID},
 		Headings:         map[string]string{"en": title},
 		Contents:         map[string]string{"en": body},
 	})
@@ -173,10 +178,10 @@ func (o *OneSignal) Send(ctx context.Context, userID int64, kind Kind, title, bo
 	}
 	if err := json.Unmarshal(respBody, &verdict); err == nil {
 		if len(verdict.Errors) > 0 {
-			return fmt.Errorf("onesignal: %s (target %s)", strings.Join(verdict.Errors, "; "), extID)
+			return fmt.Errorf("onesignal: %s (target %s)", strings.Join(verdict.Errors, "; "), subID)
 		}
 		if verdict.ID == "" {
-			return fmt.Errorf("onesignal: accepted nothing (empty id), target %s", extID)
+			return fmt.Errorf("onesignal: accepted nothing (empty id), target %s", subID)
 		}
 	}
 	return nil

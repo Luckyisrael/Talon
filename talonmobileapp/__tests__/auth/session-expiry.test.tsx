@@ -45,7 +45,16 @@ jest.mock('expo-router', () => {
 jest.mock('expo-status-bar', () => ({ StatusBar: () => null }))
 jest.mock('expo-web-browser', () => ({ maybeCompleteAuthSession: jest.fn() }))
 jest.mock('react-native-reanimated', () => ({}))
-jest.mock('@/lib/push', () => ({ initPush: jest.fn() }))
+// _layout registers push on cold start (7f5c1f1): the effect reads
+// pushAvailable() before arming its timer, so a mock that only answered
+// initPush threw "not a function" on mount and every test in this suite
+// failed for a reason this suite does not exercise. The seam the root
+// imports is mocked whole; pushAvailable=false keeps the timer disarmed.
+jest.mock('@/lib/push', () => ({
+  initPush: jest.fn(),
+  pushAvailable: jest.fn(() => false),
+  registerPushWithBackend: jest.fn(async () => ''),
+}))
 jest.mock('@/components/app-providers', () => ({
   AppProviders: ({ children }: { children?: React.ReactNode }) => children,
 }))
