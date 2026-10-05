@@ -17,9 +17,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -60,6 +62,11 @@ type OneSignal struct {
 	appID   string
 	restKey string
 	client  *http.Client
+	// endpoint overrides the create-notification URL; empty means the real
+	// OneSignal host. Tests point it at a stub so Send's HTTP path — the
+	// payload field name and the 200-with-errors verdict — is actually
+	// exercised rather than skipped past.
+	endpoint string
 	// subscriberByID resolves a user id to the OneSignal subscription id
 	// (external id) — wired by the caller so this package stays
 	// store-agnostic.
@@ -88,13 +95,30 @@ func NewOneSignal(appID, restKey string, subscriber func(ctx context.Context, us
 
 func (o *OneSignal) Configured() bool { return true }
 
+// notifyURL is OneSignal's create-notification endpoint. endpoint wins when
+// set (tests stub it); production has no endpoint and uses the real host.
+func (o *OneSignal) notifyURL() string {
+	if o.endpoint != "" {
+		return o.endpoint
+	}
+	return "https://api.onesignal.com/notifications"
+}
+
 // onesignalPayload is the subset of OneSignal's notification body this
-// product needs: one user by external id, plain title+body.
+// product needs: one device by player id, plain title+body.
+//
+// include_player_ids, NOT include_external_user_ids: the id the app binds
+// is OneSignal.User.getOnesignalId() — the device's own player id — and the
+// app never calls setExternalId(). Targeting by external id therefore
+// matches nothing and OneSignal answers 200 with
+// {"errors":["All included players are not subscribed"]}, which the status
+// check below reads as success. Delivery is pinned by
+// TestPushTargetsPlayerIDsNotExternalIDs.
 type onesignalPayload struct {
-	AppID              string            `json:"app_id"`
-	IncludeExternalIDs []string          `json:"include_external_user_ids"`
-	Headings           map[string]string `json:"headings,omitempty"`
-	Contents           map[string]string `json:"contents"`
+	AppID            string            `json:"app_id"`
+	IncludePlayerIDs []string          `json:"include_player_ids"`
+	Headings         map[string]string `json:"headings,omitempty"`
+	Contents         map[string]string `json:"contents"`
 }
 
 func (o *OneSignal) Send(ctx context.Context, userID int64, kind Kind, title, body string) error {
@@ -112,17 +136,17 @@ func (o *OneSignal) Send(ctx context.Context, userID int64, kind Kind, title, bo
 	}
 
 	payload, err := json.Marshal(onesignalPayload{
-		AppID:              o.appID,
-		IncludeExternalIDs: []string{extID},
-		Headings:           map[string]string{"en": title},
-		Contents:           map[string]string{"en": body},
+		AppID:            o.appID,
+		IncludePlayerIDs: []string{extID},
+		Headings:         map[string]string{"en": title},
+		Contents:         map[string]string{"en": body},
 	})
 	if err != nil {
 		return err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.onesignal.com/notifications", bytes.NewReader(payload))
+		o.notifyURL(), bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -134,8 +158,26 @@ func (o *OneSignal) Send(ctx context.Context, userID int64, kind Kind, title, bo
 		return err
 	}
 	defer resp.Body.Close()
+	// Read the body BEFORE deciding: OneSignal reports an unknown or
+	// unsubscribed target in the BODY of a 200 —
+	// {"id":"","errors":["All included players are not subscribed"]} — and
+	// the old status-only check logged that as success, so every dead push
+	// left no trace anywhere. Status first (cheap), then the body verdict.
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("onesignal: HTTP %d", resp.StatusCode)
+		return fmt.Errorf("onesignal: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	var verdict struct {
+		ID     string   `json:"id"`
+		Errors []string `json:"errors"`
+	}
+	if err := json.Unmarshal(respBody, &verdict); err == nil {
+		if len(verdict.Errors) > 0 {
+			return fmt.Errorf("onesignal: %s (target %s)", strings.Join(verdict.Errors, "; "), extID)
+		}
+		if verdict.ID == "" {
+			return fmt.Errorf("onesignal: accepted nothing (empty id), target %s", extID)
+		}
 	}
 	return nil
 }

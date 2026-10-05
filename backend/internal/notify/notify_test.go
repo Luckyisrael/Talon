@@ -132,3 +132,83 @@ func TestGetReturnsSingleton(t *testing.T) {
 		t.Fatal("dark env produced a configured singleton")
 	}
 }
+
+// TestPushTargetsPlayerIDsNotExternalIDs pins the field name that made every
+// push a silent no-op. The id the app binds is
+// OneSignal.User.getOnesignalId() — the device's own player id, and the app
+// never calls setExternalId() — so `include_external_user_ids` matched
+// nothing. OneSignal answered 200 with
+// {"errors":["All included players are not subscribed"]}, the status check
+// called that success, and no log line ever explained the silence.
+// Live-verified: include_player_ids delivered, include_external_user_ids did
+// not. Never edit one without the other.
+func TestPushTargetsPlayerIDsNotExternalIDs(t *testing.T) {
+	var got map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"4a1c20b0-a59b-4c99-9330-874137ee2c8c"}`))
+	}))
+	defer srv.Close()
+
+	o := &OneSignal{
+		appID: "app", restKey: "k", client: srv.Client(), endpoint: srv.URL,
+		subscriberByID: func(context.Context, int64) (string, error) {
+			return "2a2ca1f5-7a69-498f-aef0-dc489df992cd", nil
+		},
+	}
+	if err := o.Send(context.Background(), 1, KindInputNeeded, "t", "b"); err != nil {
+		t.Fatalf("send errored: %v", err)
+	}
+
+	if _, ok := got["include_external_user_ids"]; ok {
+		t.Fatal("payload still targets include_external_user_ids — the app never sets an external id, so nothing matches")
+	}
+	ids, ok := got["include_player_ids"].([]interface{})
+	if !ok || len(ids) != 1 {
+		t.Fatalf("include_player_ids missing or not a list: %#v", got["include_player_ids"])
+	}
+	if ids[0] != "2a2ca1f5-7a69-498f-aef0-dc489df992cd" {
+		t.Fatalf("target id = %v", ids[0])
+	}
+}
+
+// TestPushSurfacesErrorsInA200Body pins the other half of the silence:
+// OneSignal reports an unknown or unsubscribed target in the BODY of a 200,
+// with "id":"". Status-only checking logged that as success, so a dead device
+// id looked exactly like a delivered one in the backend log. Any error, or an
+// empty id, must now fail honestly and reach the log.
+func TestPushSurfacesErrorsInA200Body(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{"unsubscribed target", `{"id":"","errors":["All included players are not subscribed"]}`, true},
+		{"unknown player id", `{"id":"","errors":["No player with this id found"]}`, true},
+		{"accepted", `{"id":"4a1c20b0-a59b-4c99-9330-874137ee2c8c","external_id":null}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			o := &OneSignal{
+				appID: "app", restKey: "k", client: srv.Client(), endpoint: srv.URL,
+				subscriberByID: func(context.Context, int64) (string, error) {
+					return "208ca8ae-935e-4a58-a39f-49183c2c2561", nil
+				},
+			}
+			err := o.Send(context.Background(), 1, KindInputNeeded, "t", "b")
+			if tc.wantErr && err == nil {
+				t.Fatal("200 with an errors body was treated as success — the push would fail silently again")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("healthy accept reported as failure: %v", err)
+			}
+		})
+	}
+}

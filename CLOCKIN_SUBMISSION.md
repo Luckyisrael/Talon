@@ -137,9 +137,24 @@ next question instead, as the form allows.*
 
 ## DECK URL*
 
-**TODO** — pitch deck link required (supported: any public URL — Google
-Slides/Docs, Notion, PDF, etc. — check the form's accepted formats).
-*(Required for submission per `EXPORT-CREDITS-PLAN.md`.)*
+**✅ Deck built — needs publishing to become a URL.**
+
+Source: **`CLOCKIN_DECK.html`** (repo root) — a self-contained 12-slide deck,
+no build step, no dependencies. Open it in any browser; `←`/`→` or `Space` to
+advance, `P` prints/exports to PDF.
+
+| | |
+|---|---|
+| Slides | 1 title · 2 problem · 3 what it is · 4 the loop · 5 **the verify ladder** · 6 hardware proof · 7 Solana Mobile enforcement · 8 **SKR integration** · 9 the 3-minute demo · 10 mapping to the 4×25% criteria · 11 technical depth · 12 commitments |
+| Angle | Grand prize **and** the $10,000 SKR Integration Prize |
+| Judged on | all four criteria are addressed explicitly on slide 10 |
+
+**To finish:** export to PDF (`P` in the deck, or print → Save as PDF) and host
+it anywhere giving a public URL — GitHub release asset, Notion, Google Drive,
+or a page in the repo — then paste that URL here.
+
+*(Supportable formats: any public URL — Google Slides/Docs, Notion, PDF, etc.
+Required for submission per `EXPORT-CREDITS-PLAN.md`.)*
 
 ---
 

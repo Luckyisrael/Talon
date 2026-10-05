@@ -5,7 +5,7 @@ import { StatusBar } from 'expo-status-bar'
 import * as WebBrowser from 'expo-web-browser'
 import 'react-native-reanimated'
 import { AppProviders } from '@/components/app-providers'
-import { initPush } from '@/lib/push'
+import { initPush, pushAvailable, registerPushWithBackend } from '@/lib/push'
 
 // Dismisses the OAuth session when the provider redirects back: without
 // this the consent browser lingers open over the app.
@@ -24,6 +24,23 @@ export default function RootLayout() {
   // sets EXPO_PUBLIC_ONESIGNAL_APP_ID.
   useEffect(() => {
     initPush()
+  }, [])
+
+  // Re-bind the device id on every cold start. Registration used to run only
+  // at the OAuth callback and the opt-in screen, so once the id moved — a
+  // reinstall, cleared app data, a different app id baked into the build —
+  // the backend kept the dead one forever and every push targeted a device
+  // OneSignal no longer knew (the stored id answered "No player with this id
+  // found" while the live phone had a different one). SetOneSignalID is
+  // idempotent and registerPushWithBackend is a courtesy that never blocks:
+  // the same seam auth/callback uses, just not only after a sign-in.
+  // The delay gives OneSignal a beat to attach the id before it is read.
+  useEffect(() => {
+    if (!pushAvailable()) return
+    const t = setTimeout(() => {
+      void registerPushWithBackend().catch(() => {})
+    }, 2_000)
+    return () => clearTimeout(t)
   }, [])
 
   // L67 / FM-SESSa — the app's single auth-death observer. The transport

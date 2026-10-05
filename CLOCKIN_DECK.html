@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Talon — Clock In submission deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0A0B14;
+    --ink-2:#12141F;
+    --ink-3:#1A1D2B;
+    --line:rgba(255,255,255,.11);
+    --paper:#EDEEF5;
+    --muted:#8C90A8;
+    --violet:#9945FF;   /* identity */
+    --pass:#14F195;     /* meaning: gate passed */
+    --amber:#FFB020;    /* meaning: pending / best-effort */
+    --sans:'Space Grotesk',ui-sans-serif,system-ui,'Segoe UI',Helvetica,Arial,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:#05060C;
+    color:var(--paper);
+    font-family:var(--sans);
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---------- stage: fixed 16:9 canvas, scaled to fit ---------- */
+  .viewport{position:fixed;inset:0;display:grid;place-items:center}
+  .stage{
+    width:1280px;height:720px;position:relative;
+    background:var(--ink);
+    transform-origin:center center;
+    overflow:hidden;
+    box-shadow:0 40px 120px rgba(0,0,0,.6);
+  }
+  .stage::after{ /* hairline frame — structural, not decoration */
+    content:"";position:absolute;inset:0;pointer-events:none;
+    border:1px solid rgba(255,255,255,.06);z-index:40;
+  }
+
+  .slide{
+    position:absolute;inset:0;
+    padding:66px 76px 92px;
+    display:flex;flex-direction:column;
+    opacity:0;visibility:hidden;
+    transition:opacity .34s ease;
+  }
+  .slide.on{opacity:1;visibility:visible}
+
+  /* ---------- type scale ---------- */
+  h1{font-size:46px;line-height:1.06;font-weight:700;letter-spacing:-.02em;max-width:20ch}
+  h2{font-size:30px;line-height:1.16;font-weight:700;letter-spacing:-.015em;max-width:24ch}
+  p,li{font-size:18.5px;line-height:1.55;color:#C7CAD8;max-width:74ch;font-weight:400}
+  strong{color:var(--paper);font-weight:500}
+  .lede{font-size:22px;line-height:1.5;color:#D6D9E6}
+  .mono{font-family:var(--mono);font-variant-ligatures:none}
+  .quiet{color:var(--muted)}
+
+  /* ---------- bottom instrument rail ---------- */
+  .rail{
+    position:absolute;left:0;right:0;bottom:0;height:56px;z-index:30;
+    display:flex;align-items:center;gap:22px;
+    padding:0 76px;
+    border-top:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(10,11,20,0),rgba(10,11,20,.85));
+    font-family:var(--mono);font-size:11.5px;color:var(--muted);
+    letter-spacing:.04em;
+  }
+  .rail .mark{color:var(--violet);font-weight:600;letter-spacing:.14em}
+  .rail .sec{color:#A7ABBE}
+  .ticks{margin-left:auto;display:flex;gap:5px;align-items:center}
+  .tick{width:16px;height:3px;background:rgba(255,255,255,.14);border-radius:2px;transition:background .3s}
+  .tick.done{background:rgba(153,69,255,.55)}
+  .tick.now{background:var(--violet)}
+  .count{font-variant-numeric:tabular-nums}
+
+  /* ---------- shared blocks ---------- */
+  .rule{height:1px;background:var(--line);margin:26px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:54px;align-items:start}
+  .cols{display:grid;gap:34px;align-items:start}
+  .k{font-family:var(--mono);font-size:12px;color:var(--muted);letter-spacing:.06em}
+  .stat{font-family:var(--mono);font-weight:600;font-variant-numeric:tabular-nums}
+
+  ul.points{list-style:none;display:grid;gap:20px}
+  ul.points li{padding-left:26px;position:relative}
+  ul.points li::before{
+    content:"";position:absolute;left:0;top:12px;width:11px;height:1px;
+    background:var(--violet);
+  }
+
+  /* ---------- 1 · title ---------- */
+  .wordmark{display:flex;align-items:baseline;gap:20px}
+  .wordmark .big{
+    font-size:148px;line-height:.86;font-weight:700;letter-spacing:-.045em;
+  }
+  .wordmark .big .t{color:var(--violet)}
+  .tag{font-family:var(--mono);font-size:13px;color:var(--muted);letter-spacing:.1em}
+  .titleline{margin-top:34px;font-size:27px;line-height:1.36;max-width:27ch;color:#D6D9E6;font-weight:400}
+  .titleline b{color:var(--paper);font-weight:700}
+  .titleflow{
+    margin-top:46px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    font-family:var(--mono);font-size:13px;letter-spacing:.09em;color:#A7ABBE
+  }
+  .titleflow .arw{color:var(--violet)}
+  .titleflow .v{color:var(--pass)}
+  .titlefoot{margin-top:auto;display:flex;gap:38px;align-items:flex-end;flex-wrap:wrap}
+  .titlefoot div{font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.7}
+  .titlefoot span{color:#C7CAD8}
+
+  /* ---------- 2 · problem ---------- */
+  .problemlist{display:grid;gap:0;margin-top:8px}
+  .problemlist .row{
+    display:grid;grid-template-columns:1fr;gap:6px;
+    padding:22px 0;border-top:1px solid var(--line);
+  }
+  .problemlist .row:last-child{border-bottom:1px solid var(--line)}
+  .problemlist .why{font-family:var(--mono);font-size:13px;color:var(--amber);letter-spacing:.03em}
+
+  /* ---------- 3 · three surfaces ---------- */
+  .surfaces{display:grid;grid-template-columns:1.15fr 1fr 1fr;gap:0;margin-top:34px;border-top:1px solid var(--line)}
+  .surface{padding:28px 28px 0 0;border-right:1px solid var(--line)}
+  .surface:last-child{border-right:0;padding-right:0}
+  .surface:not(:first-child){padding-left:28px}
+  .surface h3{font-size:21px;font-weight:700;letter-spacing:-.01em;margin-bottom:10px}
+  .surface p{font-size:16.5px;line-height:1.5}
+  .surface .who{font-family:var(--mono);font-size:11.5px;color:var(--violet);letter-spacing:.08em;margin-bottom:14px}
+  .surface.primary h3{color:var(--violet)}
+
+  /* ---------- 4 · loop ---------- */
+  .loop{display:flex;align-items:stretch;margin-top:44px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .step{flex:1;padding:30px 22px 30px 0;position:relative}
+  .step + .step{padding-left:24px;border-left:1px solid var(--line)}
+  .step .n{font-family:var(--mono);font-size:11.5px;color:var(--muted);letter-spacing:.1em}
+  .step h3{font-size:20px;font-weight:700;margin:12px 0 9px;letter-spacing:-.01em}
+  .step p{font-size:15.5px;line-height:1.48}
+  .step::after{
+    content:"";position:absolute;right:-4px;top:50%;width:7px;height:7px;
+    background:var(--violet);transform:translateY(-50%) rotate(45deg);z-index:2
+  }
+  .step:last-child::after{display:none}
+
+  /* ---------- 5 · ladder (the hero) ---------- */
+  .ladder{display:grid;gap:0;margin-top:26px}
+  .rung{
+    display:grid;grid-template-columns:34px 1fr auto;gap:18px;align-items:center;
+    padding:13px 0;border-top:1px solid rgba(255,255,255,.07);
+    opacity:.42;transition:opacity .3s ease;
+  }
+  .rung:last-child{border-bottom:1px solid rgba(255,255,255,.07)}
+  .rung.lit{opacity:1}
+  .rung .num{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .rung .name{font-size:19.5px;font-weight:500;color:#DCDFEA}
+  .rung .name em{font-style:normal;color:var(--muted);font-size:15px;font-weight:400;margin-left:12px}
+  .rung .st{
+    font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;
+    padding:4px 10px;border:1px solid;border-radius:2px;white-space:nowrap;
+  }
+  .st.req{color:var(--pass);border-color:rgba(20,241,149,.4);background:rgba(20,241,149,.07)}
+  .st.dev{color:var(--amber);border-color:rgba(255,176,32,.4);background:rgba(255,176,32,.07)}
+  .st.opt{color:var(--muted);border-color:var(--line)}
+  .laddernote{
+    margin-top:26px;padding-left:20px;border-left:2px solid var(--violet);
+    font-size:17px;line-height:1.55;color:#C7CAD8;max-width:78ch
+  }
+
+  /* ---------- 6 · hardware ---------- */
+  .evidence{
+    margin-top:26px;background:var(--ink-2);border:1px solid var(--line);
+    padding:24px 26px;display:grid;gap:11px;
+  }
+  .evidence .ehead{
+    display:flex;align-items:center;gap:10px;font-family:var(--mono);
+    font-size:11.5px;letter-spacing:.1em;color:var(--pass)
+  }
+  .evidence .dot{width:7px;height:7px;border-radius:50%;background:var(--pass);box-shadow:0 0 10px rgba(20,241,149,.7)}
+  .evidence dl{display:grid;grid-template-columns:132px 1fr;gap:7px 20px;font-family:var(--mono);font-size:13px}
+  .evidence dt{color:var(--muted)}
+  .evidence dd{color:#D6D9E6;word-break:break-all}
+
+  /* ---------- 7 · solana ---------- */
+  .enforced{
+    margin-top:30px;display:grid;grid-template-columns:1fr 1fr;gap:0;
+    border:1px solid var(--line);
+  }
+  .enforced > div{padding:24px 26px}
+  .enforced > div:first-child{border-right:1px solid var(--line);background:rgba(20,241,149,.04)}
+  .enforced > div:last-child{background:rgba(255,80,80,.05)}
+  .enforced h3{font-size:16px;font-family:var(--mono);letter-spacing:.05em;margin-bottom:14px;font-weight:600}
+  .enforced .ok h3{color:var(--pass)}
+  .enforced .no h3{color:#FF6B6B}
+  .enforced li{font-size:16px;line-height:1.5;margin-bottom:9px;list-style:none;position:relative;padding-left:20px}
+  .enforced .ok li::before{content:"+";position:absolute;left:0;color:var(--pass);font-family:var(--mono)}
+  .enforced .no li::before{content:"\2212";position:absolute;left:0;color:#FF6B6B;font-family:var(--mono)}
+
+  /* ---------- 8 · SKR ---------- */
+  .skrflow{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:30px;border-top:1px solid var(--line)}
+  .skrflow .f{padding:22px 20px 22px 0;border-right:1px solid var(--line);position:relative}
+  .skrflow .f:last-child{border-right:0}
+  .skrflow .f:not(:first-child){padding-left:20px}
+  .skrflow .f .stepno{font-family:var(--mono);font-size:11px;color:var(--violet);letter-spacing:.1em}
+  .skrflow .f h3{font-size:17.5px;font-weight:700;margin:10px 0 8px;line-height:1.25}
+  .skrflow .f p{font-size:14.5px;line-height:1.46}
+  .verdicts{display:flex;gap:12px;margin-top:8px;flex-wrap:wrap}
+  .vd{font-family:var(--mono);font-size:12.5px;padding:7px 13px;border:1px solid;border-radius:2px;letter-spacing:.05em}
+  .vd.v{color:var(--pass);border-color:rgba(20,241,149,.45);background:rgba(20,241,149,.08)}
+  .vd.p{color:var(--amber);border-color:rgba(255,176,32,.45);background:rgba(255,176,32,.08)}
+  .vd.r{color:#FF7B7B;border-color:rgba(255,107,107,.45);background:rgba(255,107,107,.08)}
+  .fail{margin-top:22px;font-family:var(--mono);font-size:13.5px;color:#A7ABBE;line-height:1.85}
+  .fail b{color:#FF7B7B;font-weight:500}
+
+  /* ---------- 9 · demo ---------- */
+  .demo{display:grid;grid-template-columns:1fr 1fr;gap:56px;margin-top:14px;align-items:start}
+  .demoline{display:grid;grid-template-columns:56px 1fr;gap:16px;padding:16px 0;border-top:1px solid var(--line);align-items:baseline}
+  .demoline:last-child{border-bottom:1px solid var(--line)}
+  .demoline .t{font-family:var(--mono);font-size:12.5px;color:var(--violet);font-variant-numeric:tabular-nums}
+  .demoline .d{font-size:17px;line-height:1.45}
+  .demoline .d small{display:block;color:var(--muted);font-size:14.5px;margin-top:4px}
+
+  /* ---------- 10 · scoring ---------- */
+  .score{display:grid;grid-template-columns:1fr 1fr;gap:0;margin-top:26px;border-top:1px solid var(--line);border-left:1px solid var(--line)}
+  .cell{padding:24px 26px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .cell .pct{font-family:var(--mono);font-size:12.5px;color:var(--violet);letter-spacing:.08em}
+  .cell h3{font-size:19.5px;font-weight:700;margin:9px 0 9px}
+  .cell p{font-size:15.5px;line-height:1.5}
+  .cell .q{color:var(--muted);font-size:15px;margin-bottom:12px;font-style:italic}
+
+  /* ---------- 11 · numbers ---------- */
+  .numbers{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:34px;border-top:1px solid var(--line)}
+  .numbers .n{padding:28px 22px 0 0;border-right:1px solid var(--line)}
+  .numbers .n:last-child{border-right:0}
+  .numbers .n:not(:first-child){padding-left:24px}
+  .numbers .v{font-family:var(--mono);font-size:44px;font-weight:600;letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:var(--paper)}
+  .numbers .l{font-size:15px;color:var(--muted);margin-top:9px;line-height:1.4}
+  .numbers .v .u{font-size:22px;color:var(--violet)}
+
+  /* ---------- 12 · close ---------- */
+  .close-h{font-size:60px;line-height:1.04;font-weight:700;letter-spacing:-.03em;max-width:17ch}
+  .close-h .t{color:var(--violet)}
+  .commit{margin-top:34px;display:grid;gap:16px;max-width:64ch}
+  .commit .c{display:grid;grid-template-columns:22px 1fr;gap:14px;align-items:start;font-size:17.5px;line-height:1.5;color:#C7CAD8}
+  .commit .c span{color:var(--pass);font-family:var(--mono);font-size:15px}
+  .contactline{
+    margin-top:auto;display:flex;gap:34px;font-family:var(--mono);
+    font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:22px;flex-wrap:wrap
+  }
+  .contactline b{color:#D6D9E6;font-weight:500}
+
+  /* ---------- one orchestrated reveal (hero only) ---------- */
+  @media (prefers-reduced-motion:no-preference){
+    .slide.on .wordmark .big,
+    .slide.on .close-h{animation:rise .5s cubic-bezier(.2,.7,.3,1) both}
+    .slide.on .titleline{animation:rise .5s .09s cubic-bezier(.2,.7,.3,1) both}
+    @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+  }
+
+  /* ---------- nav affordance ---------- */
+  .hint{
+    position:fixed;right:26px;top:22px;z-index:60;
+    font-family:var(--mono);font-size:11px;color:#5A5F78;letter-spacing:.05em;
+    background:rgba(5,6,12,.7);padding:6px 10px;border:1px solid rgba(255,255,255,.07)
+  }
+  .hint b{color:#8C90A8;font-weight:500}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--violet);outline-offset:3px}
+  .navbtn{
+    position:absolute;top:0;bottom:56px;width:16%;z-index:35;border:0;background:transparent;
+    cursor:pointer;color:transparent;
+  }
+  .navbtn.prev{left:0}
+  .navbtn.next{right:0}
+
+  /* ---------- print / PDF ---------- */
+  @media print{
+    body{overflow:visible;background:var(--ink)}
+    .viewport{position:static;display:block}
+    .stage{transform:none!important;width:1280px;height:720px;box-shadow:none}
+    .slide{position:relative;opacity:1;visibility:visible;height:720px;page-break-after:always;animation:none!important}
+    .rung{opacity:1}
+    .hint{display:none}
+    @page{size:1280px 720px;margin:0}
+  }
+</style>
+</head>
+<body>
+
+<div class="viewport">
+<div class="stage" id="stage">
+
+  <!-- ============ 1 · TITLE ============ -->
+  <section class="slide" data-sec="Clock In · Solana Mobile">
+    <div class="wordmark">
+      <div class="big">Tal<span class="t">o</span>n</div>
+      <div class="tag">01 / BUILD&nbsp;·&nbsp;VERIFY&nbsp;·&nbsp;SHIP</div>
+    </div>
+    <div class="titleline">The AI build agent for <b>Solana Mobile</b>. Describe an app — it plans the screens, writes the code, proves it on a real phone, and signs the release.</div>
+
+    <div class="titleflow">
+      <span>DESCRIBE</span><span class="arw">→</span>
+      <span>PLAN</span><span class="arw">→</span>
+      <span>BUILD</span><span class="arw">→</span>
+      <span>VERIFY</span><span class="arw">→</span>
+      <span class="v">SHIP</span>
+    </div>
+
+    <div class="titlefoot">
+      <div>SUBMITTED TO<br><span>Clock In — A Solana Mobile Hackathon</span></div>
+      <div>REPOSITORY<br><span>github.com/Luckyisrael/Talon</span></div>
+      <div>BUILT BY<br><span>Solo builder · no funding</span></div>
+      <div>PROOF<br><span>Signed Android APK · 73.2 MB</span></div>
+    </div>
+  </section>
+
+  <!-- ============ 2 · PROBLEM ============ -->
+  <section class="slide" data-sec="The problem">
+    <h1>Shipping a mobile dApp is still a month of plumbing.</h1>
+    <div class="problemlist">
+      <div class="row">
+        <p>Before the first screen renders you are wiring Expo, native modules, a wallet stack, and store assets.</p>
+        <div class="why">Most teams never get past the scaffold.</div>
+      </div>
+      <div class="row">
+        <p>“Works on my simulator” is not proof. Builds die on the device — in Gradle, at boot, or on the first screenshot.</p>
+        <div class="why">Nobody verifies the last mile, because the last mile is expensive.</div>
+      </div>
+      <div class="row">
+        <p>And a demo nobody can install isn't a submission. The APK is the deliverable.</p>
+        <div class="why">Clock In rule: it has to run on a device.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3 · WHAT IT IS ============ -->
+  <section class="slide" data-sec="What Talon is">
+    <h2>One agent. Three surfaces.</h2>
+    <p class="lede" style="margin-top:16px">You describe the app. Talon plans it, writes it, verifies it on hardware, and hands you a signed APK plus a dApp Store bundle.</p>
+
+    <div class="surfaces">
+      <div class="surface primary">
+        <div class="who">AUTHORITY</div>
+        <h3>Go build agent</h3>
+        <p>Plan and build loops, 61 tools, guardrails, the verify ladder, checkpoints and undo, device fleet, release pipeline.</p>
+      </div>
+      <div class="surface">
+        <div class="who">FULL POWER</div>
+        <h3>Web IDE</h3>
+        <p>Live tool trace, plan approval, code editor, terminal, per-file diffs, emulator stream.</p>
+      </div>
+      <div class="surface">
+        <div class="who">IN YOUR POCKET</div>
+        <h3>Companion app</h3>
+        <p>Chat, plan approval, status headlines, push, diffs, Metro-connected Device tab. Android only.</p>
+      </div>
+    </div>
+
+    <p class="quiet" style="font-size:16px;margin-top:30px;max-width:70ch">
+      The mobile app deliberately carries no code editor and no terminal — it is the surface you drive a build from, not the surface you read a stack trace on.
+    </p>
+  </section>
+
+  <!-- ============ 4 · THE LOOP ============ -->
+  <section class="slide" data-sec="How it works">
+    <h2>Describe it once. The agent runs the whole loop.</h2>
+
+    <div class="loop">
+      <div class="step">
+        <div class="n">PLAN</div>
+        <h3>Reads the code first</h3>
+        <p>Up to 8 read-only rounds with a project map. Mutation is impossible — the write tools aren't registered.</p>
+      </div>
+      <div class="step">
+        <div class="n">APPROVE</div>
+        <h3>You sign off</h3>
+        <p>The plan becomes a durable <span class="mono">.talon/plan.md</span> you can edit. Checkboxes sync both ways.</p>
+      </div>
+      <div class="step">
+        <div class="n">BUILD</div>
+        <h3>Writes real code</h3>
+        <p>61 tools, mid-build steering, ask-user pauses, per-turn checkpoints you can undo.</p>
+      </div>
+      <div class="step">
+        <div class="n">VERIFY</div>
+        <h3>Proves it on hardware</h3>
+        <p>Eight rungs ending in a boot, a screenshot and a scripted interaction on Android.</p>
+      </div>
+      <div class="step">
+        <div class="n">SHIP</div>
+        <h3>Signs the release</h3>
+        <p>Keystore, zipalign, apksigner, re-verified before you can download it.</p>
+      </div>
+    </div>
+
+    <p class="quiet" style="font-size:16.5px;margin-top:34px;max-width:74ch">
+      If a gate fails, the agent repairs and re-runs — up to six attempts — instead of reporting a build it never watched succeed.
+    </p>
+  </section>
+
+  <!-- ============ 5 · THE LADDER (HERO) ============ -->
+  <section class="slide" data-sec="The difference">
+    <h1>It doesn't tell you it works. It shows you.</h1>
+
+    <div class="ladder" id="ladder">
+      <div class="rung"><div class="num">01</div><div class="name">LSP diagnostics<em>language server, instant</em></div><div class="st req">REQUIRED</div></div>
+      <div class="rung"><div class="num">02</div><div class="name">Typecheck<em>tsc --noEmit</em></div><div class="st req">REQUIRED</div></div>
+      <div class="rung"><div class="num">03</div><div class="name">Lint<em>ESLint</em></div><div class="st req">REQUIRED</div></div>
+      <div class="rung"><div class="num">04</div><div class="name">Bundle<em>expo export, android</em></div><div class="st req">REQUIRED</div></div>
+      <div class="rung"><div class="num">05</div><div class="name">Gradle<em>assembleDebug</em></div><div class="st req">REQUIRED</div></div>
+      <div class="rung"><div class="num">06</div><div class="name">Device boot<em>install + process alive</em></div><div class="st dev">REQUIRED IF DEVICE</div></div>
+      <div class="rung"><div class="num">07</div><div class="name">Vision<em>screenshot vs intended screen</em></div><div class="st dev">REQUIRED IF DEVICE</div></div>
+      <div class="rung"><div class="num">08</div><div class="name">Interaction<em>every plan route, scripted</em></div><div class="st dev">REQUIRED IF DEVICE</div></div>
+    </div>
+
+    <div class="laddernote">
+      Each stage carries a policy: <span class="mono" style="color:var(--pass)">required</span>,
+      <span class="mono" style="color:var(--amber)">best-effort</span> or
+      <span class="mono">off</span>, per project. Export refuses to ship a <strong>required</strong>
+      gate it skipped — unless a named human overrides, which is written to the audit log.
+    </div>
+  </section>
+
+  <!-- ============ 6 · HARDWARE ============ -->
+  <section class="slide" data-sec="Proof">
+    <h1>The proof runs on hardware, not a simulator.</h1>
+
+    <div class="cols" style="grid-template-columns:1fr 1fr;gap:52px;margin-top:26px">
+      <ul class="points">
+        <li>A Dockerized <strong>Android 14</strong> device with a warm container pool, reconciled on every cleanup tick.</li>
+        <li>A <strong>token-gated Metro relay</strong> with QR pairing, so your physical phone loads the build straight from the agent's workspace.</li>
+        <li>Release pipeline: prebuild → <span class="mono" style="font-size:15.5px">assembleRelease</span> → per-project keystore → zipalign → <span class="mono" style="font-size:15.5px">apksigner</span>.</li>
+        <li>The APK is <strong>re-verified before delivery</strong> — package identity and certificate must both match the project.</li>
+      </ul>
+
+      <div class="evidence">
+        <div class="ehead"><span class="dot"></span>SIGNED ARTIFACT ON DISK</div>
+        <dl>
+          <dt>App</dt><dd>Neighborhood Rewards — generated end-to-end by Talon</dd>
+          <dt>Package</dt><dd>com.talon.neighborhoodrewards</dd>
+          <dt>Version</dt><dd>1.0.0 · minSdk 24</dd>
+          <dt>Size</dt><dd>73,227,310 bytes (73.2 MB)</dd>
+          <dt>Signature</dt><dd>apksigner verify passes</dd>
+          <dt>SHA-256</dt><dd>9825a369c04e3a521a46ff9fb451f4a347b1f0fb016221fd0619b1d09f7899eb</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="rule"></div>
+    <p class="quiet" style="font-size:16.5px;max-width:80ch">
+      Proven end to end on a live server: <strong>plan → build → verify → device session → Metro relay → release export</strong>,
+      with wallet auth, the paywall, ownership checks and every 401/403/404 boundary asserted over the API.
+    </p>
+  </section>
+
+  <!-- ============ 7 · SOLANA MOBILE ============ -->
+  <section class="slide" data-sec="Solana Mobile">
+    <h1>Solana Mobile isn't a plugin. It's enforced.</h1>
+
+    <div class="enforced">
+      <div class="ok">
+        <h3>THE AGENT IS REQUIRED TO</h3>
+        <ul>
+          <li>Use <strong>Mobile Wallet Adapter</strong> — <span class="mono">useMobileWallet()</span> + <span class="mono">sendTransactions()</span></li>
+          <li>Build on <strong>@solana/kit</strong> program clients, devnet and testnet preconfigured</li>
+          <li>Sign in with a <strong>Solana wallet</strong> — ed25519 challenge, server verifies, never holds a key</li>
+          <li>Prove the handshake: <span class="mono">test_wallet_roundtrip</span> greps logcat for MWA evidence</li>
+          <li>Generate a <strong>dApp Store bundle</strong> alongside the APK</li>
+        </ul>
+      </div>
+      <div class="no">
+        <h3>THE AGENT IS DENIED</h3>
+        <ul>
+          <li><span class="mono">@solana/web3.js</span> — forbidden in the template and the skills, guarded in CI</li>
+          <li><span class="mono">wallet-adapter-react</span> — “cannot run on the device, use MWA transact()”</li>
+          <li><span class="mono">…protocol-web3js</span> transact calls</li>
+          <li>Seed phrases, key import, any private-key handling — the wallet holds all signing material</li>
+          <li>Phantom-only paths — evals disqualify <span class="mono">@phantom/</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="quiet" style="font-size:16px;margin-top:26px;max-width:76ch">
+      15 embedded skills ship with the agent — <span class="mono" style="font-size:15px">solana-dev</span>,
+      <span class="mono" style="font-size:15px">wallet-mwa</span>,
+      <span class="mono" style="font-size:15px">seed-vault</span> and
+      <span class="mono" style="font-size:15px">dapp-store</span> among them — and an
+      <span class="mono" style="font-size:15px">@solana/kit</span> import pulls the Solana skill automatically.
+    </p>
+  </section>
+
+  <!-- ============ 8 · SKR ============ -->
+  <section class="slide" data-sec="SKR integration">
+    <h1>We re-derive your SKR payment from the chain.</h1>
+
+    <div class="skrflow">
+      <div class="f">
+        <div class="stepno">STEP 01</div>
+        <h3>Quote</h3>
+        <p>The <strong>server</strong> states the price, pack size, mint and treasury. A price the client names is a price the client chooses.</p>
+      </div>
+      <div class="f">
+        <div class="stepno">STEP 02</div>
+        <h3>Pay in-app</h3>
+        <p>Hand-built <strong>TransferChecked</strong> over <span class="mono" style="font-size:13.5px">@solana/kit</span>, signed through <strong>MWA</strong> in your own wallet. Mint never ships in the binary.</p>
+      </div>
+      <div class="f">
+        <div class="stepno">STEP 03</div>
+        <h3>Verify</h3>
+        <p>The server fetches the transaction <strong>itself</strong> on its own RPC and re-derives mint, recipient and exact amount.</p>
+      </div>
+      <div class="f">
+        <div class="stepno">STEP 04</div>
+        <h3>Unlock</h3>
+        <p>Credits grant release export. A fresh account hits the paywall.</p>
+      </div>
+    </div>
+
+    <div class="verdicts" style="margin-top:24px">
+      <span class="vd v">VERIFIED</span>
+      <span class="vd p">PENDING · client retries, never re-sends</span>
+      <span class="vd r">REJECTED · HTTP 422</span>
+    </div>
+
+    <div class="fail">
+      <b>Fail-closed by construction.</b> Wrong mint · wrong treasury · wrong amount · failed transaction → rejected.
+      RPC unreachable → 502, no credits. Replay impossible — the signature is unique.
+      <b>Decimals come from the on-chain mint, never from config.</b>
+    </div>
+  </section>
+
+  <!-- ============ 9 · DEMO ============ -->
+  <section class="slide" data-sec="The demo">
+    <h1>The three minutes.</h1>
+
+    <div class="demo">
+      <div>
+        <div class="demoline"><div class="t">0:00</div><div class="d">Open the companion app on a real phone<small>Signed in with a Solana wallet</small></div></div>
+        <div class="demoline"><div class="t">0:20</div><div class="d">Describe the app in one sentence<small>Plan turn with the project map loaded</small></div></div>
+        <div class="demoline"><div class="t">0:55</div><div class="d">Approve the plan on the phone<small>Becomes a durable, editable .talon/plan.md</small></div></div>
+        <div class="demoline"><div class="t">1:15</div><div class="d">Watch the build stream — and watch it fail<small>Type error caught by the ladder, agent repairs</small></div></div>
+        <div class="demoline"><div class="t">2:00</div><div class="d">Boot, screenshot and interaction gates go green<small>Real Android device, not a mock</small></div></div>
+        <div class="demoline"><div class="t">2:35</div><div class="d">Buy export credits with SKR, download the signed APK<small>Server verifies the transaction on-chain</small></div></div>
+      </div>
+      <div>
+        <p class="lede">The moment that matters is at <strong>1:15</strong> — the agent breaks its own build, then fixes it in front of you, because a gate refused to call it done.</p>
+        <div class="rule"></div>
+        <p class="quiet" style="font-size:16.5px">Everything in the demo is the shipping product running against a live server. No pre-rendered mockups, no hand-edited files between steps.</p>
+        <div class="rule"></div>
+        <div class="verdicts">
+          <span class="vd v">APK INSTALLS ON DEVICE</span>
+          <span class="vd v">REPO CLONES AND RUNS</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 10 · SCORING ============ -->
+  <section class="slide" data-sec="Against the criteria">
+    <h2>How this maps to your four criteria.</h2>
+
+    <div class="score">
+      <div class="cell">
+        <div class="pct">25%</div>
+        <h3>Stickiness &amp; PMF</h3>
+        <div class="q">Does it resonate with the Seeker community and create habits?</div>
+        <p>The pocket app is a daily driver, not a companion afterthought: project dashboard, full history, and push that fires when the plan is ready, the build fails, or the agent needs an answer. Building on a phone, for phones.</p>
+      </div>
+      <div class="cell">
+        <div class="pct">25%</div>
+        <h3>User experience</h3>
+        <div class="q">Intuitive, polished, enjoyable?</div>
+        <p>Chat, plan approval, status headlines and handoff on mobile; the full trace, editor and terminal on the web. One deliberate design law decides which surface gets what, so neither is a compromise.</p>
+      </div>
+      <div class="cell">
+        <div class="pct">25%</div>
+        <h3>Innovation / X-factor</h3>
+        <div class="q">How novel? Does it stand out?</div>
+        <p>An agent that <strong>verifies its own work on real hardware</strong> — eight gates ending in a boot, a screenshot and a scripted interaction — and refuses to claim success it didn't watch happen. Then signs the release it just proved.</p>
+      </div>
+      <div class="cell">
+        <div class="pct">25%</div>
+        <h3>Presentation &amp; demo</h3>
+        <div class="q">Is the idea clearly communicated?</div>
+        <p>One loop: describe → plan → build → verify → ship. Three surfaces, one live run, a signed APK at the end. The failure-and-repair beat gives the demo a story instead of a walkthrough.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 11 · DEPTH ============ -->
+  <section class="slide" data-sec="Technical depth">
+    <h1>Depth you can check in the repo.</h1>
+
+    <div class="numbers">
+      <div class="n"><div class="v">350</div><div class="l">commits since 4 Aug 2026 — a two-month build</div></div>
+      <div class="n"><div class="v">106<span class="u">k</span></div><div class="l">lines of Go across 66 packages</div></div>
+      <div class="n"><div class="v">912</div><div class="l">backend tests in 230 files, run with -race in CI</div></div>
+      <div class="n"><div class="v">91</div><div class="l">HTTP &amp; WebSocket routes over 36 SQLite tables</div></div>
+    </div>
+
+    <div class="rule"></div>
+
+    <div class="numbers" style="border-top:0;margin-top:0">
+      <div class="n"><div class="v">61</div><div class="l">agent tools, plus MCP and plugin passthrough</div></div>
+      <div class="n"><div class="v">15</div><div class="l">embedded skills, four of them Solana Mobile</div></div>
+      <div class="n"><div class="v">6</div><div class="l">golden agent tasks replayed from fixtures in CI</div></div>
+      <div class="n"><div class="v">3</div><div class="l">CI jobs: race tests, config diff, headless real boot</div></div>
+    </div>
+
+    <p class="quiet" style="font-size:16px;margin-top:32px;max-width:78ch">
+      CI carries a <strong>Kit guard</strong> that fails the build if <span class="mono" style="font-size:15px">@solana/web3.js</span> ever reaches the template, a <strong>tree guard</strong> that fails if the gate itself modifies a tracked file, and a headless job that runs the real verify ladder — with no secrets in CI at all.
+    </p>
+  </section>
+
+  <!-- ============ 12 · CLOSE ============ -->
+  <section class="slide" data-sec="The commitment">
+    <div class="close-h">Ship the app,<br>then ship it <span class="t">again</span>.</div>
+
+    <div class="commit">
+      <div class="c"><span>→</span><div>Publish Talon's generated apps to the <strong>Solana dApp Store within 30 days</strong> of any win, per the Clock In rules.</div></div>
+      <div class="c"><span>→</span><div>Turn the SKR gate from a release credit into a full in-app economy for generated apps.</div></div>
+      <div class="c"><span>→</span><div>Open the plugin directory so the ecosystem can extend the agent without forking it.</div></div>
+    </div>
+
+    <div class="contactline">
+      <div>REPO &nbsp;<b>github.com/Luckyisrael/Talon</b></div>
+      <div>SUBMISSION &nbsp;<b>Clock In · Solana Mobile</b></div>
+      <div>PRIZES &nbsp;<b>Grand + $10,000 SKR Integration</b></div>
+    </div>
+  </section>
+
+  <!-- rail -->
+  <div class="rail">
+    <span class="mark">TALON</span>
+    <span class="sec" id="railSec">Clock In · Solana Mobile</span>
+    <span class="count" id="railCount">01 / 12</span>
+    <span class="ticks" id="ticks"></span>
+  </div>
+
+  <button class="navbtn prev" id="btnPrev" aria-label="Previous slide">prev</button>
+  <button class="navbtn next" id="btnNext" aria-label="Next slide">next</button>
+
+</div>
+</div>
+
+<div class="hint"><b>← →</b> or <b>Space</b> to move · <b>P</b> to print / export PDF</div>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var stage  = document.getElementById('stage');
+  var ticksEl= document.getElementById('ticks');
+  var secEl  = document.getElementById('railSec');
+  var cntEl  = document.getElementById('railCount');
+  var i = 0;
+
+  slides.forEach(function(_,n){
+    var t = document.createElement('span');
+    t.className = 'tick';
+    t.addEventListener('click', function(){ go(n); });
+    ticksEl.appendChild(t);
+  });
+  var ticks = Array.prototype.slice.call(ticksEl.children);
+  ticks.forEach(function(t){ t.style.cursor='pointer'; });
+
+  function pad(n){ return (n<10?'0':'') + n; }
+
+  function go(n){
+    if(n < 0 || n >= slides.length) return;
+    i = n;
+    slides.forEach(function(s,k){ s.classList.toggle('on', k===i); });
+    ticks.forEach(function(t,k){
+      t.classList.toggle('done', k < i);
+      t.classList.toggle('now',  k === i);
+    });
+    secEl.textContent = slides[i].dataset.sec || '';
+    cntEl.textContent  = pad(i+1) + ' / ' + pad(slides.length);
+    if(location.hash !== '#' + (i+1)) history.replaceState(null,'','#' + (i+1));
+    if(slides[i].querySelector('#ladder')) litLadder();
+  }
+
+  function fromHash(){
+    var n = parseInt((location.hash || '').slice(1), 10);
+    return (isNaN(n) || n < 1 || n > slides.length) ? 0 : n - 1;
+  }
+  window.addEventListener('hashchange', function(){ go(fromHash()); });
+
+  /* the one orchestrated reveal: the ladder lights rung by rung */
+  function litLadder(){
+    var rungs = document.querySelectorAll('#ladder .rung');
+    rungs.forEach(function(r){ r.classList.remove('lit'); });
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(reduce){ rungs.forEach(function(r){ r.classList.add('lit'); }); return; }
+    rungs.forEach(function(r,n){ setTimeout(function(){ r.classList.add('lit'); }, 90*n + 120); });
+  }
+
+  function fit(){
+    var s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    stage.style.transform = 'scale(' + s + ')';
+  }
+
+  document.addEventListener('keydown', function(e){
+    if(e.key==='ArrowRight' || e.key===' ' || e.key==='PageDown'){ e.preventDefault(); go(i+1); }
+    else if(e.key==='ArrowLeft' || e.key==='PageUp'){ e.preventDefault(); go(i-1); }
+    else if(e.key==='Home'){ go(0); }
+    else if(e.key==='End'){ go(slides.length-1); }
+    else if(e.key==='p' || e.key==='P'){ window.print(); }
+  });
+
+  document.getElementById('btnNext').addEventListener('click', function(){ go(i+1); });
+  document.getElementById('btnPrev').addEventListener('click', function(){ go(i-1); });
+
+  window.addEventListener('resize', fit);
+  fit();
+  go(fromHash());
+})();
+</script>
+</body>
+</html>
