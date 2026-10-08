@@ -102,6 +102,12 @@ type PromptHandler struct {
 	// the workspace-only chain (no global file): tests and embedded
 	// compositions. See AttachInstructionsChain.
 	instructionsChain func(workspacePath string) string
+	// turnsMu guards turns (L69, FM-AI-BG): the registry of in-flight agent
+	// loops keyed by prompt ID. Stop cancels a turn through it; Attach
+	// rejoins it. The entry outlives its viewer — a detached turn is exactly
+	// what those routes must still be able to find.
+	turnsMu sync.Mutex
+	turns   map[int64]*runningTurn
 }
 
 func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir string, orch *orchestrator.Orchestrator, dc *devclient.Manager, knowledge *knowledge.Registry, n notify.Notifier) *PromptHandler {
@@ -125,6 +131,192 @@ func NewPromptHandler(s *store.Store, a *ai.Client, workspaceDir, templateDir st
 
 		planSurveyCache: map[int64]planSurvey{},
 		planSectionFP:   map[int64][]promptsec.Fingerprint{},
+		turns:           map[int64]*runningTurn{},
+	}
+}
+
+// turnHeartbeatInterval is how often a running turn refreshes its project
+// session's reaper clock (I-OWN, FM-IDLE-STARVE). 60 s keeps last_active_at
+// far inside the 10 m pause window and the 30 m destroy window, so a turn
+// nobody polls never looks idle to the reaper. A var (not a const) so tests
+// can shrink it.
+var turnHeartbeatInterval = 60 * time.Second
+
+// turnResult is one agent loop's terminal outcome — the pair the view writes
+// its final frames from and the terminal effects are dispatched from.
+type turnResult struct {
+	outcome *orchestrator.BuildOutcome
+	err     error
+}
+
+// runningTurn is the registry entry for one in-flight agent loop (L69,
+// FM-AI-BG). It owns the server-side turn context — a viewer's disconnect
+// ends the view, never the work — and it is the handoff point between the
+// consumers of the turn's emitter: exactly one drains it at a time (the
+// attached view, or a background drainer while no view is attached), so the
+// agent loop's Emit can never block on a full buffer while nobody watches.
+type runningTurn struct {
+	// cancel aborts the server-owned turn context. Invoked only by the Stop
+	// route or by the turn's own finalize (below) — never by the viewer
+	// going away.
+	cancel context.CancelFunc
+
+	// finished is closed once the turn's terminal result has been stored;
+	// waitResult then returns it. Both the attached view and a re-attaching
+	// view select on it to know the turn is done.
+	finished chan struct{}
+
+	// attachable marks a turn whose emitter a later Attach may rejoin: build
+	// turns. A plan turn streams frames only to the view that started them —
+	// there is no emitter to rejoin (its frames were dropped with the view)
+	// — so Attach answers 409 and the client settles through history
+	// refetch, where persistPlanExchange already put the plan (L69 d).
+	attachable bool
+
+	mu sync.Mutex
+	// result is the terminal outcome, set once before finished is closed.
+	result turnResult
+	// emitter is the turn's event source, published as soon as the session
+	// exists. nil until then.
+	emitter *events.SessionEmitter
+	// emitterReady is closed exactly once, when emitter is published. A
+	// re-attach that races session creation waits here (or on finished, if
+	// the turn dies before it ever publishes) instead of guessing.
+	emitterReady chan struct{}
+	// drainerStop / drainerDone are non-nil only while a background drainer
+	// owns the emitter (no view is attached). Attaching stops it and waits it
+	// out before taking over, so exactly one consumer drains at a time.
+	drainStop chan struct{}
+	drainDone chan struct{}
+}
+
+func newRunningTurn(cancel context.CancelFunc, attachable bool) *runningTurn {
+	return &runningTurn{
+		cancel:       cancel,
+		finished:     make(chan struct{}),
+		attachable:   attachable,
+		emitterReady: make(chan struct{}),
+	}
+}
+
+// finish stores the terminal result and signals completion. The result is
+// written before finished is closed so a waiter always sees it.
+func (t *runningTurn) finish(res turnResult) {
+	t.mu.Lock()
+	t.result = res
+	t.mu.Unlock()
+	close(t.finished)
+}
+
+// waitResult blocks until the turn finishes and returns its terminal outcome.
+func (t *runningTurn) waitResult() turnResult {
+	<-t.finished
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.result
+}
+
+// setEmitter publishes the turn's emitter. It does NOT start draining: the
+// consumer that will read it (the attached view, or a caller that immediately
+// hands it to a background drainer) decides that, so there is never a moment
+// with two consumers.
+func (t *runningTurn) setEmitter(em *events.SessionEmitter) {
+	t.mu.Lock()
+	if t.emitter == nil {
+		t.emitter = em
+		close(t.emitterReady) // once: publish is the wake-up for waiting attaches
+	}
+	t.mu.Unlock()
+}
+
+// isDone reports whether the turn has stored its terminal result — the Stop
+// and Attach conflict test that does not depend on the registry entry having
+// been unregistered yet (finish runs before the turn goroutine's deferred
+// unregisterTurn, so a 409 must key off this, not only off getTurn).
+func (t *runningTurn) isDone() bool {
+	select {
+	case <-t.finished:
+		return true
+	default:
+		return false
+	}
+}
+
+// hasEmitter reports whether the turn reached the point of publishing its
+// emitter — i.e. the session was created and the loop really ran. Terminal
+// effects key off this to preserve the pre-L69 guard: a run that died before
+// the session existed returned before the terminal block and never pushed.
+func (t *runningTurn) hasEmitter() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.emitter != nil
+}
+
+// startDrain hands the emitter to a background drainer — used when no view is
+// attached (the viewer detached, or the request died before it could attach).
+// Without this the emitter's buffer fills and the loop's Emit blocks, wedging
+// the turn (FM-AI-BG(iii)). A later attach stops the drainer and takes over.
+func (t *runningTurn) startDrain() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.emitter == nil || t.drainStop != nil {
+		return // nothing to drain, or already draining in the background
+	}
+	em := t.emitter
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	t.drainStop, t.drainDone = stop, done
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-em.Done():
+				return
+			case <-em.Events():
+			}
+		}
+	}()
+}
+
+// takeEmitter stops any background drainer, waits it out, and returns the
+// emitter for a live view to drain. Exactly one consumer at a time (FM-AI-BG):
+// the drainer fully exits before the caller begins reading.
+func (t *runningTurn) takeEmitter() *events.SessionEmitter {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.drainStop != nil {
+		close(t.drainStop)
+		<-t.drainDone
+		t.drainStop, t.drainDone = nil, nil
+	}
+	return t.emitter
+}
+
+// registerTurn records a turn as running so Stop and Attach can reach it. The
+// entry lives until the turn goroutine finishes — not until the view returns,
+// because a detached turn is exactly what re-attach and stop must still find.
+func (h *PromptHandler) registerTurn(promptID int64, rt *runningTurn) {
+	h.turnsMu.Lock()
+	defer h.turnsMu.Unlock()
+	h.turns[promptID] = rt
+}
+
+// getTurn returns the running turn for a prompt, or nil if none runs.
+func (h *PromptHandler) getTurn(promptID int64) *runningTurn {
+	h.turnsMu.Lock()
+	defer h.turnsMu.Unlock()
+	return h.turns[promptID]
+}
+
+// unregisterTurn drops a finished turn's entry. It only deletes if the entry
+// is still this turn, so a newer turn for the same prompt is never clobbered.
+func (h *PromptHandler) unregisterTurn(promptID int64, rt *runningTurn) {
+	h.turnsMu.Lock()
+	defer h.turnsMu.Unlock()
+	if h.turns[promptID] == rt {
+		delete(h.turns, promptID)
 	}
 }
 
@@ -784,6 +976,149 @@ func (h *PromptHandler) Discard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "abandoned"})
 }
 
+// Stop cancels the server-owned context of a running turn (L69 c, FM-AI-BG):
+// once a turn outlives its viewer there is no connection left to drop, so the
+// app's stop button needs a route. The turn settles `cancelled` — a
+// deliberate stop is a cancel, not a failure (terminalStatus reads the
+// context error the loop returns). No running turn answers 409: silently
+// succeeding would let a client believe it killed work that actually ran to
+// completion.
+func (h *PromptHandler) Stop(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid prompt id")
+		return
+	}
+	prompt, err := h.store.GetPrompt(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "prompt not found")
+		return
+	}
+	if _, ok := h.ownedProject(w, r, prompt.ProjectID); !ok {
+		return
+	}
+	rt := h.getTurn(id)
+	// The entry can briefly outlive the turn's finish (unregister runs after
+	// the result is stored), so both shapes mean "nothing is running": no
+	// entry, or an entry whose turn already finished.
+	if rt == nil || rt.isDone() {
+		writeError(w, http.StatusConflict, "no running turn to stop")
+		return
+	}
+	rt.cancel()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopping"})
+}
+
+// Attach re-joins a running build turn's SSE stream (L69 d, FM-AI-BG): the
+// app foregrounds mid-turn, its old connection is gone, and the turn kept
+// running without it. The join happens BEFORE the first header byte — a view
+// is only worth streaming to once it owns the emitter (pinned by
+// TestReattachStreamsARunningTurn: `wrote` fires only after the join, so the
+// model's answer cannot race it). Live frames from now on, then the terminal
+// frame written from the turn's stored result — never from a frame a
+// background drainer may have eaten while nobody watched. A turn that is not
+// running answers 409, which is what sends the client to the persisted
+// history instead.
+func (h *PromptHandler) Attach(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid prompt id")
+		return
+	}
+	prompt, err := h.store.GetPrompt(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "prompt not found")
+		return
+	}
+	if _, ok := h.ownedProject(w, r, prompt.ProjectID); !ok {
+		return
+	}
+	rt := h.getTurn(id)
+	if rt == nil || rt.isDone() {
+		writeError(w, http.StatusConflict, "no running turn to attach to")
+		return
+	}
+	if !rt.attachable {
+		// Plan turns have no emitter to rejoin: their frames were dropped
+		// with the view that started them, and the plan itself already sits
+		// in history (persistPlanExchange) for the refetch this 409 triggers.
+		writeError(w, http.StatusConflict, "plan turns cannot be re-attached; refetch history")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "this server cannot stream responses")
+		return
+	}
+
+	// The turn may still be before its session exists (hooks, workspace
+	// setup). Wait for the publish — or for the turn to end first, which
+	// becomes the same 409, since there is nothing left to stream.
+	select {
+	case <-rt.emitterReady:
+	case <-rt.finished:
+		writeError(w, http.StatusConflict, "the turn has finished")
+		return
+	case <-r.Context().Done():
+		return
+	}
+
+	// Join: stop the background drainer and wait it out, so this view is the
+	// emitter's only consumer from the first frame it reads.
+	emitter := rt.takeEmitter()
+	if emitter == nil {
+		writeError(w, http.StatusConflict, "no running turn to attach to")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	userID := GetUserID(r.Context())
+	hb := time.NewTicker(buildHeartbeatInterval)
+	defer hb.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			// This view ends; the turn does not. Hand the emitter to a
+			// background drainer so the loop's Emit can never block on a
+			// full buffer nobody reads.
+			rt.startDrain()
+			return
+		case evt := <-emitter.Events():
+			h.writeBuildEvent(w, evt)
+			// Same push the primary view makes: each question event is
+			// consumed by exactly one view, so this can never double-fire.
+			if evt.Type == events.QuestionEvent {
+				h.dispatchNotification(userID, notify.KindInputNeeded,
+					"Talon needs your input", evt.Text)
+			}
+			flusher.Flush()
+		case <-hb.C:
+			writeSSE(w, "heartbeat", map[string]interface{}{"prompt_id": id})
+			flusher.Flush()
+		case <-rt.finished:
+			// Events queued just before the finish are still buffered —
+			// deliver them, then the terminal frame from the stored result.
+			for emitter.Pending() > 0 {
+				select {
+				case evt := <-emitter.Events():
+					h.writeBuildEvent(w, evt)
+				default:
+				}
+			}
+			flusher.Flush()
+			res := rt.waitResult()
+			h.finishBuildStream(w, flusher, res.outcome, res.err)
+			return
+		}
+	}
+}
+
 // streamPlan proxies the model's stream to the client, then parses the finished
 // text into a plan.
 // planPhaseInterval is how long the plan stream may stay silent before the
@@ -837,6 +1172,27 @@ func planHeartbeat(w http.ResponseWriter, flusher http.Flusher, promptID int64) 
 }
 
 func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, promptID, projectID, userID int64, userTurn ai.Message) {
+	// L69 (FM-AI-BG): the plan turn is server-owned too. ctx is the viewer's
+	// request context; turnCtx is derived from WithoutCancel so a viewer that
+	// leaves (app backgrounded, transport dropped) does not cancel the model
+	// call or mark the turn cancelled. Cancelled comes from exactly two
+	// places now: this function's own return (turn over) or the Stop route.
+	turnCtx, cancelTurn := context.WithCancel(context.WithoutCancel(ctx))
+	rt := newRunningTurn(cancelTurn, false) // plan: no emitter to rejoin — Attach 409s
+	h.registerTurn(promptID, rt)
+	// One defer owns the whole teardown (LIFO-safe as a unit): stop the
+	// heartbeat clock, store the terminal result so Stop/Attach's isDone
+	// conflict is deterministic, drop the entry.
+	defer func() {
+		cancelTurn()
+		rt.finish(turnResult{})
+		h.unregisterTurn(promptID, rt)
+	}()
+	// I-OWN (FM-IDLE-STARVE): a plan turn that outlives its viewer must keep
+	// the project's live session warm like any other turn — the reaper's
+	// clock ticks on the work, not on whoever polls it.
+	go h.turnHeartbeat(turnCtx, projectID)
+
 	// W3.2: per-project prompt (map + survey + AGENTS chain) with the flag
 	// on; byte-identical h.planPrompt with it off — the assembly checks the
 	// flag before touching workspace, cache, or model.
@@ -849,7 +1205,7 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 	writePlanPhase(w, promptID)
 	flusher.Flush()
 
-	sys := h.planSystemPrompt(ctx, projectID)
+	sys := h.planSystemPrompt(turnCtx, projectID)
 	var raw string
 	if planToolsEnabled() {
 		// W3.1: eyes on — the bounded read-only loop produces the final text
@@ -857,7 +1213,7 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 		// stream error path applies, and the tail below parses raw exactly
 		// as it always has (the Answer door inherits this path unchanged).
 		stopHeartbeat := planHeartbeat(w, flusher, promptID)
-		loopRaw, err := h.planWithTools(ctx, projectID, sys, h.planHistory(projectID, userTurn))
+		loopRaw, err := h.planWithTools(turnCtx, projectID, sys, h.planHistory(projectID, userTurn))
 		stopHeartbeat()
 		if err != nil {
 			writeSSE(w, "error", map[string]string{"message": friendlyAIError(err)})
@@ -865,8 +1221,10 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 			// Give a plan turn that errored or was cut off a terminal status
 			// too, so a later reload does not offer to resume it. Plan turns
 			// are not resumable; the marker just keeps the row from looking
-			// interrupted forever.
-			if ctx.Err() != nil {
+			// interrupted forever. "Cancelled" means the Stop route (or this
+			// function returning) cancelled the turn — a viewer leaving
+			// cannot, it only stops writing frames to the dropped view.
+			if turnCtx.Err() != nil {
 				h.store.UpdatePromptStatus(promptID, "cancelled", 0)
 			} else {
 				h.store.UpdatePromptStatus(promptID, "failed", 0)
@@ -879,7 +1237,7 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 	} else {
 		// The system prompt was previously omitted here while the output was
 		// still parsed as a plan, so plan mode had no instructions at all.
-		stream := h.ai.ChatStream(ctx, sys, h.planHistory(projectID, userTurn))
+		stream := h.ai.ChatStream(turnCtx, sys, h.planHistory(projectID, userTurn))
 
 		var full strings.Builder
 		sawError := false
@@ -928,16 +1286,22 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 			case <-heartbeat.C:
 				writePlanPhase(w, promptID)
 				flusher.Flush()
-			case <-ctx.Done():
+			case <-turnCtx.Done():
+				// L69: only Stop (or this function returning) ends the turn.
+				// The VIEW going away breaks nothing here — the remaining
+				// frames are written into the dropped connection (harmless;
+				// writeSSE discards errors) and the plan lands in history via
+				// persistPlanExchange, which is what the client refetches.
 				break loop
 			}
 		}
 
-		if sawError || ctx.Err() != nil {
+		if sawError || turnCtx.Err() != nil {
 			// Give a plan turn that errored or was cut off a terminal status too, so a
 			// later reload does not offer to resume it. Plan turns are not resumable;
-			// the marker just keeps the row from looking interrupted forever.
-			if ctx.Err() != nil {
+			// the marker just keeps the row from looking interrupted forever. Only the
+			// Stop route can have cancelled it — the viewer leaving no longer can.
+			if turnCtx.Err() != nil {
 				h.store.UpdatePromptStatus(promptID, "cancelled", 0)
 			} else {
 				h.store.UpdatePromptStatus(promptID, "failed", 0)
@@ -957,7 +1321,7 @@ func (h *PromptHandler) streamPlan(ctx context.Context, w http.ResponseWriter, f
 		// L4: the stream door applies the same feasibility gate as the Send
 		// door — an infeasible package fails the turn with the package
 		// named, before any of the plan is saved (FM-L4a).
-		if msg, reject := h.checkPlanFeasibility(ctx, projectID, planResp.Plan); reject {
+		if msg, reject := h.checkPlanFeasibility(turnCtx, projectID, planResp.Plan); reject {
 			writeSSE(w, "error", map[string]string{"message": msg})
 			h.store.UpdatePromptResponse(promptID, "Error: "+msg)
 			h.store.UpdatePromptStatus(promptID, "failed", 0)
@@ -1050,31 +1414,77 @@ func planAsksQuestion(raw string) bool {
 
 // streamBuild runs the agent loop while forwarding its events to the client.
 func (h *PromptHandler) streamBuild(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, projectID, promptID, userID int64, userPrompt string, bo buildOptions) {
-	type result struct {
-		outcome *orchestrator.BuildOutcome
-		err     error
-	}
-	resultCh := make(chan result, 1)
+	// L69 (FM-AI-BG): the agent loop runs on a SERVER-OWNED turn context.
+	// ctx is the viewer's request context — it dies the moment the app
+	// backgrounds or the transport drops — and before L69 that cancellation
+	// reached RunAgentLoop and settled the turn `cancelled` with no viewer
+	// to have asked for it. turnCtx is derived from WithoutCancel so the
+	// request can no longer reach the work, and it is cancelled only by the
+	// Stop route, by the turn's own finalize (below), or by shutdown.
+	turnCtx, cancelTurn := context.WithCancel(context.WithoutCancel(ctx))
+	rt := newRunningTurn(cancelTurn, true)
+	h.registerTurn(promptID, rt)
+	// The entry lives until the TURN goroutine finishes, not until this view
+	// returns: a detached turn is exactly what Stop and Attach must still
+	// find. registerTurn's cleanup is owned by the turn goroutine below.
+	// (No unregister defer here — see the goroutine.)
+
+	// I-OWN (FM-IDLE-STARVE): a viewer-less turn used to run with a frozen
+	// reaper clock — the app backgrounded, its polls stopped, and the 10 m
+	// pause / 30 m destroy windows counted down under live work. The turn
+	// touches the session at start and on a ticker for its whole life; the
+	// ticker stops when turnCtx does (finalize or Stop).
+	go h.turnHeartbeat(turnCtx, projectID)
+
 	emitterCh := make(chan *events.SessionEmitter, 1)
 
+	// The turn goroutine owns the work AND its terminal effects: the FM-NOTIFa
+	// push and the G-10 Metro probe used to live in this view's post-drain
+	// block, so a viewer that left mid-turn lost both — the field report this
+	// fix exists for. They now fire from the turn whether or not anyone
+	// watches; finishBuildStream (the SSE terminal frame) stays in the view,
+	// because it writes to the view's ResponseWriter.
 	go func() {
-		outcome, err := h.runBuild(ctx, projectID, promptID, userID, userPrompt, emitterCh, bo)
-		resultCh <- result{outcome, err}
+		defer h.unregisterTurn(promptID, rt)
+		defer cancelTurn() // turn over: stop the heartbeat ticker
+		outcome, err := h.runBuild(turnCtx, projectID, promptID, userID, userPrompt, emitterCh, bo)
+		// Terminal effects moved from view to turn (L69 b): a backgrounded
+		// app still gets its push and its warm bundler. Guarded by "the
+		// emitter was published" — a run that died before the session
+		// existed never pushed pre-L69 either (it returned at the first
+		// select below, no terminal block), and that stay-green is pinned.
+		if rt.hasEmitter() {
+			h.turnTerminalEffects(userID, projectID, outcome, err)
+		}
+		rt.finish(turnResult{outcome, err})
 	}()
 
-	// runBuild publishes its emitter as soon as the session exists.
+	// runBuild publishes its emitter as soon as the session exists (before
+	// the first model call), so this select returns early in practice.
 	var emitter *events.SessionEmitter
 	select {
 	case emitter = <-emitterCh:
-	case res := <-resultCh:
-		// Failed before the session was created.
+		rt.setEmitter(emitter)
+	case <-rt.finished:
+		// Failed before the session was created — nothing to drain.
+		res := rt.waitResult()
 		h.finishBuildStream(w, flusher, res.outcome, res.err)
 		return
 	case <-ctx.Done():
+		// The viewer vanished before the emitter was published. The turn
+		// survives; adopt the emitter into a background drainer the moment
+		// it lands, so Emit can never block on a buffer nobody reads.
+		go func() {
+			select {
+			case em := <-emitterCh:
+				rt.setEmitter(em)
+				rt.startDrain()
+			case <-rt.finished:
+			}
+		}()
 		return
 	}
 
-	var res result
 	var got bool
 
 	// L8: one writer, one clock. The ticker lives in the same select as the
@@ -1088,6 +1498,13 @@ drain:
 	for {
 		select {
 		case <-ctx.Done():
+			// L69 (FM-AI-BG): the VIEW ends, the TURN does not. Hand the
+			// emitter to a background drainer before returning — without a
+			// consumer the 128-slot buffer fills under a frame flood and the
+			// loop's Emit blocks, wedging the turn exactly when it outlived
+			// its viewer. One consumer at a time: this select chose ctx.Done,
+			// so this goroutine is not receiving when the drainer starts.
+			rt.startDrain()
 			return
 		case evt := <-emitter.Events():
 			h.writeBuildEvent(w, evt)
@@ -1102,7 +1519,7 @@ drain:
 		case <-hb.C:
 			writeSSE(w, "heartbeat", map[string]interface{}{"prompt_id": promptID})
 			flusher.Flush()
-		case res = <-resultCh:
+		case <-rt.finished:
 			got = true
 			break drain
 		}
@@ -1120,36 +1537,10 @@ drain:
 	flusher.Flush()
 
 	if got {
+		res := rt.waitResult()
 		h.finishBuildStream(w, flusher, res.outcome, res.err)
-		// E: the turn's terminal state is the other moment worth a push —
-		// success (with the verification verdict) or failure (with the
-		// reason). Neither resumable stop is terminal, so neither may push
-		// (FM-NOTIFa): ask_user (Paused — the question push above already
-		// fired) and the round budget (Exhausted — Resume continues it; it
-		// also returns a nil error, which is how it slipped past this guard
-		// live and pushed "Build finished / verified: false" over a
-		// half-built app). Stalled, BudgetStop and HookStop are terminal and
-		// still push; an error still pushes build_failed. Classify any new
-		// stop added to BuildOutcome here.
-		if res.outcome == nil || (!res.outcome.Paused && !res.outcome.Exhausted) {
-			if res.err == nil {
-				verified := res.outcome != nil && res.outcome.Verified
-				h.dispatchNotification(userID, notify.KindBuildSuccess,
-					"Build finished", fmt.Sprintf("verified: %v", verified))
-			} else {
-				h.dispatchNotification(userID, notify.KindBuildFailed,
-					"Build failed", friendlyAIError(res.err))
-			}
-		}
-		// G-10: files changed this turn, and Metro's watcher can miss a
-		// create — the device's next launch would come back 500 into a
-		// native crash dialog while every gate above read green. Verify the
-		// bundler's file map now, in the background, while the reply is
-		// being read: warm by the time anyone taps "Open on this phone",
-		// and never asked on the launch path, where the only honest answer
-		// to a stale map is the crash itself. Runs on failed turns too —
-		// a failed turn writes files as well.
-		go h.ensureMetroFresh(projectID)
+		// Terminal effects (the push block and ensureMetroFresh) moved from
+		// here into the turn goroutine — see turnTerminalEffects.
 	}
 }
 
@@ -1163,6 +1554,79 @@ func (h *PromptHandler) ensureMetroFresh(projectID int64) {
 		return
 	}
 	metro.EnsureFresh(sess.ID)
+}
+
+// turnTerminalEffects is the terminal work that used to live in the VIEW's
+// post-drain block (L69 b, FM-AI-BG): the build_success/failed push and the
+// G-10 Metro freshness probe. Moved into the turn goroutine so a viewer that
+// backgrounded or disconnected mid-turn still gets its push and its warm
+// bundler — the field report this phase exists for. finishBuildStream (the
+// SSE terminal frame) is NOT here: it writes to the view's ResponseWriter.
+//
+// FM-NOTIFa guards are byte-for-byte the ones the view block carried:
+//
+//   - neither resumable stop may push — ask_user (Paused: the question push
+//     already fired from the drain loop) and the round budget (Exhausted:
+//     Resume continues it; it also returns a nil error, which is how it
+//     slipped past this guard live and pushed "Build finished / verified:
+//     false" over a half-built app);
+//   - Stalled, BudgetStop and HookStop are terminal and still push;
+//   - an error still pushes build_failed. Classify any new stop added to
+//     BuildOutcome here.
+//
+// ensureMetroFresh runs on every turn that published an emitter — including
+// failed turns, which also write files.
+func (h *PromptHandler) turnTerminalEffects(userID, projectID int64, outcome *orchestrator.BuildOutcome, runErr error) {
+	if outcome == nil || (!outcome.Paused && !outcome.Exhausted) {
+		if runErr == nil {
+			verified := outcome != nil && outcome.Verified
+			h.dispatchNotification(userID, notify.KindBuildSuccess,
+				"Build finished", fmt.Sprintf("verified: %v", verified))
+		} else {
+			h.dispatchNotification(userID, notify.KindBuildFailed,
+				"Build failed", friendlyAIError(runErr))
+		}
+	}
+	// G-10: files changed this turn, and Metro's watcher can miss a create —
+	// the device's next launch would come back 500 into a native crash dialog
+	// while every gate above read green. Verify the bundler's file map now, in
+	// the background, while the reply is being read: warm by the time anyone
+	// taps "Open on this phone", and never asked on the launch path, where the
+	// only honest answer to a stale map is the crash itself.
+	go h.ensureMetroFresh(projectID)
+}
+
+// turnHeartbeat is the I-OWN clock (FM-IDLE-STARVE): touch the project's live
+// session at turn start, then every turnHeartbeatInterval for the turn's life.
+// Backgrounding the app froze the viewer's polls but never should have frozen
+// the work's clock — a viewer-less turn ran for minutes with last_active_at
+// standing still and the reaper (10 m pause / 30 m destroy) destroyed the
+// session under it. Stops the moment turnCtx does: finalize at the end of the
+// turn, or the Stop route. A leaked ticker here would pin the session alive
+// forever, so the loop exits on turnCtx.Done before anything else.
+//
+// TouchSession's own WHERE state <> 'destroyed' keeps a race with the reaper a
+// no-op rather than an error: the latest live session is resolved on each
+// tick, so a destroyed session is simply not touched again.
+func (h *PromptHandler) turnHeartbeat(ctx context.Context, projectID int64) {
+	touch := func() {
+		sess, err := h.store.LatestLiveSession(projectID)
+		if err != nil || sess == nil {
+			return // no live session; nothing to keep warm
+		}
+		h.store.TouchSession(sess.ID)
+	}
+	touch() // turn start: the clock starts warm, not one interval cold
+	ticker := time.NewTicker(turnHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return // finalize/stop: the clock stops ticking
+		case <-ticker.C:
+			touch()
+		}
+	}
 }
 
 // dispatchNotification is the one send path: dark-safe (nil notifier), and

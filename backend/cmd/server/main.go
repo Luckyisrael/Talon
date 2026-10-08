@@ -497,6 +497,12 @@ func main() {
 		r.Get("/v1/prompts/{id}", promptHandler.Get)
 		// Discard only flips a status marker — no loop, no metering.
 		r.Post("/v1/prompts/{id}/discard", promptHandler.Discard)
+		// Stop cancels a running turn's server-owned context (L69 c): it
+		// ends work rather than starting any, so no metering.
+		r.Post("/v1/prompts/{id}/stop", promptHandler.Stop)
+		// Attach re-joins a running turn's SSE stream (L69 d): the turn it
+		// watches was paid for when the prompt ran — nothing new is spent.
+		r.Get("/v1/prompts/{id}/stream", promptHandler.Attach)
 
 		// Project knowledge and history.
 		r.Get("/v1/projects/{projectID}/memory", promptHandler.GetMemory)

@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import React from 'react';
+import { AppState } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '@/stores/app';
 import {
@@ -639,6 +640,74 @@ export function usePromptStream(projectId: number | null) {
     };
   }
 
+  // L69 (FM-AI-BG, row f): what the AppState observer reads — the tail as it
+  // stands now, and the latest re-attach. Refs so the listener registers once
+  // instead of on every streamed frame.
+  const turnRef = useRef(turn);
+  turnRef.current = turn;
+  const reattachRef = useRef<(pid: number) => Promise<void>>(async () => {});
+
+  // Re-join the turn this device's stream lost (row f): drop whatever handle
+  // is left, then open GET /v1/prompts/:id/stream. Join-only — the turn never
+  // stopped server-side, so there is no local state to seed; frames reduce
+  // into the same tail through applyEvents.
+  async function reattach(pid: number) {
+    closeRef.current?.();
+    closeRef.current = null;
+    let settled = false;
+    const close = await promptsApi.attachPrompt(
+      pid,
+      applyEvents(() => {}),
+      (err) => {
+        settled = true;
+        const status =
+          typeof err === 'object' && err !== null ? (err as { status?: unknown }).status : undefined;
+        if (status === 409) {
+          // Nothing runs server-side (the turn finished, or a plan turn has
+          // no rejoinable stream): settle the tail. The screen's existing
+          // settle effect refetches history on `done` — where the turn's
+          // persisted record lives; isTailVisible retires the tail once
+          // history carries it, and a waiting question returns as the
+          // restored card (waitingId) rather than vanishing.
+          setTurn((prev) =>
+            prev.phase === 'done' || prev.phase === 'error' ? prev : { ...prev, phase: 'done' },
+          );
+          return;
+        }
+        // Any other failure takes the same degraded settle every stream
+        // failure takes: phase error, which starts the screen's silent
+        // history poll (the turn keeps running server-side regardless).
+        setTurn((prev) => ({ ...prev, phase: 'error', error: err.message }));
+      },
+    );
+    if (settled) return; // onError settled it (409 or refused open) — no handle to keep
+    closeRef.current = close;
+  }
+  reattachRef.current = reattach;
+
+  // The app's FIRST AppState observer (FM-AI-BG row f). Suspension drops the
+  // connection but no longer the turn (the server half is L69): on the way
+  // down, close the view — the connection dies with suspension anyway, and
+  // this makes the local truth honest; on the way back up, while the tail
+  // still shows streaming/waiting and is named by a prompt id, re-attach.
+  // A 409 settles through the history refetch (reattach above), so a turn
+  // that ended while the app was away never strands a live tail.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'background' || next === 'inactive') {
+        closeRef.current?.();
+        closeRef.current = null;
+        return;
+      }
+      if (next !== 'active') return;
+      const t = turnRef.current;
+      if (t.phase !== 'streaming' && t.phase !== 'waiting') return;
+      if (t.promptId == null || t.promptId <= 0) return;
+      void reattachRef.current(t.promptId);
+    });
+    return () => sub.remove();
+  }, []);
+
   async function send(mode: 'plan' | 'build', prompt: string, attachmentIds: number[] = [], explicitProjectId?: number) {
     const pid = explicitProjectId ?? projectId;
     if (pid == null) return;
@@ -758,6 +827,15 @@ export function usePromptStream(projectId: number | null) {
   }
 
   function stop() {
+    // L69 (FM-AI-BG, row c): the turn runs on the server now — closing the
+    // local stream alone would leave it burning (and its device session
+    // warm until the reaper). Cancel it FIRST: 409 means nothing runs, which
+    // is the same settle this function does locally either way. Then drop
+    // the view and settle, exactly as before.
+    const pid = turn.promptId;
+    if (pid != null && pid > 0) {
+      void promptsApi.stopPrompt(pid).catch(() => {});
+    }
     closeRef.current?.();
     closeRef.current = null;
     setTurn((prev) => ({ ...prev, phase: 'done' }));

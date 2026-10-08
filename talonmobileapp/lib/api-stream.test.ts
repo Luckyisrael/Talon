@@ -115,3 +115,23 @@ it('never talks to the browser fetch for a stream', async () => {
   expect(mockExpoFetch).toHaveBeenCalledTimes(1)
   close()
 })
+
+it('L69 — surfaces the HTTP status on a stream that never opened', async () => {
+  // A 409 from GET /v1/prompts/:id/stream means "no turn is running": the
+  // hook settles the tail through history instead of treating it like a
+  // transport failure. That decision needs the status on the error, not
+  // buried in its message.
+  const errors: (Error & { status?: number })[] = []
+  mockExpoFetch.mockResolvedValue({ ok: false, status: 409, body: null })
+  global.fetch = neverSettles as unknown as typeof fetch
+
+  const close = await streamOnce(
+    () => {},
+    (e) => errors.push(e as Error & { status?: number }),
+  )
+  await flush()
+
+  expect(errors).toHaveLength(1)
+  expect(errors[0].status).toBe(409)
+  close()
+})

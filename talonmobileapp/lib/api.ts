@@ -627,7 +627,12 @@ export async function openStream(
         }
       }
       if (!res.ok || !res.body) {
-        throw new Error(`stream failed (${res.status})`)
+        // Carry the status on the error (L69): a caller must be able to tell
+        // "no turn to stream" (409 on the attach route — settle through
+        // history) from a transport failure without parsing message text.
+        const failure = new Error(`stream failed (${res.status})`) as Error & { status: number }
+        failure.status = res.status
+        throw failure
       }
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -710,6 +715,26 @@ export const promptsApi = {
 
   discard(promptId: number) {
     return request<{ status: string }>(`/v1/prompts/${promptId}/discard`, { method: 'POST' })
+  },
+
+  /** Cancel a running turn's server-owned context (L69, FM-AI-BG): the turn
+   *  outlives its viewer now, so dropping the local stream alone would leave
+   *  it running. 409 = no turn runs — the same outcome the caller settles
+   *  locally either way. */
+  stopPrompt(promptId: number) {
+    return request<{ status: string }>(`/v1/prompts/${promptId}/stop`, { method: 'POST' })
+  },
+
+  /** Re-join a running build turn's SSE stream (L69): backgrounding dropped
+   *  the connection, the turn kept running. A 409 (nothing to rejoin)
+   *  arrives on onError with `status` set — the caller settles through the
+   *  history refetch instead. */
+  attachPrompt(
+    promptId: number,
+    onEvent: (event: StreamEvent) => void,
+    onError?: (error: Error) => void,
+  ) {
+    return openStream(`/v1/prompts/${promptId}/stream`, { method: 'GET' }, onEvent, onError)
   },
 
   list(projectId: number) {
