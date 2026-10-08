@@ -103,7 +103,7 @@ export default function MoreScreen() {
               {me?.email ?? 'Signed out'}
             </UIText>
             <UIText variant="bodySm" tone="muted">
-              {me?.display_name ? me.display_name : 'GitHub/Google identity'}
+              {me?.display_name ? me.display_name : 'GitHub identity'}
             </UIText>
           </Card>
 

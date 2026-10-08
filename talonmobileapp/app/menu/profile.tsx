@@ -73,7 +73,7 @@ export default function ProfileScreen() {
               <Badge label={me?.tier ?? 'free'} tone="info" />
             </View>
             <UIText variant="bodySm" tone="muted">
-              {me?.display_name ? me.display_name : 'GitHub or Google identity'}
+              {me?.display_name ? me.display_name : 'GitHub identity'}
             </UIText>
           </View>
         )}
