@@ -90,7 +90,7 @@ export default function BuildScreen() {
   // the bottom of this screen in every sub-view.
   const project = useActiveProject();
   const projectId = project?.id ?? null;
-  const { turn, send, answer, answerPrompt, resume, discard, steer, parkQueue, stop } = usePromptStream(projectId);
+  const { turn, send, answer, answerPrompt, resume, discard, steer, parkQueue, stop, reattach } = usePromptStream(projectId);
   const [draft, setDraft] = React.useState('');
   const [mode, setMode] = React.useState<'plan' | 'build'>('build');
   // H2 delivery toggle, the web's queueInstead: OFF (default) a submitted
@@ -211,6 +211,24 @@ export default function BuildScreen() {
       if (projectId != null) void qc.invalidateQueries({ queryKey: ['verify-state', projectId] });
     }
   }, [turn.phase, loadHistory, qc, projectId]);
+
+  // L69b-c (FM-AI-BG(v)) — the cold-start door. The AppState observer can
+  // only answer a state *transition*, and a fresh mount never gets one, so a
+  // turn the server kept running (history's latest says `running`) had no
+  // route back in except Resume — which correctly 409s on a live turn and
+  // used to dead-end as a raw error (prompt 102, 2026-10-08). History says
+  // `running` and this screen has no live tail (idle = fresh mount, error =
+  // degraded poll): attach directly. Once per prompt id — a 409 → settle →
+  // reload cycle can never turn the attach into a loop. `cancelled`/`failed`/
+  // `paused` rows keep the banner: a dead turn resumes, it never attaches.
+  const attachingRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (!resumable || resumable.status !== 'running') return;
+    if (turn.phase !== 'idle' && turn.phase !== 'error') return;
+    if (attachingRef.current === resumable.id) return;
+    attachingRef.current = resumable.id;
+    void reattach(resumable.id);
+  }, [resumable, turn.phase, reattach]);
   useFocusEffect(
     React.useCallback(() => {
       void loadHistory({ silent: true });

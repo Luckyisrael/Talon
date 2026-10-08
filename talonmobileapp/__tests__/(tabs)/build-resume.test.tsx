@@ -1,5 +1,5 @@
 import React from 'react'
-import { fireEvent, render, screen } from '@testing-library/react-native'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import BuildScreen from '@/app/(tabs)/build'
 import { useActiveProject, usePromptStream } from '@/hooks'
@@ -120,6 +120,9 @@ function primeStream(turn: Record<string, unknown>) {
     steer: jest.fn(),
     parkQueue: jest.fn(),
     stop: jest.fn(),
+    // L69b-c: the screen's own door back into a live turn (cold start —
+    // no AppState transition ever fires for a fresh mount to answer).
+    reattach: jest.fn(),
   }
   ;(usePromptStream as jest.Mock).mockReturnValue(stream)
   return stream
@@ -195,4 +198,25 @@ test('L53c — Resume hands the stored blocks so the continuation seeds, not res
   expect(seedBlocks).toEqual(
     expect.arrayContaining([expect.objectContaining({ kind: 'text', text: 'I was mid-build' })]),
   )
+})
+
+// L69b-c / FM-AI-BG(v) — the cold-start door: a fresh mount never sees an
+// AppState *transition*, so the L69 observer cannot be what rejoins a turn
+// the server kept running. History's latest says `running`, the tail is
+// empty — the screen attaches itself, once per prompt id.
+test('L69b-c — a fresh mount attaches the running turn the server kept alive', async () => {
+  mockHistory.mockResolvedValue({
+    turns: [
+      { role: 'user', prompt_id: 82, blocks: [{ kind: 'text', text: 'build the wallet' }] },
+      { role: 'assistant', prompt_id: 82, blocks: [{ kind: 'text', text: 'I was mid-build' }] },
+    ],
+    latest: { id: 82, mode: 'build', status: 'running', round: 3 },
+  })
+  const stream = primeStream({ phase: 'idle', promptId: 0, text: '', thinking: '', output: '', tasks: [], toolCalls: [] })
+  await mount()
+
+  await waitFor(() => expect(stream.reattach).toHaveBeenCalledWith(82))
+  // Once: the ref keyed on the id keeps a 409 → settle → reload cycle from
+  // turning the attach into a loop.
+  expect(stream.reattach).toHaveBeenCalledTimes(1)
 })

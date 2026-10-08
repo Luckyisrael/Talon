@@ -68,6 +68,9 @@ jest.mock('react-native/Libraries/AppState/AppState', () => ({
 const mockStreamCalls: { pid: number; mode: string; prompt: string }[] = []
 let mockDeliver: ((ev: { kind: string; data: string }) => void) | null = null
 const mockStreamClose = jest.fn()
+// L69b-a: resume's onError is driven by hand like attach's — the 409 the
+// live-turn refusal answers (prompt 102's four dead-end taps, 23:09–23:11).
+let mockResumeError: ((err: Error) => void) | null = null
 
 jest.mock('@/lib/api', () => {
   const actual = jest.requireActual('@/lib/api') as typeof import('@/lib/api')
@@ -82,6 +85,10 @@ jest.mock('@/lib/api', () => {
           return Promise.resolve(mockStreamClose)
         },
       ),
+      resume: jest.fn((_pid: number, _onEvent: unknown, onError?: (err: Error) => void) => {
+        mockResumeError = onError ?? null
+        return Promise.resolve(mockStreamClose)
+      }),
       attachPrompt: jest.fn(() => Promise.resolve(jest.fn())),
       stopPrompt: jest.fn(() => Promise.resolve({ status: 'stopping' })),
     },
@@ -105,6 +112,7 @@ function fireAppState(state: string) {
 beforeEach(() => {
   mockStreamCalls.length = 0
   mockDeliver = null
+  mockResumeError = null
   mockStreamClose.mockClear()
   jest.clearAllMocks()
   mockAppStateListeners.length = 0
@@ -201,4 +209,38 @@ test('L69d — stop() cancels the turn server-side before it drops the local str
   const stopAt = (promptsApi.stopPrompt as jest.Mock).mock.invocationCallOrder[0]
   const closeAt = mockStreamClose.mock.invocationCallOrder[0]
   expect(stopAt).toBeLessThan(closeAt)
+})
+
+// L69b / FM-AI-BG(v) — the doors back in. The server's Resume 409 is not a
+// failure to report: it is the proof a loop is already running (or the turn
+// just finished). Either truth means the correct door is ATTACH — join the
+// live stream, seed intact — not a raw `stream failed (409)` dead-end.
+test('L69b-a — resume 409 joins the live turn instead of dead-ending', async () => {
+  const { result } = await renderHook(() => usePromptStream(7), { wrapper })
+
+  await act(async () => {
+    await result.current.resume(42)
+  })
+  expect(result.current.turn.phase).toBe('streaming')
+
+  // The exact refusal prompt 102 answered four times on 2026-10-08 23:09–23:11:
+  // the turn is live, Resume refuses a second loop.
+  await act(async () => {
+    mockResumeError?.(Object.assign(new Error('stream failed (409)'), { status: 409 }))
+  })
+  expect(promptsApi.attachPrompt).toHaveBeenCalledWith(42, expect.any(Function), expect.any(Function))
+  expect(result.current.turn.phase).not.toBe('error')
+})
+
+test('L69b-a2 — a non-409 resume failure still lands phase error (keep-green)', async () => {
+  const { result } = await renderHook(() => usePromptStream(7), { wrapper })
+
+  await act(async () => {
+    await result.current.resume(42)
+  })
+  await act(async () => {
+    mockResumeError?.(new Error('network request failed'))
+  })
+  expect(result.current.turn.phase).toBe('error')
+  expect(promptsApi.attachPrompt).not.toHaveBeenCalled()
 })

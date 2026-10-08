@@ -815,7 +815,22 @@ export function usePromptStream(projectId: number | null) {
     closeRef.current = await promptsApi.resume(
       promptId,
       applyEvents(() => {}),
-      (err) => setTurn((prev) => ({ ...prev, phase: 'error', error: err.message })),
+      (err) => {
+        // L69b-a (FM-AI-BG(v)): a 409 is not a failure to report — it is the
+        // server refusing a second loop, which means the turn is live (or just
+        // finished). Either way the door back in is attach: the seeded
+        // timeline above stays put, live frames append on top, and attach's
+        // own 409 settles through history as designed. The raw
+        // `stream failed (409)` dead-end this replaces was tap 4 of 4 in
+        // front of a running build (2026-10-08, prompt 102).
+        const status =
+          typeof err === 'object' && err !== null ? (err as { status?: unknown }).status : undefined;
+        if (status === 409) {
+          void reattachRef.current(promptId);
+          return;
+        }
+        setTurn((prev) => ({ ...prev, phase: 'error', error: err.message }));
+      },
     );
   }
 
@@ -856,7 +871,10 @@ export function usePromptStream(projectId: number | null) {
     void send('plan', next.text, [], projectId);
   }, [turn.phase, turn.queue, projectId, send]);
 
-  return { turn, send, answer, answerPrompt, resume, discard, stop, steer, parkQueue };
+  // L69b-b: the screen's door back into a live turn. The AppState observer
+  // only answers a state *transition* — a fresh mount never gets one — so
+  // build.tsx calls this itself when history's latest turn says `running`.
+  return { turn, send, answer, answerPrompt, resume, discard, stop, steer, parkQueue, reattach };
 }
 
 // ── Device session ────────────────────────────────────
