@@ -4,9 +4,10 @@
 // The handshake is honest about where each act can legally happen:
 //
 //   - BEFORE sign-in (onboarding, `beginWalletLink`): the wallet signs the
-//     PUBLIC challenge and the proof is held in memory — a signature cannot
-//     outlive its challenge (single-use, swept at 10 minutes), and it has
-//     no session to land on yet.
+//     PUBLIC challenge and the proof is held in memory + storage (FM-WALLc(v)
+//     — a reload between handshake and callback must not lose it) — a
+//     signature cannot outlive its challenge (single-use, swept at 10
+//     minutes), and it has no session to land on yet.
 //   - AFTER sign-in (`takePendingWalletProof` at the OAuth callback, or
 //     `linkWalletNow` from a signed-in screen): verify rides the session
 //     token, so the backend binds the wallet to the SIGNED-IN account —
@@ -21,6 +22,7 @@
 //     that), from a pure encoder: neither btoa nor Buffer exists reliably
 //     on Hermes.
 
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { walletAuthApi, walletLinkApi, type WalletProof } from '@/lib/api'
 
 // Structural, not kit-shaped: the flow needs an address and a signature —
@@ -68,7 +70,41 @@ export function toBase64(bytes: Uint8Array): string {
 // The proof held between the onboarding handshake and the sign-in it
 // attaches to. Consumed exactly once — one proof, one nonce, one attempt,
 // mirroring the server's single-use challenge.
+//
+// FM-WALLc(v)/L73(d): it outlives the PROCESS too. A Metro reload or JS
+// teardown between the signature and the OAuth callback used to erase
+// `pending` silently, so the wallet never linked and nothing said so.
+// Storage is the floor; module memory stays the fast path. A storage
+// failure degrades to exactly the old in-memory behavior — never worse.
+const PENDING_PROOF_KEY = 'talon.pending-wallet-proof'
 let pending: WalletProof | null = null
+
+async function storePending(proof: WalletProof): Promise<void> {
+  try {
+    await AsyncStorage.setItem(PENDING_PROOF_KEY, JSON.stringify(proof))
+  } catch {
+    // Degrade to the old behavior; the in-memory copy still completes
+    // the flow as long as no reload happens.
+  }
+}
+
+// Read-and-consume, once: the bytes are cleared before parsing, so a
+// corrupt payload cannot trap the slot either.
+async function takeStoredProof(): Promise<WalletProof | null> {
+  let raw: string | null = null
+  try {
+    raw = await AsyncStorage.getItem(PENDING_PROOF_KEY)
+  } catch {
+    return null
+  }
+  if (raw === null) return null
+  void AsyncStorage.removeItem(PENDING_PROOF_KEY).catch(() => {})
+  try {
+    return JSON.parse(raw) as WalletProof
+  } catch {
+    return null
+  }
+}
 
 async function signForChallenge(
   wallet: WalletConnectors,
@@ -89,6 +125,7 @@ export async function beginWalletLink(wallet: WalletConnectors): Promise<WalletP
   const challenge = await walletAuthApi.challenge(account.address)
   const proof = await signForChallenge(wallet, account.address, challenge)
   pending = proof
+  await storePending(proof)
   return proof
 }
 
@@ -104,8 +141,17 @@ export function takePendingWalletProof(): WalletProof | null {
 // the session just minted. Resolves false when there is nothing to
 // complete (skipped handshake, already consumed) — the caller treats both
 // falses the same way: continue unlinked, let the reminder catch it.
+// FM-WALLc(v): after a reload the memory copy is gone, so a proof found
+// in neither place is the only real "nothing" — the stored bytes answer
+// for the reloaded process, still consumed exactly once across both.
 export async function completePendingWalletLink(): Promise<boolean> {
-  const proof = takePendingWalletProof()
+  let proof = takePendingWalletProof()
+  if (proof) {
+    // Memory carried it — the disk copy is consumed with it.
+    void AsyncStorage.removeItem(PENDING_PROOF_KEY).catch(() => {})
+  } else {
+    proof = await takeStoredProof()
+  }
   if (!proof) return false
   await walletLinkApi.verify(proof)
   return true

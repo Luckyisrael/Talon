@@ -21,6 +21,12 @@ const ITEMS = [
   { icon: Book, label: 'Documentation', route: '/menu/docs' },
 ] as const;
 
+// FM-WALLc(ii)/L73(c): first 4 … last 4 — the address exactly as the
+// wallet showed it to approve, short enough for a 300pt drawer row.
+function shortWalletAddress(address: string): string {
+  return address.length > 12 ? `${address.slice(0, 4)}…${address.slice(-4)}` : address;
+}
+
 // Push drawer: fixed half-screen sheet sliding in from the left while the
 // content translates right by the same distance, shift, never squeeze.
 // No scrim, no overlay: both panes stay full-width, the content simply
@@ -72,16 +78,36 @@ export function Drawer({
   // MWA signature → verify) and the row vanishes the moment the link
   // lands — never latched. A cancel or refusal leaves it up: the reminder
   // survives its own failure so the retry is obvious.
+  //
+  // L73/FM-WALLc — and the drawer now says what HAPPENED, not only what
+  // is missing: a positive Connected row carrying the approved address
+  // (ii), recorded locally the moment the link lands so a null `me` can
+  // no longer drop the fact (iii — the old `setMe(prev => prev ? … :
+  // prev)` was a no-op exactly then), and a refusal that states its
+  // reason instead of swallowing it (i). Local-only trust is bounded by
+  // the server's own word: an explicit `wallet_linked: false` keeps the
+  // reminder (L65's retry) no matter what the session holds.
   const wallet = useMobileWallet();
   const [connecting, setConnecting] = React.useState(false);
+  const [linkError, setLinkError] = React.useState<string | null>(null);
+  const [linkedLocal, setLinkedLocal] = React.useState(false);
+  const account = wallet.account;
+  const linked =
+    linkedLocal ||
+    me?.wallet_linked === true ||
+    (!!account && !linkError && me?.wallet_linked !== false);
+  const shortAddress = account ? shortWalletAddress(account.address) : null;
   async function connectWallet() {
     if (connecting) return;
     setConnecting(true);
+    setLinkError(null);
     try {
       await linkWalletNow(wallet);
+      setLinkedLocal(true);
       setMe((prev) => (prev ? { ...prev, wallet_linked: true } : prev));
-    } catch {
-      // Cancelled or refused — the reminder stays and can be retried.
+    } catch (err) {
+      // Cancelled or refused — the reminder stays, now with the reason.
+      setLinkError(err instanceof Error && err.message ? err.message : 'the wallet declined');
     } finally {
       setConnecting(false);
     }
@@ -101,7 +127,22 @@ export function Drawer({
             {me ? `${me.email} · ${me.tier ?? 'free'}` : 'Not signed in. Explore freely, nothing syncs yet.'}
           </UIText>
         </View>
-        {me?.wallet_linked === false && (
+        {linked && (
+          <View style={[styles.item, styles.reminder]} accessibilityLabel="Wallet connected">
+            <Wallet size={24} color={Colors.acidLime} variant="Bulk" />
+            <View style={styles.connected}>
+              <UIText variant="bodyLg" tone="accent">
+                Wallet connected
+              </UIText>
+              {shortAddress && (
+                <UIText variant="bodySm" tone="muted" numberOfLines={1}>
+                  {shortAddress}
+                </UIText>
+              )}
+            </View>
+          </View>
+        )}
+        {!linked && me?.wallet_linked === false && (
           <Pressable
             style={[styles.item, styles.reminder]}
             accessibilityRole="button"
@@ -114,6 +155,11 @@ export function Drawer({
               {connecting ? 'Connecting…' : 'Connect your wallet'}
             </UIText>
           </Pressable>
+        )}
+        {!linked && linkError && (
+          <UIText variant="caption" tone="danger">
+            Connect failed: {linkError}
+          </UIText>
         )}
         {ITEMS.map((item) => {
           const Icon = item.icon;
@@ -195,5 +241,6 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.s8,
   },
   reminderText: { fontWeight: '700', flexShrink: 1 },
+  connected: { flexShrink: 1 },
   foot: { marginTop: 'auto', paddingBottom: Spacing.s16 },
 });

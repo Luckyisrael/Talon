@@ -423,3 +423,60 @@ it('L66 — a quote failure shows the reason the wire carried, not only "try aga
 
   expect(await screen.findByText(/the credits ledger is offline/)).toBeTruthy()
 })
+
+// FM-WALLc(v) / L73(e) — the FIRST pay: no account is chosen at render, so
+// the kit's sendTransactions is bound to null and throws "No account
+// selected" (index.native.mjs:483) no matter what connect() later returns.
+// The send must run through the handle the connect produced — the render
+// AFTER it — never the render-time closure.
+//
+// Red before L73 (observed): pay() destructured sendTransactions at render,
+// awaited connect() mid-function, then signed through the stale closure →
+// 'No account selected', exportApi.start never called.
+it('L73 — the first pay acquires the wallet handle AFTER connecting (FM-WALLc(v))', async () => {
+  ;(skrApi.quote as jest.Mock).mockResolvedValue(quoteOf({ spare_credits: 0 }))
+  ;(skrApi.verify as jest.Mock).mockResolvedValue({
+    verified: true,
+    reason: 'verified',
+    credits_added: 5,
+    spare_credits: 5,
+  })
+  ;(exportApi.start as jest.Mock).mockResolvedValue({ job_id: 41 })
+
+  // A handle that changes across renders, exactly like the real one: the
+  // pre-connect instance has no account and throws; once connect() has
+  // chosen an account, the next render's instance sends.
+  const session = { connected: false }
+  const stale = {
+    account: undefined,
+    connect: jest.fn(async () => {
+      session.connected = true
+      return { address: OWNER }
+    }),
+    sendTransactions: jest.fn(async (_instructions: readonly Instruction[]) => {
+      throw new Error('No account selected')
+    }),
+    client: wallet.client,
+    chain: 'solana:devnet',
+  }
+  const fresh = {
+    account: { address: OWNER },
+    connect: stale.connect,
+    sendTransactions: jest.fn(async (_instructions: readonly Instruction[]) => SIGNATURE),
+    client: wallet.client,
+    chain: 'solana:devnet',
+  }
+  ;(useMobileWallet as jest.Mock).mockImplementation(() => (session.connected ? fresh : stale))
+
+  await renderPanel()
+
+  fireEvent.press(await screen.findByText('Export'))
+  fireEvent.press(await screen.findByText('Pay 37 SKR'))
+
+  // The payment runs through the post-connect handle and completes…
+  await waitFor(() => expect(fresh.sendTransactions).toHaveBeenCalledTimes(1))
+  // …the render-time one was never asked to sign…
+  expect(stale.sendTransactions).not.toHaveBeenCalled()
+  // …and the export it paid for starts.
+  await waitFor(() => expect(exportApi.start).toHaveBeenCalledTimes(1))
+})

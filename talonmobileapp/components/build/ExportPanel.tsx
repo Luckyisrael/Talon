@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Linking, StyleSheet, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { address } from '@solana/kit';
@@ -13,6 +13,10 @@ import {
   packAmountInRawUnits,
   transferCheckedInstruction,
 } from '@/lib/skr-transfer';
+
+// The kit's own account shape ({ address, addressBase64, icon, label }) —
+// what both connect() and the hook's account carry (FM-WALLc(v)).
+type WalletAccount = NonNullable<ReturnType<typeof useMobileWallet>['account']>;
 
 // FM-SKRb — the phone's side of the release-export payment.
 //
@@ -125,6 +129,10 @@ export function ExportPanel({ projectId }: { projectId: number }) {
   const [paying, setPaying] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  // FM-WALLc(v)/L73(e): what connect() returned for a first-time payer,
+  // carried to the render where the charge actually runs.
+  const [connectAccount, setConnectAccount] = useState<WalletAccount | null>(null);
+  const [payAfterConnect, setPayAfterConnect] = useState(false);
 
   const { account, connect, sendTransactions, client } = useMobileWallet();
   const quote = useQuery<SkrQuote>({ queryKey: ['skr-quote'], queryFn: () => skrApi.quote() });
@@ -196,44 +204,20 @@ export function ExportPanel({ projectId }: { projectId: number }) {
     setPaying(true);
     setFailure(null);
     try {
-      // Every one of these values is quoted; none is ours to pick. A
-      // refusal's own price beats the opening quote — it arrived later.
-      const mint = address(offer.mint);
-      const treasury = address(offer.treasury);
-      const who = account ?? (await connect());
-      const payer = who.address;
-
-      const raw = await packAmountInRawUnits(live.skr ?? offer.skr_amount, mint, client.rpc);
-      const [treasuryAccount, payerAccount] = await Promise.all([
-        findAssociatedTokenAddress(treasury, mint),
-        findAssociatedTokenAddress(payer, mint),
-      ]);
-
-      // Two instructions, one transaction: the treasury's token account may
-      // not exist yet, and a transfer to a missing account just fails.
-      const signature = await sendTransactions([
-        createAssociatedTokenAccountIdempotentInstruction({
-          payer,
-          owner: treasury,
-          mint,
-          ata: treasuryAccount,
-        }),
-        transferCheckedInstruction({
-          source: payerAccount,
-          mint,
-          owner: payer,
-          destination: treasuryAccount,
-          amount: raw,
-        }),
-      ]);
-
-      const outcome = await settlePayment(signature);
-      if (outcome.ok) {
-        setSheetOpen(false);
-        queueExport();
-      } else {
-        setFailure(outcome.reason ?? 'rejected');
+      // FM-WALLc(v)/L73(e): before any account is chosen, the render-time
+      // `sendTransactions` is BOUND TO NULL — the kit throws "No account
+      // selected" through it no matter what connect() returns. So the
+      // first pay only connects, and the charge runs in the re-render
+      // that connect produces (the effect below) — the handle a payment
+      // signs through is always acquired AFTER the connect that made it.
+      const who = account ?? connectAccount;
+      if (!who) {
+        const connected = await connect();
+        setConnectAccount(connected);
+        setPayAfterConnect(true);
+        return;
       }
+      await charge(who, offer);
     } catch (err) {
       const e = err as { message?: string };
       setFailure(e?.message ?? 'the wallet could not send it');
@@ -241,6 +225,74 @@ export function ExportPanel({ projectId }: { projectId: number }) {
       setPaying(false);
     }
   }
+
+  // The whole charge, parametrized by the account it pays from and the
+  // offer it quotes — every value still read from the freshest render
+  // (live.skr, sendTransactions, client), so this IS the post-connect
+  // handle once it runs from the effect.
+  async function charge(who: WalletAccount, offer: SkrQuote) {
+    // Every one of these values is quoted; none is ours to pick. A
+    // refusal's own price beats the opening quote — it arrived later.
+    const mint = address(offer.mint);
+    const treasury = address(offer.treasury);
+    const payer = who.address;
+
+    const raw = await packAmountInRawUnits(live.skr ?? offer.skr_amount, mint, client.rpc);
+    const [treasuryAccount, payerAccount] = await Promise.all([
+      findAssociatedTokenAddress(treasury, mint),
+      findAssociatedTokenAddress(payer, mint),
+    ]);
+
+    // Two instructions, one transaction: the treasury's token account may
+    // not exist yet, and a transfer to a missing account just fails.
+    const signature = await sendTransactions([
+      createAssociatedTokenAccountIdempotentInstruction({
+        payer,
+        owner: treasury,
+        mint,
+        ata: treasuryAccount,
+      }),
+      transferCheckedInstruction({
+        source: payerAccount,
+        mint,
+        owner: payer,
+        destination: treasuryAccount,
+        amount: raw,
+      }),
+    ]);
+
+    const outcome = await settlePayment(signature);
+    if (outcome.ok) {
+      setSheetOpen(false);
+      queueExport();
+    } else {
+      setFailure(outcome.reason ?? 'rejected');
+    }
+  }
+
+  // The resume: this runs on the render the connect produced, so the
+  // handle it closes over is the fresh one — the render-time closure that
+  // opened the sheet never signs anything.
+  useEffect(() => {
+    if (!payAfterConnect) return;
+    setPayAfterConnect(false);
+    const who = account ?? connectAccount;
+    if (!who || !offer) {
+      setFailure('the wallet returned no account — connect and try again.');
+      return;
+    }
+    setPaying(true);
+    charge(who, offer)
+      .catch((err) => {
+        const e = err as { message?: string };
+        setFailure(e?.message ?? 'the wallet could not send it');
+      })
+      .finally(() => setPaying(false));
+    // The deps are the trigger states; `charge` is the render-local
+    // closure BY DESIGN — the effect must sign through this render's
+    // handle, not a memoized one from before the connect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payAfterConnect, account, connectAccount, offer]);
 
   if (!offer) {
     return (

@@ -151,19 +151,26 @@ export function ConnectScreen() {
   }
   // L63/FM-WALLa(iii): the control drives the handshake it advertises —
   // connect, sign the public challenge, hold the proof; the OAuth callback
-  // attaches it to the session being created right after this screen. Any
-  // failure (no wallet app, user cancels, network) still continues to
-  // sign-in: the drawer reminder is the second chance, not a dead end.
+  // attaches it to the session being created right after this screen.
+  // L73/FM-WALLc(i): a REFUSED handshake lands its reason and stays put —
+  // the old `finally` pushed /auth whatever the wallet answered, so a
+  // declined connect was indistinguishable from a linked one. "Later"
+  // below remains the deliberate skip.
+  const [connectError, setConnectError] = useState<string | null>(null)
   async function connectNow() {
     setConnecting(true)
+    setConnectError(null)
     try {
       await beginWalletLink(wallet)
-    } catch {
-      // Handshake abandoned — sign-in proceeds unlinked.
-    } finally {
+    } catch (err) {
+      setConnectError(
+        err instanceof Error && err.message ? err.message : 'the wallet session ended without a signature',
+      )
       setConnecting(false)
-      leave('/auth')
+      return
     }
+    setConnecting(false)
+    leave('/auth')
   }
   return (
     <Screen>
@@ -189,6 +196,13 @@ export function ConnectScreen() {
         </Animated.View>
         <Animated.View entering={FadeInDown.duration(450).delay(240)} style={styles.foot}>
           <LimeButton title={connecting ? 'Connecting…' : 'Connect wallet'} onPress={connectNow} />
+          {/* FM-WALLc(i)/L73(b): the refusal is stated where the control
+              pressed it — no-wallet, declined, dead challenge. */}
+          {connectError && (
+            <UIText variant="caption" tone="danger">
+              Connect failed: {connectError}
+            </UIText>
+          )}
           <GhostButton title="Later" onPress={() => leave('/auth')} />
         </Animated.View>
         <UIText variant="caption" tone="faint">

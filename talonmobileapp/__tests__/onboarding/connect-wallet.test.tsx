@@ -55,3 +55,24 @@ it('L63 — "Later" stays an honest skip: no signature demanded', async () => {
   await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/auth'))
   expect(beginWalletLink).not.toHaveBeenCalled()
 })
+
+// FM-WALLc(i) / L73(b) — the catch that swallowed every failure had a
+// `finally` that pushed /auth whatever the wallet answered: no wallet
+// installed, declined, challenge dead — all three walked into sign-in as
+// if linked. The refusal must land its reason and stay put; "Later"
+// remains the deliberate skip.
+//
+// Red before L73 (observed): press "Connect wallet" with a rejected
+// handshake → no reason is rendered, and router.push('/auth') runs anyway.
+it('L73 — a refused connect states why and stays put (FM-WALLc(i))', async () => {
+  ;(beginWalletLink as jest.Mock).mockRejectedValueOnce(new Error('No wallet found'))
+
+  await render(<ConnectScreen />)
+  fireEvent.press(await screen.findByText('Connect wallet'))
+
+  // The failure lands its reason…
+  expect(await screen.findByText(/No wallet found/)).toBeTruthy()
+  // …and never navigates past it.
+  await waitFor(() => expect(beginWalletLink).toHaveBeenCalledTimes(1))
+  expect(mockPush).not.toHaveBeenCalled()
+})

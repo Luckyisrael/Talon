@@ -20,6 +20,33 @@ import {
   toBase64,
 } from '@/lib/walletlink'
 
+// L73(d)'s backing store. The map lives on globalThis, not in the factory
+// closure: jest.resetModules() re-runs this factory for the reloaded
+// instance, and a reload simulation must see the bytes the pre-reload
+// instance wrote — the disk survives the process, the closure does not.
+jest.mock('@react-native-async-storage/async-storage', () => {
+  const store = (): Map<string, string> => {
+    const g = globalThis as { __talonProofStore?: Map<string, string> }
+    g.__talonProofStore ??= new Map()
+    return g.__talonProofStore
+  }
+  return {
+    default: {
+      getItem: async (k: string) => store().get(k) ?? null,
+      setItem: async (k: string, v: string) => void store().set(k, v),
+      removeItem: async (k: string) => void store().delete(k),
+    },
+    getItem: async (k: string) => store().get(k) ?? null,
+    setItem: async (k: string, v: string) => void store().set(k, v),
+    removeItem: async (k: string) => void store().delete(k),
+  }
+})
+
+beforeEach(() => {
+  const g = globalThis as { __talonProofStore?: Map<string, string> }
+  g.__talonProofStore?.clear()
+})
+
 function bytes(...values: number[]): Uint8Array {
   return Uint8Array.from(values)
 }
@@ -90,4 +117,55 @@ it('L63 — the pre-auth proof is held until sign-in consumes it, once', async (
   await expect(completePendingWalletLink()).resolves.toBe(true)
   await expect(completePendingWalletLink()).resolves.toBe(false)
   expect(takePendingWalletProof()).toBeNull()
+})
+
+// FM-WALLc(v) / L73(d) — the proof outlives the process that made it.
+//
+// Between the onboarding handshake and the OAuth callback stands a Metro
+// reload / JS teardown. `pending` used to live in module memory alone, so
+// the reloaded callback found nothing and the wallet silently never
+// linked. jest.resetModules() IS that reload: same storage, new module.
+//
+// Red before L73 (observed): the reloaded instance's
+// completePendingWalletLink() resolves false — nothing was persisted.
+it('L73 — the pending proof survives a reload between handshake and callback (FM-WALLc(v))', async () => {
+  type FetchResponse = {
+    ok: boolean
+    status: number
+    json: () => Promise<unknown>
+    text: () => Promise<string>
+  }
+  const challenge = { nonce: 'n-2', message: 'Talon sign-in\nwallet: Wa11et\nnonce: n-2' }
+  global.fetch = jest.fn(async (url: unknown, init?: { body?: string }): Promise<FetchResponse> => {
+    const path = String(url)
+    if (path.endsWith('/v1/auth/wallet/challenge')) {
+      return { ok: true, status: 200, json: async () => challenge, text: async () => JSON.stringify(challenge) }
+    }
+    if (path.endsWith('/v1/me/wallet/verify')) {
+      const body = JSON.parse(String(init?.body))
+      expect(body.wallet).toBe('Wa11et')
+      expect(body.nonce).toBe('n-2')
+      expect(body.signature.length).toBeGreaterThan(0)
+      return { ok: true, status: 200, json: async () => ({ linked: true }), text: async () => '{"linked":true}' }
+    }
+    throw new Error(`unexpected call: ${path}`)
+  }) as unknown as typeof fetch
+
+  const signedPayload = (msg: Uint8Array) =>
+    new Uint8Array([...msg, ...new Array(64).fill(7)])
+
+  // Handshake on the pre-reload instance (the file's top-level import).
+  await beginWalletLink({
+    connect: async () => ({ address: 'Wa11et' }),
+    signMessages: async (m: Uint8Array) => signedPayload(m),
+  })
+
+  // The reload: module memory is gone, the disk is not.
+  jest.resetModules()
+  const reloaded = jest.requireActual('@/lib/walletlink') as typeof import('@/lib/walletlink')
+
+  await expect(reloaded.completePendingWalletLink()).resolves.toBe(true)
+  // Consumed exactly once across the reload, as in memory — one proof,
+  // one nonce, one attempt.
+  await expect(reloaded.completePendingWalletLink()).resolves.toBe(false)
 })
