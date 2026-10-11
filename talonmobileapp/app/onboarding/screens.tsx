@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { StyleSheet, View } from 'react-native'
 import Animated, { FadeInDown } from 'react-native-reanimated'
 import { useRouter } from 'expo-router'
@@ -6,7 +6,7 @@ import { Code, Mobile, TaskSquare } from 'iconsax-react-native'
 import { useMobileWallet } from '@wallet-ui/react-native-kit'
 import { GhostButton, LimeButton, Screen, ShotSlot, UIText } from '@/components/ui'
 import { Colors, Spacing } from '@/constants/theme'
-import { beginWalletLink } from '@/lib/walletlink'
+import { beginWalletLink, latestWallet } from '@/lib/walletlink'
 import { useAppStore } from '@/stores/app'
 
 // Onboarding, second pass: the product shot sits in the middle, half height,
@@ -145,6 +145,14 @@ export function ConnectScreen() {
   const router = useRouter()
   const markOnboarded = useAppStore((s) => s.markOnboarded)
   const wallet = useMobileWallet()
+  // L78/FM-WALLd(v): the flow binds through `latestWallet(this ref)` —
+  // every call reads the CURRENT hook object, so the stale-token
+  // recovery's retry lands on the post-clear render's closures (the
+  // kit's connect closes over the token of the render that made it).
+  const walletRef = useRef(wallet)
+  useEffect(() => {
+    walletRef.current = wallet
+  })
   const [connecting, setConnecting] = useState(false)
   function leave(next: '/auth') {
     void markOnboarded().finally(() => router.push(next))
@@ -161,7 +169,7 @@ export function ConnectScreen() {
     setConnecting(true)
     setConnectError(null)
     try {
-      await beginWalletLink(wallet)
+      await beginWalletLink(latestWallet(walletRef))
     } catch (err) {
       setConnectError(
         err instanceof Error && err.message ? err.message : 'the wallet session ended without a signature',
@@ -179,8 +187,8 @@ export function ConnectScreen() {
         <Animated.View entering={FadeInDown.duration(450)} style={styles.middle}>
           <ShotSlot
             fill
-            shot="wallet-approve.png"
-            size="1170×2532"
+            //shot="wallet-approve.png"
+            //size="1170×2532"
             source={require('../../assets/wallet-approve.png')}
           />
         </Animated.View>

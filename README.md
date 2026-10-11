@@ -163,6 +163,19 @@ CI gates pushes and pull requests (backend vet plus race-detector tests and guar
 
 ## Known limitations
 
+- **Phantom 26.32 declines wallet requests under dev-client bridge latency** —
+  when the JS→native bridge stalls (observed 7–23s at random on a dev build),
+  Phantom silently auto-declines Mobile Wallet Adapter requests that arrive
+  ≥ ~9s into a session: no consent UI is ever shown and the request dies
+  `-3/sign request declined` or `-1/authorization request failed`. Verified
+  live 2026-10-11: the same build signed twice on Phantom when the invokes
+  landed fast (~200ms) and was declined every time they stalled. The app
+  recovers the one recoverable class (`-1` while an authorization is held:
+  clear, then a single retry — see `lib/walletlink.ts`, L78) and surfaces
+  everything else untouched. **Solflare is the tested wallet for sign-in** —
+  it answers promptly under identical conditions. Phantom support resumes
+  once the latency is addressed (release build, or SIWS single-session
+  sign-in).
 - Billing is a test-mode mock behind a deliberate provider swap.
 - Mobile checkout UI is an honest stub until billing lands.
 - Plan-mode turns see attachment names and docs; pixels replay in build turns.

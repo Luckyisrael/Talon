@@ -26,6 +26,9 @@ jest.mock('react-native-safe-area-context', () =>
   jest.requireActual('react-native-safe-area-context/jest/mock').default,
 )
 jest.mock('react-native-reanimated', () => require('@/test/native-seams').reanimated())
+// The real `latestWallet` (L78) pulls the flow module, which imports
+// AsyncStorage at load — one shared fake (test/async-storage-seam.ts).
+jest.mock('@react-native-async-storage/async-storage', () => require('@/test/async-storage-seam').asyncStorage())
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }))
@@ -37,9 +40,19 @@ jest.mock('@/lib/auth', () => ({
   clearToken: jest.fn(async () => {}),
   getToken: jest.fn(async () => 'session-token'),
 }))
-jest.mock('@/lib/walletlink', () => ({ linkWalletNow: jest.fn(async () => {}) }))
+jest.mock('@/lib/walletlink', () => ({
+  linkWalletNow: jest.fn(async () => {}),
+  // The real binding law runs here: the flow receives the CURRENT hook
+  // object (L78/FM-WALLd(v)), only the flow itself is stubbed.
+  latestWallet: jest.requireActual('@/lib/walletlink').latestWallet,
+}))
 jest.mock('@wallet-ui/react-native-kit', () => ({
-  useMobileWallet: jest.fn(() => ({ connect: jest.fn(), signMessages: jest.fn() })),
+  useMobileWallet: jest.fn(() => ({
+    connect: jest.fn(),
+    signMessages: jest.fn(),
+    account: undefined,
+    disconnect: jest.fn(),
+  })),
 }))
 
 beforeEach(() => {

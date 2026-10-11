@@ -7,6 +7,14 @@
 //
 // The URI clause is the kit's own law (assert-valid-identity-uri): a
 // scheme-bearing absolute URI, or nothing. The fix must ship one.
+//
+// Corrected live 2026-10-10 (FM-WALLd session): Phantom 26.32 REFUSES
+// authorizes carrying an unverifiable identity uri/icon — the refusal
+// lands inside the wallet as `-1/authorization request failed`, with no
+// consent UI (every uri+icon round on device; the workspace-40
+// reference app — name-only, same kit, same Phantom — connects on the
+// first press). The kit's law allows nothing: `uri == null` returns.
+// The prompt's whole duty is the NAME.
 
 import { AppConfig } from '@/constants/app-config'
 
@@ -21,7 +29,10 @@ jest.mock('@wallet-ui/react-native-kit', () => ({
 it('L73 — the wallet consent prompt carries Talon, not the scaffold', () => {
   expect(AppConfig.identity.name).toBe('Talon')
 
-  const uri = AppConfig.identity.uri
-  expect(typeof uri).toBe('string')
-  expect(String(uri)).toMatch(/^[A-Za-z][A-Za-z0-9+.-]*:/)
+  // The identity ships name and nothing else: an uri or icon the wallet
+  // cannot verify makes Phantom refuse the whole authorize (-1, no UI).
+  // Red before this clause (observed): uri was 'http://localhost:3000'
+  // with icon 'favicon.ico' — and every connect round died in Phantom.
+  expect(AppConfig.identity.uri).toBeUndefined()
+  expect((AppConfig.identity as { icon?: string }).icon).toBeUndefined()
 })

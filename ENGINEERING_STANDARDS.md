@@ -1768,6 +1768,106 @@ Failure modes (written before the code, TEST_RULES §3):
   that made it, and a payment signs through a handle acquired after
   the connect that created it.**
 
+- **FM-WALLd (candidate L76)** — the wallet answers with a shape the
+  app no longer accepts. Failure modes: (i) *The wire law froze while
+  the wallets moved.* `lib/walletlink.ts`'s `splitSignedPayload`
+  enforces the legacy MWA law — `sign_messages`' `signed_payloads[0]`
+  is the message with the 64-byte ed25519 signature appended — and
+  throws `signed payload too short to carry a 64-byte signature` on
+  any payload ≤ 64 bytes. Phantom 26.32 returns the BARE 64-byte
+  signature (observed live on device, 2026-10-10 — connect succeeds,
+  the signing prompt reads Talon, then this throw kills the proof),
+  and Solana's own protocol library already tolerates both shapes
+  (`signInFallback` falls back to the sent message when the signed
+  message half is empty) — the app's splitter is the only layer that
+  refuses. (ii) *The refusal is indistinguishable from a bad wallet.*
+  The throw surfaces as `Connect failed: ...` — the same surface as a
+  decline or a missing wallet — so a wire-shape drift reads as the
+  wallet misbehaving. (iii) *Hidden wallet state changes the answer to
+  the same call* (observed live on device, 2026-10-10, twice): the
+  kit's store holds the `auth_token` a previous authorize minted, so
+  the next `connect()` sends `reauthorize` — and Phantom 26.32 REFUSES
+  `reauthorize` outright: `-1/authorization request failed` back in
+  ~25 ms, no consent UI ever shown, the MWA session torn down with it.
+  Every connect round after a token was stored died on this invisible
+  refusal; the reference workspace-40 app stayed peaceful only because
+  its different identity keyed an empty token slot. The kit's own
+  fallback (retry `authorize` on `ERROR_AUTHORIZATION_FAILED`) cannot
+  help on the native path — it retries on the same dead session the
+  wallet just closed. The law: **a proof is the signature; any wallet
+  answer carrying a full 64-byte ed25519 signature is a valid answer —
+  bare signature or legacy concatenation — and only sub-64 garbage is
+  refused. And a connect that fails while a token is held must clear
+  that token and start one fresh session — a refusal the human never
+  saw is the wallet's state rotting, not the human saying no; a refusal
+  the human DID see (no held token) is theirs, surfaced untouched.
+  (iv) *The app hand-rolled what the standard provides.* The custom
+  message-challenge + `signMessages` + hand-split payload fought the
+  protocol's own sign-in: MWA's `authorize` carries `sign_in_payload`
+  (Sign in with Solana) and returns a standard `sign_in_result`, and
+  the kit's `signIn` wraps both in ONE wallet prompt with the
+  authorization. Every hand-rolled layer was a place a wallet's lawful
+  variation could kill the flow — bare-vs-concatenated signature
+  bytes (i); a second session re-authorizing with a rotten token
+  (iii). The law: **the sign-in is the standard's shape end to end —
+  backend-issued SIWS input (single-use nonce, expiry, domain
+  binding), one prompt, the standard result verified against the
+  canonical message the official helper rebuilds — and the app never
+  parses what the standard already defines.****  (v) *The standard's
+  message, signed by no wallet you can test on.* The (iv) law shipped
+  and met the device live (2026-10-10, Phantom 26.32, twice):
+  `authorize` carries `sign_in_payload` and gets NO `sign_in_result`
+  back — the field is silently ignored — so the protocol SDK's own
+  `signInFallback` builds the canonical message with the standard's
+  helper and sends it via `sign_messages`; Phantom auto-declines it
+  `-3/sign request declined` in 290 ms with no consent UI ever shown.
+  Neither path exists on this wallet: the native one unimplemented,
+  the manual one refused on sight. The control is decisive — the SAME
+  session arrangement rendered the consent sheet for a plain custom
+  message minutes earlier (it had worked all morning), so the
+  discriminator is the message FORMAT. Third-party confirmation on
+  real hardware (Seeker): Solana.Unity-SDK PR #278 — Phantom "closes
+  the WebSocket when it receives sign_messages [with the SIWS
+  fallback]… a wallet-side limitation, not an SDK issue." And the MWA
+  spec makes `sign_in_payload` support OPTIONAL for wallet endpoints.
+  The law: **the sign-in message is the plain server-rendered
+  challenge — act, wallet, nonce, one statement — signed in the
+  wallet's own words. SIWS is deferred not by preference but by the
+  only testable reality: it returns with the first wallet that
+  implements `sign_in_payload` (Seeker's Seed Vault Wallet), tested
+  against that hardware, and not one commit before.**
+  (vi) *The recovery itself was stale — and the rot reaches the sign
+  step.* Both traps observed live on the same device night
+  (2026-10-11, Phantom 26.32). TRAP 1 — THE CLEAR MUST REACH THE
+  RETRY: the kit's `disconnect` clears its store locally
+  (`persist(null)`), but `connect` CLOSES OVER the token of the render
+  that created it — so the L77(e)/L78(d) recovery, as first written,
+  cleared the store and then re-sent the IDENTICAL corpse: the warn
+  logged `authorization held: true` at 00:31:51 and the retry's
+  `reauthorize` at 00:32:04 carried the same dead token, refused again
+  in 80 ms. Law: screens bind the flow through `latestWallet(ref)` so
+  every call reads the CURRENT hook object, and the post-clear wait
+  OBSERVES the clear (`account` disappearing from the live object IS
+  the proof the post-clear render — the one whose closures carry no
+  token — has committed) instead of sleeping a guessed render
+  duration; if the clear never lands, the original error is re-thrown,
+  because a retry built on pre-clear closures is certain to repeat the
+  refusal. TRAP 2 — THE SIGN STEP RE-AUTHORIZES IN ITS OWN SESSION:
+  the kit's `signMessages` opens a fresh MWA session and re-authorizes
+  with the store's token, so even a token minted SECONDS earlier can
+  be refused: observed 01:15:43 `authorize` succeeded (consent
+  tapped), 01:16:12 the signMessages reauthorize died
+  `-1/authorization request failed` with no UI, no proof — while the
+  same reauthorize shape was accepted the previous morning, which is
+  the proof it is wallet-window-dependent and cannot be relied on.
+  Law: the sign step recovers on EXACTLY one class — protocol code
+  `-1` (authorization failed) while `account` is still held → clear →
+  ONE re-sign through the post-clear render (the human taps consent
+  once more); the human's own `-3` decline and every network error
+  surface untouched, even while held (L73(b) holds at the sign step
+  too: a -3 is the one refusal the human actually saw on a rendered
+  prompt).**
+
 - **FM-SKRe (candidate L75)** — judge mode charges faucet money, on a
   cluster both ends agree on, or it charges nothing at all. Failure
   modes: (i) *The paywall that was never configured.* `backend/.env`
@@ -1871,6 +1971,9 @@ Failure modes (written before the code, TEST_RULES §3):
 
 | L73 | **The connect says what happened (FM-WALLc)** — (a) `constants/app-config.ts`'s identity becomes Talon's own — `name: 'Talon'` plus the web origin and icon — pinned by test so a scaffold name can never return to the consent prompt; (b) both connect surfaces lose their silent catches: onboarding's `connectNow` leaves for `/auth` ONLY on a successful `beginWalletLink` (failure renders its reason — no wallet installed / declined / challenge failed — and stays put), `Drawer.connectWallet` surfaces the same reason instead of swallowing it; (c) a positive **Connected** state — the drawer row shows Connected + the truncated approved address once `wallet_linked` is true (server) or the local authorization cache holds an account, and the `setMe` updater records the link even when `me` starts null; (d) the pending wallet proof persists (AsyncStorage, honoring the challenge's own single-use window) so the OAuth callback completes after a reload; (e) `ExportPanel`'s pay acquires the wallet handle AFTER `connect()` returns — the send path is built from the post-connect account, never the render-time closure | fails-first jest reds, each observed before its fix: identity (red: `kit-expo` still shipped), onboarding (red: a rejected `connect()` still routes `/auth` — the exact silent-failure state, with L63's existing test kept green), drawer Connected (red: no Connected/address renders while `me` is null — the no-op update), persistence (red: `jest.resetModules()` between `beginWalletLink` and `completePendingWalletLink` → proof null), export panel (red: `sendTransactions` captured pre-connect); gates mobile `npm test` / `npx tsc --noEmit` / `npm run lint:check` (7 baseline); **live (needs user at device)**: connect on the phone with a wallet app installed — consent prompt must read Talon, decline must leave a visible reason, drawer must flip to Connected + address | ⬤ |
 | L75 | **Judges pay faucet money, and both ends say which (FM-SKRe)** — (a) `internal/skr` config gains `Asset` (`skr` \| `sol`, env `SKR_ASSET`, default `skr` = today's behavior byte-for-byte) and a completeness law: `sol` mode requires `SKR_RPC_URL` + `SKR_TREASURY` + `SKR_PRICE_AMOUNT` (in lamports — 10000000 = 0.01 SOL) and boot refuses an incomplete mode BY NAME (log + skip), never the unconfigured-then-502 of today; `ProbeMint` runs only in `skr` mode; (b) `Verify` branches on asset: `sol` reads the transaction's `preBalances`/`postBalances` — the treasury's delta must equal exactly the configured price, `meta.err == nil`, confirmed — answering with the same verdict vocabulary the token path uses (pending / wrong_amount / wrong_recipient / tx_failed; a duplicate signature answers 200 with the balance already held); (c) quote gains additive `asset` + `cluster` and, in sol mode, `amount_raw` (integer lamports — no client-side exponent math exists), and the 402 body carries `asset` too; (d) mobile pay sheet builds from the quote: `asset:"sol"` → a plain system transfer of `amount_raw` to `treasury` (no ATA, no `getTokenSupply`), copy reads "devnet SOL"; `asset:"skr"` keeps L37's TransferChecked path untouched; a quote `cluster` disagreeing with the selected network refuses IMMEDIATELY with the mismatch named — never the 12-poll pending loop; (e) web ExportPanel's offer copy follows `asset`; (f) `.env.example` documents every `SKR_*` name with sample values — real values stay out of git | fails-first, red observed before each fix: Go — `TestQuoteStatesAssetAndCluster` (red: no `asset` key on the wire), `TestSolVerifyGrantsOnExactLamports` + wrong-amount / wrong-recipient / failed / pending fixtures over a stub chain (red: asset undefined — verify only knows token balances), `TestBootRefusesIncompleteSolMode` (red: boot silent with zero `SKR_*` — the 2026-10-09 log line as the before-state); jest — `TestPayBuildsSystemTransferForSolQuote` (red: builds `TransferChecked` against a sol quote), `TestClusterMismatchRefusesBeforePolling` (red: polls the 12-attempt ladder), copy red (red: sheet says SKR under `asset:"sol"`); gates: `go test ./internal/api/ ./internal/store/ ./internal/skr/` + `go vet`, mobile `npm test` / `tsc` / `lint:check`; **live proof**: ephemeral devnet keypair → 0.01 SOL to the quoted treasury → `POST /v1/skr/verify` → `spare_credits` +5 → export accepted (202); env flip `SKR_ASSET=skr` restores the mainnet path untouched | ⬤ |
+| L76 | **The proof survives the wallet's wire shape (FM-WALLd)** — (a) `splitSignedPayload` accepts both legal `sign_messages` answers: `length > 64` → legacy message ‖ signature split as before; `length == 64` → the bare signature (the message half is empty — the caller already holds the challenge it sent, and only the signature ever rides the proof); `length < 64` → still refuses (cannot be either shape); (b) the wire-law comment in `lib/walletlink.ts` states both shapes, with the live evidence (Phantom 26.32, 2026-10-10) pinned beside them; (c) `signForChallenge` unchanged — it only ever consumed `signature`; (d) the connect recovers from the invisible refusal (FM-WALLd(iii)) — `WalletConnectors` gains `disconnect` + `store.$authToken` (the kit's held token), and `connectWithStaleTokenRecovery`: held token + failed connect → `disconnect()` (clears the persisted authorization) + ONE fresh connect (a fresh `authorize`); no held token → the refusal surfaces untouched (a human's own decline is never re-prompted — L73(b) holds) | fails-first jest reds: `L76 accepts a bare 64-byte signature from a modern wallet` (red: the Phantom answer throws `signed payload too short to carry a 64-byte signature` — the exact live failure) and `L76 — a refused connect with a held token clears it and retries once` (red: no recovery exists — the -1 propagates and the stale token survives), legacy-split + sub-64-refusal + no-token-surfaced pins pass baseline → **GREEN**: mobile `npm test` / `npx tsc --noEmit` / `npm run lint:check` (7 baseline warnings, 0 errors); **live (needs user at device)**: repeat connect + challenge sign on the phone — the proof must clear the wallet step and reach the sign-in/callback with no error | ⬤ |
+| L77 | **The sign-in is the standard's, in one prompt (FM-WALLd(iv))** — (a) both backend challenge pairs (login `/v1/auth/wallet/challenge`, link `/v1/me/wallet/challenge`) issue the SIWS **input** — `domain`, `statement`, `uri`, `version`, single-use `nonce`, `issuedAt`, `expirationTime` — stored as JSON in the existing single-use/sweep row keyed by nonce; (b) `internal/api/siws.go` — the Go port of `@solana/wallet-standard-util`'s law: parse the signed message with the canonical grammar, field-by-field compare against the issued input, rebuild the canonical text, byte-equality with what was signed, ed25519 verify over it with the presented base58 address (and the parsed address must BE that address); (c) both verify pairs consume the nonce and refuse expired / foreign / wrong-address / non-canonical answers 401 before the unchanged upsert/link laws run; (d) mobile: `beginWalletLink`/`linkWalletNow` become challenge → ONE `signIn(input)` (the kit's documented hook method — `authorize` with `sign_in_payload`, authorization + signature in a single wallet prompt, wallet picks the account) → the proof carries the standard shape `{wallet, nonce, signature, signedMessage}` (all base64 as issued); (e) recovery on the documented surface: a failed `signIn` while `account` is held → `disconnect()` + ONE retry (the kit clears the rotten token); no `account` → the refusal surfaces untouched (L73(b) holds); (f) `splitSignedPayload` + `signForChallenge` + the L76(d) `store.$authToken` read die with their tests — nothing hand-parses the wallet's bytes anymore, so the wire-shape law is moot | fails-first reds: **backend** — reworked `TestWalletAuthRoundTrip` (red: the old handler answers `{nonce,message}` — no SIWS input fields exist), reworked adversarials (wrong key / replay / cross-wallet / swept / canonical-rebuild mismatch / expired input); **mobile** — reworked walletlink suites (red: the old flow calls `connect`+`signMessages`; the new wallet exposes only `signIn`, `account`, `disconnect`); gates backend `go build ./...` + `go test ./...` + `go vet ./...`, mobile `npm test` / `npx tsc --noEmit` / `npm run lint:check` (7 baseline warnings, 0 errors); **live (needs user at device)**: one Connect press → ONE Phantom prompt (SIWS, reads talon.app + the statement) → sign-in completes to the callback with no error, drawer shows Connected | ⬤ |
+| L78 | **The sign-in message is the plain server-rendered challenge; SIWS returns with the wallets that can sign it (FM-WALLd(v)) — supersedes L77, whose live criterion passed on no available wallet** — (a) both challenge pairs issue `{nonce, message}` — the exact bytes to sign, stored single-use with the 10-minute sweep as before; (b) verify consumes the nonce, requires the stored message to name the presented wallet, base58 address → ed25519 over the exact stored bytes — the proven L63 law verbatim; (c) mobile: `connectWithRecovery` → `challenge(address)` → `signMessages(message bytes)` → `splitSignedPayload` (the L76 wire law survives whole — it is what lets the plain path accept BOTH legal wallet answer shapes) → proof `{wallet, nonce, signature}`; (d) the recovery law, STRENGTHENED by the FM-WALLd(vi) traps: both recovery paths bind through `latestWallet(ref)` — every call reads the CURRENT hook object, because the kit's `connect`/`signMessages` close over the token of the render that made them and a pre-clear retry re-sends the identical corpse; the post-clear wait OBSERVES the clear (`account` disappearing from the live object = the post-clear render committed; it never landing → the original error is re-thrown, never a retry certain to repeat the refusal); connect recovers any failure while `account` is held → clear → ONE fresh connect; the sign step recovers ONLY protocol code `-1` while held → clear → ONE re-sign through the post-clear render — the human's `-3` decline and every network error surface untouched even while held; nothing held anywhere → the refusal is the human's own answer, surfaced untouched, never re-prompted (L73(b)); (e) SIWS leaves the shipping tree: `internal/api/siws.go` (the tested Go port of the standard's verify grammar) moves to the Seeker Connect project's `reference/go-siws-verifier/` — a live asset for that track, dead code in none; the name-only identity correction (L73(a)) stands untouched — identity and message shape are separate laws and both were device-proven | fails-first jest reds: `L78 — the stale-token recovery retries through the post-clear render, never the corpse` (red under a snapshot binding — the retry re-sends the identical dead token, the exact 00:32 device failure), `L78 — a clear that never lands re-throws the original refusal instead of re-sending the corpse`, `L78 — a -1 from the sign step clears the held authorization and re-signs through the post-clear render` (mutation-red observed: recovery removed → the `-1` propagates and no proof forms — the exact 01:16 device failure), `L78 — a human decline (-3) from the sign step surfaces untouched even while held: no disconnect, no re-prompt`, and `L78 — a refusal with no held authorization surfaces untouched` (the recovery's boundary pins) → **GREEN**: backend `go build ./...` + `go vet ./...` + `go test ./...`; mobile `npm test` / `npx tsc --noEmit` / `npm run lint:check` (7 baseline warnings, 0 errors); **live (needs user at device)**: one Connect press → Phantom consent renders the PLAIN message → Sign → OAuth callback → verify 200 → drawer Connected | ⬤ |
 
 Still-open P1 rows from the previous list:
 

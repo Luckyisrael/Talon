@@ -22,13 +22,26 @@ jest.mock('react-native-safe-area-context', () =>
 // Reanimated boots native Worklets at import — the shipped seam renders
 // plain views instead (see test/native-seams.ts).
 jest.mock('react-native-reanimated', () => require('@/test/native-seams').reanimated())
+// The real `latestWallet` (L78) pulls the flow module, which imports
+// AsyncStorage at load — one shared fake (test/async-storage-seam.ts).
+jest.mock('@react-native-async-storage/async-storage', () => require('@/test/async-storage-seam').asyncStorage())
 const mockPush = jest.fn()
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: mockPush }),
 }))
-jest.mock('@/lib/walletlink', () => ({ beginWalletLink: jest.fn() }))
+jest.mock('@/lib/walletlink', () => ({
+  beginWalletLink: jest.fn(),
+  // The real binding law runs here: the flow receives the CURRENT hook
+  // object (L78/FM-WALLd(v)), only the flow itself is stubbed.
+  latestWallet: jest.requireActual('@/lib/walletlink').latestWallet,
+}))
 jest.mock('@wallet-ui/react-native-kit', () => ({
-  useMobileWallet: jest.fn(() => ({ connect: jest.fn(), signMessages: jest.fn() })),
+  useMobileWallet: jest.fn(() => ({
+    connect: jest.fn(),
+    signMessages: jest.fn(),
+    account: undefined,
+    disconnect: jest.fn(),
+  })),
 }))
 jest.mock('@/stores/app', () => ({
   useAppStore: (selector: (s: unknown) => unknown) =>

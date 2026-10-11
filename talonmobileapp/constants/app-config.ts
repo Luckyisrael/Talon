@@ -1,21 +1,21 @@
 import { AppIdentity, createSolanaDevnet, createSolanaTestnet, SolanaCluster } from '@wallet-ui/react-native-kit'
 
-// FM-WALLc(iv)/L73(a) — this identity is what the wallet's consent prompt
-// shows the human being asked to approve Talon. It was the scaffold's
-// `kit-expo`; now it is the app's own name, the web origin the operator
-// configured (the same env-first shape docs.tsx resolves URLs with), and —
-// only where a web origin can actually serve one — the favicon that MWA
-// resolves relative to uri (frontend/app/favicon.ico).
+// FM-WALLc(iv)/L73(a), corrected live 2026-10-10 — this identity is what
+// the wallet's consent prompt shows the human being asked to approve
+// Talon. It was the scaffold's `kit-expo`; it is the app's own name.
+//
+// It carries NOTHING else. Phantom 26.32 refuses authorizes that ship an
+// identity `uri`/`icon` it cannot verify — refused inside the wallet with
+// `-1/authorization request failed` and no consent UI at all (observed on
+// device: every uri+icon round failed; the workspace-40 reference app —
+// name-only identity, same kit, same Phantom — connects on the first
+// press). The kit's own law agrees: `assert-valid-identity-uri` accepts
+// an absent uri (`uri == null` returns), it only rejects malformed
+// schemes. Name is the whole law: the prompt must read Talon, never a
+// template, and metadata the wallet cannot check is metadata the wallet
+// will not carry.
 function appIdentity(): AppIdentity {
-  const explicit = (process.env.EXPO_PUBLIC_WEB_URL ?? '').trim().replace(/\/+$/, '')
-  const api = (process.env.EXPO_PUBLIC_API_URL ?? '').trim()
-  const fromApi = api.match(/^(https?:\/\/[^/:]+)/i)
-  const uri = explicit || (fromApi ? `${fromApi[1]}:3000` : 'talon://app')
-  // AppIdentity is readonly — declared whole: the icon only where a web
-  // origin can actually serve it.
-  return /^https?:/i.test(uri)
-    ? { name: 'Talon', uri, icon: 'favicon.ico' }
-    : { name: 'Talon', uri }
+  return { name: 'Talon' }
 }
 
 export class AppConfig {

@@ -9,7 +9,7 @@ import { UIText } from '@/components/ui';
 import { Colors, Spacing } from '@/constants/theme';
 import { authApi, meApi } from '@/lib/api';
 import { clearToken, getToken } from '@/lib/auth';
-import { linkWalletNow } from '@/lib/walletlink';
+import { latestWallet, linkWalletNow } from '@/lib/walletlink';
 
 const ITEMS = [
   { icon: Folder, label: 'Projects', route: '/menu/projects' },
@@ -88,6 +88,13 @@ export function Drawer({
   // the server's own word: an explicit `wallet_linked: false` keeps the
   // reminder (L65's retry) no matter what the session holds.
   const wallet = useMobileWallet();
+  // L78/FM-WALLd(v): same latest-ref binding as the onboarding screen —
+  // the link flow's stale-token retry must land on the post-clear
+  // render's closures, not the ones this render captured.
+  const walletRef = React.useRef(wallet);
+  React.useEffect(() => {
+    walletRef.current = wallet;
+  });
   const [connecting, setConnecting] = React.useState(false);
   const [linkError, setLinkError] = React.useState<string | null>(null);
   const [linkedLocal, setLinkedLocal] = React.useState(false);
@@ -102,7 +109,7 @@ export function Drawer({
     setConnecting(true);
     setLinkError(null);
     try {
-      await linkWalletNow(wallet);
+      await linkWalletNow(latestWallet(walletRef));
       setLinkedLocal(true);
       setMe((prev) => (prev ? { ...prev, wallet_linked: true } : prev));
     } catch (err) {
