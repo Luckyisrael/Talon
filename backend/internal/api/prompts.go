@@ -1758,9 +1758,22 @@ func (h *PromptHandler) writeBuildEvent(w http.ResponseWriter, evt events.Event)
 		// the answer resumes (POST /answer is keyed by it); id is the pending
 		// ask_user tool_use the answer resolves; the frontend echoes id back so
 		// the reply lands on the right call. choices, when present, are the
-		// suggested answers to offer.
+		// suggested answers to offer, and multi_select tells the UI to render
+		// checkboxes instead of a single-choice picker. Both fields ride on
+		// evt.Data as a QuestionData struct; destructure them so the wire shape
+		// stays flat (never nested under `choices`).
+		var qChoices []string
+		var qMulti bool
+		if qd, ok := evt.Data.(events.QuestionData); ok {
+			qChoices = qd.Choices
+			qMulti = qd.MultiSelect
+		} else if raw, ok := evt.Data.([]string); ok {
+			// Backward-compat: an older emitter still sends bare []string.
+			qChoices = raw
+		}
 		writeSSE(w, "question", map[string]interface{}{
-			"prompt_id": evt.PromptID, "id": evt.ID, "question": evt.Text, "choices": evt.Data,
+			"prompt_id": evt.PromptID, "id": evt.ID, "question": evt.Text,
+			"choices": qChoices, "multi_select": qMulti,
 		})
 	case events.ThinkingEvent:
 		writeSSE(w, "thinking.delta", ai.StreamTextDelta{Text: evt.Text})

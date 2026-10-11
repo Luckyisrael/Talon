@@ -17,7 +17,7 @@ func TestAskUserRequestFindsQuestionAndChoices(t *testing.T) {
 			`{"question":"Which auth flow?","choices":["MWA","email link"]}`)},
 	}
 
-	id, question, choices, ok := askUserRequest(uses)
+	id, question, choices, multiSelect, ok := askUserRequest(uses)
 	if !ok {
 		t.Fatal("did not recognise the ask_user call")
 	}
@@ -30,6 +30,25 @@ func TestAskUserRequestFindsQuestionAndChoices(t *testing.T) {
 	if len(choices) != 2 || choices[0] != "MWA" || choices[1] != "email link" {
 		t.Errorf("choices = %v, want [MWA, email link]", choices)
 	}
+	if multiSelect {
+		t.Errorf("multi_select = true on a question that did not set it (default is single-select)")
+	}
+}
+
+// A model that explicitly opts into multi-select for a genuinely multi-answer
+// question surfaces the flag through so the UI renders checkboxes.
+func TestAskUserRequestReadsMultiSelect(t *testing.T) {
+	uses := []ai.ToolUseBlock{
+		{ID: "ask1", Name: "ask_user", Input: json.RawMessage(
+			`{"question":"Which features?","choices":["auth","payments","notifications"],"multi_select":true}`)},
+	}
+	_, _, _, multiSelect, ok := askUserRequest(uses)
+	if !ok {
+		t.Fatal("did not recognise the ask_user call")
+	}
+	if !multiSelect {
+		t.Error("multi_select = false, want true when the model set it")
+	}
 }
 
 func TestAskUserRequestDetectsAmongSiblings(t *testing.T) {
@@ -39,7 +58,7 @@ func TestAskUserRequestDetectsAmongSiblings(t *testing.T) {
 		{ID: "r1", Name: "read_file", Input: json.RawMessage(`{"path":"app.tsx"}`)},
 		{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{"question":"Proceed?"}`)},
 	}
-	id, question, _, ok := askUserRequest(uses)
+	id, question, _, _, ok := askUserRequest(uses)
 	if !ok || id != "ask1" || question != "Proceed?" {
 		t.Errorf("got (id=%q, q=%q, ok=%v), want the batched ask_user", id, question, ok)
 	}
@@ -49,10 +68,10 @@ func TestAskUserRequestIgnoresOrdinaryCalls(t *testing.T) {
 	uses := []ai.ToolUseBlock{
 		{ID: "w1", Name: "write_file", Input: json.RawMessage(`{"path":"a.tsx"}`)},
 	}
-	if _, _, _, ok := askUserRequest(uses); ok {
+	if _, _, _, _, ok := askUserRequest(uses); ok {
 		t.Error("reported an ask_user where only write_file was called")
 	}
-	if _, _, _, ok := askUserRequest(nil); ok {
+	if _, _, _, _, ok := askUserRequest(nil); ok {
 		t.Error("reported an ask_user on an empty round")
 	}
 }
@@ -64,7 +83,7 @@ func TestAskUserRequestPausesOnMalformedInput(t *testing.T) {
 	uses := []ai.ToolUseBlock{
 		{ID: "ask1", Name: "ask_user", Input: json.RawMessage(`{"question":`)},
 	}
-	id, question, _, ok := askUserRequest(uses)
+	id, question, _, _, ok := askUserRequest(uses)
 	if !ok {
 		t.Fatal("malformed ask_user input should still pause, not execute")
 	}

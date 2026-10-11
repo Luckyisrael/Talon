@@ -16,8 +16,9 @@ import (
 type AskUser struct{}
 
 type AskUserArgs struct {
-	Question string   `json:"question"`
-	Choices  []string `json:"choices,omitempty"`
+	Question    string   `json:"question"`
+	Choices     []string `json:"choices,omitempty"`
+	MultiSelect bool     `json:"multi_select,omitempty"`
 }
 
 func (t *AskUser) Name() string { return "ask_user" }
@@ -28,15 +29,18 @@ func (t *AskUser) Description() string {
 		"they have. The build stops until they answer, so call this alone (not alongside other tools) and only " +
 		"when the answer changes what you build. Do not use it for routine implementation details you can " +
 		"decide yourself, and never to ask for secrets, keys, or seed phrases. Offer choices when the options " +
-		"are known so the user can pick rather than type."
+		"are known so the user can pick rather than type. Set multi_select=true when the question genuinely " +
+		"admits multiple answers at once (features to enable, screens to include, packages to add) so the UI " +
+		"renders checkboxes instead of a single-choice picker; leave it false for pick-one questions."
 }
 
 func (t *AskUser) InputSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"question": {"type": "string", "description": "The question to ask, in one or two sentences"},
-			"choices":  {"type": "array", "items": {"type": "string"}, "description": "Optional list of concrete options for the user to pick from"}
+			"question":     {"type": "string", "description": "The question to ask, in one or two sentences"},
+			"choices":      {"type": "array", "items": {"type": "string"}, "description": "Optional list of concrete options for the user to pick from"},
+			"multi_select": {"type": "boolean", "description": "True when the question admits more than one choice at once (renders checkboxes); false or omitted for pick-one questions (renders radio-style)"}
 		},
 		"required": ["question"]
 	}`)

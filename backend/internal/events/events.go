@@ -226,14 +226,30 @@ func (e *SessionEmitter) EmitCommandOutput(text string) {
 	e.Emit(Event{Type: CommandOutputEvent, Text: text})
 }
 
-// EmitQuestion surfaces an ask_user pause: the question the agent needs answered
-// and any suggested choices. id is the pending ask_user tool_use the user's
-// answer resolves on resume — the frontend echoes it back so the answer lands on
-// the right call. The emitter's session id is the prompt id (CreateSession is
-// keyed by it), so it is carried too: POST /answer is addressed by prompt id,
-// and a fresh build turn has no other way to learn it.
-func (e *SessionEmitter) EmitQuestion(id, question string, choices []string) {
-	e.Emit(Event{Type: QuestionEvent, ID: id, Text: question, Data: choices, PromptID: e.sessionID})
+// QuestionData rides on a QuestionEvent's Data field so the SSE writer can
+// destructure both choices and the multi-select flag out of one payload — the
+// flag drives whether the frontend renders radio-style (single) or checkbox
+// (multi) selection when the sheet appears.
+type QuestionData struct {
+	Choices     []string `json:"choices"`
+	MultiSelect bool     `json:"multi_select"`
+}
+
+// EmitQuestion surfaces an ask_user pause: the question the agent needs answered,
+// any suggested choices, and whether the user can pick more than one at once.
+// id is the pending ask_user tool_use the user's answer resolves on resume —
+// the frontend echoes it back so the answer lands on the right call. The
+// emitter's session id is the prompt id (CreateSession is keyed by it), so it
+// is carried too: POST /answer is addressed by prompt id, and a fresh build
+// turn has no other way to learn it.
+func (e *SessionEmitter) EmitQuestion(id, question string, choices []string, multiSelect bool) {
+	e.Emit(Event{
+		Type:     QuestionEvent,
+		ID:       id,
+		Text:     question,
+		Data:     QuestionData{Choices: choices, MultiSelect: multiSelect},
+		PromptID: e.sessionID,
+	})
 }
 
 // Decision is the payload of a DecisionEvent: an architecture decision the agent
