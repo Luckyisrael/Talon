@@ -57,10 +57,17 @@ function AgentWorkspace({
   }, [traceRows, follow]);
 
   // Selecting a file from the tree switches to its view; opening the
-  // transcript again is one click.
-  useEffect(() => {
+  // transcript again is one click. Adjusted during render with a previous-
+  // value guard (React's "store info from previous renders" pattern): the
+  // tab lands on "file" in the same commit as the selection, with no
+  // post-commit cascade from an effect. Null is the mount value — a file
+  // already selected on first paint flips the tab, exactly as the old
+  // mount-time effect did.
+  const [prevSelected, setPrevSelected] = useState<string | null>(null);
+  if (selectedFile !== prevSelected) {
+    setPrevSelected(selectedFile);
     if (selectedFile) setTab("file");
-  }, [selectedFile]);
+  }
 
   const hasDiff = filesTouched.length > 0;
 
@@ -411,23 +418,27 @@ function DecisionRow({ row }: { row: TraceRow }) {
 /** DiffView fetches and renders the turn's diff, file by file. */
 function DiffView({ projectId, files }: { projectId: number; files: string[] }) {
   const [diff, setDiff] = useState<string>("");
-  const [err, setErr] = useState<string | null>(null);
+  // The error is keyed to the fetch it belongs to: a projectId/files change
+  // hides the old error the moment the key changes — derived here instead of
+  // cleared by a synchronous setState at the top of the effect.
+  const fetchKey = `${projectId}:${files.length}`;
+  const [errAt, setErrAt] = useState<{ key: string; msg: string } | null>(null);
+  const err = errAt && errAt.key === fetchKey ? errAt.msg : null;
 
   useEffect(() => {
     let cancelled = false;
-    setErr(null);
     conversation
       .diff(projectId)
       .then((res) => {
         if (!cancelled) setDiff(res?.diff ?? "");
       })
       .catch(() => {
-        if (!cancelled) setErr("The diff could not be loaded.");
+        if (!cancelled) setErrAt({ key: fetchKey, msg: "The diff could not be loaded." });
       });
     return () => {
       cancelled = true;
     };
-  }, [projectId, files.length]);
+  }, [projectId, files.length, fetchKey]);
 
   // Render cap: a turn that touches many files (or a generated bundle) can
   // produce a diff of tens of thousands of lines, and one span per line froze

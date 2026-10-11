@@ -75,9 +75,11 @@ export default function ChangedFiles({ projectId, filesTouched }: ChangedFilesPr
     let cancelled = false;
     // Only the loading spinner on the first load; a mid-build refetch is a
     // background refresh and the list should not flash to "loading" each time
-    // a file lands.
+    // a file lands. `loading` already starts true, so the first load spins
+    // without a synchronous set here — and the one case where a set would
+    // change state (refetching after an empty result) is exactly the flash
+    // this comment disowns.
     const firstLoad = diff === "" && note === null;
-    if (firstLoad) setLoading(true);
     conversation
       .diff(projectId)
       .then((res) => {
@@ -101,16 +103,18 @@ export default function ChangedFiles({ projectId, filesTouched }: ChangedFilesPr
   }, [projectId, touchedKey]);
 
   // A file appearing in the diff for the first time opens itself — the row
-  // you would reach for is already open when the change lands.
-  useEffect(() => {
-    if (!diff || !filesTouched.length) return;
+  // you would reach for is already open when the change lands. Adjusted
+  // during render with a previous-value guard: same triggers as before
+  // (touchedKey or diff changed), applied in the commit that carries the
+  // change rather than a post-commit effect cascade.
+  const [prevAuto, setPrevAuto] = useState<{ key: string; diff: string }>({ key: touchedKey, diff });
+  if (prevAuto.key !== touchedKey || prevAuto.diff !== diff) {
+    setPrevAuto({ key: touchedKey, diff });
     const last = filesTouched[filesTouched.length - 1];
-    if (!last) return;
-    if (diff.includes(`+++ b/${last}`) && expanded !== last) {
+    if (last && diff.includes(`+++ b/${last}`) && expanded !== last) {
       setExpanded(last);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [touchedKey, diff]);
+  }
 
   // Per-file hunks, each classified. Memoised because the diff can be large.
   const fileMap = useMemo(() => (diff ? splitByFile(diff) : new Map()), [diff]);

@@ -1,10 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { auth } from "@/lib/api";
 import { setRefreshToken, setToken, setEmail as persistEmail } from "@/lib/auth";
+
+// The URL is a browser fact that never changes for this page's lifetime (a
+// navigation remounts it), so the subscription is a no-op — the store exists
+// to read it during render without a hydration mismatch or a setState-in-effect.
+const subscribeNoop = () => () => {};
 
 /**
  * The OAuth landing page: the provider redirected here with a single-use
@@ -14,12 +19,30 @@ import { setRefreshToken, setToken, setEmail as persistEmail } from "@/lib/auth"
  *
  * Errors are named plainly: "denied" (the user refused consent),
  * "provider-unavailable" (the provider hiccuped — retry), "server-error".
+ *
+ * A missing code is derived from the URL during render (server snapshot
+ * pretends a code exists so the static shell shows the neutral "exchanging"
+ * state), never set in an effect.
  */
 export default function AuthCallbackPage() {
   const router = useRouter();
   const [phase, setPhase] = useState<"exchanging" | "done" | "error">("exchanging");
   const [error, setError] = useState("");
   const exchanged = useRef(false);
+
+  const search = useSyncExternalStore(
+    subscribeNoop,
+    () => window.location.search,
+    // A present-but-empty code param: the server shell renders the neutral
+    // "exchanging" state, and after hydration the real URL takes over — a
+    // genuinely absent code falls out of the same derivation below.
+    () => "?code=",
+  );
+  const hasCode = new URLSearchParams(search).get("code") !== null;
+  const showError = !hasCode || phase === "error";
+  const errorText = hasCode
+    ? error
+    : "The sign-in response carried no code — start again from the sign-in page.";
 
   useEffect(() => {
     // Exactly once: the code is single-use and React 18 double-invokes
@@ -32,8 +55,8 @@ export default function AuthCallbackPage() {
     const next = params.get("next");
 
     if (!code) {
-      setPhase("error");
-      setError("The sign-in response carried no code — start again from the sign-in page.");
+      // Nothing to exchange — the render above already shows the failure
+      // from the same URL, so no state update is needed here.
       return;
     }
 
@@ -74,16 +97,20 @@ export default function AuthCallbackPage() {
       <div className="w-full max-w-sm">
         <div className="card text-center">
           <h1 className="text-[17px] font-medium tracking-tight text-paper mb-2">
-            {phase === "exchanging" && "Finishing sign-in…"}
-            {phase === "done" && "Signed in"}
-            {phase === "error" && "Sign-in failed"}
+            {showError
+              ? "Sign-in failed"
+              : phase === "done"
+                ? "Signed in"
+                : "Finishing sign-in…"}
           </h1>
           <p className="text-sm text-fog">
-            {phase === "exchanging" && "Exchanging the one-time code for your session."}
-            {phase === "done" && "Taking you to your projects."}
-            {phase === "error" && error}
+            {showError
+              ? errorText
+              : phase === "done"
+                ? "Taking you to your projects."
+                : "Exchanging the one-time code for your session."}
           </p>
-          {phase === "error" && (
+          {showError && (
             <Link
               href="/login"
               className="inline-block mt-6 h-10 px-4 leading-10 rounded-lg border border-smoke bg-gradient-to-b from-carbon to-void text-sm text-paper transition-colors hover:border-mist/40"

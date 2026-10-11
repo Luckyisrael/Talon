@@ -61,6 +61,18 @@ export default function PhonePreview({
   // stall retry path.
   const [streamEpoch, setStreamEpoch] = useState(0);
 
+  // DV1: the bundler's voice — bundle progress, hot reloads, redbox errors.
+  // The badge lives above the stream: bundling/reloaded are transient states
+  // with self-dismissing timers, errors persist until the next good bundle.
+  // Declared before the tap effect below — it reads and clears both on
+  // subscribe/unsubscribe, so the bindings must exist where it is defined.
+  const [metroBadge, setMetroBadge] = useState<{
+    kind: MetroEvent["kind"];
+    text: string;
+    progress: number;
+  } | null>(null);
+  const metroTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // DV1: the metro SSE tap rides the device's lifetime — subscribed while
   // streaming, torn down with it. Events drive the badge; errors persist
   // (the redbox is on the screen until a good bundle clears it), progress
@@ -99,30 +111,9 @@ export default function PhonePreview({
     };
   }, [status, projectId, streamEpoch]);
 
-  // DV3: the decoder dies with the subscription — never across re-subs.
-  useEffect(() => {
-    return () => {
-      // state is only meaningful on a real WebCodecs decoder; a jsdom stub
-      // lacks it, and closing a closed decoder throws.
-      if (decoderRef.current && "state" in decoderRef.current && decoderRef.current.state !== "closed") {
-        decoderRef.current.close();
-      }
-      decoderRef.current = null;
-      h264Active.current = false;
-    };
-  }, [streamEpoch, status, sessionId]);
   const [stalled, setStalled] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [captureNote, setCaptureNote] = useState<string | null>(null);
-  // DV1: the bundler's voice — bundle progress, hot reloads, redbox errors.
-  // The badge lives above the stream: bundling/reloaded are transient states
-  // with self-dismissing timers, errors persist until the next good bundle.
-  const [metroBadge, setMetroBadge] = useState<{
-    kind: MetroEvent["kind"];
-    text: string;
-    progress: number;
-  } | null>(null);
-  const metroTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // DV3: the stream's negotiated mode arrives as the first (text) frame —
   // h264 (the device's own encoder, WebCodecs-decoded) or jpeg (the
   // standing fallback). Null until the server speaks.
@@ -285,6 +276,21 @@ export default function PhonePreview({
       h264Active.current = false;
     }
   }, []);
+
+  // DV3: the decoder dies with the subscription — never across re-subs.
+  // Positioned after startH264 (the only writer of decoderRef/h264Active) —
+  // the cleanup reads what the writer above it sets, in that source order.
+  useEffect(() => {
+    return () => {
+      // state is only meaningful on a real WebCodecs decoder; a jsdom stub
+      // lacks it, and closing a closed decoder throws.
+      if (decoderRef.current && "state" in decoderRef.current && decoderRef.current.state !== "closed") {
+        decoderRef.current.close();
+      }
+      decoderRef.current = null;
+      h264Active.current = false;
+    };
+  }, [streamEpoch, status, sessionId]);
 
   const feedH264 = useCallback(async (blob: Blob) => {
     const decoder = decoderRef.current;

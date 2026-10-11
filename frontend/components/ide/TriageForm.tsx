@@ -23,13 +23,15 @@ export default function TriageForm({ projectId }: { projectId: number }) {
   const [date, setDate] = useState("");
   const [dollars, setDollars] = useState("");
   const [notes, setNotes] = useState("");
-  const [loaded, setLoaded] = useState(false);
+  // Which project's record has loaded — derived `loaded` below flips back to
+  // the loading state the moment projectId changes, without a synchronous
+  // setState at the top of the effect.
+  const [loadedFor, setLoadedFor] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedTick, setSavedTick] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setLoaded(false);
     triageApi
       .get(projectId)
       .then((r) => {
@@ -41,8 +43,9 @@ export default function TriageForm({ projectId }: { projectId: number }) {
         }
       })
       .catch(() => {})
-      .finally(() => setLoaded(true));
+      .finally(() => setLoadedFor(projectId));
   }, [projectId]);
+  const loaded = loadedFor === projectId;
 
   async function save() {
     if (!decision.trim()) {

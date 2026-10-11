@@ -43,7 +43,7 @@ export default function LoginPage() {
   function start(providerID: string) {
     const next = new URLSearchParams(window.location.search).get("next");
     const target = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
-    window.location.href = auth.startURL(providerID, `/auth/callback?next=${encodeURIComponent(target)}`);
+    window.location.assign(auth.startURL(providerID, `/auth/callback?next=${encodeURIComponent(target)}`));
   }
 
   const allProviders = [

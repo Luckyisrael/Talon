@@ -10,7 +10,7 @@
  * as Claude Desktop's multi-artifact view.
  */
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { SHOW_TRIAGE } from "@/lib/flags";
 import type { DockPanel } from "./IDELayout";
 
@@ -30,6 +30,11 @@ interface TopbarProps {
   dockSplit: "col" | "row";
   onToggleSplit: () => void;
 }
+
+// No-op subscription for browser facts read through useSyncExternalStore:
+// navigator.platform and window.location never change without a navigation,
+// which remounts the page anyway. Module-level so the reference is stable.
+const subscribeNoop = () => () => {};
 
 const DOCK_ICONS: Record<DockPanel, { label: string; path: string }> = {
   files: { label: "Files", path: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" },
@@ -58,10 +63,15 @@ export default function Topbar({
   dockSplit,
   onToggleSplit,
 }: TopbarProps) {
-  const [mod, setMod] = useState("⌘");
-  useEffect(() => {
-    setMod(/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl");
-  }, []);
+  // The platform key hint is a browser fact, read through the store: the
+  // server shell and hydration both render "⌘" (getServerSnapshot), and the
+  // real platform takes over after hydration with no mismatch and no
+  // setState-in-effect. navigator.platform is stable for the page's life.
+  const mod = useSyncExternalStore(
+    subscribeNoop,
+    () => (/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl"),
+    () => "⌘",
+  );
 
   const openCount = (Object.values(openPanels) as boolean[]).filter(Boolean).length;
 
