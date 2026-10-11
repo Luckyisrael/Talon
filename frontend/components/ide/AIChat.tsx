@@ -2834,6 +2834,12 @@ function QuestionCard({
   busy: boolean;
 }) {
   const [draft, setDraft] = useState("");
+  // Multi-select mode keeps a set of picked choices; the freeform draft can be
+  // added alongside them. Single-select fires on click (this stays empty).
+  // Declared with `draft` above the answered-receipt early return: hooks run in
+  // the same order on every render regardless of which branch returns.
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const multi = !!question.multiSelect;
 
   if (question.answered !== undefined) {
     return (
@@ -2847,11 +2853,6 @@ function QuestionCard({
       </div>
     );
   }
-
-  // Multi-select mode keeps a set of picked choices; the freeform draft can be
-  // added alongside them. Single-select fires on click (this stays empty).
-  const [picked, setPicked] = useState<Set<number>>(new Set());
-  const multi = !!question.multiSelect;
 
   const submit = (reply: string) => {
     if (busy) return;
