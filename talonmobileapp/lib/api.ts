@@ -1065,6 +1065,13 @@ export type SkrQuote = {
   mint: string
   treasury: string
   spare_credits: number
+  // Which rail the server is quoting: "skr" (production) or "devnet-sol" —
+  // the judge-facing test rail when SKR is unconfigured. Absent on older
+  // servers, which are always SKR.
+  chain?: 'skr' | 'devnet-sol'
+  // Devnet-SOL rail only: the pack price already in lamports, so the client
+  // never multiplies a decimal it could get wrong.
+  sol_lamports?: number
 }
 
 // The backend's three-way answer about a payment: 200 verified, 200 pending

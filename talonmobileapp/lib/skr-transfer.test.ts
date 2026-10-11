@@ -51,7 +51,7 @@ const OTHER_MINT = address('vyUryFPQZz7idWLb4FehEwXsPXXKewn2NmtXL2Fqa3k')
 // The mint is a FIXTURE HERE, not an export of lib/skr-transfer: the module
 // must not carry one, because the server quotes the mint (FM-SKRb(ii)). A
 // constant shipped in the app could not be rotated without a store release.
-const SKR_MINT = address('SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3')
+const SKR_MINT = address('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
 
 /** Reads a little-endian u64. `ArrayLike` so it accepts kit's ReadonlyUint8Array. */
 function littleEndianU64(data: ArrayLike<number>, offset: number): bigint {

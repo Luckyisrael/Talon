@@ -359,9 +359,22 @@ func main() {
 	// payment. With them absent the paywall still quotes its price and the
 	// export gate still refuses correctly — only verify reports itself
 	// unavailable, which is the honest answer when there is no chain to ask.
-	skrVerifier := skr.New(skr.ConfigFromEnv())
+	skrCfg := skr.ConfigFromEnv()
+	if skrCfg.Mode == skr.ModeDevnetSol && skrCfg.Treasury == "" {
+		// The test rail's treasury is generated ONCE and persisted beside the
+		// ledger it buys from — a fresh pubkey per boot would strand every
+		// payment already sent to yesterday's address.
+		treasury, err := s.EnsureSolTreasury(skr.GenerateTreasury)
+		if err != nil {
+			log.Fatalf("devnet SOL export treasury could not be persisted: %v", err)
+		}
+		skrCfg.Treasury = treasury
+	}
+	skrVerifier := skr.New(skrCfg)
 	skrHandler := api.NewSkrHandler(s, skrVerifier)
-	if cfg := skrVerifier.Config(); cfg.RPCURL != "" && cfg.Mint != "" {
+	if cfg := skrVerifier.Config(); cfg.Mode == skr.ModeDevnetSol {
+		log.Printf("export payment rail: devnet SOL (%d lamports per pack of %d, treasury %s) — the judge-facing test rail; production billing is SKR (set SKR_RPC_URL / SKR_MINT / SKR_TREASURY to switch)", cfg.SolLamports, cfg.Credits, cfg.Treasury)
+	} else if cfg.RPCURL != "" && cfg.Mint != "" {
 		// Probe the mint now rather than at the first purchase. A mistyped
 		// SKR_MINT would otherwise be a silent black hole where nobody can
 		// ever buy, and the first symptom would be a customer's failure

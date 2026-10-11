@@ -150,14 +150,21 @@ func (h *ExportHandler) takeExportCredit(w http.ResponseWriter, user *store.User
 // no prose-parsing. A 403 would say "forbidden, ever" and hand the client
 // nothing to unlock against.
 func (h *ExportHandler) writeCreditsRequired(w http.ResponseWriter, spare int) {
-	writeJSON(w, http.StatusPaymentRequired, map[string]interface{}{
+	body := map[string]interface{}{
 		"error":               "a release build spends one credit — you have none left",
 		"code":                "export_credits_required",
 		"spare_credits":       spare,
 		"credits_per_export":  1,
 		"skr_amount_per_pack": packAmount(),
 		"credits_per_pack":    packCredits(),
-	})
+	}
+	// On the devnet-SOL test rail the refusal quotes the SOL price too, so
+	// the sheet renders from the refusal alone (FM-SKRd(iii)) — same law,
+	// second rail.
+	if skr.DevnetSolActive() {
+		body["sol_lamports_per_pack"] = skr.SolPackLamports()
+	}
+	writeJSON(w, http.StatusPaymentRequired, body)
 }
 
 type exportRequest struct {

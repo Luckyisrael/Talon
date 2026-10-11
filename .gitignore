@@ -127,3 +127,4 @@ vendored-skills-reference/
 agent/
 .agents/
 .claude/
+*.apk

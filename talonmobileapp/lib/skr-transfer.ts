@@ -113,6 +113,41 @@ export function transferCheckedInstruction(args: {
   }
 }
 
+/**
+ * Moves `lamports` native SOL from `source` to `destination`.
+ *
+ * The System program's Transfer (instruction index 2), layout the published
+ * program defines: `[u32 LE index][u64 LE lamports]` over
+ * `source (signer, writable), destination (writable)`. This is the devnet-SOL
+ * test rail — production billing pays in SKR through
+ * `transferCheckedInstruction` above; nothing about the rail is chosen here,
+ * the server's quote names it.
+ */
+export function systemTransferInstruction(args: {
+  source: Address
+  destination: Address
+  lamports: bigint
+}): Instruction {
+  const { source, destination, lamports } = args
+
+  const data = new Uint8Array(12)
+  data[0] = 2 // u32 little-endian instruction index; the next three bytes stay 0
+  let remaining = lamports
+  for (let i = 0; i < 8; i++) {
+    data[4 + i] = Number(remaining & 0xffn)
+    remaining >>= 8n
+  }
+
+  return {
+    programAddress: SYSTEM_PROGRAM_ADDRESS,
+    accounts: [
+      { address: source, role: AccountRole.WRITABLE_SIGNER },
+      { address: destination, role: AccountRole.WRITABLE },
+    ],
+    data,
+  }
+}
+
 /** The slice of kit's RPC the pack price needs. Injected so tests can pin it. */
 export type SupplyReader = {
   getTokenSupply(mint: Address): { send(): Promise<{ value: { decimals: number } }> }

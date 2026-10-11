@@ -58,9 +58,9 @@ func New(cfg Config) *Verifier {
 func (v *Verifier) Config() Config { return v.cfg }
 
 // Verify answers whether this signature is a payment of the pack price to our
-// treasury, in our mint. It never takes the request's word for anything: the
-// verdict is derived entirely from a getTransaction this method issues, and a
-// signature that is not well-formed never reaches that call.
+// treasury, on the configured rail. It never takes the request's word for
+// anything: the verdict is derived entirely from a getTransaction this method
+// issues, and a signature that is not well-formed never reaches that call.
 func (v *Verifier) Verify(ctx context.Context, signature string) (Verdict, error) {
 	sig := strings.TrimSpace(signature)
 	if !ValidSignature(sig) {
@@ -69,27 +69,51 @@ func (v *Verifier) Verify(ctx context.Context, signature string) (Verdict, error
 	if v.cfg.RPCURL == "" {
 		return Verdict{}, errors.New("no Solana RPC configured (SKR_RPC_URL)")
 	}
-	if v.cfg.Mint == "" || v.cfg.Treasury == "" {
+	if v.cfg.Mode == ModeDevnetSol {
+		if v.cfg.Treasury == "" {
+			return Verdict{}, errors.New("no devnet SOL treasury configured")
+		}
+	} else if v.cfg.Mint == "" || v.cfg.Treasury == "" {
 		return Verdict{}, errors.New("SKR_MINT / SKR_TREASURY not configured")
 	}
 
+	tx, interim, err := v.fetchSettled(ctx, sig)
+	if err != nil || interim != (Verdict{}) {
+		return interim, err
+	}
+	if v.cfg.Mode == ModeDevnetSol {
+		return v.solVerdict(tx), nil
+	}
+	return v.skrVerdict(tx), nil
+}
+
+// fetchSettled is the rail-independent head of every verification: it either
+// returns a settled, successful transaction, or the interim verdict that
+// explains why there isn't one (pending / incomplete / tx_failed). A failed
+// transaction still RETURNS a transaction, so err is checked before anything
+// about its contents is believed.
+func (v *Verifier) fetchSettled(ctx context.Context, sig string) (*txResult, Verdict, error) {
 	tx, err := v.getTransaction(ctx, sig)
 	if err != nil {
-		return Verdict{}, err
+		return nil, Verdict{}, err
 	}
 	// A transaction that is not there yet is not a transaction that failed.
 	if tx == nil {
-		return Verdict{Status: StatusPending, Reason: "pending"}, nil
+		return nil, Verdict{Status: StatusPending, Reason: "pending"}, nil
 	}
 	if tx.Meta == nil {
-		return Verdict{Status: StatusRejected, Reason: "incomplete"}, nil
+		return nil, Verdict{Status: StatusRejected, Reason: "incomplete"}, nil
 	}
-	// A failed transaction still returns a transaction, so err is checked
-	// before anything about its contents is believed.
 	if tx.Meta.Err != nil {
-		return Verdict{Status: StatusRejected, Reason: "tx_failed"}, nil
+		return nil, Verdict{Status: StatusRejected, Reason: "tx_failed"}, nil
 	}
+	return tx, Verdict{}, nil
+}
 
+// skrVerdict judges a settled transaction on the SKR rail: the configured
+// mint must be present, credited to the configured treasury, by exactly the
+// pack price — with the exponent taken from the very balances being judged.
+func (v *Verifier) skrVerdict(tx *txResult) Verdict {
 	hasMint := false
 	var credited []tokenBalance
 	for _, b := range tx.Meta.PostTokenBalances {
@@ -106,10 +130,10 @@ func (v *Verifier) Verify(ctx context.Context, signature string) (Verdict, error
 		}
 	}
 	if !hasMint {
-		return Verdict{Status: StatusRejected, Reason: "wrong_mint"}, nil
+		return Verdict{Status: StatusRejected, Reason: "wrong_mint"}
 	}
 	if len(credited) == 0 {
-		return Verdict{Status: StatusRejected, Reason: "wrong_recipient"}, nil
+		return Verdict{Status: StatusRejected, Reason: "wrong_recipient"}
 	}
 
 	for _, b := range credited {
@@ -122,10 +146,40 @@ func (v *Verifier) Verify(ctx context.Context, signature string) (Verdict, error
 				Reason:   "verified",
 				Decimals: b.UI.Decimals,
 				Expected: expected,
-			}, nil
+			}
 		}
 	}
-	return Verdict{Status: StatusRejected, Reason: "wrong_amount"}, nil
+	return Verdict{Status: StatusRejected, Reason: "wrong_amount"}
+}
+
+// solVerdict judges a settled transaction on the devnet-SOL test rail: one
+// System transfer of exactly the quoted lamports to the treasury. Only the
+// System program's own parsed transfers count — a token instruction that
+// merely mentions the treasury as an account cannot buy, which is the same
+// mint-and-receiver discipline skrVerdict applies, one program over.
+func (v *Verifier) solVerdict(tx *txResult) Verdict {
+	sawRecipient := false
+	for _, ix := range tx.parsedInstructions() {
+		if ix.Program != "system" || ix.Parsed == nil || ix.Parsed.Type != "transfer" {
+			continue
+		}
+		if ix.Parsed.Info.Destination != v.cfg.Treasury {
+			continue
+		}
+		sawRecipient = true
+		if ix.Parsed.Info.Lamports == v.cfg.SolLamports {
+			return Verdict{
+				Status:   StatusVerified,
+				Reason:   "verified",
+				Decimals: SolDecimals,
+				Expected: new(big.Int).SetUint64(v.cfg.SolLamports),
+			}
+		}
+	}
+	if !sawRecipient {
+		return Verdict{Status: StatusRejected, Reason: "wrong_recipient"}
+	}
+	return Verdict{Status: StatusRejected, Reason: "wrong_amount"}
 }
 
 // packRaw converts a whole-token price into the base units the chain counts.
@@ -215,6 +269,23 @@ type txMeta struct {
 	PostTokenBalances []tokenBalance `json:"postTokenBalances"`
 }
 
+// parsedInstruction is one instruction as jsonParsed renders it: the System
+// and SPL programs both arrive with their `parsed` body decoded, and the
+// devnet-SOL rail reads System transfers straight off it. `program` is the
+// program's own lowercase name ("system"), which is what keeps a token
+// instruction that merely mentions the treasury from counting as a payment.
+type parsedInstruction struct {
+	Program string `json:"program"`
+	Parsed  *struct {
+		Type string `json:"type"`
+		Info struct {
+			Source      string `json:"source"`
+			Destination string `json:"destination"`
+			Lamports    uint64 `json:"lamports"`
+		} `json:"info"`
+	} `json:"parsed"`
+}
+
 type txResult struct {
 	Meta        *txMeta `json:"meta"`
 	Transaction *struct {
@@ -222,8 +293,17 @@ type txResult struct {
 			AccountKeys []struct {
 				Pubkey string `json:"pubkey"`
 			} `json:"accountKeys"`
+			Instructions []parsedInstruction `json:"instructions"`
 		} `json:"message"`
 	} `json:"transaction"`
+}
+
+// parsedInstructions is the nil-safe view of the message's instructions.
+func (t *txResult) parsedInstructions() []parsedInstruction {
+	if t == nil || t.Transaction == nil {
+		return nil
+	}
+	return t.Transaction.Message.Instructions
 }
 
 func (t *txResult) accountKeyAt(i int) string {

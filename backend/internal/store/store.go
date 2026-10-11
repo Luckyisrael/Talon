@@ -419,6 +419,14 @@ func (s *Store) migrate() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_events_user ON billing_events(user_id, id DESC)`,
+		// app_settings owns the few facts the server generates for itself and
+		// must keep across restarts — today only the devnet-SOL export treasury.
+		// A treasury that vanished on reboot would strand every payment already
+		// sent to it, so it sits beside the ledger it buys from.
+		`CREATE TABLE IF NOT EXISTS app_settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
 		// user_git_credentials holds one connected git provider account per user.
 		// access_token is stored ENCRYPTED (see internal/secrets) and never in the
 		// clear — the struct tags it json:"-" so it cannot leak through an API

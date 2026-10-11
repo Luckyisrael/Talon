@@ -11,8 +11,20 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
   findAssociatedTokenAddress,
   packAmountInRawUnits,
+  systemTransferInstruction,
   transferCheckedInstruction,
 } from '@/lib/skr-transfer';
+
+/** How many lamports make one SOL — SOL's fixed exponent, a chain constant. */
+const LAMPORTS_PER_SOL = 1_000_000_000n;
+
+/** The quoted SOL price as a human number ("0.1"), never more decimals than lamports carry. */
+function solDisplay(lamports: bigint): string {
+  const whole = lamports / LAMPORTS_PER_SOL
+  const frac = lamports % LAMPORTS_PER_SOL
+  if (frac === 0n) return whole.toString()
+  return `${whole}.${frac.toString().padStart(9, '0').replace(/0+$/, '')}`
+}
 
 // The kit's own account shape ({ address, addressBase64, icon, label }) —
 // what both connect() and the hook's account carry (FM-WALLc(v)).
@@ -105,6 +117,7 @@ type CreditRefusal = {
   spare_credits?: number;
   skr_amount_per_pack?: number;
   credits_per_pack?: number;
+  sol_lamports_per_pack?: number;
 };
 
 /**
@@ -149,7 +162,13 @@ export function ExportPanel({ projectId }: { projectId: number }) {
     skr: refusal?.skr_amount_per_pack ?? offer?.skr_amount,
     packs: refusal?.credits_per_pack ?? offer?.credits,
     spare: refusal?.spare_credits ?? offer?.spare_credits,
+    sol: refusal?.sol_lamports_per_pack ?? offer?.sol_lamports,
   };
+
+  // The rail the SERVER quoted — never a constant here. Devnet SOL is the
+  // judge-facing test rail; SKR is production billing. An absent chain means
+  // an older server, which is always SKR.
+  const solRail = offer?.chain === 'devnet-sol';
 
   // FM-SKRd(ii): a refusal must land as the offer, never as silence. This
   // is the mutation's onError — a 402 that escaped the pre-gate opens the
@@ -233,33 +252,48 @@ export function ExportPanel({ projectId }: { projectId: number }) {
   async function charge(who: WalletAccount, offer: SkrQuote) {
     // Every one of these values is quoted; none is ours to pick. A
     // refusal's own price beats the opening quote — it arrived later.
-    const mint = address(offer.mint);
     const treasury = address(offer.treasury);
     const payer = who.address;
 
-    const raw = await packAmountInRawUnits(live.skr ?? offer.skr_amount, mint, client.rpc);
-    const [treasuryAccount, payerAccount] = await Promise.all([
-      findAssociatedTokenAddress(treasury, mint),
-      findAssociatedTokenAddress(payer, mint),
-    ]);
+    let instructions;
+    if (offer.chain === 'devnet-sol') {
+      // The test rail: one System transfer of the quoted lamports. The
+      // price arrives in base units, so nothing is scaled here.
+      const lamports = BigInt(offer.sol_lamports ?? 0);
+      if (lamports <= 0n) {
+        throw new Error('the server quoted no SOL price');
+      }
+      instructions = [
+        systemTransferInstruction({ source: payer, destination: treasury, lamports }),
+      ];
+    } else {
+      const mint = address(offer.mint);
+      const raw = await packAmountInRawUnits(live.skr ?? offer.skr_amount, mint, client.rpc);
+      const [treasuryAccount, payerAccount] = await Promise.all([
+        findAssociatedTokenAddress(treasury, mint),
+        findAssociatedTokenAddress(payer, mint),
+      ]);
 
-    // Two instructions, one transaction: the treasury's token account may
-    // not exist yet, and a transfer to a missing account just fails.
-    const signature = await sendTransactions([
-      createAssociatedTokenAccountIdempotentInstruction({
-        payer,
-        owner: treasury,
-        mint,
-        ata: treasuryAccount,
-      }),
-      transferCheckedInstruction({
-        source: payerAccount,
-        mint,
-        owner: payer,
-        destination: treasuryAccount,
-        amount: raw,
-      }),
-    ]);
+      // Two instructions, one transaction: the treasury's token account may
+      // not exist yet, and a transfer to a missing account just fails.
+      instructions = [
+        createAssociatedTokenAccountIdempotentInstruction({
+          payer,
+          owner: treasury,
+          mint,
+          ata: treasuryAccount,
+        }),
+        transferCheckedInstruction({
+          source: payerAccount,
+          mint,
+          owner: payer,
+          destination: treasuryAccount,
+          amount: raw,
+        }),
+      ];
+    }
+
+    const signature = await sendTransactions(instructions);
 
     const outcome = await settlePayment(signature);
     if (outcome.ok) {
@@ -308,7 +342,7 @@ export function ExportPanel({ projectId }: { projectId: number }) {
 
   return (
     <View style={styles.wrap}>
-      <Card>
+      <Card style={{ gap: Spacing.s12 }}>
         <UIText variant="title">Release export</UIText>
         <UIText variant="body" tone="muted">
           {offer.spare_credits} of {offer.credits} export credits left
@@ -369,12 +403,26 @@ export function ExportPanel({ projectId }: { projectId: number }) {
             Balance: {live.spare ?? 0} export credits
           </UIText>
           <UIText variant="body">
-            {live.skr} SKR unlocks {live.packs} exports
+            {solRail
+              ? `${solDisplay(BigInt(live.sol ?? offer.sol_lamports ?? 0))} devnet SOL unlocks ${live.packs} exports`
+              : `${live.skr} SKR unlocks ${live.packs} exports`}
           </UIText>
           <UIText variant="bodySm" tone="muted">
-            One credit covers one release export (the signed APK + store
-            bundle). Credits are paid in SKR, Solana&apos;s token — buy a pack
-            with your wallet right here in the app.
+            {solRail ? (
+              <>
+                One credit covers one release export (the signed APK + store
+                bundle). This is the devnet test rail — it spends devnet SOL,
+                which is free from any faucet, so the whole flow can be tried
+                end to end. Production billing runs on SKR; a server with
+                SKR configured quotes that rail instead.
+              </>
+            ) : (
+              <>
+                One credit covers one release export (the signed APK + store
+                bundle). Credits are paid in SKR, Seeker&apos;s token buy a pack
+                with your wallet right here in the app.
+              </>
+            )}
           </UIText>
           {/* Prose for the human, the raw code for verification: a payment
               refusal has to be checkable against what the chain actually
@@ -385,7 +433,11 @@ export function ExportPanel({ projectId }: { projectId: number }) {
             </UIText>
           )}
           <LimeButton
-            title={`Pay ${live.skr ?? offer.skr_amount} SKR`}
+            title={
+              solRail
+                ? `Pay ${solDisplay(BigInt(live.sol ?? offer.sol_lamports ?? 0))} devnet SOL`
+                : `Pay ${live.skr ?? offer.skr_amount} SKR`
+            }
             onPress={pay}
             disabled={paying}
           />

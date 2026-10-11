@@ -38,7 +38,7 @@ const OWNER = '7jAqQXSEWNoNon45Noctg692w9cQJPdmL3vzhxYdKPFP'
 const TREASURY = '5xJqQXSEWNoNon45Noctg692w9cQJPdmL3vzhxYdKPFP'
 const QUOTED_MINT = '315RTJYfgHANxzwrHFodmfi6NJ6ELBN1Z55fFxTEXCtx'
 // The mint the backend verifies against — must never appear unless quoted.
-const BACKEND_MINT = 'SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3'
+const BACKEND_MINT = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
 const SIGNATURE = '5K9exampleSignatureAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
 jest.mock('@/lib/api', () => {

@@ -1,201 +1,174 @@
 # Talon
 
-> Previously named **SeekerStudio** — renamed to Talon over a naming and keyword conflict.
+**An AI app factory in your pocket.** Chat with an agent that plans, writes, verifies and ships real mobile apps — then test them on your phone live, and export a signed release APK. Sign-in is your Solana wallet; your keys never leave it.
 
-A browser IDE, a companion mobile app, and an AI build agent for the Solana Mobile ecosystem. Describe an app in plain language and the agent plans the screens, writes React Native/Expo code, verifies it through typecheck, lint, device boot, vision, and interaction gates, and ships it to a live device or your phone over Metro.
-
-![Status](https://img.shields.io/badge/status-Alpha-orange)
-![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)
-![Next.js](https://img.shields.io/badge/Next.js-16.3-black?logo=next.js)
-![Expo](https://img.shields.io/badge/Expo_SDK-55-000020?logo=expo)
+- **Chat with a real engineering agent** — plan mode and build mode, streaming tool calls, file edits in a sandboxed workspace
+- **Live device sessions** — the agent sees and drives a device (screenshots, taps, logs) to verify what it builds
+- **Verification ladder** — typecheck, lint, bundle, gradle, boot, vision, interact; a release never ships on an unproven build
+- **Release export** — pay for a release build on-chain (devnet SOL for testing, SKR in production), get an APK
+- **Wallet auth** — sign in with Solflare by signing a plain message; the backend never holds private keys
 
 ---
-
-## What it is
-
-- **Web IDE** (`frontend/`) — chat-driven agent workspace: conversation with live tool trace, plan approval cards, changed-files diffs, code editor, terminal, command palette, and a device panel with emulator stream or Metro relay to a real phone.
-- **Companion app** (`talonmobileapp/`) — the same agent in your pocket: Build with streaming trace and attachments, per-file Diff, Metro-connected Device tab, project dashboard, history, settings, help, and docs. Android only.
-- **Build agent** (`backend/`) — Go orchestrator running plan and build turns: tool calling with guardrails, verify ladder (static, runtime, vision, interact), self-healing, checkpoints and undo, conversation persistence with resume, steer, and ask-user pauses.
-- **Auth** — GitHub/Google OAuth plus Solana wallet sign-in, short-lived access tokens with rotating refresh tokens, per-device sessions with revocation.
-- **Attachments** — images and markdown docs ride turns end to end: client validation and downscale, hash-pinned storage (Cloudflare R2 for images, local disk fallback), provider-native image parts in build turns.
-- **History** — server-owned transcripts on every device: paged conversation API, turn index, full-text search, jump-to-turn, offline snapshots on mobile. Conversations are never deleted; removing a project removes its transcript with it.
-- **Plugins** — public packs the agent fetches at build time ([talon-plugin-directory](https://github.com/Luckyisrael/talon-plugin-directory)): web3 components today, more Solana packs as they land. Documented under Docs, Plugins in the web app.
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│              WEB FRONTEND (Next.js 16)                   │
-│  AI chat · trace · plan cards · diffs · editor · terminal│
-│  PhonePreview (emulator stream / Metro relay + QR pair)  │
-└──────────────┬───────────────────────┬───────────────────┘
-               │ REST / SSE            │ WebSocket
-┌──────────────▼──────────────┐  ┌─────▼───────────────────┐
-│    AI ORCHESTRATOR (Go)     │  │   STREAMING GATEWAY     │
-│  plan/build loops · tools   │  │  emulator frames · adb  │
-│  guardrails · verify ladder │  │  input · terminal       │
-│  attachments · history      │  └────────────┬────────────┘
-└──────────────┬──────────────┘               │
-               │ writes code      ┌───────────▼───────────┐
-┌──────────────▼─────────┐       │   REDROID CONTAINER   │
-│   METRO (per session)  │       │  Android 14 · Docker  │
-│   bundler · HMR relay ─┼──────►│                       │
-│   phone deep links     │       └───────────────────────┘
-└────────────────────────┘
-         ▲                              ▲
-         └────── COMPANION APP ──────────┘
-         (Expo 55 · same API · SecureStore sessions)
+talon/
+├── backend/            Go backend (API :8080, agent orchestrator, sandboxed tool
+│                       harness, verification ladder, release builder, store)
+│   ├── cmd/server/     entrypoint
+│   ├── internal/       api, orchestrator, harness, tools, skr (payment rail),
+│   │                   store, release, verify, …
+│   └── template/       the Expo project template every new workspace project
+│                       is generated from (AGENTS.md / TEMPLATE.md drive the agent)
+├── talonmobileapp/     Expo/React Native app (the thing you install on your phone)
+│   ├── app/            expo-router screens (auth, chat, files, export, device)
+│   ├── components/     build surface, export panel, wallet UI
+│   └── lib/            API client, MWA wallet adapter glue, SKR transfer helpers
+├── frontend/           web IDE surface (same backend API)
+└── e2e/                end-to-end gauntlet + behaviour reports
 ```
 
-## Project structure
+One backend serves both the mobile app and the web frontend — identical routes, identical shapes. Each project the agent builds lives in `backend/workspaces/<project-id>/` as a full Expo app generated from the template.
 
-```
-Talon/
-├── backend/               # Go API server
-│   ├── cmd/server/        # Entrypoint, route wiring
-│   ├── internal/
-│   │   ├── ai/            # Provider clients, message blocks, serializers, compaction
-│   │   ├── api/           # Handlers: auth, prompts/stream, conversation, history,
-│   │   │                  #   attachments, sessions, metro, test-info, export, memory
-│   │   ├── auth/          # JWT access + rotating refresh tokens
-│   │   ├── blobstore/     # Attachment bytes: Cloudflare R2, local fallback
-│   │   ├── harness/       # Agent loop, skills catalog, instructions, guardrails,
-│   │   │                  #   session log, sandbox, workflow, compaction
-│   │   ├── knowledge/     # Embedded skills (mobile-craft/motion, wallet-mwa,
-│   │   │                  #   solana-dev, motion-review, …) with attribution
-│   │   ├── orchestrator/  # Build sessions, verify gates, self-healing, checkpoints
-│   │   ├── store/         # SQLite: projects, prompts, transcripts, sessions,
-│   │   │                  #   attachments, refresh tokens, billing, memory
-│   │   ├── tools/         # read/write/edit, shell, git, metro, wallet, skills…
-│   │   └── ws/            # Terminal, device stream, input sockets
-│   ├── template/          # Expo 55 project scaffold provisioned per project
-│   └── e2e/               # End-to-end harness
-├── frontend/              # Next.js web app (landing, auth, dashboard, IDE, docs)
-├── talonmobileapp/        # Expo companion app (build, diff, device, more, menu)
-├── infra/                 # Infrastructure (Redroid, Docker)
-├── content/               # Marketing/changelog content
-└── ROADMAP.md             # Deferred work with reasons
-```
+---
 
 ## Prerequisites
 
-- Docker CE (native Linux installation, for Redroid)
-- [Android SDK](https://developer.android.com/studio) platform-tools (for ADB)
-- [Node.js 22](https://nodejs.org/)
-- [Go 1.25+](https://go.dev/dl/)
-- [Expo](https://expo.dev/) tooling for the companion app (`npx expo`)
+| Tool | Why |
+|---|---|
+| **Go 1.22+** | backend |
+| **Node 20+** | mobile app + template builds |
+| **JDK 17** | Android/gradle stages |
+| **Android SDK** (`ANDROID_HOME`) | gradle gates + APK builds |
+| **Solflare** (browser or mobile) | wallet sign-in — the only auth you need to start |
 
-## Quick start
+---
 
-### 1. Clone and configure
-
-```bash
-git clone git@github.com:Luckyisrael/Talon.git
-cd Talon
-cp backend/.env.example backend/.env
-```
-
-Edit `backend/.env` — the model, your LAN IP (phones and LAN browsers reach
-the studio here), and secrets:
+## 1. Run the backend
 
 ```bash
-AI_MODEL=nvidia/nemotron-3.5-lightning:free
-AI_API_KEY=sk-or-v1-...
-PUBLIC_HOST=192.168.1.6
-JWT_SECRET=openssl-rand-hex-32-output-here
-# Attachments: images to Cloudflare R2 when all four are set, else local disk
-# R2_ACCOUNT_ID=... R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=... R2_BUCKET=...
+cd backend
+go run ./cmd/server
 ```
 
-### 2. Start the stack
+The backend needs a `backend/.env` (never committed). Minimum to start and sign in with a wallet:
+
+```ini
+JWT_SECRET=long-random-string
+AI_API_KEY=…            # your LLM key
+AI_BASE_URL=…           # OpenAI-compatible endpoint
+AI_MODEL=…              # e.g. the chat model you want the agent on
+AUTH_CALLBACK_BASE=http://localhost:8080
+CORS_ALLOWED_ORIGINS=*
+```
+
+Optional (only for production billing — see *Export & payment* below):
+
+```ini
+SKR_RPC_URL=…  SKR_MINT=…  SKR_TREASURY=…
+```
+
+Health check:
 
 ```bash
-./dev.sh
+curl http://localhost:8080/healthz     # → ok
 ```
 
-```
-▸ backend  :8080
-▸ frontend :3000  → API at http://192.168.1.6:8080
+The listen address, workspace dir (`WORKSPACE_DIR`), template dir and DB path all have sane defaults; set them only if you want things elsewhere.
 
-Talon is up:
-  web     http://localhost:3000
-  web LAN http://192.168.1.6:3000
-  api     http://localhost:8080
-```
+## 2. Run the mobile app (WiFi — recommended)
 
-`./dev.sh stop` stops both; logs land in `.dev-logs/`.
-
-### 3. Open the IDE
-
-Sign in (GitHub, Google, or Solana wallet), create a project, describe the
-app. Approve the plan, watch the build stream, answer the agent when it
-pauses with a question. Attach a photo when words fall short, a markdown
-file when the spec already exists.
-
-### 4. Companion app
+Your phone and your computer must be on the **same network**. No cable required.
 
 ```bash
 cd talonmobileapp
-cp .env.example .env   # point EXPO_PUBLIC_API_URL at your LAN backend
-npx expo run:android   # dev build (OAuth needs a real build, not Expo Go)
+npm install
+echo "EXPO_PUBLIC_API_URL=http://<YOUR_COMPUTER_LAN_IP>:8080" > .env.local
+npx expo start
 ```
 
-## Key API surfaces
+Find your computer's LAN IP with `ip addr` (Linux) or `ipconfig` (Windows/macOS) — e.g. `192.168.1.8`. Open the app on your phone (Talon dev client or Expo Go) and it talks to your backend over WiFi.
 
-| Area | Endpoints |
+> **adb is optional.** `adb reverse tcp:8080 tcp:8080` is only useful when you want the phone on USB (e.g. recording the screen with scrcpy). Over WiFi the app just needs `EXPO_PUBLIC_API_URL` pointing at your computer.
+
+## 3. Install the Talon APK (release build)
+
+A prebuilt **Talon.apk** is attached to the submission (a Google Doc link — it can be swapped there as builds are updated). It is a standalone release build: the JS bundle is embedded, no Metro needed, only the backend.
+
+Two ways to point it at your backend:
+
+- **USB:** `adb reverse tcp:8080 tcp:8080` → the APK's baked `http://localhost:8080` reaches the backend through the cable.
+- **WiFi:** rebuild the APK with your LAN IP baked in (the URL is frozen into the bundle at build time):
+
+  ```bash
+  cd talonmobileapp
+  sed -i 's#EXPO_PUBLIC_API_URL=.*#EXPO_PUBLIC_API_URL=http://<YOUR_LAN_IP>:8080#' .env
+  cd android && ./gradlew assembleRelease
+  # → android/app/build/outputs/apk/release/app-release.apk
+  ```
+
+  First build compiles all native modules (~15–30 min); cached rebuilds take ~5 min.
+
+---
+
+## Signing in
+
+Open the app → **Connect wallet** → Solflare. The app asks your wallet to **sign a plain message** (no transaction, no funds, no approvals). That signature is the whole credential — the backend verifies it and issues your session.
+
+- **The backend never holds or can spend your keys.** Signing happens only inside your wallet (mobile wallet adapter).
+- GitHub/Google OAuth is also wired (`AUTH_GITHUB_CLIENT_ID/SECRET`, `AUTH_GOOGLE_*`) but is optional — wallet sign-in works with nothing but `JWT_SECRET` set.
+
+---
+
+## How a build works
+
+1. **Plan** — the agent reads your request and writes a plan (visible in the Plan tab).
+2. **Build** — it edits files in the project's sandboxed workspace, streaming every tool call (edits, checks, shell) into the chat.
+3. **Verify** — at the end of a turn that changed code, the ladder runs: `typecheck → lint → bundle → gradle → boot → vision → interact`. With a device session attached, boot/vision/interact actually launch the app and drive it.
+4. **Device session** — *Device tab → Start session* gives the agent a device container (install, screenshot, tap, logs) so verification is evidence, not a promise.
+5. **Export** — the *Export tab* builds a signed release and hands you the APK (see below).
+
+Sensitive actions (shell, git push, release export) route through an **approval seam**: the agent asks, you tap allow, the answer is audited. Fail-closed — nothing sensitive runs unseamed.
+
+---
+
+## Export & payment
+
+Release exports are paid on-chain. **This build ships the devnet-SOL test rail** so anyone can test end-to-end for free:
+
+1. The panel fetches a quote — price, credits, and the treasury address come from the server, never from app constants.
+2. Solflare signs a **devnet SOL** transfer to the treasury (switch Solflare to devnet first).
+3. The backend verifies the settled transaction on-chain (recipient, amount, finality) and grants export credits.
+4. The release build runs and the APK is delivered.
+
+Production billing runs on **SKR**: set `SKR_RPC_URL`, `SKR_MINT` and `SKR_TREASURY` in `backend/.env` and the same flow charges the SKR token instead. Nothing in the app changes — the rail is a server decision.
+
+> **Known gate:** a release export additionally requires a fresh **full verification pass** (no skipped gates) for the project — the fail-closed rule that keeps unverified builds from shipping. Projects whose last sweep skipped device gates can be refused at export until a sweep runs with a device session attached.
+
+---
+
+## Project structure (mobile app)
+
+| Path | What it is |
 |---|---|
-| Auth | `POST /v1/auth/{github,google}/start`, `GET */callback`, `POST /v1/auth/exchange`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET/DELETE /v1/auth/sessions`, wallet challenge/verify |
-| Turns | `POST /v1/prompts`, `/stream`, `/{id}/answer`, `/{id}/resume`, `/{id}/steer`, `/{id}/discard` |
-| History | `GET /v1/projects/{id}/conversation` (paged), `/conversation/search`, `GET /v1/projects/{id}/prompts` |
-| Attachments | `POST/GET /v1/projects/{id}/attachments[/{attID}]` |
-| Devices | `POST/GET/DELETE /v1/sessions`, Metro SSE, `/test-info`, pairing QR, dev-client APK |
-| Projects | CRUD plus files, git status/diff/push, checkpoints, memory, export/assets, triage |
+| `app/(auth)/` | wallet + OAuth sign-in screens |
+| `app/(tabs)/` | Chat · Files · Export tabs; Build/Diff/Device header |
+| `components/build/` | chat stream, plan view, file tree, export panel, verify badge |
+| `lib/api.ts` | typed client for every backend route (`EXPO_PUBLIC_API_URL`) |
+| `lib/skr-transfer.ts` | builds the System transfer instruction Solflare signs |
+| `components/wallet/` | mobile-wallet-adapter glue (challenge sign, tx sign, disconnect) |
 
-## Testing
+---
 
-```bash
-cd backend && go build ./... && go test ./...
-cd ../frontend && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/vitest run
-cd ../talonmobileapp && ./node_modules/.bin/tsc --noEmit   # plus eslint; no test runner yet (see ROADMAP.md)
-```
+## Development notes
 
-CI gates pushes and pull requests (backend vet plus race-detector tests and guards).
+- **Never commit `backend/.env`** or any real keys. Wallet keys stay in the wallet — by design there is no code path that exports a private key.
+- Tests: backend `go test ./...`; mobile `npm test` (jest), `npx tsc --noEmit`, `npm run lint:check`.
+- The agent's generated projects live under `backend/workspaces/` — safe to delete; each is regenerated from `backend/template/`.
 
-## Known limitations
+---
 
-- **Phantom 26.32 declines wallet requests under dev-client bridge latency** —
-  when the JS→native bridge stalls (observed 7–23s at random on a dev build),
-  Phantom silently auto-declines Mobile Wallet Adapter requests that arrive
-  ≥ ~9s into a session: no consent UI is ever shown and the request dies
-  `-3/sign request declined` or `-1/authorization request failed`. Verified
-  live 2026-10-11: the same build signed twice on Phantom when the invokes
-  landed fast (~200ms) and was declined every time they stalled. The app
-  recovers the one recoverable class (`-1` while an authorization is held:
-  clear, then a single retry — see `lib/walletlink.ts`, L78) and surfaces
-  everything else untouched. **Solflare is the tested wallet for sign-in** —
-  it answers promptly under identical conditions. Phantom support resumes
-  once the latency is addressed (release build, or SIWS single-session
-  sign-in).
-- Billing is a test-mode mock behind a deliberate provider swap.
-- Mobile checkout UI is an honest stub until billing lands.
-- Plan-mode turns see attachment names and docs; pixels replay in build turns.
-- No mobile test runner yet.
+## Status
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## License
-
-Private — All rights reserved.
-
-## Acknowledgments
-
-- [Solana Mobile](https://solanamobile.com/) for the Seeker device ecosystem
-- [Expo](https://expo.dev/) for React Native tooling
-- [Redroid](https://github.com/remote-android/redroid-doc) for Android emulation
-- Appllama and Emil Kowalski for MIT-licensed design knowledge adapted into the agent harness (see each skill's `ATTRIBUTION.md`)
+Hackathon build. Everything above runs today on a local machine; there is deliberately no hosted backend — the agent, your wallet and your keys stay on hardware you control.

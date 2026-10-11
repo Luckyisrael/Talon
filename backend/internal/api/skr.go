@@ -39,12 +39,25 @@ func (h *SkrHandler) Quote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not read your export credits")
 		return
 	}
+	if cfg.Mode == skr.ModeDevnetSol {
+		// The devnet-SOL test rail: no mint exists, and the price arrives
+		// already in lamports — base units the client cannot mis-scale.
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"chain":         "devnet-sol",
+			"sol_lamports":  cfg.SolLamports,
+			"credits":       cfg.Credits,
+			"treasury":      cfg.Treasury,
+			"spare_credits": spare,
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"skr_amount":    cfg.Price,
-		"credits":       cfg.Credits,
-		"mint":          cfg.Mint,
-		"treasury":      cfg.Treasury,
-		"spare_credits": spare,
+		"chain":          "skr",
+		"skr_amount":     cfg.Price,
+		"credits":        cfg.Credits,
+		"mint":           cfg.Mint,
+		"treasury":       cfg.Treasury,
+		"spare_credits":  spare,
 	})
 }
 
@@ -121,7 +134,13 @@ func (h *SkrHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	// already holds rather than an error the client would keep retrying.
 	cfg := h.verifier.Config()
 	added := 0
-	granted, err := h.store.GrantCredits(userID, cfg.Credits, "skr", req.Signature)
+	// The ledger row names the rail the payment actually arrived on — "skr"
+	// or "devnet-sol" — so an audit can tell test-rail purchases from real ones.
+	source := string(cfg.Mode)
+	if source == "" {
+		source = "skr"
+	}
+	granted, err := h.store.GrantCredits(userID, cfg.Credits, source, req.Signature)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not record your credits")
 		return
